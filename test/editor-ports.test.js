@@ -31,7 +31,6 @@ async function editorOnA() {
     },
   });
   env.load(...FILES);
-  await env.get('Storage').init();
   await startEditorClient(env);
   const navigation = quietNavigation();
   const editor = makeEditor(env, env.document, { navigation });

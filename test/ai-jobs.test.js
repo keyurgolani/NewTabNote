@@ -521,9 +521,10 @@ describe('T4: insights write the insight fields only', () => {
     await execute(env, 'setPinned', { noteId: 'A', pinned: true });
     writes = spyWrites(env);
     updates = [];
-    // The page's Storage's writes a job could still make (saveNoteWithBlocks went with #17 PR 4a)
+    // The writes a job could still make through the Storage global, its shell's since #17 PR 4b,
+    // which has no updateNote (saveNoteWithBlocks went with #17 PR 4a)
     const page = env.get('Storage');
-    for (const method of ['updateNote', 'setSetting']) {
+    for (const method of ['setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'saveVector', 'setSetting']) {
       const real = page[method].bind(page);
       page[method] = (...args) => { updates.push(method); return real(...args); };
     }
