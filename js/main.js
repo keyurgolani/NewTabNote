@@ -26,6 +26,7 @@ import './ui/graph-view.js';
 import './ui/export-notice.js';
 
 // Data & Services
+import './close-drafts.js';
 import './storage.js';
 import './theme-engine.js';
 import './virtual-scroller.js';

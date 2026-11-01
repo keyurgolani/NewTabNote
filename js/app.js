@@ -180,6 +180,8 @@ class App {
       // Initialize storage
       await Storage.init();
       this.reportMissingStores();
+      // The edits a closed tab left as close-time drafts, before anything reads a note (#33)
+      await this.applyCloseDrafts();
 
       // The export notice decides now, before any note renders and before a first note exists
       this.exportNotice = new ExportNotice({
@@ -301,6 +303,8 @@ class App {
 
       this.updateEmptyState();
       this.updateBadgeCounts();
+      // Once the list shows them: the recovered notes no new tab has told about yet (#33)
+      await this.tellRecoveredNotes();
 
       // Defer non-critical initialization until after first render (Req 27.1)
       const deferWork = async () => {
@@ -378,6 +382,44 @@ class App {
       pane.setAttribute('tabindex', '-1');
       pane.addEventListener('blur', () => pane.removeAttribute('tabindex'), { once: true });
       pane.focus();
+    }
+  }
+
+  /**
+   * Apply the close-time drafts a tab that closed left (js/close-drafts.js, #33): each one's
+   * edit is saved, or kept as a recovered note beside its note when that note was saved
+   * elsewhere since. It runs before anything reads a note, and with no draft it waits for
+   * nothing. What it did is kept for the rebuild that follows it at the same start.
+   * @returns {Promise<void>}
+   */
+  async applyCloseDrafts() {
+    if (typeof CloseDrafts === 'undefined') return;
+    try {
+      this.closeDrafts = await CloseDrafts.apply({ db: appStorage().db });
+    } catch (error) {
+      // The drafts stay for the next start
+      console.error('Close-time drafts were not applied:', error);
+    }
+  }
+
+  /**
+   * The toast for the recovered notes no new tab has told about, whichever start made them:
+   * this one, or a Popup or Side Panel start before it. It counts only notes that still exist.
+   * @returns {Promise<void>}
+   */
+  async tellRecoveredNotes() {
+    if (typeof CloseDrafts === 'undefined') return;
+    try {
+      const recovered = [];
+      for (const { id, of } of CloseDrafts.takeUntold(CloseDrafts.pageStorage())) {
+        const note = await appStorage().getNote(id);
+        if (!note) continue;
+        const original = await appStorage().getNote(of);
+        recovered.push({ title: (original && original.name) || 'Untitled', trashed: Boolean(note.trashed) });
+      }
+      if (recovered.length > 0) Utils.showToast(CloseDrafts.TEXT.toast(recovered), 'info', 10000);
+    } catch (error) {
+      console.error('The recovered notes could not be counted:', error);
     }
   }
 
