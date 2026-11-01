@@ -227,7 +227,7 @@ const OVERLAYS = [
 async function newTab(extension, side) {
   await extension.seedOnboarded();
   await driver.seedNotes(extension, side === 'right' ? [...NOTES, PACKING] : NOTES);
-  await extension.worker.evaluate(() => self.Storage.createFolder('Work'));
+  await driver.seedFolder(extension, 'Work');
   const page = await driver.openNewTab(extension);
   await extension.context.grantPermissions(['clipboard-read', 'clipboard-write']);
   if (side === 'right') {

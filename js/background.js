@@ -15,10 +15,6 @@
 // The network guard first, ahead of every other module (#21 slice 1b): it wraps the worker's
 // fetch before anything else can call it, and never throws. Its handle is the worker's alone.
 import { contextGuard } from './kernel/composition/network-guard-first.js';
-// utils.js and storage.js put Utils and Storage on self. The worker's kernel no longer runs on
-// Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
-import './utils.js';
-import './storage.js';
 import {
   MIGRATE_MESSAGE,
   PURGE_MESSAGE,
