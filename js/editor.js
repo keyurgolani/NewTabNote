@@ -4578,6 +4578,8 @@ class BlockEditor {
     notice.setAttribute('role', 'alert');
     const text = this.doc.createElement('p');
     text.className = 'note-gone-text';
+    // Focusable from script, so a part's Reload can hand over to these words (ownNoticeText)
+    text.setAttribute('tabindex', '-1');
     text.textContent = "This note was deleted, so these changes aren't saved.";
     const button = this.doc.createElement('button');
     button.type = 'button';
@@ -4592,13 +4594,15 @@ class BlockEditor {
   }
 
   /**
-   * The button of the notice this editor shows for changes it couldn't save: the reload-required
-   * notice's Reload, or the deleted note's Save as a new note. Null when it shows neither.
+   * The words of the notice this editor shows for changes it couldn't save: the reload-required
+   * notice's, or the deleted note's. A part's Reload that a save stopped moves focus there, where
+   * a screen reader reads the sentence, Enter does nothing, and Tab reaches the notice's button,
+   * whose Reload runs no save guards (#27 slice 3b). Null when it shows neither.
    * @returns {HTMLElement | null}
    */
-  ownNoticeButton() {
+  ownNoticeText() {
     const notice = this._reloadNotice || this._noteGoneNotice;
-    return notice ? notice.querySelector('button') : null;
+    return notice ? notice.querySelector('.note-gone-text') : null;
   }
 
   /**
@@ -4635,6 +4639,8 @@ class BlockEditor {
     notice.setAttribute('role', 'alert');
     const text = this.doc.createElement('p');
     text.className = 'note-gone-text';
+    // Focusable from script, so a part's Reload can hand over to these words (ownNoticeText)
+    text.setAttribute('tabindex', '-1');
     text.textContent = "This page lost its connection to your notes, so these changes aren't saved. Copy anything you need, then reload.";
     const button = this.doc.createElement('button');
     button.type = 'button';

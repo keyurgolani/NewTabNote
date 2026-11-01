@@ -27,7 +27,7 @@
  * runs one load, and its answer draws in both.
  * Reload runs the page's save guards first (the loader's reloadAfterGuards) and reads "Saving…"
  * at the same width meanwhile; when an open editor shows its own notice for what it couldn't
- * save, that notice speaks, and focus goes to its button, unless the notice can't take focus, as
+ * save, that notice speaks, and focus goes to its words, unless the notice can't take focus, as
  * on Stats, where the editor is hidden. Each state is said once, through a polite live region the
  * PartState puts on the page when it's made, before any words go in; a failure that comes again
  * in the same words, from the third on, is said again where it was pressed.
@@ -136,7 +136,7 @@ async function whileLoading(work, { show, hide = () => {} }) {
 
 /**
  * What a part's Reload uses: the page loader's guarded reload, its reload without the guards,
- * and the button of a notice an open editor shows for what it couldn't save, if one does
+ * and the words of a notice an open editor shows for what it couldn't save, if one does
  * @typedef {object} PartReload
  * @property {() => Promise<{reloaded: boolean}>} guarded
  * @property {() => void} now
@@ -444,6 +444,9 @@ class PartState {
     const shown = this._slots.map((key) => this._buttonOf(key));
     for (const item of all) item.hidden = !shown.includes(item);
     this._order([...shown, ...all.filter((item) => item.hidden)]);
+    // A place kept empty beside the words sends Reload anyway to a line of its own (css/editor.css),
+    // so the words keep their room
+    this.actions.classList.toggle('is-split', this._slots.includes('spacer'));
     this.actions.hidden = shown.length === 0;
     this.place(element);
     this._say([words, note].filter(Boolean).join(' '), sayAgain);
@@ -618,8 +621,8 @@ class PartState {
     this._busy(button, false, true);
     if (answer && answer.reloaded) return;
     // An open editor's own notice says what it couldn't save: it speaks, the row stays as it is,
-    // and focus goes to the notice's button. A notice that can't take focus, as on Stats, where
-    // the editor is hidden, leaves it to the row.
+    // and focus goes to the notice's words, not its Reload, which runs no save guards. A notice
+    // that can't take focus, as on Stats, where the editor is hidden, leaves it to the row.
     const notice = this.reload.ownNotice();
     if (notice) {
       this._focus(notice);

@@ -5813,6 +5813,28 @@ kbd {
     flex-wrap: nowrap;
     align-self: flex-start;
   }
+
+  /* Where Try again's own place is kept empty beside the words, Reload anyway takes a line of its
+     own under the buttons, at the row's end, so the words keep the room a single Reload's u5 gives
+     them. Try again stays in the pressed Reload's place, and Reload anyway stays clear of it. */
+  .part-state:not(.is-narrow) > .part-state-actions.is-split {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: end;
+  }
+
+  .part-state:not(.is-narrow) > .part-state-actions.is-split > .part-state-try {
+    grid-area: 1 / 1;
+  }
+
+  .part-state:not(.is-narrow) > .part-state-actions.is-split > .part-state-spacer {
+    grid-area: 1 / 2;
+  }
+
+  .part-state:not(.is-narrow) > .part-state-actions.is-split > .part-state-anyway {
+    grid-area: 2 / 1 / 3 / 3;
+    justify-self: end;
+  }
 }
 
 /* Reload anyway, the quiet one: no fill or border, the secondary label, still a 44 px target */

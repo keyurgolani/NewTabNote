@@ -263,8 +263,8 @@ class App {
   /**
    * What a part's Reload uses when its library didn't load (js/ui/part-state.js, #27 slice 3b):
    * the loader's reload once every save guard says it saved, its reload without them for "Reload
-   * anyway", and the button of the notice an open editor shows for changes it couldn't save, which
-   * speaks for a save that stopped the reload. Null without the loader, when a part's Reload is
+   * anyway", and the words of the notice an open editor shows for changes it couldn't save, which
+   * speak for a save that stopped the reload. Null without the loader, when a part's Reload is
    * the browser's.
    * @returns {any}
    */
@@ -274,7 +274,7 @@ class App {
     return {
       guarded: () => loader.reloadAfterGuards(),
       now: () => loader.reloadNow(),
-      ownNotice: () => (this.tabController ? this.tabController.ownNoticeButton() : null),
+      ownNotice: () => (this.tabController ? this.tabController.ownNoticeText() : null),
     };
   }
 
