@@ -605,6 +605,41 @@ describe("every delete for good, under the drafts' lock (the lead's Q7)", () => 
     assert.deepEqual(keysOf(tab), []);
   });
 
+  it("a delete for good whose clear can't load doesn't run: it answers reload-required, and the note and what it left stay (the review's D1)", async () => {
+    for (const type of /** @type {const} */ (['deleteNotePermanently', 'emptyTrash'])) {
+      const { tab, client } = await profileWithA();
+      assert.equal(
+        (await client.execute({ type: 'trashNote', commandId: client.ids.next(), noteId: 'A' })).kind,
+        'committed',
+      );
+      leave(tab);
+      const before = keysOf(tab).sort();
+      /** @type {string[]} */
+      const told = [];
+      const clearing = withCloseDraftClears(client, {
+        storage: tab.env.global.localStorage,
+        locks: tab.env.global.navigator.locks,
+        load: () => Promise.reject(new TypeError('Failed to fetch dynamically imported module')),
+        logger: { warn: event => told.push(event) },
+      });
+      const outcome = await clearing.execute(
+        /** @type {Command} */ (
+          type === 'emptyTrash'
+            ? { type, commandId: client.ids.next() }
+            : { type, commandId: client.ids.next(), noteId: 'A' }
+        ),
+      );
+      assert.deepEqual(
+        [outcome.kind, outcome.kind === 'unavailable' && outcome.code],
+        ['unavailable', 'reload-required'],
+        type,
+      );
+      assert.deepEqual(told, ['close-drafts-not-cleared'], type);
+      assert.notEqual(await noteOf(client, 'A'), null, `${type}: A is still in the Trash`);
+      assert.deepEqual(keysOf(tab).sort(), before, `${type}: what A left is as it was`);
+    }
+  });
+
   it('a trash, an archive, or a folder deleted clears nothing', async () => {
     const { tab, client, run } = await profileWithA();
     const clearing = clearingClient(tab, client);
@@ -689,6 +724,19 @@ describe("every delete for good, under the drafts' lock (the lead's Q7)", () => 
       });
       assert.deepEqual(counts, takes ? { loads: 1, locks: 1 } : { loads: 0, locks: 0 }, left);
     }
+  });
+
+  it("a delete that names its note finds its draft beside a value under the prefix that doesn't parse, and takes the lock (the review's D3)", async () => {
+    const { tab, client } = await profileWithA();
+    tab.env.global.localStorage.setItem(`${PREFIX}bad`, '{');
+    write(tab, draftOfA({ id: 'draft-x', noteId: 'X' }));
+    const { counts, load, drafts } = counted(tab);
+    await withCloseDraftClears(client, { storage: drafts.storage, locks: drafts.locks, load }).execute({
+      type: 'deleteNotePermanently',
+      commandId: client.ids.next(),
+      noteId: 'X',
+    });
+    assert.deepEqual(counts, { loads: 1, locks: 1 });
   });
 
   it('Empty Trash, trash retention and a bulk action, which name their notes only in their outcome, skip the applier and the lock only on a page with no key at all', async () => {
