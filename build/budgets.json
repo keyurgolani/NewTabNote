@@ -96,8 +96,13 @@
     "recovery": {
       "page": "recovery.html",
       "lazyChunks": ["index-lag", "legacy", "permissions", "platform", "probe", "recovery-readiness"],
-      "reason": "The Trust Center and the Recovery Center (#20 slice 4b). It has no approved numbers yet: each row stays null until the owner sets one. The trust code is its own, so its start holds it; the providers' checks load after it opens. Its forbidden list is every other category and its dependencies are what its graph holds, both as the build reported them on 2026-10-31, so anything added later is deliberate.",
-      "start": { "js": null, "css": null, "html": null, "fonts": null },
+      "reason": "The Trust Center and the Recovery Center (#20 slice 4b). Its rows are today's size plus about 5%, the rule the owner set for these rows, decided for the owner on 2026-11-01 (docs/performance/budgets.md). The trust code is its own, so its start holds it; the providers' checks load after it opens. Its forbidden list is every other category and its dependencies are what its graph holds, both as the build reported them on 2026-10-31, so anything added later is deliberate.",
+      "start": {
+        "js": { "raw": 404480, "gzip": 125952 },
+        "css": { "raw": 23040, "gzip": 4608 },
+        "html": { "raw": 2048, "gzip": 1024 },
+        "fonts": null
+      },
       "forbidden": ["chart-library", "search-library", "zip-library", "model-runtime", "charting-analytics", "graph-view", "search-indexing", "import-export", "archive-trash", "settings", "sync", "remote-ai", "recipes", "embeddings", "ai-policy", "onboarding-walkthrough", "workspace"],
       "dependencies": ["valibot"]
     },

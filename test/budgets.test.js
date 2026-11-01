@@ -341,11 +341,11 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.equal(entries.moment.chunk, 'moment');
   });
 
-  it("holds recovery.html's row as the build reported it, with no number the owner hasn't set (#20 slice 4b)", () => {
+  it("holds recovery.html's row: today's size plus about 5% (2026-11-01), and its lists as the build reported them (#20 slice 4b)", () => {
     const { recovery } = BUDGETS.entries;
     assert.equal(recovery.page, 'recovery.html');
     assert.equal(recovery.planned, undefined);
-    assert.deepEqual(recovery.start, { js: null, css: null, html: null, fonts: null });
+    assert.deepEqual(recovery.start, { js: { raw: 395 * KIB, gzip: 123 * KIB }, css: { raw: 22.5 * KIB, gzip: 4.5 * KIB }, html: { raw: 2 * KIB, gzip: 1 * KIB }, fonts: null });
     // The trust code is the page's own; every other category stays off its start
     assert.deepEqual(recovery.forbidden, [
       'chart-library',
