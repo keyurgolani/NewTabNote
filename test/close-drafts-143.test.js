@@ -111,29 +111,37 @@ describe("1.4.3 reads a draft in the stack's format (the lead's Q1)", () => {
   });
 });
 
+/**
+ * What 1.4.3 leaves on a profile at version 8, made by its own code: A's draft from the base its
+ * editor last saw, B's put back beside the recovered note 1.4.3's own apply made of it (B was
+ * saved elsewhere after its draft's base), C's from a base whose stored stamp its editor's own
+ * save made, the untold list, and the IDs a Popup or Side Panel start passed on for the catch-up
+ */
+async function leftovers() {
+  const { env, release } = await profileAt8({ B: { updatedAt: T0 + 70 }, C: { updatedAt: T0 + 50 } });
+  const base = (updatedAt, issued = []) => ({ revision: null, updatedAt, issued });
+  const { drafts, first } = await leave143(release, {
+    now: T0 + 90,
+    elsewhere: {
+      noteId: 'B', base: base(T0), at: AT, blocks: [block('b1', 'B', 0, 'bravo, edited')], deletedBlockIds: [],
+      preview: 'bravo, edited', todoProgress: null, linkedNames: [],
+    },
+    own: {
+      noteId: 'A', base: base(T0), at: AT + 1, blocks: [block('a1', 'A', 0, 'alpha, edited')], deletedBlockIds: ['a2'],
+      preview: 'alpha, edited', todoProgress: null, linkedNames: [],
+    },
+    issued: {
+      noteId: 'C', base: base(T0, [T0 + 50]), at: AT + 2, blocks: [block('c1', 'C', 0, 'charlie, edited')], deletedBlockIds: [],
+      preview: 'charlie, edited', todoProgress: null, linkedNames: [],
+    },
+    catchUp: { dropped: ['A'], gone: ['Z'] },
+  });
+  return { env, release, drafts, first, recoveredId: `${drafts.elsewhere.id}-recovered` };
+}
+
 describe("what 1.4.3 leaves for the stack's first start after the update", () => {
   it('drafts, a recovered note whose draft is still there, the untold list and the catch-up IDs, each as 1.4.3 wrote it', async () => {
-    // B was saved elsewhere after its draft's base; C's stored stamp is one its editor's save made
-    const { env, release } = await profileAt8({ B: { updatedAt: T0 + 70 }, C: { updatedAt: T0 + 50 } });
-    const base = (updatedAt, issued = []) => ({ revision: null, updatedAt, issued });
-    const { drafts, first } = await leave143(release, {
-      now: T0 + 90,
-      elsewhere: {
-        noteId: 'B', base: base(T0), at: AT, blocks: [block('b1', 'B', 0, 'bravo, edited')], deletedBlockIds: [],
-        preview: 'bravo, edited', todoProgress: null, linkedNames: [],
-      },
-      own: {
-        noteId: 'A', base: base(T0), at: AT + 1, blocks: [block('a1', 'A', 0, 'alpha, edited')], deletedBlockIds: ['a2'],
-        preview: 'alpha, edited', todoProgress: null, linkedNames: [],
-      },
-      issued: {
-        noteId: 'C', base: base(T0, [T0 + 50]), at: AT + 2, blocks: [block('c1', 'C', 0, 'charlie, edited')], deletedBlockIds: [],
-        preview: 'charlie, edited', todoProgress: null, linkedNames: [],
-      },
-      catchUp: { dropped: ['A'], gone: ['Z'] },
-    });
-
-    const recoveredId = `${drafts.elsewhere.id}-recovered`;
+    const { env, release, first, recoveredId } = await leftovers();
     assert.deepEqual(first, { ...NOTHING, recovered: [{ noteId: 'B', recoveredId }] });
     // Every draft still there, in the order their tabs closed, B's put back after its apply
     assert.deepEqual(
@@ -153,5 +161,93 @@ describe("what 1.4.3 leaves for the stack's first start after the update", () =>
       [T0, T0 + 70, T0 + 50],
       "the stamps the stack's applier reads 1.4.3's bases against",
     );
+  });
+});
+
+describe("the stack's first start after the update, on what 1.4.3 left", () => {
+  const { webcrypto } = require('node:crypto');
+  const { IDBKeyRange } = require('fake-indexeddb');
+
+  /** The stack's roots: the worker's, and the new tab's */
+  const roots = async () => ({
+    worker: await import('../js/kernel/composition/background.js'),
+    newTab: await import('../js/kernel/composition/newtab.js'),
+  });
+
+  /** The worker's host on the page's profile */
+  const workerHost = (env) => ({
+    indexedDB: env.indexedDB,
+    keyRange: IDBKeyRange,
+    settings: env.chrome.api.storage.local,
+    locks: env.global.navigator.locks,
+    estimate: null,
+    crypto: webcrypto,
+  });
+
+  /** The new tab on the page, opening the database as it finds it, without waiting for the worker */
+  const openNewTab = ({ newTab }, env) =>
+    newTab.createNewTabPageClient(
+      newTab.createNewTabAdapter({
+        indexedDB: env.indexedDB,
+        settings: env.chrome.api.storage.local,
+        awaitUpgrade: async () => {},
+        locks: env.global.navigator.locks,
+      }),
+      { drafts: { storage: env.global.localStorage, locks: env.global.navigator.locks }, wake: () => {} },
+    );
+
+  /** Each draft as the stack applies it: A's and C's saved, B's already recovered by 1.4.3 */
+  const appliedOf = (recoveredId) => ({
+    ...NOTHING,
+    saved: ['A', 'C'],
+    savedInTrash: [],
+    recovered: [{ noteId: 'B', recoveredId }],
+    caughtUp: [],
+    catchUp: { dropped: ['A'], gone: ['Z'] },
+  });
+
+  /** What every run leaves: the edits in, one recovered note, told once, and nothing in localStorage */
+  async function assertApplied({ env, release, recoveredId }) {
+    const after = await stored(env);
+    assert.equal(after.blocks.a1.content, 'alpha, edited');
+    assert.equal(after.blocks.a2, undefined, "A's draft deleted a2");
+    assert.equal(after.blocks.c1.content, 'charlie, edited', "C's stored stamp is its own editor's save");
+    assert.equal(after.blocks.b1.content, 'bravo', 'B as the other writer left it');
+    assert.deepEqual(
+      Object.keys(after.notes).filter((id) => id.endsWith('-recovered')),
+      [recoveredId],
+      "one recovered note of B's draft, 1.4.3's",
+    );
+    assert.deepEqual(JSON.parse(release.storage.getItem(UNTOLD)), [{ id: recoveredId, of: 'B' }]);
+    assert.deepEqual(draftKeys(release), []);
+    assert.equal(release.storage.getItem(CATCH_UP), null);
+  }
+
+  it("run 1: the worker upgrades the profile and runs its transforms, then the new tab applies 1.4.3's drafts", async () => {
+    const left = await leftovers();
+    const stack = await roots();
+    const worker = stack.worker.createWorkerClient(workerHost(left.env));
+    assert.equal((await worker.migration.done).status, 'migrated');
+    assert.equal((await worker.transforms.done)?.status, 'transformed');
+    assert.equal((await worker.recordsCatchUp.done)?.status, 'done');
+
+    const tab = openNewTab(stack, left.env);
+    assert.deepEqual(plain(await tab.applied()), appliedOf(left.recoveredId));
+    await assertApplied(left);
+  });
+
+  it('run 2: the new tab opens at 8 before the worker runs and applies them there, and the upgrade then closes its connection', async () => {
+    const left = await leftovers();
+    const stack = await roots();
+    const tab = openNewTab(stack, left.env);
+    assert.deepEqual(plain(await tab.applied()), appliedOf(left.recoveredId));
+    assert.equal((await dumpDatabase(left.env.indexedDB)).version, 8, 'applied at 8');
+    await assertApplied(left);
+
+    const worker = stack.worker.createWorkerClient(workerHost(left.env));
+    assert.equal((await worker.migration.done).status, 'migrated', 'the tab held up no upgrade');
+    const after = await tab.execute({ type: 'setPinned', commandId: 'after-the-upgrade', noteId: 'A', pinned: true });
+    assert.equal(after.code, 'reload-required');
+    await assertApplied(left);
   });
 });
