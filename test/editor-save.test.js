@@ -442,6 +442,45 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
   });
 
+  it("closing the whole tab commits the pop-out's pending edit with the page's own close, its blocks alone and at once, and the pop-out's close after it writes nothing more (#33)", { timeout: 10_000 }, async () => {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    type(pip, 'charlie in the pop-out');
+    const opened = spyTransactions(Storage);
+    const committed = spyCommits(Storage);
+    // The page's pagehide fires first, then the pop-out's
+    env.window.fire('pagehide', { persisted: false });
+    assert.deepEqual(writesOf(opened), [{ stores: ['elements'], mode: 'readwrite' }], "the pop-out's blocks, over the blocks alone");
+    assert.deepEqual(committed, [['elements']], 'committed before the page goes');
+    pipWindow.fire('pagehide');
+    assert.equal(writesOf(opened).length, 1, "the pop-out's own close finds it written");
+    await settle();
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
+  });
+
+  it("a page hidden into the back/forward cache leaves the pop-out's edit to its own save (#33)", { timeout: 10_000 }, async () => {
+    const { pip } = await openPiP(env, 'C');
+    type(pip, 'charlie in the pop-out');
+    const opened = spyTransactions(Storage);
+    env.window.fire('pagehide', { persisted: true });
+    assert.equal(writesOf(opened).length, 0);
+    assert.notEqual(pip.saveTimeout, null, "the pop-out's debounce runs on");
+  });
+
+  it("a pop-out closed earlier leaves no listener on the page, so the page's own close writes nothing for it (#33)", { timeout: 10_000 }, async () => {
+    const listening = () => (env.window.listeners.pagehide || []).length;
+    const before = listening();
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    assert.equal(listening(), before + 1, "the pop-out's editor listens for the page's close");
+    type(pip, 'charlie in the pop-out');
+    pipWindow.fire('pagehide');
+    await settle();
+    assert.equal(listening(), before, 'its listener went with the pop-out');
+    const opened = spyTransactions(Storage);
+    env.window.fire('pagehide', { persisted: false });
+    assert.equal(writesOf(opened).length, 0);
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
+  });
+
   it('switching panes: each editor keeps its own pending edit on its own note', async () => {
     const secondary = makeEditor(env);
     await secondary.loadNote('B');
@@ -460,6 +499,127 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.deepEqual(rows.a1, { canvasId: 'A', content: 'left pane' });
     assert.deepEqual(rows.b1, { canvasId: 'B', content: 'right pane' });
     assert.deepEqual(rows.c1, { canvasId: 'C', content: 'charlie' });
+  });
+});
+
+describe('BlockEditor closing writes beside another pane on the same note (#33)', () => {
+  // With js/close-drafts.js loaded, as the new tab loads it, each editor knows the blocks it last
+  // saw commit, and a closing write puts only the ones it changed since
+  const DRAFT_FILES = [
+    'js/utils.js',
+    'js/core/storage-error.js',
+    'js/close-drafts.js',
+    'js/storage.js',
+    'js/sidebar-utils.js',
+    'js/blocks.js',
+    'js/editor.js',
+  ];
+
+  async function setupWithDrafts() {
+    const env = createLegacyEnv();
+    await createDatabase(env.indexedDB, {
+      records: {
+        canvases: [note('A'), note('C', { name: 'Charlie' })],
+        elements: [block('a1', 'A', 0, 'alpha'), block('c1', 'C', 0, 'charlie'), block('c2', 'C', 1, 'charlie two')],
+      },
+    });
+    env.load(...DRAFT_FILES);
+    const Storage = env.get('Storage');
+    await Storage.init();
+    return { env, Storage };
+  }
+
+  /** A pop-out on C whose frames run with the page's */
+  async function popOut(env) {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    pipWindow.requestAnimationFrame = (fn) => env.global.requestAnimationFrame(fn);
+    return { pip, pipWindow };
+  }
+
+  /** C's blocks as stored, in order, as `id=content` */
+  async function blocksOfC(env) {
+    const rows = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
+      .filter((row) => row.canvasId === 'C')
+      .sort((a, b) => a.order - b.order);
+    return rows.map((row) => `${row.id}=${row.content}`).join(' | ');
+  }
+
+  /** The whole tab closes: the page's pagehide, then the pop-out's */
+  async function closeTab(env, pipWindow) {
+    env.window.fire('pagehide', { persisted: false });
+    pipWindow.fire('pagehide', { persisted: false });
+    await settle();
+  }
+
+  it("the pop-out's closing write puts only the blocks it changed since its last save, so a block the main pane saved after that stays", { timeout: 10_000 }, async () => {
+    const { env } = await setupWithDrafts();
+    const main = makeEditor(env);
+    await main.loadNote('C');
+    const { pip, pipWindow } = await popOut(env);
+    type(pip, 'pop-out, saved first');
+    await runUntil(env, pip.flushSave());
+    type(main, 'main pane, saved after', 1);
+    await runUntil(env, main.flushSave());
+    pip.noteData.name = 'Charlie, renamed in the pop-out';
+    pip.noteData.titleManuallySet = true;
+    type(pip, 'pop-out, typed as the tab closed');
+    await closeTab(env, pipWindow);
+    assert.equal(await blocksOfC(env), 'c1=pop-out, typed as the tab closed | c2=main pane, saved after');
+  });
+
+  it("the main pane's closing write puts only the blocks it changed, so a block the pop-out saved after it loaded stays", { timeout: 10_000 }, async () => {
+    const { env } = await setupWithDrafts();
+    const main = makeEditor(env);
+    await main.loadNote('C');
+    const { pip, pipWindow } = await popOut(env);
+    type(pip, 'pop-out, saved', 1);
+    await runUntil(env, pip.flushSave());
+    type(main, 'main pane, typed as the tab closed');
+    await closeTab(env, pipWindow);
+    assert.equal(await blocksOfC(env), 'c1=main pane, typed as the tab closed | c2=pop-out, saved');
+  });
+
+  it('a pop-out that only loaded the note puts only what it changed since, so a block the main pane saved after it loaded stays', { timeout: 10_000 }, async () => {
+    const { env } = await setupWithDrafts();
+    const main = makeEditor(env);
+    await main.loadNote('C');
+    const { pip, pipWindow } = await popOut(env);
+    type(main, 'main pane, saved after the pop-out loaded', 1);
+    await runUntil(env, main.flushSave());
+    type(pip, 'pop-out, typed as the tab closed');
+    await closeTab(env, pipWindow);
+    assert.equal(await blocksOfC(env), 'c1=pop-out, typed as the tab closed | c2=main pane, saved after the pop-out loaded');
+  });
+
+  it("a closed pop-out's editor leaves the page's editors once its close save commits, so four opens and closes leave the main pane alone", { timeout: 10_000 }, async () => {
+    const { env } = await setupWithDrafts();
+    const main = makeEditor(env);
+    await main.loadNote('A');
+    const editors = () => env.get('pageEditors').size;
+    assert.equal(editors(), 1);
+    for (let n = 1; n <= 4; n += 1) {
+      const { pip, pipWindow } = await popOut(env);
+      assert.equal(editors(), 2, `open ${n}`);
+      type(pip, `pop-out ${n}`);
+      pipWindow.fire('pagehide', { persisted: false });
+      await runUntil(env, settle());
+      assert.equal(editors(), 1, `close ${n}`);
+    }
+  });
+
+  it("a closed pop-out whose close save failed stays among the page's editors, so the page's own close still writes its draft", { timeout: 10_000 }, async () => {
+    const { env, Storage } = await setupWithDrafts();
+    const main = makeEditor(env);
+    await main.loadNote('A');
+    const { pip, pipWindow } = await popOut(env);
+    failWritesOf(Storage, 'C', 1);
+    type(pip, 'pop-out, its save fails');
+    pipWindow.fire('pagehide', { persisted: false });
+    await settle();
+    assert.equal(env.get('pageEditors').size, 2);
+    env.window.fire('pagehide', { persisted: false });
+    const drafts = env.get('CloseDrafts').list(env.global.localStorage).map(({ draft }) => draft.noteId);
+    assert.equal(drafts.join(' '), 'C');
   });
 });
 

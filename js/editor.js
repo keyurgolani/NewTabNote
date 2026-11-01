@@ -4073,6 +4073,19 @@ class BlockEditor {
   }
 
   /**
+   * `blocks` less the ones this editor last saw commit as they are now: what a close-time draft
+   * holds, and what a closing write puts (#33). All of them when it has seen no commit of the note.
+   * @param {string} noteId
+   * @param {Array<any>} blocks - serialized, as a save writes them
+   * @returns {Array<any>}
+   */
+  _changedSinceCommit(noteId, blocks) {
+    const committed = typeof CloseDrafts === 'undefined' ? null : this._committed.get(noteId);
+    if (!committed || !Array.isArray(blocks)) return blocks;
+    return blocks.filter((block) => committed.blocks.get(block.id) !== CloseDrafts.digest(block));
+  }
+
+  /**
    * The close-time draft of `noteId`'s edit: the blocks changed since the last save this editor
    * saw commit, the ones deleted since, and the title when it changed since
    * @param {string} noteId
@@ -4082,9 +4095,7 @@ class BlockEditor {
    */
   _closeDraftOf(noteId, noteData, blocks) {
     const committed = this._committed.get(noteId) || null;
-    const changed = committed
-      ? blocks.filter((block) => committed.blocks.get(block.id) !== CloseDrafts.digest(block))
-      : blocks;
+    const changed = this._changedSinceCommit(noteId, blocks);
     const present = new Set(blocks.map((block) => block.id));
     const deleted = committed ? [...committed.blocks.keys()].filter((id) => !present.has(id)) : [];
     const renamed = !committed || noteData.name !== committed.name;
@@ -4223,7 +4234,10 @@ class BlockEditor {
     if ((this._writtenSeq.get(state.noteId) || 0) < state.seq) {
       this._writtenSeq.set(state.noteId, state.seq);
     }
-    const saving = editorStorage().saveNoteWithBlocks(state.noteData, state.blocks, { closing });
+    // A closing write puts only the blocks this editor changed since the last save it saw
+    // commit, so its copy of a block another pane saved since never goes over that save (#33)
+    const blocks = closing ? this._changedSinceCommit(state.noteId, state.blocks) : state.blocks;
+    const saving = editorStorage().saveNoteWithBlocks(state.noteData, blocks, { closing });
     if (!closing) {
       // saveNoteWithBlocks stamps updatedAt as it opens the transaction: a stored note with
       // this stamp is this editor's own write, for a close-time draft written later (#33)
@@ -4305,8 +4319,22 @@ class BlockEditor {
   }
 
   /**
+   * A closed pop-out's editor leaves the page's editors once its close save has committed, so it
+   * and its closed document don't stay with the page. One whose save failed holds the edit for
+   * its retry, so it stays, and the page's own close still writes its draft (#33).
+   * @returns {void}
+   */
+  _leavePageWhenSaved() {
+    // allSettled, so a save that ever rejects still leaves the decision to what's pending
+    Promise.allSettled(this._activeSaves().map((entry) => entry.promise)).then(() => {
+      if (!this._hasPendingSave()) pageEditors.delete(this);
+    });
+  }
+
+  /**
    * Write pending edits when the page is hidden or closed. Each editor listens
-   * on its own document and window, so the PiP editor covers the PiP window.
+   * on its own document and window, so the PiP editor covers the PiP window,
+   * and the PiP editor also listens for this page's own close.
    * @returns {void}
    */
   _bindLifecycleFlush() {
@@ -4332,7 +4360,22 @@ class BlockEditor {
           if (!event.persisted) writeCloseDrafts();
         });
       }
-      win.addEventListener('pagehide', (event) => this._writePendingNow({ closing: ownPage && !event.persisted }));
+      // The pop-out's editor writes through this page's connection, and when the whole tab
+      // closes, this page's pagehide fires before the pop-out's, so a write the pop-out opens
+      // after it is lost. So the pop-out's editor also writes at this page's own close, with the
+      // page's closing writes (#33). Its listener goes when the pop-out closes, so a pop-out
+      // closed earlier leaves none on the page.
+      const pageClose = ownPage ? null : new AbortController();
+      if (pageClose) {
+        window.addEventListener('pagehide', (event) => {
+          if (!event.persisted) this._writePendingNow({ closing: true });
+        }, { signal: pageClose.signal });
+      }
+      win.addEventListener('pagehide', (event) => {
+        if (pageClose && !event.persisted) pageClose.abort();
+        this._writePendingNow({ closing: ownPage && !event.persisted });
+        if (pageClose && !event.persisted) this._leavePageWhenSaved();
+      });
     }
   }
 
