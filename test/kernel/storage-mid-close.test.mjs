@@ -6,17 +6,19 @@
 //
 // Chrome closes it in an order of its own, which e2e/connection-closing.spec.js pins: it aborts
 // what's open on the connection, whose requests fail while the connection still takes a new
-// transaction, and the page hears of the close only after those aborts. So a read in flight
-// answers transaction-failed, as next's legacy adapter's and 1.4.1's did there, and every call
-// once the close has reached the page answers reload-required. A command's run again, and any
-// call that starts between the two, fails once the close has reached the page, which the
-// adapter's closing check turns into reload-required, where a command answered
-// retries-exhausted before it.
+// transaction, and the page hears of the close only after those aborts. A transaction opened in
+// between never runs: the close fails its requests and fires neither complete nor abort for it.
+// So a read in flight answers transaction-failed, as next's legacy adapter's and 1.4.1's did
+// there, and every call once the close has reached the page answers reload-required. A command's
+// run again, and any call that starts between the two, opens a transaction the close catches:
+// the adapter takes the connection's close as that transaction's end, and the closing check
+// makes it reload-required. Before, a command waited on that transaction for good.
 //
 // R88's mid-command-close probe, adopted, with Chrome's order in place of a close that came with
 // the abort, the saves an abort finds overtaken, the worker's ports, a read that starts between
-// the abort and the close, and the worker's own open, whose upgrade IndexedDB refuses a
-// transaction during as it does on a closing connection.
+// the abort and the close, an upgrade that lands at 8, and the worker's own open, whose upgrade
+// IndexedDB refuses a transaction during as it does on a closing connection. The command cases
+// time out where a command waits for good.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -88,12 +90,13 @@ function onFirst(mode, store, then) {
 /**
  * Chrome's forced close of a connection, in Chrome's order (e2e/connection-closing.spec.js).
  * Once the first transaction of `mode` over `store` opens, the browser aborts each transaction
- * open on that connection, and any that opens before those aborts have reached the page, whose
- * requests fail with an AbortError while the connection still takes a new transaction. The close
- * reaches the page only after the aborts have: as the next transaction opens on the connection,
- * which the browser never runs, or a task later when none does. Then every transaction still
- * open on it aborts, the connection refuses new ones, and close fires once they've finished.
- * fake-indexeddb's forceCloseDatabase lets an open transaction finish, so this aborts each.
+ * open on that connection, whose requests fail with an AbortError and which fire abort, while the
+ * connection still takes a new transaction. Nothing opened on the connection after that runs.
+ * The close reaches the page a task after those aborts have: every transaction still open then
+ * fails its requests and fires neither complete nor abort, the connection refuses new ones, and
+ * close fires, before those requests' errors. fake-indexeddb runs what's opened and fires abort
+ * for what it aborts, so this holds the connection with a transaction that never ends until the
+ * close, and drops complete and abort for what the close catches.
  * @param {IDBTransactionMode} mode
  * @param {string} store
  * @param {{onAborted?: () => void}} [options] - runs as the aborts reach the page, before the close does
@@ -105,46 +108,76 @@ function chromeCloses(mode, store, { onAborted } = {}) {
   const opened = [];
   /** @type {'open' | 'aborting' | 'aborted' | 'closed'} */
   let phase = 'open';
-  let left = 0;
+  /** @type {IDBDatabase | null} */
+  let closing = null;
   /** @type {() => void} */
   let reached = () => {};
   /** @type {Promise<void>} */
   const closed = new Promise(resolve => {
     reached = resolve;
   });
-  /** @param {IDBDatabase} db */
-  const closeReaches = db => {
-    if (phase === 'closed') return;
+  /**
+   * The close catches `tx`: its requests fail, and neither complete nor abort reaches anyone
+   * @param {IDBTransaction} tx
+   */
+  const caught = tx => {
+    const quiet = /** @type {any} */ (tx);
+    const dispatch = quiet.dispatchEvent.bind(quiet);
+    quiet.dispatchEvent = (/** @type {Event} */ event) =>
+      event.type === 'abort' || event.type === 'complete' ? true : dispatch(event);
+    try {
+      tx.abort();
+    } catch {
+      // It finished already
+    }
+  };
+  const closeReaches = () => {
+    if (phase === 'closed' || !closing) return;
     phase = 'closed';
-    for (const tx of opened) {
+    for (const tx of opened) caught(tx);
+    fake.forceCloseDatabase(closing);
+    reached();
+  };
+  /**
+   * The browser's side of the close: what's open aborts, and nothing opened after runs, as a
+   * transaction over every store that ends only at the close holds the connection
+   * @param {IDBDatabase} db
+   */
+  const browserAborts = db => {
+    closing = db;
+    let left = 0;
+    for (const tx of [...opened]) {
       try {
         tx.abort();
       } catch {
         // It finished already
+        continue;
       }
+      left += 1;
+      tx.addEventListener('abort', () => {
+        left -= 1;
+        if (left > 0 || phase !== 'aborting') return;
+        phase = 'aborted';
+        if (onAborted) onAborted();
+        setImmediate(closeReaches);
+      });
     }
-    fake.forceCloseDatabase(db);
-    reached();
-  };
-  /**
-   * @param {IDBDatabase} db
-   * @param {IDBTransaction} tx
-   */
-  const browserAborts = (db, tx) => {
-    try {
-      tx.abort();
-    } catch {
-      // It finished already, or it's aborting
-      return;
-    }
-    left += 1;
-    tx.addEventListener('abort', () => {
-      left -= 1;
-      if (left > 0 || phase !== 'aborting') return;
+    const names = [...db.objectStoreNames];
+    const held = transaction.call(db, names, 'readwrite');
+    opened.push(held);
+    const holding = held.objectStore(names[0]);
+    const next = () => {
+      const request = holding.get('ntn-held');
+      request.onsuccess = () => {
+        if (phase !== 'closed') next();
+      };
+      request.onerror = () => {};
+    };
+    next();
+    if (left === 0) {
       phase = 'aborted';
-      if (onAborted) onAborted();
-      setImmediate(() => closeReaches(db));
-    });
+      setImmediate(closeReaches);
+    }
   };
   /**
    * @this {IDBDatabase}
@@ -155,16 +188,11 @@ function chromeCloses(mode, store, { onAborted } = {}) {
   fake.IDBDatabase.prototype.transaction = function watched(names, txMode, options) {
     const tx = transaction.call(this, names, txMode, options);
     const db = this;
+    if (closing && closing !== db) return tx;
     opened.push(tx);
-    if (phase === 'aborting') {
-      queueMicrotask(() => (phase === 'aborting' ? browserAborts(db, tx) : closeReaches(db)));
-    } else if (phase === 'aborted') {
-      queueMicrotask(() => closeReaches(db));
-    } else if (phase === 'open' && (txMode || 'readonly') === mode && [names].flat().includes(store)) {
+    if (phase === 'open' && (txMode || 'readonly') === mode && [names].flat().includes(store)) {
       phase = 'aborting';
-      queueMicrotask(() => {
-        for (const each of [...opened]) browserAborts(db, each);
-      });
+      queueMicrotask(() => browserAborts(db));
     }
     return tx;
   };
@@ -199,7 +227,7 @@ const noteIn = async (of, id) =>
 const RELOAD = ['unavailable', 'storage', 'reload-required', false];
 
 describe("#17's adapter, as the new tab's root opens it, when its connection goes while a call runs (#17 PR 4a)", () => {
-  it('Chrome closes it while a command commits: reload-required once its run again fails there, nothing written, and the next call the same', async () => {
+  it('Chrome closes it while a command commits: reload-required once its run again fails there, nothing written, and the next call the same', { timeout: 10_000 }, async () => {
     const { of, adapter, kernel } = await newTab();
     const chrome = chromeCloses('readwrite', 'canvases');
     let during;
@@ -315,7 +343,56 @@ describe("#17's adapter, as the new tab's root opens it, when its connection goe
     adapter.close();
   });
 
-  it('Chrome closes it while two saves of one note are in flight: the older, which the newer overtook, transaction-failed, and the newer reload-required once its run again fails there', async () => {
+  it("another context's upgrade lands while a command commits at 8, with no ledger to answer a resend: the command runs once and answers committed", { timeout: 10_000 }, async () => {
+    const of = await profileWith(/** @type {any} */ (synthesized().get('v8.basic')));
+    const adapter = createNewTabAdapter({
+      indexedDB: of.real,
+      settings: of.chrome.api.storage.local,
+      awaitUpgrade: async () => {},
+      locks: null,
+    });
+    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+    await adapter.open();
+    const { transaction } = fake.IDBDatabase.prototype;
+    let runs = 0;
+    /** @type {Promise<void> | undefined} */
+    let upgrade;
+    /**
+     * Each write over the notes, and the upgrade sent as the first opens
+     * @this {IDBDatabase}
+     * @param {string | string[]} names
+     * @param {IDBTransactionMode} [txMode]
+     * @param {IDBTransactionOptions} [options]
+     */
+    fake.IDBDatabase.prototype.transaction = function watched(names, txMode, options) {
+      const tx = transaction.call(this, names, txMode, options);
+      if (txMode === 'readwrite' && [names].flat().includes('canvases')) {
+        runs += 1;
+        if (!upgrade) {
+          upgrade = legacyEnv
+            .requestToPromise(of.real.open('CanvasTabDB', this.version + 1))
+            .then((/** @type {IDBDatabase} */ opened) => opened.close());
+        }
+      }
+      return tx;
+    };
+    let during;
+    try {
+      during = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'during', name: 'During' });
+      await upgrade;
+    } finally {
+      fake.IDBDatabase.prototype.transaction = transaction;
+    }
+    // The close this adapter makes on versionchange fires no close event, and waits for the
+    // command, which commits, so it isn't taken for the end of the command's transaction
+    assert.equal(during.kind, 'committed', JSON.stringify(during));
+    assert.equal(runs, 1, 'the command ran once');
+    assert.ok(await noteIn(of, 'during'));
+    assert.equal(adapter.openState(), 'version-changed');
+    adapter.close();
+  });
+
+  it('Chrome closes it while two saves of one note are in flight: the older, which the newer overtook, transaction-failed, and the newer reload-required once its run again fails there', { timeout: 10_000 }, async () => {
     const { of, adapter, kernel } = await newTab();
     await kernel.execute({
       type: 'createNote',

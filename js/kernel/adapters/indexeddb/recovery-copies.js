@@ -9,6 +9,7 @@
  */
 
 import { withDataUrls } from './data-urls.js';
+import { endOf } from './requests.js';
 import { DB_NAME, LEGACY_VERSION, STORE_SCHEMAS } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 
@@ -89,9 +90,9 @@ export function readStoreForCopy(db, name) {
     const store = tx.objectStore(name);
     const values = store.getAll();
     const keys = store.keyPath === null ? store.getAllKeys() : null;
-    tx.oncomplete = () => resolve({ values: values.result || [], keys: keys ? keys.result : null });
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
+    endOf(tx).then(end =>
+      end.committed ? resolve({ values: values.result || [], keys: keys ? keys.result : null }) : reject(end.error),
+    );
   }).then(async read => {
     const { values, keys } = /** @type {{values: unknown[], keys: IDBValidKey[] | null}} */ (read);
     const converted = [];
