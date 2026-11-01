@@ -2,10 +2,11 @@
  * NTN-21 on the built extension: the AI features run only when Settings and the AI sidebar
  * say they do. Settings shows the stored AI settings each time it opens, without a request or
  * a write, and saves each background job's switch and interval as the user changes them. A
- * first run leaves both jobs off, and a later start keeps them as stored. The sidebar's
- * Insights tab reads the note only while the sidebar is open. The key is a test value, and
- * the harness refuses every request that leaves the extension; the specs only record them.
- * Each test also fails on an uncaught exception that test/known-defects.json doesn't list.
+ * first run leaves both jobs off. An install that ran an earlier version has both turned off
+ * once, at its first start, and a job the user turns back on stays on. The sidebar's Insights
+ * tab reads the note only while the sidebar is open. The key is a test value, and the harness
+ * refuses every request that leaves the extension; the specs only record them. Each test also
+ * fails on an uncaught exception that test/known-defects.json doesn't list.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
@@ -13,6 +14,14 @@ const driver = require('./characterization/driver');
 
 const KEY = 'sk-test';
 const CONFIGURED = { llmProvider: 'openai', llmApiKey: KEY, llmModel: 'gpt-4o-mini' };
+/** Both jobs on, as a user turns them on in Settings after their one-time switch-off */
+const CHOSEN_ON = {
+  backgroundJobsOffOnce: true, autoTitleEnabled: true, autoTitleInterval: 30, insightsEnabled: true, insightsInterval: 720,
+};
+/** Settings as an earlier version's first run left them, with a provider set up since: both jobs on */
+const EARLIER = { ...CONFIGURED, autoTitleEnabled: true, autoTitleInterval: 15, insightsEnabled: true, insightsInterval: 360 };
+/** An untitled note long enough for both jobs to pick up */
+const UNTITLED_NOTE = { name: 'Untitled', blocks: [{ type: 'text', content: 'Ship the beta to testers on Friday, then read every reply before the next build.' }] };
 
 /** Store `settings` before the first new tab opens, as an earlier session left them */
 async function storeSettings(extension, settings) {
@@ -49,8 +58,30 @@ async function startSettled(page) {
 }
 
 /**
+ * Record, from now until stop(), each request that leaves the extension; the harness still
+ * refuses it
+ */
+async function recordRequests(extension) {
+  const requests = [];
+  const record = route => {
+    const request = route.request();
+    if (!request.url().startsWith('chrome-extension://')) requests.push(`${request.method()} ${request.url()}`);
+    return route.fallback();
+  };
+  await extension.context.route('**/*', record);
+  return {
+    async stop() {
+      await extension.context.unroute('**/*', record);
+      return requests.slice();
+    },
+  };
+}
+
+/**
  * Record, from now until stop(), each request that leaves the extension (the harness still
- * refuses it) and each chrome.storage.local key written
+ * refuses it) and each chrome.storage.local key written: the page's own writes at the call,
+ * so a write that leaves a value as it was counts too, and every other context's through
+ * chrome.storage.onChanged
  */
 async function watchTraffic(extension, page) {
   const requests = [];
@@ -62,6 +93,15 @@ async function watchTraffic(extension, page) {
   await extension.context.route('**/*', record);
   await page.evaluate(() => {
     window.__ntnWrites = [];
+    const local = chrome.storage.local;
+    for (const method of ['set', 'remove', 'clear']) {
+      const write = local[method].bind(local);
+      local[method] = (...args) => {
+        const keys = method === 'set' ? Object.keys(args[0] || {}) : method === 'remove' ? [].concat(args[0]) : ['(clear)'];
+        window.__ntnWrites.push(...keys);
+        return write(...args);
+      };
+    }
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local') window.__ntnWrites.push(...Object.keys(changes));
     });
@@ -77,9 +117,7 @@ async function watchTraffic(extension, page) {
 
 test('Settings shows the stored AI settings after a reload, and opening it sends and writes nothing', async ({ extension }) => {
   await extension.seedOnboarded();
-  await storeSettings(extension, {
-    ...CONFIGURED, autoTitleEnabled: true, autoTitleInterval: 30, insightsEnabled: true, insightsInterval: 720,
-  });
+  await storeSettings(extension, { ...CONFIGURED, ...CHOSEN_ON });
   const page = await driver.openNewTab(extension);
   await driver.reload(page);
   await startSettled(page);
@@ -105,9 +143,7 @@ test('Settings shows the stored AI settings after a reload, and opening it sends
 
 test("Settings saves a background job's switch and interval as the user changes them", async ({ extension }) => {
   await extension.seedOnboarded();
-  await storeSettings(extension, {
-    ...CONFIGURED, autoTitleEnabled: true, autoTitleInterval: 30, insightsEnabled: true, insightsInterval: 720,
-  });
+  await storeSettings(extension, { ...CONFIGURED, ...CHOSEN_ON });
   const page = await driver.openNewTab(extension);
   const settings = await driver.openSettings(page, 'AI Configuration');
 
@@ -120,20 +156,46 @@ test("Settings saves a background job's switch and interval as the user changes 
   await expectNoUncaught(extension, page);
 });
 
-test('a first run leaves both background jobs off', async ({ extension }) => {
+test('a first run leaves both background jobs off, with their one-time switch-off marked as done', async ({ extension }) => {
   const page = await driver.openNewTab(extension, { wait: false });
   await driver.skipOnboarding(page);
-  expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled'])).toEqual({ autoTitleEnabled: false, insightsEnabled: false });
+  expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled', 'backgroundJobsOffOnce']))
+    .toEqual({ autoTitleEnabled: false, insightsEnabled: false, backgroundJobsOffOnce: true });
   await expectNoUncaught(extension, page);
 });
 
-test('a later start keeps both background jobs as they were stored', async ({ extension }) => {
+test('an install that ran an earlier version has both background jobs turned off at its first start, with no request to the provider', async ({ extension }) => {
   await extension.seedOnboarded();
-  await storeSettings(extension, { autoTitleEnabled: true, insightsEnabled: false });
+  await storeSettings(extension, EARLIER);
+  await driver.seedNotes(extension, [UNTITLED_NOTE]);
+  const requests = await recordRequests(extension);
   const page = await driver.openNewTab(extension);
-  await driver.reload(page);
   await startSettled(page);
-  expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled'])).toEqual({ autoTitleEnabled: true, insightsEnabled: false });
+
+  expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled', 'backgroundJobsOffOnce']))
+    .toEqual({ autoTitleEnabled: false, insightsEnabled: false, backgroundJobsOffOnce: true });
+  expect((await requests.stop()).filter(line => line.includes('https://api.openai.com/')), 'requests to the provider').toEqual([]);
+  const settings = await driver.openSettings(page, 'AI Configuration');
+  await expect(settings.locator('#auto-title-enabled')).not.toBeChecked();
+  await expect(settings.locator('#insights-enabled')).not.toBeChecked();
+  await expectNoUncaught(extension, page);
+});
+
+test('a background job turned back on after the one-time switch-off stays on at later starts', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await storeSettings(extension, EARLIER);
+  const page = await driver.openNewTab(extension);
+  await startSettled(page);
+  expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled'])).toEqual({ autoTitleEnabled: false, insightsEnabled: false });
+
+  const settings = await driver.openSettings(page, 'AI Configuration');
+  await settings.locator('.llm-auto-title-row .toggle-switch').click();
+  await expect.poll(() => storedSettings(extension, ['autoTitleEnabled'])).toEqual({ autoTitleEnabled: true });
+  for (const start of ['the next start', 'the start after']) {
+    await driver.reload(page);
+    await startSettled(page);
+    expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled']), start).toEqual({ autoTitleEnabled: true, insightsEnabled: false });
+  }
   await expectNoUncaught(extension, page);
 });
 

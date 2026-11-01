@@ -261,6 +261,10 @@ class App {
         });
       }
 
+      // Before anything can start a background AI job: an install that ran an earlier
+      // version has both jobs turned off, once (#21). onboarding.js puts Onboarding on window.
+      await /** @type {any} */ (globalThis).Onboarding.turnBackgroundJobsOffOnce();
+
       // Setup UI
       this.setupPageSelector(this.notes);
       await this.initSidebarController();

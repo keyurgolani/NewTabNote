@@ -304,6 +304,8 @@ class AIChatController {
 
     this.aiSidebarOpen = true;
     this.updateAISidebarState();
+    // Opened on the Insights tab: it reads the open note again, as showing the tab does
+    if (this.aiActiveTab === 'smart') this.updateSmartSuggestions(true);
 
     // Lazy-load AI embedding model on first AI sidebar open (Req 27.3)
     if (this.onLoadEmbeddingsModel) {

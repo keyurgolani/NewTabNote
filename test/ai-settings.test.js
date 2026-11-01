@@ -5,10 +5,15 @@
 //   (masked), the model, the Ollama URL, and both background jobs (titles and insights) with
 //   their intervals and the rows they turn on. Opening it sends no request and writes nothing.
 // - Each job's switch and interval save the moment the user changes them, and start, stop or
-//   restart the job. A job whose stored switch turns off stops in every open new tab.
-// - A first run leaves both jobs off.
+//   restart the job. A job whose stored switch turns off stops in every open new tab, and sends
+//   nothing more, even from a run under way.
+// - A first run leaves both jobs off. An install that ran an earlier version has both turned
+//   off once, at its first start, before either can run; a job turned back on stays on.
 // - The AI sidebar's Insights tab reads the note only while the sidebar is open.
+// - Settings' key warning says where the key is kept.
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory } = require('fake-indexeddb');
@@ -30,6 +35,16 @@ const UNTITLED = {
   canvases: [note('n1', { name: 'Untitled' })],
   elements: [block('b1', 'n1', 0, 'Ship the beta to testers on Friday, then read every reply before the next build.')],
 };
+/** Six such notes: a run sends one request for each, a second or so apart */
+const SIX_UNTITLED = {
+  canvases: Array.from({ length: 6 }, (_, i) => note(`n${i}`, { name: 'Untitled' })),
+  elements: Array.from({ length: 6 }, (_, i) => block(`b${i}`, `n${i}`, 0, `${i}: Ship the beta to testers on Friday, then read every reply before the next build.`)),
+};
+/** The two background jobs, as Settings, storage and NotesManager name their parts */
+const JOBS = [
+  { name: 'the titles job', toggle: 'auto-title-enabled', select: 'auto-title-interval', enabled: 'autoTitleEnabled', interval: 'autoTitleInterval', timer: 'autoTitleIntervalId', setup: 'setupAutoTitle', update: 'updateAutoTitleSettings', row: '.llm-auto-title-interval-row', minutes: 15, next: '30' },
+  { name: 'the insights job', toggle: 'insights-enabled', select: 'insights-interval', enabled: 'insightsEnabled', interval: 'insightsInterval', timer: 'insightsIntervalId', setup: 'setupInsightsExtraction', update: 'updateInsightsSettings', row: '.llm-insights-interval-row', minutes: 360, next: '720' },
+];
 
 /** `settings` as an earlier session stored them, in chrome.storage.local */
 function storedSettings(settings) {
@@ -262,10 +277,7 @@ describe('Settings shows the AI settings in effect', () => {
 });
 
 describe("Settings saves each background job's switch and interval as the user changes them", () => {
-  for (const job of [
-    { name: 'the titles job', toggle: 'auto-title-enabled', select: 'auto-title-interval', enabled: 'autoTitleEnabled', interval: 'autoTitleInterval', timer: 'autoTitleIntervalId', setup: 'setupAutoTitle', row: '.llm-auto-title-interval-row', minutes: 15, next: '30' },
-    { name: 'the insights job', toggle: 'insights-enabled', select: 'insights-interval', enabled: 'insightsEnabled', interval: 'insightsInterval', timer: 'insightsIntervalId', setup: 'setupInsightsExtraction', row: '.llm-insights-interval-row', minutes: 360, next: '720' },
-  ]) {
+  for (const job of JOBS) {
     /** A new tab whose stored `job` is on or off, with the provider configured, started as App starts it */
     const start = async (on) => {
       const factory = new IDBFactory();
@@ -362,8 +374,72 @@ describe("Settings saves each background job's switch and interval as the user c
   });
 });
 
+describe('a job turned off sends nothing more, even from a run under way', () => {
+  /** A new tab on six eligible notes with `job` on, its run started and its first request out */
+  const started = async (job, shared = null) => {
+    const factory = new IDBFactory();
+    await createDatabase(factory, { records: SIX_UNTITLED });
+    const page = await openPage(shared || {
+      chrome: storedSettings({ ...CONFIGURED, [job.enabled]: true, [job.interval]: job.minutes }),
+      indexedDB: factory,
+    });
+    page.notes[job.setup]();
+    for (let i = 0; i < 40 && chats(page) === 0; i++) await settle(30);
+    assert.equal(chats(page), 1, `${job.name}'s run sent its first request`);
+    return page;
+  };
+
+  for (const job of JOBS) {
+    it(`${job.name}, left on: its run sends a request for every note`, async () => {
+      const page = await started(job);
+      await pass(page, 20_000, 1000);
+      assert.equal(chats(page), 6);
+    });
+
+    it(`${job.name}, turned off in Settings during its run: nothing more goes to the provider`, async () => {
+      const page = await started(job);
+      await page.settings.openSettingsModal();
+      await change(page, job.toggle, false);
+      const sent = chats(page);
+      await pass(page, 20_000, 1000);
+      assert.equal(chats(page) - sent, 0, 'requests after the switch went off');
+    });
+
+    it(`${job.name}, turned off in another new tab during this one's run: nothing more goes to the provider`, async () => {
+      const chrome = storedSettings({ ...CONFIGURED, [job.enabled]: true, [job.interval]: job.minutes });
+      const factory = new IDBFactory();
+      await createDatabase(factory, { records: SIX_UNTITLED });
+      const shared = { chrome, indexedDB: factory, locks: createLockManager(), channels: createChannelBus() };
+      const first = await openPage(shared);
+      const second = await started(job, shared);
+      second.settings.setupSettingsSync();
+
+      await first.notes[job.update](false, job.minutes);
+      for (const listener of chrome.api.storage.onChanged.listeners.slice()) {
+        listener({ [`setting_${job.enabled}`]: { oldValue: true, newValue: false } }, 'local');
+      }
+      await settle(60);
+      const sent = chats(second);
+      await pass(second, 20_000, 1000);
+      assert.equal(chats(second) - sent, 0, 'requests from this tab after the switch went off in the other');
+    });
+  }
+});
+
+describe("Settings' key warning", () => {
+  it('says where the key is kept', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'newtab.html'), 'utf8');
+    const warning = /<p class="[^"]*\bapi-key-warning\b[^"]*">([\s\S]*?)<\/p>/.exec(html);
+    assert.ok(warning, 'newtab.html has the key warning');
+    assert.equal(
+      warning[1].replace(/\s+/g, ' ').trim(),
+      "⚠️ API keys are stored in your device's local extension storage. They are accessible to this extension but are not encrypted at rest. Avoid using keys with broad permissions.",
+    );
+  });
+});
+
 describe('a first run', () => {
-  it('leaves both background jobs off', async () => {
+  it('leaves both background jobs off, and marks their one-time switch-off as done', async () => {
     const env = createLegacyEnv();
     env.load(...FILES);
     const Storage = env.get('Storage');
@@ -373,6 +449,56 @@ describe('a first run', () => {
 
     assert.equal(await Storage.getSetting('autoTitleEnabled', null), false);
     assert.equal(await Storage.getSetting('insightsEnabled', null), false);
+    assert.equal(await Storage.getSetting('backgroundJobsOffOnce', null), true);
+  });
+});
+
+describe('an install that ran an earlier version', () => {
+  /** Settings as an earlier version's first run left them, with a provider set up since: both jobs on */
+  const EARLIER = {
+    ...CONFIGURED, hasCompletedOnboarding: true,
+    autoTitleEnabled: true, autoTitleInterval: 15, insightsEnabled: true, insightsInterval: 360,
+  };
+
+  /** A new tab's start as App runs it: the jobs' one-time switch-off, then each job's own setup */
+  const startTab = async (shared) => {
+    const page = await openPage(shared);
+    await page.env.get('Onboarding').turnBackgroundJobsOffOnce();
+    await page.notes.setupAutoTitle();
+    await page.notes.setupInsightsExtraction();
+    await runsDone(page);
+    return page;
+  };
+
+  it('has both background jobs turned off at its first start, before either runs, and marked as done', async () => {
+    const factory = new IDBFactory();
+    await createDatabase(factory, { records: UNTITLED });
+    const page = await startTab({ chrome: storedSettings(EARLIER), indexedDB: factory });
+
+    assert.equal(await page.Storage.getSetting('autoTitleEnabled', null), false);
+    assert.equal(await page.Storage.getSetting('insightsEnabled', null), false);
+    assert.equal(await page.Storage.getSetting('backgroundJobsOffOnce', null), true, 'the switch-off is marked as done');
+    assert.equal(page.notes.autoTitleIntervalId, null, 'titles never started');
+    assert.equal(page.notes.insightsIntervalId, null, 'insights never started');
+    assert.equal(chats(page), 0, 'nothing went to the provider');
+  });
+
+  it('turns them off only once: a job turned back on stays on at every later start', async () => {
+    const factory = new IDBFactory();
+    await createDatabase(factory, { records: UNTITLED });
+    const shared = { chrome: storedSettings(EARLIER), indexedDB: factory, locks: createLockManager(), channels: createChannelBus() };
+    const first = await startTab(shared);
+    await first.settings.openSettingsModal();
+    await change(first, 'auto-title-enabled', true);
+    await runsDone(first);
+    assert.equal(await first.Storage.getSetting('autoTitleEnabled', null), true, 'the user turned titles back on');
+
+    for (const start of ['the second start', 'the third start']) {
+      const page = await startTab(shared);
+      assert.equal(await page.Storage.getSetting('autoTitleEnabled', null), true, `titles stay on at ${start}`);
+      assert.equal(await page.Storage.getSetting('insightsEnabled', null), false, `insights stay off at ${start}`);
+      assert.notEqual(page.notes.autoTitleIntervalId, null, `titles run at ${start}`);
+    }
   });
 });
 
@@ -401,6 +527,18 @@ describe("the AI sidebar's Insights tab", () => {
     // An edit, as App's editor change handler reports it
     await page.ai.updateSmartSuggestions();
     assert.equal(chats(page), opened + 1, 'an edit reads it again');
+  });
+
+  it('reads the note again when the sidebar reopens on the tab', async () => {
+    const page = await start();
+    page.ai.openAISidebar();
+    page.ai.switchAITab('smart');
+    await settle(60);
+    const shown = chats(page);
+    page.ai.closeAISidebar();
+    page.ai.openAISidebar();
+    await settle(60);
+    assert.equal(chats(page), shown + 1, 'reopening on the Insights tab reads the note');
   });
 
   it('sends nothing to the provider once the sidebar is closed, after showing the tab', async () => {

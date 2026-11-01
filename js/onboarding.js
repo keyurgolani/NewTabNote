@@ -42,13 +42,40 @@ class OnboardingManager {
 
   /**
    * Configure default settings for first-run users. Both background AI jobs, titles and
-   * insights, start off; the user turns them on in Settings.
+   * insights, start off; the user turns them on in Settings. A new install has nothing for
+   * the one-time switch-off to do, so it's marked as done.
    * @returns {Promise<void>}
    */
   static async setupFirstRun() {
-    await Storage.setSetting('embeddingsEnabled', true);
-    await Storage.setSetting('autoTitleEnabled', false);
-    await Storage.setSetting('insightsEnabled', false);
+    const storage = OnboardingManager.storage;
+    await storage.setSetting('embeddingsEnabled', true);
+    await storage.setSetting('autoTitleEnabled', false);
+    await storage.setSetting('insightsEnabled', false);
+    await storage.setSetting('backgroundJobsOffOnce', true);
+  }
+
+  /**
+   * Turn both background AI jobs, titles and insights, off once: at the first start of this
+   * version on an install that ran an earlier one, before either job can start. The stored
+   * marker keeps it from running again, so a job the user turns back on in Settings stays on.
+   * @returns {Promise<boolean>} Whether it turned them off at this start
+   */
+  static async turnBackgroundJobsOffOnce() {
+    const storage = OnboardingManager.storage;
+    if (await storage.getSetting('backgroundJobsOffOnce', false)) return false;
+    await storage.setSetting('autoTitleEnabled', false);
+    await storage.setSetting('insightsEnabled', false);
+    await storage.setSetting('backgroundJobsOffOnce', true);
+    return true;
+  }
+
+  /**
+   * The shared DatabaseManager from storage.js. The bare `Storage` global also names the
+   * DOM's Web Storage type, so typed calls go through this.
+   * @returns {DatabaseManager}
+   */
+  static get storage() {
+    return /** @type {any} */ (globalThis).Storage;
   }
 
   /**

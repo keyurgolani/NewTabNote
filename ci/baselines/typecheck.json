@@ -414,7 +414,7 @@
       "TS2339": {
         "Property 'Onboarding' does not exist on type 'Window & typeof globalThis'.": 1,
         "Property 'getSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1,
-        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 4
+        "Property 'setSetting' does not exist on type '{ new (): Storage; prototype: Storage; }'.": 1
       }
     },
     "js/popup.js": {

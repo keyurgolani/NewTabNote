@@ -734,6 +734,8 @@ class NotesManager {
         if (note.lastTitleContentHash && note.lastTitleContentHash === contentHash) continue;
 
         try {
+          // Turned off since this run began, here or in another new tab: nothing more goes out
+          if (!(await this.storage.getSetting('autoTitleEnabled', false))) break;
           this.logger.debug('NotesManager', `Generating title for note: ${note.id}`);
 
           const editor = this.getEditor ? this.getEditor() : null;
@@ -913,6 +915,8 @@ class NotesManager {
         if (note.lastInsightsContentHash && note.lastInsightsContentHash === contentHash) continue;
 
         try {
+          // Turned off since this run began, here or in another new tab: nothing more goes out
+          if (!(await this.storage.getSetting('insightsEnabled', false))) break;
           this.logger.debug('NotesManager', `Extracting insights for note: ${note.id} (${note.name || 'Untitled'})`);
 
           const insights = await this.llm.extractInsights(content, note.name);
