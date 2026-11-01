@@ -2,10 +2,11 @@
  * #27 slice 3b's states on the packaged build, as steps that bring a new tab there, for
  * e2e/part-states.spec.js, which checks each one, and for the design review's screenshots.
  *
- * A state is { build, open, reach }: `build` changes a copy of the build (a library's file gone,
- * one that loads and throws, another build's build-info.json, the workspace chunk gone), `open`
- * says how the tab opens, and `reach(page)` takes the open tab to the state and answers the
- * element that shows it. Notes are seeded first: Alpha plan, Beta plan and Gamma.
+ * A state is { build, open, reach, said }: `build` changes a copy of the build (a library's file
+ * gone, one that loads and throws, another build's build-info.json, the workspace chunk gone),
+ * `open` says how the tab opens, and `reach(page)` takes the open tab to the state and answers the
+ * element that shows it. `said` is what its live region last said, when that isn't the state's
+ * first sentence. Notes are seeded first: Alpha plan, Beta plan and Gamma.
  */
 
 const fs = require('fs');
@@ -198,6 +199,17 @@ async function typeLine(page, text) {
   await page.keyboard.type(text);
 }
 
+/** u5: the charts' Reload, whose save guard failed, with the failed save in Reload's place */
+async function saveFailed(page) {
+  await failingSaves(page);
+  await typeLine(page, ' and a line never stored');
+  await openStats(page);
+  const panel = page.locator(PLACES.charts);
+  await panel.locator('button.part-state-swap').click();
+  await expect(panel).toContainText("Failed to save your changes, so the page didn't reload.", { timeout: 15_000 });
+  return panel;
+}
+
 /**
  * The states, each at a width and theme: { name, about, build, open, reach }. `reach` answers the
  * locator that shows the state.
@@ -352,13 +364,20 @@ const STATES = [
   },
   {
     name: 'u5-save-failed', about: "Reload's save guard failed: the failed save in Reload's place, with Try again and Reload anyway", build: () => threw('chart'),
+    reach: saveFailed,
+  },
+  {
+    name: 'u5-trying-again', about: "u5's Try again while the guards run: the failed save's words over \"Saving your changes before reloading.\", Try again held with focus", build: () => threw('chart'),
+    said: 'Saving your changes before reloading.',
     reach: async (page) => {
-      await failingSaves(page);
-      await typeLine(page, ' and a line never stored');
-      await openStats(page);
-      const panel = page.locator(PLACES.charts);
-      await panel.locator('button.part-state-swap').click();
-      await expect(panel).toContainText("Failed to save your changes, so the page didn't reload.", { timeout: 15_000 });
+      const panel = await saveFailed(page);
+      // This time the guard never answers, so the state stays for its 10 s
+      await page.evaluate(() => { app.tabController.saveOpenEditors = () => new Promise(() => {}); });
+      const tryAgainButton = panel.getByRole('button', { name: 'Try again' });
+      await tryAgainButton.click();
+      await expect(tryAgainButton).toHaveAttribute('aria-disabled', 'true');
+      await expect(tryAgainButton).toBeFocused();
+      await expect(panel.locator('.part-state-note')).toHaveText('Saving your changes before reloading.');
       return panel;
     },
   },

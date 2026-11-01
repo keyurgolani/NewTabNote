@@ -4,9 +4,10 @@
  * search, the Markdown export, the embedding model in search and Related Notes, the AI chat's All
  * Notes), with Try again, then the second failure with Reload, or Reload alone for a file that
  * loaded and threw or another build on disk. A part's Reload runs the save guards first and says
- * when a save stopped it, a guard that never answers included. The status line shows only past
- * 400 ms and holds 300 ms. No toast says any of it, and typing still saves. The states themselves
- * are in e2e/part-states/states.js.
+ * when a save stopped it, a guard that never answers included, and the Try again after that says
+ * it's saving while the guards run. The status line shows only past 400 ms and holds 300 ms. No
+ * toast says any of it, and typing still saves. The states themselves are in
+ * e2e/part-states/states.js.
  */
 
 const fs = require('fs');
@@ -56,6 +57,7 @@ const BUTTONS = {
   'm4-related-failed': ['Try again'],
   'a1-all-notes-failed': ['Try again'],
   'u5-save-failed': ['Try again', 'Reload anyway'],
+  'u5-trying-again': ['Try again', 'Reload anyway'],
 };
 
 for (const width of WIDTHS) {
@@ -84,7 +86,7 @@ for (const width of WIDTHS) {
         });
         const words = (await panel.locator('.part-state-text').textContent()).trim();
         if (said.inMessages) expect(said.regions.join(' ')).not.toContain(words);
-        else expect(said.regions.join(' | ')).toContain(words.split('.')[0]);
+        else expect(said.regions.join(' | ')).toContain(state.said || words.split('.')[0]);
         // Each button is a 44 px target
         for (const box of await panel.locator('.part-state-actions button:visible').evaluateAll((list) => list.map((b) => b.getBoundingClientRect().toJSON()))) {
           expect(box.height).toBeGreaterThanOrEqual(44);
