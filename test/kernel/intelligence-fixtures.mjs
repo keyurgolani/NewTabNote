@@ -3,7 +3,7 @@
 // through the kernel's block command (saveNoteContent) and the tests can check that nothing
 // else ever writes a note.
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createIntelligence } from '../../js/kernel/core/intelligence/service.js';
 import { SUBJECT_KEYS, signalIdOf } from '../../js/kernel/core/intelligence/identity.js';
 import { plainTitle } from '../../js/kernel/core/intelligence/records.js';

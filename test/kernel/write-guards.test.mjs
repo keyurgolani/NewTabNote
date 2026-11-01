@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import { walk } from '../../js/kernel/core/contracts/schema-walk.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';

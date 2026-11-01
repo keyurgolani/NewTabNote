@@ -6,7 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { indexCommands } from '../../js/kernel/core/application/indexing.js';
 import { noteCommands } from '../../js/kernel/core/application/notes.js';
 import { remoteCommands } from '../../js/kernel/core/application/remote.js';

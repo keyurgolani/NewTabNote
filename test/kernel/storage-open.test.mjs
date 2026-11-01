@@ -17,7 +17,7 @@ import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY } from '../../js/kernel/adapters/indexeddb/settings.js';
 import { MIGRATE_MESSAGE, MIGRATE_WAIT_MS, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { adapterOn, closeAll, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';

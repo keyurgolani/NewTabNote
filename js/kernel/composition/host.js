@@ -15,6 +15,7 @@ import { randomIds } from './ids.js';
 
 /** @typedef {import('../adapters/indexeddb/adapter.js').SettingsStore} SettingsStore */
 /** @typedef {import('../core/application/kernel.js').KernelClient} KernelClient */
+/** @typedef {import('../core/application/handlers.js').HandlerTable} HandlerTable */
 /** @typedef {import('../core/contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('../core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../core/ports/runtime.js').Ids} Ids */
@@ -161,29 +162,33 @@ export function waitForWorkerUpgrade({ runtime = globalThis.chrome?.runtime, wai
 }
 
 /**
- * Reports a commit-feed listener that threw. Its detail holds the aggregate, the ids, and the
- * error, never a payload.
+ * Reports a commit-feed listener that threw, and as an error a command or query the page sent
+ * that its table doesn't hold. Its detail holds the aggregate, the ids, the surface, the type
+ * and the error, never a payload.
  * @type {Logger}
  */
 const consoleLogger = Object.freeze({
   warn: (event, detail) => console.warn(`NewTabNote kernel: ${event}`, detail),
+  error: (event, detail) => console.error(`NewTabNote kernel: ${event}`, detail),
 });
 
 /**
  * One context's kernel on `adapter`, which starts opening now, and its client. Its caller is
- * `surface` with an id of its own, which the policy checks on every command and query.
- * `maintainOnOpen` runs startup maintenance before anything else, as the new tab's and the
- * worker's Storage.init did. `ready` is what the kernel waits on before it runs anything, the
- * adapter's open unless the root has more to open (the new tab's). Every id it and its client
- * make is a UUID (ids.js).
- * @param {{adapter: KernelAdapter & {open(): Promise<void>}, surface: Surface, maintainOnOpen?: boolean, ready?: Promise<unknown>}} options
+ * `surface` with an id of its own, which the policy checks on every command and query, and it
+ * runs the commands and queries `handlers` holds, the root's table of what its page sends
+ * (core/application/handlers.js). `maintainOnOpen` runs startup maintenance before anything
+ * else, as the new tab's and the worker's Storage.init did. `ready` is what the kernel waits
+ * on before it runs anything, the adapter's open unless the root has more to open (the new
+ * tab's). Every id it and its client make is a UUID (ids.js).
+ * @param {{adapter: KernelAdapter & {open(): Promise<void>}, surface: Surface, handlers: HandlerTable, maintainOnOpen?: boolean, ready?: Promise<unknown>}} options
  * @returns {Client}
  */
-export function kernelClient({ adapter, surface, maintainOnOpen = false, ready = adapter.open() }) {
+export function kernelClient({ adapter, surface, handlers, maintainOnOpen = false, ready = adapter.open() }) {
   const kernel = createKernel({
     adapter,
     policy: createBaselinePolicy(),
     caller: Object.freeze({ surface, contextId: `${surface}-${randomIds.next()}` }),
+    handlers,
     ids: randomIds,
     clock: systemClock,
     logger: consoleLogger,

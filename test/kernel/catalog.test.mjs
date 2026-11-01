@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 
 import * as v from '../../js/lib/valibot/index.mjs';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import * as envelope from '../../js/kernel/core/contracts/envelope.js';

@@ -35,7 +35,7 @@ import {
   TRANSFORM_RETRY_AFTER_MS,
   TRANSFORM_STOP_KEY,
 } from '../../js/kernel/adapters/indexeddb/transforms.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { PLACEMENT_FIELDS, withoutPlacement } from '../../js/kernel/core/domain/placement.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { placementOf } from '../../js/product/placement.js';

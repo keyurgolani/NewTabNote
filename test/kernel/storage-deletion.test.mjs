@@ -22,7 +22,7 @@ import {
   DEFAULT_LIMITS,
 } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import {
   DELETED_AT,

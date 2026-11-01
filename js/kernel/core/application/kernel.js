@@ -10,11 +10,15 @@
  * command and query. Nothing a payload says changes it, so #35's coordinator builds one kernel
  * per principal #13 verified rather than one that takes the caller from a message.
  *
+ * Each kernel runs the handlers its composition root's table holds (handlers.js), the ones its
+ * page sends, so a page loads only the handler modules it runs.
+ *
  * execute() copies a command as it's called, then runs it the same way every time: ask the
- * policy, recall the outcome an earlier send of its commandId got, run its use case, commit,
- * and publish what changed. Once the kernel is ready nothing before the commit is awaited, so
- * saveNoteContent opens its transaction in the task that calls it. Whatever a policy, a use
- * case, an adapter, a listener, or the logger does, execute() answers with an outcome.
+ * policy, find its handler in the table, recall the outcome an earlier send of its commandId
+ * got, run its use case, commit, and publish what changed. Once the kernel is ready nothing
+ * before the commit is awaited, so saveNoteContent opens its transaction in the task that
+ * calls it. Whatever a policy, a use case, an adapter, a listener, or the logger does,
+ * execute() answers with an outcome.
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
@@ -33,16 +37,6 @@ import {
 import { isQueryType } from '../contracts/queries.js';
 import { silentLogger, systemClock } from '../ports/runtime.js';
 import { createCommitFeed } from './feed.js';
-import { folderCommands, folderQueries } from './folders.js';
-import { indexCommands, indexQueries } from './indexing.js';
-import { jobCommands, jobQueries } from './jobs.js';
-import { maintenanceCommands } from './maintenance.js';
-import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
-import { preferenceCommands, preferenceQueries } from './preferences.js';
-import { remoteChangesRefusal, remoteCommands } from './remote.js';
-import { sessionCommands, sessionQueries } from './session.js';
-import { snapshotCommands, snapshotQueries } from './snapshots.js';
-import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/commands.js').CommandType} CommandType */
@@ -78,57 +72,20 @@ import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js
  * @typedef {import('../contracts/outcomes.js').QueryState<T>} QueryState
  */
 
-/**
- * @template {CommandType} T
- * @typedef {import('./work.js').CommandHandler<T>} CommandHandler
- */
+/** @typedef {import('./handlers.js').HandlerTable} HandlerTable */
 
-/**
- * @template {QueryType} T
- * @typedef {import('./work.js').QueryHandler<T>} QueryHandler
- */
-
-/** @type {Readonly<{[T in CommandType]: CommandHandler<T>}>} */
-const COMMAND_HANDLERS = Object.freeze({
-  ...noteCommands,
-  ...folderCommands,
-  ...preferenceCommands,
-  ...sessionCommands,
-  ...maintenanceCommands,
-  ...jobCommands,
-  ...snapshotCommands,
-  ...workspaceDataCommands,
-  ...indexCommands,
-  ...remoteCommands,
-});
-
-/**
- * What refuses each bulk command for its payload before the adapter recalls it, which reserves
- * its key, so a refused one leaves no record and the corrected one can run under its commandId
- * @type {Readonly<Record<string, (command: any) => import('../contracts/outcomes.js').Rejected | undefined>>}
- */
-export const BULK_REFUSALS = Object.freeze({
-  runBulkAction: bulkRefusal,
-  applyRemoteChanges: remoteChangesRefusal,
-});
-
-/** @type {Readonly<{[T in QueryType]: QueryHandler<T>}>} */
-const QUERY_HANDLERS = Object.freeze({
-  ...noteQueries,
-  ...folderQueries,
-  ...preferenceQueries,
-  ...sessionQueries,
-  ...jobQueries,
-  ...snapshotQueries,
-  ...workspaceDataQueries,
-  ...indexQueries,
-});
+/** The code a command or query answers when the policy allows it and the context's table doesn't hold it */
+export const NOT_REGISTERED = 'not-registered';
 
 /**
  * @typedef {object} KernelOptions
  * @property {KernelAdapter} adapter
  * @property {PolicyPort} policy
  * @property {Caller} caller - this context's, from its composition root
+ * @property {HandlerTable} handlers
+ *   The commands and queries this context runs (handlers.js), its composition root's table:
+ *   the ones its page sends. One the policy allows that the table doesn't hold is refused as
+ *   `not-registered` and logged as an error, so it's never run, and never taken for done.
  * @property {Ids} ids
  * @property {Clock} [clock]
  * @property {Logger} [logger]
@@ -205,6 +162,14 @@ function commitResultOf(value) {
 }
 
 /**
+ * Whether `value` is a handler table: its commands, queries and refusals, each a record
+ * @param {unknown} value
+ * @returns {value is HandlerTable}
+ */
+const isHandlerTable = value =>
+  isRecord(value) && isRecord(value.commands) && isRecord(value.queries) && isRecord(value.refusals);
+
+/**
  * @param {KernelOptions} options
  * @returns {Kernel}
  */
@@ -212,12 +177,15 @@ export function createKernel({
   adapter,
   policy,
   caller,
+  handlers,
   ids,
   clock = systemClock,
   logger = silentLogger,
   ready,
   maintainOnOpen = false,
 }) {
+  // A root that builds a kernel with no table is a bug in the root, found as it starts
+  if (!isHandlerTable(handlers)) throw new TypeError("createKernel takes its context's handler table (handlers.js)");
   const feed = createCommitFeed(logger);
   /** @type {'opening' | 'ready' | 'failed'} */
   let status = ready === undefined && !maintainOnOpen ? 'ready' : 'opening';
@@ -311,6 +279,23 @@ export function createKernel({
       : Promise.resolve({ outcome: result, replayed: false });
 
   /**
+   * Reports a command or query the policy allowed that this context's table doesn't hold, a
+   * page sending what its root never registered, as an error: the kernel refuses it, so what
+   * the page meant to do is not done. The detail holds the surface and the type, never a
+   * payload. A logger that throws changes nothing the kernel answers.
+   * @param {string} type
+   */
+  const reportUnregistered = type => {
+    try {
+      const detail = { surface: caller.surface, type, code: NOT_REGISTERED };
+      if (typeof logger.error === 'function') logger.error('handler-missing', detail);
+      else logger.warn('handler-missing', detail);
+    } catch {
+      // The refusal stands
+    }
+  };
+
+  /**
    * Runs a command the caller can no longer change.
    * @param {unknown} copy
    * @returns {Promise<Outcome | BulkOutcome>}
@@ -323,14 +308,21 @@ export function createKernel({
     if (!isId(copy.commandId)) return Promise.resolve(rejected('validation', 'invalid-command'));
     const command = /** @type {Command} */ (copy);
 
+    // One this context's table doesn't hold is refused before anything runs or is recalled,
+    // so no key is reserved, nothing is written, and the page can't take it for done
+    if (!Object.hasOwn(handlers.commands, command.type)) {
+      reportUnregistered(command.type);
+      return Promise.resolve(rejected('policy', NOT_REGISTERED));
+    }
     const handler =
       /** @type {(command: Command, context: UseCaseContext) => UseCaseResult | PromiseLike<UseCaseResult>} */ (
-        COMMAND_HANDLERS[command.type]
+        handlers.commands[command.type]
       );
     const { aggregate, bulk } = COMMANDS[command.type];
     // recall reserves a bulk command's key, so one refused for its payload, such as its action
     // or notes, is refused first, and leaves no record
-    const refusal = bulk && Object.hasOwn(BULK_REFUSALS, command.type) ? BULK_REFUSALS[command.type] : undefined;
+    const refusal =
+      bulk && Object.hasOwn(handlers.refusals, command.type) ? handlers.refusals[command.type] : undefined;
     const refused = refusal ? refusal(command) : undefined;
     if (refused) return Promise.resolve(refused);
     /** @type {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>} */
@@ -417,8 +409,12 @@ export function createKernel({
     if (!isQueryType(copy.type)) return Promise.resolve(failed('policy', 'unknown-query'));
     const decision = decide(copy);
     if (!decision.allowed) return Promise.resolve(failed('policy', decision.code));
+    if (!Object.hasOwn(handlers.queries, copy.type)) {
+      reportUnregistered(copy.type);
+      return Promise.resolve(failed('policy', NOT_REGISTERED));
+    }
     const handler = /** @type {(query: Query, context: UseCaseContext) => Promise<QueryState<QueryData[T]>>} */ (
-      QUERY_HANDLERS[copy.type]
+      handlers.queries[copy.type]
     );
     const accepted = /** @type {Query} */ (copy);
     return Promise.resolve()

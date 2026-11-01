@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';

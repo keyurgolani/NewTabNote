@@ -21,7 +21,7 @@ import vm from 'node:vm';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { filledByLogical2 } from '../../js/kernel/adapters/indexeddb/transforms.js';
 import { VERSION_FIELDS } from '../../js/kernel/adapters/indexeddb/versions.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';

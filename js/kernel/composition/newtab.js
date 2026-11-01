@@ -12,6 +12,7 @@ import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { validateBackup } from '../adapters/indexeddb/backups.js';
 import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { exportRawStores } from '../adapters/indexeddb/raw-export.js';
+import { NEWTAB_HANDLERS } from '../core/application/handlers-all.js';
 import { createNoteList } from '../core/application/note-list.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { createDocumentClient } from './document.js';
@@ -187,16 +188,23 @@ export function createNewTabAdapter(host) {
 }
 
 /**
- * The new tab's kernel and its client, on `adapter` (createNewTabAdapter). It runs startup
- * maintenance before any command. Its connection closes when the worker upgrades the database,
- * so that upgrade never waits on this tab, and from then on every command answers
- * `reload-required`: the editor keeps its text and asks for a reload. It's the tab's one
- * connection to the database since #17 PR 4b, when js/storage.js stopped opening its own.
+ * The new tab's kernel and its client, on `adapter` (createNewTabAdapter), with every handler
+ * the catalog allows on the new tab (NEWTAB_HANDLERS). It runs startup maintenance before any
+ * command. Its connection closes when the worker upgrades the database, so that upgrade never
+ * waits on this tab, and from then on every command answers `reload-required`: the editor
+ * keeps its text and asks for a reload. It's the tab's one connection to the database since
+ * #17 PR 4b, when js/storage.js stopped opening its own.
  * @param {IndexedDbAdapter} adapter
  * @returns {Client}
  */
 export function createNewTabClient(adapter) {
-  return kernelClient({ adapter, surface: 'newtab', maintainOnOpen: true, ready: adapter.open() });
+  return kernelClient({
+    adapter,
+    surface: 'newtab',
+    handlers: NEWTAB_HANDLERS,
+    maintainOnOpen: true,
+    ready: adapter.open(),
+  });
 }
 
 /** The codes of a committed command that deleted notes or folders for good, leaving tombstones */

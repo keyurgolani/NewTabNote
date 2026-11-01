@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 
 import { IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { faultyFactory } from './storage-faults.mjs';
 import { CALLERS, isSettingsArea, testClock, testIds } from './support.mjs';

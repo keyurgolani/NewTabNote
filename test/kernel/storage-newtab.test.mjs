@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { INITIALIZED_KEY } from '../../js/kernel/adapters/indexeddb/settings.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { adapterOn, closeAll, kernelOn, legacyEnv, profile, recordsOf } from './storage-fixture.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';

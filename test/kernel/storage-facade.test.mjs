@@ -20,6 +20,7 @@ import {
 import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { PROVIDER_SETTING_KEYS, SYNC_SETTING_KEYS } from '../../js/kernel/composition/holder-settings.js';
+import { NEWTAB_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
 import { kernelClient, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import {
   connectNewTabStorage,
@@ -56,7 +57,7 @@ async function newTab({ omit = [] } = {}) {
     locks: env.global.navigator.locks || null,
   };
   const adapter = createNewTabAdapter(host);
-  const client = kernelClient({ adapter, surface: 'newtab', maintainOnOpen: true });
+  const client = kernelClient({ adapter, surface: 'newtab', handlers: NEWTAB_HANDLERS, maintainOnOpen: true });
   assert.equal(await client.whenReady(), null);
   /** @type {unknown[]} */
   const sent = [];
