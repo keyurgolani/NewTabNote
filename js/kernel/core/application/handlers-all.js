@@ -5,6 +5,7 @@
  * did before each page had its table (#17 PR 4b).
  */
 
+import { closeDraftCommands } from './close-drafts.js';
 import { folderCommands, folderQueries } from './folders.js';
 import { forSurface, handlerTable } from './handlers.js';
 import { indexCommands, indexQueries } from './indexing.js';
@@ -23,6 +24,7 @@ import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js
 export const ALL_HANDLERS = handlerTable({
   commands: {
     ...noteCommands,
+    ...closeDraftCommands,
     ...folderCommands,
     ...preferenceCommands,
     ...sessionCommands,
