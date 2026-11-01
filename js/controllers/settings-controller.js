@@ -38,6 +38,8 @@ class SettingsController {
     this.onRenderNotesList = null;
     this.onUpdateSmartSuggestions = null;
     this.onRenderAIPromptTemplateSettings = null;
+    /** @type {(() => Promise<void>)|null} Show the AI settings in effect, read from storage, as Settings opens */
+    this.onUpdateLLMSettingsUI = null;
     /** @type {(() => Promise<void>)|null} Write what every open editor has pending, before a full export reads */
     this.onSaveOpenEditors = null;
     /** @type {function|null} */
@@ -480,6 +482,9 @@ class SettingsController {
         dailyNoteTemplateSelect.appendChild(option);
       });
     }
+
+    // AI: the provider, the key, the model and both background jobs, as stored
+    if (this.onUpdateLLMSettingsUI) await this.onUpdateLLMSettingsUI();
 
     if (this.onRenderAIPromptTemplateSettings) {
       this.onRenderAIPromptTemplateSettings();

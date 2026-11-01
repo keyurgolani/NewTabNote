@@ -39,6 +39,8 @@ async function relatedNotes(name) {
   const shown = [];
   const chat = Object.create(env.get('AIChatController').prototype);
   Object.assign(chat, {
+    // The Insights tab, in the open AI sidebar
+    aiSidebarOpen: true,
     aiActiveTab: 'smart',
     searchEngine: search,
     getEditor: () => ({ noteId: 'n1', noteData: { id: 'n1', name }, getAllBlocksTextContent: () => TEXT, titleEl: { textContent: name } }),
