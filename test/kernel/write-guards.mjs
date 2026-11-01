@@ -153,6 +153,10 @@ export const WRITE_GUARDS = Object.freeze({
     'content',
     "a closing tab's edit, whose base it checks against the note in its own transaction: a change the page never saw makes a recovered note, never a write over it",
   ),
+  catchUpNoteRecords: unguarded(
+    'derived',
+    "the worker's one-time catch-up, which gives a record the preview and to-do progress its blocks give in the transaction that reads them, and nothing else",
+  ),
   emptyTrash: unguarded('placement', 'deletes what the trash holds as committed, so a note restored meanwhile stays'),
   runTrashCleanup: unguarded('placement', 'deletes what has been in the trash past its days as committed'),
   deleteFolder: unguarded(
