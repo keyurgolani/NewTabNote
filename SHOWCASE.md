@@ -16,7 +16,7 @@ Open a new tab and land in a full block-based workspace: a notes sidebar with se
 
 ## ⚡ Slash Commands
 
-Type `/` in any empty block to bring up the block menu — Text, Headings, lists, code, and 18+ block types in total. Pasted Markdown (`#`, `-`, `>`, ```` ``` ````) turns into blocks too.
+Type `/` in any empty block to bring up the block menu — Text, Headings, lists, code, and 18+ block types in total. Pasted Markdown headings, lists, and quotes (`#`, `-`, `>`) turn into blocks too.
 
 ![Slash command block menu](docs/screenshots/02-slash-menu.png)
 
@@ -47,7 +47,7 @@ The editor in both light and dark modes — dark mode is built for nighttime use
 |------------|--------|
 | **Editor** | Block-based, 18+ block types, slash commands, Markdown paste, drag-and-drop |
 | **AI** | Summarize, expand, auto-title; OpenAI / Anthropic / Gemini / local Ollama |
-| **Organization** | Unlimited notes & folders, fuzzy search, tabs, daily notes, backlinks |
+| **Organization** | Unlimited notes & folders, fuzzy title search, tabs, daily notes, backlinks |
 | **Privacy** | 100% local storage (IndexedDB), offline-ready, no tracking |
 | **Customization** | Themes (Light/Dark/System), fonts, adjustable editor width |
 | **Data** | JSON / Markdown export & import |
