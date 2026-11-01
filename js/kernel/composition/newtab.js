@@ -13,8 +13,11 @@ import { validateBackup } from '../adapters/indexeddb/backups.js';
 import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { exportRawStores } from '../adapters/indexeddb/raw-export.js';
 import { NEWTAB_HANDLERS } from '../core/application/handlers-all.js';
+import { applyCloseDrafts, closeDraftStore } from '../core/application/close-drafts.js';
 import { createNoteList } from '../core/application/note-list.js';
+import { DRAFTS_LOCK } from '../core/domain/close-draft-keys.js';
 import { systemClock } from '../core/ports/runtime.js';
+import { applyingCloseDrafts, pageDrafts } from './close-drafts.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
 import { PROVIDER_SETTING_KEYS, SYNC_SETTING_KEYS, createHolderSettings } from './holder-settings.js';
@@ -251,6 +254,73 @@ export function withPurgeWake(client, wake) {
   });
 }
 
+/** The commands that can delete a note for good, a bulk action's items included (#33) */
+const DELETING_COMMANDS = Object.freeze(['deleteNotePermanently', 'emptyTrash', 'runTrashCleanup', 'trashNote', 'runBulkAction']);
+
+/** The codes of a committed command that deleted notes for good, whose changedIds are those notes */
+const NOTES_DELETED = Object.freeze(['note-deleted', 'trash-emptied', 'trash-cleaned']);
+
+/**
+ * The notes `outcome` deleted for good
+ * @param {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} outcome
+ * @returns {string[]}
+ */
+const notesDeletedBy = outcome => {
+  if (outcome.kind === 'bulk') return outcome.items.flatMap(item => notesDeletedBy(item.outcome));
+  return outcome.kind === 'committed' && NOTES_DELETED.includes(outcome.code) ? outcome.changedIds : [];
+};
+
+/**
+ * `client`, whose every command that can delete a note for good holds the close-time drafts'
+ * lock around the command and the clear of what the notes it deleted left in `store`, whatever
+ * path sends it: a permanent delete, Empty Trash, trash retention, a bulk action, and the Trash,
+ * which deletes an empty untitled note for good (#33, the lead's Q7). Only the outcome says what
+ * was deleted, so the lock is taken first. So a delete never lands between an apply's read of a
+ * draft and its command, and clearing after the commit needs nothing put back.
+ * @param {Client} client
+ * @param {{store: import('../core/application/close-drafts.js').DraftStore, locks: import('../core/application/close-drafts.js').DraftLocks | null}} drafts
+ * @returns {Client}
+ */
+export function withCloseDraftClears(client, { store, locks }) {
+  /** @param {import('../core/contracts/commands.js').Command} command */
+  const run = async command => {
+    const outcome = /** @type {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} */ (
+      await client.execute(command)
+    );
+    const ids = notesDeletedBy(outcome);
+    if (ids.length > 0) store.clearNotes(ids);
+    return outcome;
+  };
+  return Object.freeze({
+    ...client,
+    execute: /** @type {Client['execute']} */ (
+      /** @type {unknown} */ (
+        (/** @type {import('../core/contracts/commands.js').Command} */ command) => {
+          if (!DELETING_COMMANDS.includes(command.type)) return client.execute(command);
+          return locks ? locks.request(DRAFTS_LOCK, { mode: 'exclusive' }, () => run(command)) : run(command);
+        }
+      )
+    ),
+  });
+}
+
+/**
+ * The client the new tab's root hands out, on `adapter` (createNewTabClient): it wakes the worker
+ * to purge after each delete for good (withPurgeWake), holds the close-time drafts' lock around
+ * each command that can delete for good and clears what the deleted notes left of them
+ * (withCloseDraftClears), and its whenReady resolves once the closing tabs' edits are applied,
+ * so the note list's first read and App's start come after them (#33). The new tab has the
+ * applier in its start, where Popup and Side Panel load it when they need it.
+ * @param {IndexedDbAdapter} adapter
+ * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void}} [page] - the page's drafts and its wake, from its globals
+ * @returns {ReturnType<typeof applyingCloseDrafts>}
+ */
+export function createNewTabPageClient(adapter, { drafts = pageDrafts(), wake = () => wakeWorkerToPurge() } = {}) {
+  const store = closeDraftStore(drafts.storage);
+  const client = withCloseDraftClears(withPurgeWake(createNewTabClient(adapter), wake), { store, locks: drafts.locks });
+  return applyingCloseDrafts(client, drafts, { load: async () => ({ applyCloseDrafts, closeDraftStore }) });
+}
+
 /**
  * The document client the new tab's editors read and write through, on `kernel`. Before the
  * adapter's connection closes for another context's upgrade, it has them write what they have
@@ -437,7 +507,7 @@ export function startNewTab({ loader = null } = {}) {
     const page = /** @type {NewTabPage} */ (/** @type {unknown} */ (globalThis));
     const host = newTabHost();
     const adapter = createNewTabAdapter(host);
-    const kernel = withPurgeWake(createNewTabClient(adapter), () => wakeWorkerToPurge());
+    const kernel = createNewTabPageClient(adapter);
     const noteList = createNewTabNoteList(kernel);
     /** @type {NewTabApp | null} */
     let built = null;

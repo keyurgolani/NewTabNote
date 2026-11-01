@@ -22,6 +22,8 @@ export const CHANGE_OPS = Object.freeze({
   ensureDailyNote: ['createNote', 'updateNote', 'insertBlock'],
   restoreSnapshot: ['updateNote', ...BLOCK_DIFF],
   applyRemoteContent: ['createNote', 'updateNote', ...BLOCK_DIFF],
+  // A closing tab's edit: saved into its note, or a recovered note made beside it
+  applyCloseDraft: ['createNote', 'updateNote', ...BLOCK_DIFF],
   // What the jobs make from it
   attachInsights: ['updateNote'],
   // Where it sits and how it's kept, and an empty untitled note trash deletes for good
