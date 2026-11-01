@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import * as v from '../../js/lib/valibot/index.mjs';
 import { createKernel } from './test-kernel.mjs';
 import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
-import { FOLDER_OP_FIELDS, NOTE_OP_FIELDS, changeOp } from '../../js/kernel/core/contracts/entities.js';
+import { FOLDER_OP_FIELDS, NOTE_OP_FIELDS, changeOp, changeRecord } from '../../js/kernel/core/contracts/entities.js';
 import { blocksByNote, folderOps, noteOps, sameValue } from '../../js/kernel/core/domain/changes.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryCommitLog } from '../../js/kernel/core/memory/commit-log.js';
@@ -277,6 +277,13 @@ describe("#17 PR 4c: every catalog command's change ops", () => {
       const world = await make();
       try {
         const byCommand = await samplesOn(world);
+        // Every row #17's adapter keeps is a change record as the schema has it, which is strict,
+        // so a field a row gains fails here until the schema names it (R131)
+        if ('of' in world) {
+          for (const row of await recordsOf(/** @type {ReturnType<typeof profile>} */ (world.of), 'changes')) {
+            assert.ok(v.safeParse(changeRecord, row).success, JSON.stringify(row));
+          }
+        }
         /** @type {Set<string>} */
         const seen = new Set();
         for (const [type, rows] of byCommand) {
@@ -544,11 +551,16 @@ describe("#17 PR 4c: the before-images #17's adapter takes the ops from", () => 
     /** @type {{IDBObjectStore: any, IDBIndex: any}} */
     const fake = createRequire(import.meta.url)('fake-indexeddb');
     const realGet = fake.IDBObjectStore.prototype.get;
+    const realGetKey = fake.IDBObjectStore.prototype.getKey;
     const realGetAll = fake.IDBIndex.prototype.getAll;
-    const reads = { gets: 0, indexReads: 0 };
+    const reads = { gets: 0, keyReads: 0, indexReads: 0 };
     fake.IDBObjectStore.prototype.get = function get(/** @type {unknown[]} */ ...args) {
       if (this.name === 'elements') reads.gets += 1;
       return realGet.apply(this, args);
+    };
+    fake.IDBObjectStore.prototype.getKey = function getKey(/** @type {unknown[]} */ ...args) {
+      if (this.name === 'elements') reads.keyReads += 1;
+      return realGetKey.apply(this, args);
     };
     fake.IDBIndex.prototype.getAll = function getAll(/** @type {unknown[]} */ ...args) {
       if (this.objectStore.name === 'elements' && this.name === 'canvasId') reads.indexReads += 1;
@@ -558,6 +570,7 @@ describe("#17 PR 4c: the before-images #17's adapter takes the ops from", () => 
       return { answer: await fn(), reads };
     } finally {
       fake.IDBObjectStore.prototype.get = realGet;
+      fake.IDBObjectStore.prototype.getKey = realGetKey;
       fake.IDBIndex.prototype.getAll = realGetAll;
     }
   };
@@ -594,7 +607,7 @@ describe("#17 PR 4c: the before-images #17's adapter takes the ops from", () => 
    */
   const blockOf = (id, order) => ({ id, canvasId: 'n1', type: 'text', content: id, order });
 
-  it('a save of a 100-block note reads its blocks once, through the canvasId index, and looks none up by itself', async () => {
+  it("a save of a 100-block note reads its blocks once, through the canvasId index, asks each block's key once, and looks none up by itself", async () => {
     const world = await indexedDbWorld();
     try {
       const blocks = Array.from({ length: 100 }, (_, order) => ({
@@ -608,7 +621,7 @@ describe("#17 PR 4c: the before-images #17's adapter takes the ops from", () => 
       const { answer: saved, reads } = await blockReads(() =>
         world.run('saveNoteContent', { noteId: 'n1', blocks: typed }),
       );
-      assert.deepEqual(reads, { gets: 0, indexReads: 1 });
+      assert.deepEqual(reads, { gets: 0, keyReads: 100, indexReads: 1 });
       assert.deepEqual(await rowsOf(world, saved), [['note', 'n1', [{ op: 'updateBlock', blockId: 'b50' }]]]);
     } finally {
       await world.close();
@@ -663,7 +676,7 @@ describe("#17 PR 4c: the before-images #17's adapter takes the ops from", () => 
           tx.put('blocks', blockOf('b7', 7));
         }),
       );
-      assert.deepEqual(reads, { gets: 0, indexReads: 1 });
+      assert.deepEqual(reads, { gets: 0, keyReads: 0, indexReads: 1 });
       assert.deepEqual(await rowsOf(world, answer), [
         [
           'note',
@@ -692,7 +705,7 @@ describe("#17 PR 4c: the before-images #17's adapter takes the ops from", () => 
           tx.put('blocks', { ...(await tx.get('blocks', 'b1')), content: 'Changed' });
         }),
       );
-      assert.deepEqual(reads, { gets: 1, indexReads: 0 });
+      assert.deepEqual(reads, { gets: 1, keyReads: 0, indexReads: 0 });
       assert.deepEqual(await rowsOf(world, answer), [['note', 'n1', [{ op: 'updateBlock', blockId: 'b1' }]]]);
     } finally {
       await world.close();
@@ -782,6 +795,128 @@ describe('#17 PR 4c: no change row holds what the user wrote, live or in a recov
     } finally {
       await world.close();
     }
+  });
+
+  it("an imported note with a field no schema names, through edits, a pin, a move, deleteBlocks, a capture, a remote change, a snapshot's restore and a delete for good, leaves no row holding what was written, live or in a recovery point (R131)", async () => {
+      const world = await indexedDbWorld();
+      const io = { keyRange: KeyRange, crypto: /** @type {any} */ (webcrypto), limits: DEFAULT_LIMITS };
+      /** @param {any} query */
+      const ask = async query => /** @type {any} */ (await world.kernel.query(query)).data;
+      try {
+        const text = (/** @type {string} */ slot) => `${CANARY} ${slot}`;
+        const imported = await world.run('importBackup', {
+          mode: 'merge',
+          backup: {
+            version: 1,
+            exportedAt: 1,
+            canvases: [
+              {
+                id: 'p1',
+                name: text('title'),
+                createdAt: 1,
+                updatedAt: 1,
+                [`${CANARY}-field`]: text('made-up value'),
+                insights: { todos: [text('insight')] },
+              },
+            ],
+            elements: [{ id: 'pb1', canvasId: 'p1', type: 'text', content: text('block'), order: 0 }],
+            folders: [{ id: 'pf1', name: text('folder'), parentId: null }],
+          },
+        });
+        assert.equal(imported.kind, 'committed', JSON.stringify(imported));
+        const [noteId] = imported.changedIds;
+        const [block] = await ask({ type: 'getNoteBlocks', noteId });
+        /** The note's versions as committed, for a remote change made from them */
+        const versions = async () => {
+          const { revision = 0, placementVersion = 0 } = await ask({ type: 'getNote', noteId });
+          return { expectedRevision: revision, expectedPlacementVersion: placementVersion };
+        };
+        for (const [type, fields] of /** @type {Array<[string, Record<string, unknown>]>} */ ([
+          ['saveNoteContent', { noteId, blocks: [{ ...block, content: text('typed') }], preview: text('preview'), name: text('saved') }],
+          ['renameNote', { noteId, name: text('renamed'), origin: 'typed' }],
+          ['insertBlocks', { noteId, blocks: [{ id: 'i1', type: 'text', content: text('inserted') }] }],
+          ['setPinned', { noteId, pinned: true }],
+          ['createFolder', { folderId: 'f2', name: text('new folder'), parentId: null }],
+          ['moveNoteToFolder', { noteId, folderId: 'f2' }],
+          ['deleteBlocks', { noteId, blockIds: ['i1'] }],
+          ['captureToDailyNote', { noteId: 'd1', blockId: 'c1', capture: { type: 'text', content: text('capture'), source: text('source') } }],
+        ])) {
+          const outcome = await world.run(type, fields);
+          assert.equal(outcome.kind, 'committed', `${type}: ${JSON.stringify(outcome)}`);
+        }
+        const remote = await world.run('applyRemoteChanges', {
+          changes: [
+            {
+              note: { id: noteId, name: text('remote title'), pinned: true, folderId: 'f2' },
+              blocks: [{ id: block.id, type: 'text', content: text('remote block'), order: 0 }],
+              ...(await versions()),
+            },
+            { note: { id: 'r1', name: text('remote note') }, blocks: [{ id: 'rb1', type: 'text', content: text('remote line'), order: 0 }] },
+          ],
+        });
+        assert.deepEqual(
+          remote.items.map((/** @type {any} */ item) => item.outcome.kind),
+          ['committed', 'committed'],
+          JSON.stringify(remote),
+        );
+        for (const [type, fields] of /** @type {Array<[string, Record<string, unknown>]>} */ ([
+          ['saveSnapshot', { noteId, snapshotId: 's1', blocks: [{ id: block.id, type: 'text', content: text('snapshot') }], title: text('snapshot title') }],
+          ['restoreSnapshot', { noteId, snapshotId: 's1', preSnapshotId: 's2', blocks: [{ id: block.id, type: 'text', content: text('snapshot') }], name: text('restored') }],
+          ['trashNote', { noteId }],
+          ['deleteNotePermanently', { noteId }],
+        ])) {
+          const outcome = await world.run(type, fields);
+          assert.equal(outcome.kind, 'committed', `${type}: ${JSON.stringify(outcome)}`);
+        }
+
+        // What a recovery point made now holds of the change log
+        const rows = await world.rows();
+        const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(world.of.faults.factory, 'CanvasTabDB'));
+        const recovery = /** @type {IDBDatabase} */ (await openRecovery(world.of.faults.factory, { create: true }));
+        /** @type {any[]} */
+        let pointRows = [];
+        try {
+          const { point, progress } = await startPoint(recovery, {
+            id: 'p-import',
+            kind: 'pre-repair',
+            sourceShape: 'current',
+            sourceVersion: source.version,
+            structuralVersion: null,
+            logicalVersion: null,
+            target: null,
+            stores: storesToCopy(source),
+            createdAt: NOW,
+          });
+          await copyPoint({ source, recovery, point, progress, io });
+          pointRows = await readPointStore(recovery, point, 'changes', io);
+        } finally {
+          source.close();
+          recovery.close();
+        }
+        assert.equal(pointRows.length, rows.length);
+        for (const held of [JSON.stringify(rows), JSON.stringify(pointRows)]) {
+          assert.equal(held.includes(CANARY) || held.includes('c4n4ry'), false);
+        }
+        // Each kind of writer left its ops, and they name schema fields only
+        const ops = rows.flatMap(row => row.ops);
+        for (const op of ['createFolder', 'createNote', 'updateNote', 'insertBlock', 'updateBlock', 'deleteBlock', 'deleteNote']) {
+          assert.ok(
+            ops.some(each => each.op === op),
+            op,
+          );
+        }
+        for (const row of rows) {
+          const fields = row.ops.flatMap(op => ('fields' in op ? op.fields : []));
+          const known = row.entityType === 'folder' ? FOLDER_OP_FIELDS : NOTE_OP_FIELDS;
+          assert.ok(
+            fields.every(field => known.includes(field)),
+            JSON.stringify(row),
+          );
+          assert.ok(isValid(row.ops), JSON.stringify(row));
+        }
+      } finally {
+        await world.close();
+      }
   });
 
   it("a note deleted for good keeps its rows and their ops in a recovery point, which the purge leaves verifying, as it takes the note's records out", async () => {

@@ -292,6 +292,10 @@ describe('entity schemas (#13, AC1)', () => {
     assert.equal(accepts(changeRecord, { ...change, ops: [] }), true);
     assert.equal(accepts(changeRecord, { ...change, seq: 0 }), false);
     assert.equal(accepts(changeRecord, { ...change, entityType: 'tab' }), false);
+    // #17's adapter keeps each row's place in its commit, and a field the schema doesn't name,
+    // a value of the note's included, doesn't fit (R131)
+    assert.equal(accepts(changeRecord, { ...change, position: 0 }), true);
+    assert.equal(accepts(changeRecord, { ...change, name: 'Plan' }), false);
   });
 
   it("pin the change log's ops to their names, a block's id, and the record's own field names, so no value fits in one (#17 PR 4c)", () => {
