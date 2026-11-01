@@ -9,6 +9,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('../harness');
+const { profileStore } = require('../harness/profile-store');
 const driver = require('./driver');
 
 test('Space on a header button presses it instead of typing into the note, and letters still go to the note', async ({ extension }) => {
@@ -208,10 +209,11 @@ test('with split view open, Backspace in a left block edits it and leaves a bloc
   await page.keyboard.press('Backspace');
   await expect.poll(() => driver.blocks(page)).toEqual([left[0], { ...left[1], text: left[1].text.slice(0, -1) }]);
   expect(await driver.rightPaneBlocks(page), 'the selected block is still there').toEqual(right);
-  const stored = await page.evaluate(async () => {
+  const rightId = await page.evaluate(async () => {
     await app.secondaryEditor.flushSave();
-    return (await Storage.getElementsByNote(app.secondaryEditor.noteId)).length;
+    return app.secondaryEditor.noteId;
   });
+  const stored = (await profileStore(page).getElementsByNote(rightId)).length;
   expect(stored, 'and still stored').toBe(right.length);
   await expectNoUncaught(extension, page);
 });
@@ -405,11 +407,12 @@ test('in Picture-in-Picture, ? typed with focus outside the note goes into the n
   await pip.evaluate(() => document.activeElement && document.activeElement.blur());
   await pip.keyboard.press('?');
   await expect.poll(() => pip.locator('.blocks-container .block-content').last().textContent()).toBe('milk?');
-  const stored = await page.evaluate(async () => {
+  const pipNoteId = await page.evaluate(async () => {
     const editor = app.tabController.pipEditor;
     await editor.flushSave();
-    return (await Storage.getElementsByNote(editor.noteId)).map(element => element.content);
+    return editor.noteId;
   });
+  const stored = (await profileStore(page).getElementsByNote(pipNoteId)).map(element => element.content);
   expect(stored).toEqual(['milk?']);
   await expectNoUncaught(extension, page);
 });

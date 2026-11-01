@@ -10,6 +10,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('../harness');
+const { profileStore } = require('../harness/profile-store');
 const driver = require('./driver');
 
 const TABLE = { type: 'table', content: '', tableData: [['a', 'b'], ['1', '2']], rows: 2, cols: 2 };
@@ -28,12 +29,15 @@ const dialog = name => page => page.getByRole('dialog', { name, exact: true });
 
 /** A pane's blocks on screen, and as stored once its editor has written what it has pending */
 const blocksIn = (page, side) => (side === 'right' ? driver.rightPaneBlocks(page) : driver.blocks(page));
-const storedIn = (page, side) => page.evaluate(async which => {
-  const editor = which === 'right' ? app.secondaryEditor : app.editor;
-  await editor.flushSave();
-  const elements = await Storage.getElementsByNote(editor.noteId);
+const storedIn = async (page, side) => {
+  const noteId = await page.evaluate(async which => {
+    const editor = which === 'right' ? app.secondaryEditor : app.editor;
+    await editor.flushSave();
+    return editor.noteId;
+  }, side);
+  const elements = await profileStore(page).getElementsByNote(noteId);
   return elements.sort((a, b) => a.order - b.order).map(element => element.content);
-}, side);
+};
 
 /** A click on the modal's backdrop, outside its dialog box */
 const onBackdrop = page => page.mouse.click(8, 8);
@@ -57,11 +61,14 @@ const openBlockMenu = (page, side = 'left') => {
 };
 
 /** The template menu under a pane's second block. Nothing in 1.4.x opens it: checkMarkdownShortcuts, which looks for "/template", is never called */
-const openTemplateMenu = side => page => page.evaluate(async ([which, selector]) => {
-  const editor = which === 'right' ? app.secondaryEditor : app.editor;
-  editor.templates = await Storage.getTemplates();
-  editor.showTemplateMenu(document.querySelectorAll(selector)[1]);
-}, [side, `${PANES[side]} .blocks-container > .block`]);
+const openTemplateMenu = side => async page => {
+  const templates = await profileStore(page).getTemplates();
+  await page.evaluate(([which, selector, list]) => {
+    const editor = which === 'right' ? app.secondaryEditor : app.editor;
+    editor.templates = list;
+    editor.showTemplateMenu(document.querySelectorAll(selector)[1]);
+  }, [side, `${PANES[side]} .blocks-container > .block`, templates]);
+};
 
 /** Right-click the sidebar's Work folder */
 const openFolderMenu = page => page.locator('.sidebar-folder-header', { hasText: 'Work' }).click({ button: 'right' });

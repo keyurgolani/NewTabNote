@@ -8,6 +8,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { generateId, profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 /**
@@ -24,19 +25,18 @@ async function twoTabs(extension, shown = 'Alpha') {
   await driver.openNote(other, shown);
   const used = await driver.openNewTab(extension);
   await driver.openNote(used, 'Beta');
-  const ids = await used.evaluate(async () => Object.fromEntries((await Storage.getAllNotes()).map(note => [note.name, note.id])));
+  const ids = Object.fromEntries((await profileStore(used).getAllNotes()).map(note => [note.name, note.id]));
   const otherTabs = await other.locator('#note-tabs .note-tab-name').allTextContents();
   return { used, other, ids, otherTabs };
 }
 
 /** A note as stored: its trash and archive state and its blocks' text, or null when it's gone */
-function stored(page, noteId) {
-  return page.evaluate(async id => {
-    const note = await Storage.getNote(id);
-    if (!note) return null;
-    const blocks = (await Storage.getElementsByNote(id)).sort((a, b) => a.order - b.order).map(block => block.content);
-    return { trashed: Boolean(note.trashed), archived: Boolean(note.archived), blocks };
-  }, noteId);
+async function stored(page, noteId) {
+  const store = profileStore(page);
+  const note = await store.getNote(noteId);
+  if (!note) return null;
+  const blocks = (await store.getElementsByNote(noteId)).sort((a, b) => a.order - b.order).map(block => block.content);
+  return { trashed: Boolean(note.trashed), archived: Boolean(note.archived), blocks };
 }
 
 /** Type at the end of the first block of `page`'s note, and let the editor write it */
@@ -132,14 +132,15 @@ test('trash retention at a new tab\'s start leaves another new tab on the note i
   await extension.seedOnboarded();
   const other = await driver.openNewTab(extension);
   // A note trashed 40 days ago, past the 30-day retention, open from the Trash view
-  const oldId = await other.evaluate(async () => {
-    const note = await Storage.createNote('Old trashed');
-    await Storage.saveElement({ id: Utils.generateId(), canvasId: note.id, type: 'text', content: 'old body', order: 0 });
-    await Storage.updateNote({ ...(await Storage.getNote(note.id)), trashed: true, trashedAt: Date.now() - 40 * 24 * 60 * 60 * 1000 });
+  const store = profileStore(other);
+  const old = await store.createNote('Old trashed');
+  await store.saveElement({ id: generateId(), canvasId: old.id, type: 'text', content: 'old body', order: 0 });
+  await store.updateNote({ ...(await store.getNote(old.id)), trashed: true, trashedAt: Date.now() - 40 * 24 * 60 * 60 * 1000 });
+  const oldId = old.id;
+  await other.evaluate(async id => {
     await app.sidebarController.reloadLists();
-    await app.openNoteInNewTab(note.id);
-    return note.id;
-  });
+    await app.openNoteInNewTab(id);
+  }, oldId);
   await expect(other.locator('#page-title')).toHaveText('Old trashed');
 
   // A new tab starts, and its retention deletes the note

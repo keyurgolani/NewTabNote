@@ -310,12 +310,13 @@ function blocks(page) {
  * The open note's blocks' content as stored, once the editor has written what it has
  * pending, in order
  */
-function savedBlocks(page) {
-  return page.evaluate(async () => {
+async function savedBlocks(page) {
+  const noteId = await page.evaluate(async () => {
     await app.editor.flushSave();
-    const elements = await Storage.getElementsByNote(app.editor.noteId);
-    return elements.sort((a, b) => a.order - b.order).map(element => element.content);
+    return app.editor.noteId;
   });
+  const elements = await profileStore(page).getElementsByNote(noteId);
+  return elements.sort((a, b) => a.order - b.order).map(element => element.content);
 }
 
 /**

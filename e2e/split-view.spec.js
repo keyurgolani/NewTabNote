@@ -6,13 +6,13 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { generateId, profileStore } = require('./harness/profile-store');
 
 /** The note body as the left pane shows it, and as storage has it */
 async function bodies(page, noteId) {
-  return page.evaluate(async id => ({
-    shown: app.editor.blocks.map(block => block.content).join('\n'),
-    stored: (await Storage.getElementsByNote(id)).sort((a, b) => a.order - b.order).map(el => el.content).join('\n'),
-  }), noteId);
+  const shown = await page.evaluate(() => app.editor.blocks.map(block => block.content).join('\n'));
+  const stored = (await profileStore(page).getElementsByNote(noteId)).sort((a, b) => a.order - b.order).map(el => el.content).join('\n');
+  return { shown, stored };
 }
 
 test("split view closing onto the right pane's note keeps the left pane's edits through an undo", async ({ extension }) => {
@@ -25,9 +25,10 @@ test("split view closing onto the right pane's note keeps the left pane's edits 
   await expect(page.locator('#editor-container .block-content').first()).toBeFocused();
 
   // Two active notes: the first one on the left, Beta on the right
+  const store = profileStore(page);
+  const beta = await store.createNote('Beta');
+  await store.saveElement({ id: generateId(), canvasId: beta.id, type: 'text', content: 'beta body', order: 0 });
   const { alphaId, betaId } = await page.evaluate(async () => {
-    const beta = await Storage.createNote('Beta');
-    await Storage.saveElement({ id: Utils.generateId(), canvasId: beta.id, type: 'text', content: 'beta body', order: 0 });
     await app.sidebarController.reloadLists();
     await app.tabController.toggleSplitView();
     return { alphaId: app.editor.noteId, betaId: app.secondaryEditor.noteId };

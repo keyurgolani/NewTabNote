@@ -7,6 +7,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 const LIST = 'Milk, eggs, and bread for the week, and the bakery on Sunday morning before ten';
@@ -123,10 +124,10 @@ test("the Picture-in-Picture editor calls the provider through the new tab's AI 
     await editor.handleInlineAIAction(editor.blocks[0].id, 'rewrite');
     await editor.flushSave();
     await editor.refreshInsights();
-    const blocks = await Storage.getElementsByNote(editor.noteId);
     const state = await app.kernel.query({ type: 'getNote', noteId: editor.noteId });
-    return { blocks: blocks.map(block => block.content), insights: state.data.note.insights, calls: window.__aiCalls };
+    return { noteId: editor.noteId, insights: state.data.note.insights, calls: window.__aiCalls };
   });
+  result.blocks = (await profileStore(page).getElementsByNote(result.noteId)).map(block => block.content);
   expect(result.blocks).toEqual(['Rewritten line about the weekly groceries list']);
   expect(result.insights.todos).toEqual(['Buy milk']);
   expect(result.calls).toEqual(['chat', 'extractInsights']);
