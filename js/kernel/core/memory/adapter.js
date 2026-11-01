@@ -45,7 +45,7 @@ import { UnavailableError, rejected, unavailable, unavailableFrom } from '../con
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
 import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
-import { digestOf } from './fingerprint.js';
+import { digestOf, sameConflict } from './fingerprint.js';
 
 /** @typedef {import('../contracts/commands.js').Command} Command */
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
@@ -451,7 +451,13 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       if (unit.when && !unit.when()) continue;
       const stop = await unit.run(transaction(pending, unit.mode || 'readwrite', unit.stores));
       if (stop) {
-        if (stop.kind === 'conflict') storeOf('conflicts').set(work.commandId, conflictRecord(work, stop));
+        if (stop.kind === 'conflict') {
+          // One the store has already, the same change sent again under a new commandId, isn't
+          // kept twice (R131)
+          const record = conflictRecord(work, stop);
+          const kept = [...storeOf('conflicts').values()].some(other => sameConflict(other, record));
+          if (!kept) storeOf('conflicts').set(work.commandId, record);
+        }
         return { outcome: stop, changed: [], tombstones: [] };
       }
     }

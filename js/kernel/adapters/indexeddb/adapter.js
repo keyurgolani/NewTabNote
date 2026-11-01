@@ -87,7 +87,7 @@ import {
   unavailableFrom,
 } from '../../core/contracts/outcomes.js';
 import { withoutPlacement } from '../../core/domain/placement.js';
-import { digestOf } from '../../core/memory/fingerprint.js';
+import { digestOf, sameConflict } from '../../core/memory/fingerprint.js';
 import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 import { systemClock } from '../../core/ports/runtime.js';
 import { createAutoBackup, exportFile, exportObject, prepareImport, readExport } from './backups.js';
@@ -126,6 +126,7 @@ import { createVersionTracker } from './versions.js';
 /** @typedef {import('../../core/ports/runtime.js').Clock} Clock */
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../core/contracts/outcomes.js').Conflict} Conflict */
+/** @typedef {import('./conflicts.js').ConflictRecord} ConflictRecord */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
 /** @typedef {import('./integrity.js').IntegrityLog} IntegrityLog */
 /** @typedef {import('./connection.js').OpenState} OpenState */
@@ -612,17 +613,26 @@ export function createIndexedDbAdapter({
   const lastWrite = new Map();
 
   /**
-   * Keeps a conflict that wrote nothing: its record and its ledger row, in `tx`
+   * Keeps a conflict that wrote nothing: its record, unless the note has one of the same change
+   * already, sent again under a new commandId (R131), and its ledger row, in `tx`
    * @param {IDBTransaction} tx
    * @param {Books} books
    * @param {Work} work
    * @param {Conflict} conflict
+   * @returns {Promise<void>}
    */
-  const keepConflict = (tx, books, work, conflict) => {
+  const keepConflict = async (tx, books, work, conflict) => {
     const at = clock.now();
-    if (books.conflicts) tx.objectStore(CONFLICTS_STORE).put(conflictRecord(work, conflict, at));
     if (books.ledger && isCatalogCommand(work))
       tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, conflict, at));
+    if (!books.conflicts) return;
+    const record = conflictRecord(work, conflict, at);
+    const store = tx.objectStore(CONFLICTS_STORE);
+    const theirs =
+      typeof record.noteId === 'string'
+        ? /** @type {ConflictRecord[]} */ (await result(store.index('noteId').getAll(record.noteId)))
+        : [];
+    if (!theirs.some(other => sameConflict(other, record))) store.put(record);
   };
 
   /**
@@ -749,7 +759,7 @@ export function createIndexedDbAdapter({
         if (stop && stop.kind === 'conflict') {
           // A unit checks the version it expects before it writes, so this is a bug in the unit
           if (tracker.written()) return { abort: answered(unavailable('adapter', 'conflict-after-write', false)) };
-          keepConflict(open, books, work, stop);
+          await keepConflict(open, books, work, stop);
           return { commit: stop };
         }
         if (stop) return { abort: answered(stop) };

@@ -4,8 +4,10 @@
  * trashed, a template, each with the time it was set, and its folder. They replace the note's,
  * and its placement, kind, and lifecycle follow (#17 PR 3a). A note that's moved past
  * `expectedPlacementVersion` is a `placement-conflict`, kept in `conflicts`, and changes in
- * nothing; one already placed as the remote has it changes in nothing either. A folder this
- * profile doesn't have files the note at the root.
+ * nothing; one already placed as the remote has it changes in nothing either. A trash also
+ * needs the note's text at `expectedRevision`, 0 when left out, since trash leads to deletion:
+ * one whose text moved past it is a `revision-conflict` (R131). A folder this profile doesn't
+ * have files the note at the root.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';
@@ -25,6 +27,7 @@ export const payload = commandPayload('applyRemotePlacement', {
     folderId: v.optional(v.nullable(entityId('folder'))),
   }),
   expectedPlacementVersion: revision,
+  expectedRevision: v.optional(revision),
 });
 
 export const result = outcomeSchema;

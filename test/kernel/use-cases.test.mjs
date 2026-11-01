@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { noteCommands } from '../../js/kernel/core/application/notes.js';
+import { remoteCommands } from '../../js/kernel/core/application/remote.js';
 import { derivedOnly } from '../../js/kernel/core/application/scopes.js';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { dailyDateStr } from '../../js/kernel/core/domain/note.js';
@@ -150,6 +151,55 @@ describe('saveNoteContent', () => {
     const log = [];
     await unit.run(spyTx(log, { notes: { n1: { id: 'n1', name: 'Plan' } } }));
     assert.deepEqual(log, ['get notes n1', 'versions notes n1', 'put blocks b1', 'put blocks b2', 'put notes n1']);
+  });
+});
+
+describe('applyRemoteContent', () => {
+  it("is the conflict, writing nothing, where there's no `conflicts` to keep the 1.4.x text a change that says no version would replace (R131)", async () => {
+    /** @type {UseCaseContext} */
+    const context = {
+      adapter: createMemoryAdapter(),
+      clock: testClock(),
+      ids: testIds(),
+      run: () => assert.fail('applyRemoteContent runs no other command'),
+    };
+    /** @type {import('../../js/kernel/core/contracts/commands.js').CommandOf<'applyRemoteContent'>} */
+    const command = {
+      type: 'applyRemoteContent',
+      commandId: 'c1',
+      noteId: 'old',
+      note: { id: 'old', name: 'Theirs' },
+      blocks: [],
+      expectedRevision: null,
+    };
+    const work = /** @type {Work} */ (remoteCommands.applyRemoteContent(command, context));
+    const [unit] = work.effect.kind === 'units' ? work.effect.units : [];
+    const records = {
+      notes: { old: { id: 'old', name: 'Old' } },
+      blocks: { b1: { id: 'b1', canvasId: 'old', type: 'text', content: 'Old line', order: 0 } },
+    };
+    for (const kept of [false, true]) {
+      /** @type {string[]} */
+      const log = [];
+      const tx = /** @type {Tx} */ ({
+        ...spyTx(log, records),
+        // A database below step 10, which has no `conflicts`, or one at it
+        has: (/** @type {string} */ store) => kept || store !== 'conflicts',
+        versions: () => ({ revision: 0, placementVersion: 0 }),
+      });
+      const stop = await unit.run(tx);
+      const writes = log.filter(line => line.startsWith('put') || line.startsWith('delete'));
+      if (kept) {
+        assert.equal(stop, undefined);
+        assert.deepEqual(writes.slice(0, 2), ['put conflicts c1', 'delete blocks b1']);
+      } else {
+        assert.deepEqual(stop && stop.kind === 'conflict' && [stop.code, stop.currentRevision], [
+          'revision-conflict',
+          0,
+        ]);
+        assert.deepEqual(writes, []);
+      }
+    }
   });
 });
 

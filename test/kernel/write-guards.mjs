@@ -31,12 +31,13 @@ export const SCOPE_GUARDS = Object.freeze({
 /**
  * - guarded: it writes a note or its blocks in `scope`, and a stale version at `guard`, the
  *   field's path in its payload, is a conflict, or for a derived write, dropped. `callers` are
- *   the page's methods that send it, `Class.method`, none with its version.
+ *   the page's methods that send it, `Class.method`, none with its version. `also` names any
+ *   other version field it takes, each with when it checks it.
  * - unguarded: it writes a note or its blocks in one of `scopes` with no version to expect,
  *   for `why`.
  * - bulk: it writes nothing itself, and runs `items` for each note.
  * - none: it writes no note and no block, but `writes`.
- * @typedef {{kind: 'guarded', scope: WriteScope, guard: string, callers: readonly string[]}
+ * @typedef {{kind: 'guarded', scope: WriteScope, guard: string, callers: readonly string[], also: Readonly<Record<string, string>>}
  *   | {kind: 'unguarded', scopes: readonly WriteScope[], why: string}
  *   | {kind: 'bulk', items: readonly CommandType[], why: string}
  *   | {kind: 'none', writes: string}} WriteGuard
@@ -46,10 +47,17 @@ export const SCOPE_GUARDS = Object.freeze({
  * @param {WriteScope} scope
  * @param {string} guard
  * @param {string[]} [callers]
+ * @param {Record<string, string>} [also]
  * @returns {WriteGuard}
  */
-const guarded = (scope, guard, callers = []) =>
-  Object.freeze({ kind: 'guarded', scope, guard, callers: Object.freeze([...callers].sort()) });
+const guarded = (scope, guard, callers = [], also = {}) =>
+  Object.freeze({
+    kind: 'guarded',
+    scope,
+    guard,
+    callers: Object.freeze([...callers].sort()),
+    also: Object.freeze({ ...also }),
+  });
 
 /**
  * @param {WriteScope | WriteScope[]} scope - one, or each its modes commit in
@@ -91,7 +99,8 @@ export const WRITE_GUARDS = Object.freeze({
     'NotesManager.runAutoTitle',
     'AIChatController.generateTitleForNewNote',
   ]),
-  // applyRemoteChanges sends it with the revision each change was made from
+  // applyRemoteChanges sends it with the revision each change was made from, or null for none,
+  // which counts as 0
   applyRemoteContent: guarded('content', 'expectedRevision'),
 
   // Placement: where a note sits and how it's kept
@@ -107,7 +116,9 @@ export const WRITE_GUARDS = Object.freeze({
   convertNoteToTemplate: guarded('placement', 'expectedPlacementVersion', ['NotesManager.convertNoteToTemplate']),
   convertTemplateToNote: guarded('placement', 'expectedPlacementVersion', ['NotesManager.convertTemplateToNote']),
   deleteNotePermanently: guarded('placement', 'expectedPlacementVersion', ['NotesManager.permanentlyDeleteNoteById']),
-  applyRemotePlacement: guarded('placement', 'expectedPlacementVersion'),
+  applyRemotePlacement: guarded('placement', 'expectedPlacementVersion', [], {
+    expectedRevision: 'a trash, which needs the text the change was made from, since trash leads to deletion (R131)',
+  }),
 
   // Derived: what jobs make from a note's content, dropped when made from an older revision
   attachInsights: guarded('derived', 'sourceRevision', [
@@ -155,7 +166,7 @@ export const WRITE_GUARDS = Object.freeze({
   ),
   applyRemoteChanges: bulkOf(
     ['applyRemoteContent', 'applyRemotePlacement'],
-    'both parts of each note, each with the version the change was made from, or 0',
+    'both parts of each note, each with the version the change was made from, or 0, and a trash with the text revision too',
   ),
 
   // Writes no note and no block

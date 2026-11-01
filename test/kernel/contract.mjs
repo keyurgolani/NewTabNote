@@ -241,7 +241,7 @@ export function runContractSuite(fixture) {
      * Puts records no command writes (media, vectors, snapshots, links no note's text made, and
      * notes in states no command reaches yet, such as a template), through the adapter's own
      * commit, so any adapter can run the cases that need them.
-     * @param {'media' | 'vectors' | 'snapshots' | 'links' | 'notes' | 'searchIndex' | 'tombstones'} store
+     * @param {'media' | 'vectors' | 'snapshots' | 'links' | 'notes' | 'blocks' | 'searchIndex' | 'tombstones'} store
      * @param {Array<Record<string, unknown>>} records
      */
     const seed = async (store, records) => {
@@ -4167,6 +4167,120 @@ export function runContractSuite(fixture) {
 
       it(
         flags.revisions
+          ? "revisions: a remote trash made before a newer local edit is a conflict, since trash leads to deletion (the lead's Q2, condition 1), and the note stays as it is, versions and all (R131)"
+          : 'no revisions: a remote trash lands over a newer local edit (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          const base = await madeFrom('n1');
+          // The newest text here, typed after the remote's copy was made
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Newest')] }));
+          const before = await storedNoteOf('n1');
+          const trashed = remoteNote('n1', { name: 'Plan', trashed: true, trashedAt: NOW - 500 });
+          const command = cmd('applyRemoteChanges', {
+            changes: [{ note: trashed, blocks: [textBlock('n1', 'Line')], ...base }],
+          });
+          const outcome = bulkOf(await kernel.execute(command));
+          if (!flags.revisions) {
+            assert.equal((await noteOf('n1'))?.trashed, true);
+            return;
+          }
+          assert.deepEqual(itemsOf(outcome), [['n1', 'conflict', 'revision-conflict']]);
+          assert.deepEqual(outcome.committedIds, []);
+          assert.deepEqual(await storedNoteOf('n1'), before);
+          assert.equal((await blocksOf('n1'))[0].content, 'Newest');
+          // Both parts are kept, the trash at the text revision it needed
+          assert.deepEqual(
+            (await keptConflicts()).map(record => [record.id, record.scope, record.expected, record.current]),
+            [
+              [`${command.commandId}:n1:content`, 'content', 1, 2],
+              [`${command.commandId}:n1:placement`, 'placement', 1, 2],
+            ],
+          );
+        },
+      );
+
+      it("a remote trash made from the note's text as it is lands, with new text or without, and the editor's save after it lands inside the trash, as a save from another tab does in a note trashed here (#6's to decide)", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+        await createNote({ noteId: 'n2', name: 'Other', blocks: [textBlock('n2', 'Line')] });
+        const bases = { n1: await madeFrom('n1'), n2: await madeFrom('n2') };
+        const outcome = await apply([
+          {
+            note: remoteNote('n1', { name: 'Plan', trashed: true, trashedAt: NOW - 500 }),
+            blocks: [textBlock('n1', 'Line')],
+            ...bases.n1,
+          },
+          // Its text lands first, and moves its revision, which the trash then lands on
+          {
+            note: remoteNote('n2', { name: 'Other', trashed: true, trashedAt: NOW - 500 }),
+            blocks: [textBlock('n2', 'Their last words')],
+            ...bases.n2,
+          },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [
+          ['n1', 'committed', 'remote-placement-applied'],
+          ['n2', 'committed', 'remote-content-applied-placement-applied'],
+        ]);
+        assert.deepEqual(
+          [(await noteOf('n1'))?.trashed, (await noteOf('n2'))?.trashed, (await blocksOf('n2'))[0].content],
+          [true, true, 'Their last words'],
+        );
+        // The other order: the editor's save carries no revision, and a trash moves none
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Typed after')] }));
+        assert.deepEqual([(await noteOf('n1'))?.trashed, (await blocksOf('n1'))[0].content], [true, 'Typed after']);
+      });
+
+      it(
+        flags.revisions
+          ? 'revisions: a change made from a version that is still the text one but not the placement one lands its text and says its placement is a conflict (R131)'
+          : 'no revisions: a change with a stale placement lands whole',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          const base = await madeFrom('n1');
+          await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+          const outcome = await apply([
+            {
+              note: remoteNote('n1', { name: 'Plan', archived: true, archivedAt: NOW - 500 }),
+              blocks: [textBlock('n1', 'Theirs')],
+              ...base,
+            },
+          ]);
+          if (!flags.revisions) {
+            assert.deepEqual(outcome.committedIds, ['n1']);
+            return;
+          }
+          assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied-placement-conflict']]);
+          assert.deepEqual(outcome.items[0].outcome.severity, 'warning');
+          assert.deepEqual(outcome.committedIds, ['n1']);
+          assert.deepEqual(
+            [(await blocksOf('n1'))[0].content, (await noteOf('n1'))?.pinned, (await noteOf('n1'))?.archived],
+            ['Theirs', true, false],
+          );
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: the same stale change sent again under new commandIds keeps one conflict record, and a different one another (R131)'
+          : 'no revisions: a stale change lands each time it is sent',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          const base = await madeFrom('n1');
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Mine')] }));
+          const stale = { note: remoteNote('n1', { name: 'Plan' }), blocks: [textBlock('n1', 'Theirs')], ...base };
+          for (let sent = 0; sent < 3; sent += 1) await apply([stale]);
+          if (!flags.revisions) return;
+          assert.equal((await keptConflicts()).length, 1);
+          await apply([{ ...stale, blocks: [textBlock('n1', 'Theirs, edited')] }]);
+          assert.deepEqual(
+            (await keptConflicts()).map(record => /** @type {any} */ (record.command).blocks[0].content).sort(),
+            ['Theirs', 'Theirs, edited'],
+          );
+          assert.equal((await blocksOf('n1'))[0].content, 'Mine');
+        },
+      );
+
+      it(
+        flags.revisions
           ? 'revisions: a change that says nothing it was made from counts as made from version 0, so it never lands over an edit made here'
           : 'no revisions: a change that says nothing it was made from lands',
         async () => {
@@ -4179,13 +4293,40 @@ export function runContractSuite(fixture) {
           } else {
             assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
           }
-          // A note as 1.4.x stored it, which nothing here has moved, is at version 0, so one lands on it
-          await seed('notes', [storageNote('old', 'Old', NOW)]);
-          const landed = await apply([{ note: remoteNote('old', { name: 'Theirs', pinned: true }), blocks: [] }]);
-          assert.deepEqual(itemsOf(landed), [['old', 'committed', 'remote-placement-applied']]);
-          assert.deepEqual([(await noteOf('old'))?.name, (await noteOf('old'))?.pinned], ['Theirs', true]);
         },
       );
+
+      it('a change that says nothing it was made from lands on a note as 1.4.x stored it, at version 0 since nothing here moved it, keeps the title and blocks it replaced as a conflict record, and says so (R131)', async () => {
+        await seed('notes', [storageNote('old', 'Old', NOW)]);
+        await seed('blocks', [{ id: 'old-block-0', canvasId: 'old', type: 'text', content: 'Old line', order: 0 }]);
+        const command = cmd('applyRemoteChanges', {
+          changes: [{ note: remoteNote('old', { name: 'Theirs' }), blocks: [textBlock('old', 'Their line')] }],
+        });
+        const landed = bulkOf(await kernel.execute(command));
+        assert.deepEqual(itemsOf(landed), [['old', 'committed', 'remote-content-replaced-legacy']]);
+        assert.deepEqual(landed.committedIds, ['old']);
+        assert.deepEqual(
+          [(await noteOf('old'))?.name, (await blocksOf('old')).map(block => block.content)],
+          ['Theirs', ['Their line']],
+        );
+        // The local title and blocks, as a stale save's are kept, under the part's commandId
+        const kept = await keptConflicts();
+        assert.deepEqual(
+          kept.map(record => [record.id, record.noteId, record.scope, record.expected, record.current]),
+          [[`${command.commandId}:old:content`, 'old', 'content', null, 0]],
+        );
+        const mine = /** @type {any} */ (kept[0].command);
+        assert.deepEqual(
+          [mine.type, mine.noteId, mine.name, mine.blocks.map((/** @type {BlockRecord} */ block) => block.content)],
+          ['saveNoteContent', 'old', 'Old', ['Old line']],
+        );
+        // Sent again under a new commandId, it finds the remote's text there, and keeps no more
+        const again = await apply([
+          { note: remoteNote('old', { name: 'Theirs' }), blocks: [textBlock('old', 'Their line')] },
+        ]);
+        assert.deepEqual(itemsOf(again), [['old', 'committed', 'remote-content-unchanged']]);
+        assert.equal((await keptConflicts()).length, 1);
+      });
 
       it('a note that already has the remote title, blocks, and placement changes in nothing, whatever versions the change says, and keeps no conflict', async () => {
         await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
@@ -4263,11 +4404,13 @@ export function runContractSuite(fixture) {
             assert.deepEqual(outcome.committedIds, ['n1', 'n2']);
             return;
           }
+          // n1's says its pin landed and its text didn't, so the list counts it (R131)
           assert.deepEqual(itemsOf(outcome), [
-            ['n1', 'conflict', 'revision-conflict'],
+            ['n1', 'committed', 'remote-content-conflict-placement-applied'],
             ['n2', 'committed', 'remote-content-applied'],
           ]);
-          assert.deepEqual(outcome.committedIds, ['n2']);
+          assert.deepEqual(outcome.items[0].outcome.severity, 'warning');
+          assert.deepEqual(outcome.committedIds, ['n1', 'n2']);
           assert.deepEqual([(await noteOf('n1'))?.pinned, (await blocksOf('n1'))[0].content], [true, 'Mine']);
           assert.equal((await blocksOf('n2'))[0].content, 'Theirs');
         },
@@ -4339,6 +4482,16 @@ export function runContractSuite(fixture) {
             'applyRemotePlacement',
             /** @type {any} */ ({ noteId: 'n1', placement: { name: 'x' }, expectedPlacementVersion: 0 }),
           ),
+          // The text revision a trash needs, when it says one, is a version
+          cmd(
+            'applyRemotePlacement',
+            /** @type {any} */ ({
+              noteId: 'n1',
+              placement: { trashed: true },
+              expectedPlacementVersion: 0,
+              expectedRevision: -1,
+            }),
+          ),
         ])) {
           assertRejected(await kernel.execute(command), 'validation', 'invalid-command');
         }
@@ -4362,7 +4515,7 @@ export function runContractSuite(fixture) {
             changes: [{ note: remoteNote('n1', { name: 'Theirs', pinned: true }), blocks: [], ...base }],
           });
           const first = bulkOf(await kernel.execute(command));
-          assert.deepEqual(itemsOf(first), [['n1', 'committed', 'remote-placement-applied']]);
+          assert.deepEqual(itemsOf(first), [['n1', 'committed', 'remote-content-applied-placement-applied']]);
           const after = await storedNoteOf('n1');
           const second = bulkOf(await kernel.execute(command));
           if (flags.idempotency) assert.deepEqual(second.items, first.items);
