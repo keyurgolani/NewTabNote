@@ -51,9 +51,25 @@ function draftsIn(page) {
   return page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('ntn-close-draft:')).length);
 }
 
+/**
+ * Put the caret after the second block's last character. End goes only to the end of a line,
+ * and the block wraps once enough rounds have added their words.
+ */
+async function caretAtEnd(page) {
+  await page.locator('#blocks-container > .block .block-content').nth(1).evaluate(content => {
+    content.focus();
+    const range = document.createRange();
+    range.selectNodeContents(content);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+}
+
 /** Type `word` at the end of the second block, inside the debounce, and close the tab while the Popup holds the blocks */
 async function typeAndCloseHeld(page, popup, word) {
-  await driver.clickBlock(page, 1);
+  await caretAtEnd(page);
   await page.keyboard.type(` ${word}`);
   expect(await page.evaluate(() => app.editor.saveTimeout !== null), 'the save is still in its debounce').toBe(true);
   await holdBlocks(popup, HOLD_MS);
@@ -73,8 +89,9 @@ test('text typed just before the tab closes is kept while another page holds the
     const word = `w${round}x`;
     await typeAndCloseHeld(page, popup, word);
     page = await reopen(extension);
+    // A space typed last in a contenteditable can stay a no-break space
     const text = (await driver.blocks(page))[1].text;
-    if (!text.split(' ').includes(word)) lost.push(round);
+    if (!text.split(/\s+/).includes(word)) lost.push(round);
   }
   expect(lost, `rounds whose edit was lost, of ${ROUNDS}`).toEqual([]);
   expect(await draftsIn(page), 'every draft applied and removed').toBe(0);
