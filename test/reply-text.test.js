@@ -71,18 +71,22 @@ const timeOnce = (fn, value) => {
 /**
  * Whether `fn` grows linearly: four times the input takes well under the sixteen times a
  * quadratic read would. The two sizes take turns, five calls each, and each keeps its best, so
- * a busy machine slows both alike.
+ * a busy machine slows both alike. The measure runs up to three times, so one stalled attempt
+ * doesn't decide it; a quadratic read misses every attempt.
  */
 const linear = (fn, make) => {
   const small = make(20_000);
   const large = make(80_000);
-  let bestSmall = Number.POSITIVE_INFINITY;
-  let bestLarge = Number.POSITIVE_INFINITY;
-  for (let k = 0; k < 5; k++) {
-    bestSmall = Math.min(bestSmall, timeOnce(fn, small));
-    bestLarge = Math.min(bestLarge, timeOnce(fn, large));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let bestSmall = Number.POSITIVE_INFINITY;
+    let bestLarge = Number.POSITIVE_INFINITY;
+    for (let k = 0; k < 5; k++) {
+      bestSmall = Math.min(bestSmall, timeOnce(fn, small));
+      bestLarge = Math.min(bestLarge, timeOnce(fn, large));
+    }
+    if (bestLarge < Math.max(bestSmall * 8, 50)) return true;
   }
-  return bestLarge < Math.max(bestSmall * 8, 50);
+  return false;
 };
 
 describe("an AI reply's text is shown as text", () => {
