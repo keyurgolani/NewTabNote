@@ -4047,14 +4047,15 @@ class BlockEditor {
   /**
    * Open the note-and-blocks transaction for a captured state.
    * @param {EditorSaveState} state
+   * @param {boolean} [closing] - The page is going: the blocks commit before it does
    * @returns {Promise<Object|null>} The note, or null when it no longer exists and nothing was written
    */
-  _writeSaveState(state) {
+  _writeSaveState(state, closing = false) {
     state.written = true;
     if ((this._writtenSeq.get(state.noteId) || 0) < state.seq) {
       this._writtenSeq.set(state.noteId, state.seq);
     }
-    return editorStorage().saveNoteWithBlocks(state.noteData, state.blocks);
+    return editorStorage().saveNoteWithBlocks(state.noteData, state.blocks, { closing });
   }
 
   /**
@@ -4137,7 +4138,8 @@ class BlockEditor {
     });
     const win = doc.defaultView;
     if (win) {
-      win.addEventListener('pagehide', () => this._writePendingNow());
+      // A page that goes runs no more callbacks, so what this writes commits at once (#142)
+      win.addEventListener('pagehide', (event) => this._writePendingNow({ closing: !event.persisted }));
     }
   }
 
@@ -4149,9 +4151,11 @@ class BlockEditor {
    * pages don't run rAF and closing pages don't wait, so the metadata is
    * computed here and the transactions open before this returns.
    * Writes nothing when nothing is pending.
+   * @param {{closing?: boolean}} [options] - closing: the page is going (pagehide), so the
+   *   blocks commit before it does, and the note's record catches up on its next save
    * @returns {void}
    */
-  _writePendingNow() {
+  _writePendingNow({ closing = false } = {}) {
     const waiting = this._activeSaves()
       .map((entry) => entry.state)
       .filter((state) => !state.written && state.noteId === this.noteId);
@@ -4159,12 +4163,15 @@ class BlockEditor {
     if (!due && waiting.length === 0) return;
 
     const work = due ? this._takeDueWork() : { loaded: false, loadedIsRetry: false, others: [] };
-    for (const copy of work.others) this._rewrite(copy);
+    for (const copy of work.others) this._rewrite(copy, closing);
     if (!work.loaded && waiting.length === 0) return;
+    // A closing write commits without the read that finds a deleted note gone, so a note this
+    // editor already found deleted stays deleted, its blocks included (#142)
+    if (closing && this.noteGone) return;
 
     const isRetry = work.loaded ? work.loadedIsRetry : waiting.every((state) => state.isRetry);
     const state = this._captureSaveState(isRetry);
-    if (state && this._takeBlockSnapshot(state)) this._writeNow(state);
+    if (state && this._takeBlockSnapshot(state)) this._writeNow(state, closing);
   }
 
   /**
@@ -4172,24 +4179,26 @@ class BlockEditor {
    * that note. It keeps its capture order, so it can't supersede a newer save
    * of the note.
    * @param {EditorSaveState} copy
+   * @param {boolean} [closing] - The page is going
    * @returns {Promise<void>}
    */
-  _rewrite(copy) {
-    return this._writeNow({ ...copy, written: false, isRetry: true });
+  _rewrite(copy, closing = false) {
+    return this._writeNow({ ...copy, written: false, isRetry: true }, closing);
   }
 
   /**
    * Write a state whose blocks are taken, without waiting for a frame. The
    * transaction opens before this returns.
    * @param {EditorSaveState} state
+   * @param {boolean} [closing] - The page is going
    * @returns {Promise<void>}
    */
-  _writeNow(state) {
+  _writeNow(state, closing = false) {
     let work;
     try {
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
-      work = this._writeSaveState(state).then((saved) => {
+      work = this._writeSaveState(state, closing).then((saved) => {
         if (saved) return this._afterSaveWrite(state, meta.text);
         this._onNoteGone(state);
         return undefined;
