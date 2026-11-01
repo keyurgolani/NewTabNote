@@ -135,6 +135,15 @@ describe('a block dropped on the sidebar', () => {
     assert.deepEqual(shape(await tab.madeBlocks()), [{ type: 'quote', content: 'Milk and eggs' }]);
   });
 
+  it('is stored as its text once a new drag starts on something in the editor that is not a block', async () => {
+    const tab = await newTab();
+    const transfer = tab.dragBlock({ id: 'b1', type: 'quote', content: '<b>Milk</b> and eggs' });
+    const other = tab.editor.container.appendChild(tab.env.document.createElement('div'));
+    tab.editor.onDragStart({ target: other, dataTransfer: dataTransfer() });
+    await tab.drop(transfer);
+    assert.deepEqual(shape(await tab.madeBlocks()), [{ type: 'quote', content: 'Milk and eggs' }]);
+  });
+
   it("from this page's editor with no rich content, stores its text escaped", async () => {
     const tab = await newTab();
     await tab.drop(tab.dragBlock({ id: 't1', type: 'table', tableData: [['Q3 <b>plan</b>', '&']] }));
