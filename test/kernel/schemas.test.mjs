@@ -334,6 +334,13 @@ describe('entity schemas (#13, AC1)', () => {
       NOTE_OP_FIELDS.includes('name') && !NOTE_OP_FIELDS.includes('id') && !NOTE_OP_FIELDS.includes('updatedAt'),
     );
     assert.deepEqual([...FOLDER_OP_FIELDS], ['collapsed', 'color', 'createdAt', 'name', 'parentId']);
+    // op-fields.js lists them apart from the schemas, for the differ, and each list is its
+    // record schema's fields but its id and updatedAt, so a field a schema gains fails here
+    // until the list names it too
+    /** @param {Record<string, unknown>} entries */
+    const opFieldsOf = entries => Object.keys(entries).filter(field => field !== 'id' && field !== 'updatedAt').sort();
+    assert.deepEqual([...NOTE_OP_FIELDS], opFieldsOf(noteRecord.entries));
+    assert.deepEqual([...FOLDER_OP_FIELDS], opFieldsOf(folderRecord.entries));
   });
 });
 
