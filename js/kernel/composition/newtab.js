@@ -13,11 +13,16 @@ import { validateBackup } from '../adapters/indexeddb/backups.js';
 import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { exportRawStores } from '../adapters/indexeddb/raw-export.js';
 import { NEWTAB_HANDLERS } from '../core/application/handlers-all.js';
-import { applyCloseDrafts, closeDraftStore } from '../core/application/close-drafts.js';
 import { createNoteList } from '../core/application/note-list.js';
-import { DRAFTS_LOCK } from '../core/domain/close-draft-keys.js';
+import {
+  DRAFTS_LOCK,
+  DRAFT_PREFIX,
+  SAVED_UNTOLD_KEY,
+  UNTOLD_KEY,
+  recoveredIdOf,
+} from '../core/domain/close-draft-keys.js';
 import { systemClock } from '../core/ports/runtime.js';
-import { applyingCloseDrafts, pageDrafts } from './close-drafts.js';
+import { applyingCloseDrafts, holdsKeys, pageDrafts } from './close-drafts.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
 import { PROVIDER_SETTING_KEYS, SYNC_SETTING_KEYS, createHolderSettings } from './holder-settings.js';
@@ -41,6 +46,10 @@ import { startIndexer } from './workers.js';
 /** @typedef {import('./removal.js').NoteRemoval} NoteRemoval */
 /** @typedef {import('./removal.js').RemovalPorts} RemovalPorts */
 /** @typedef {import('./storage-facade.js').StorageFacade} StorageFacade */
+/** @typedef {import('./close-drafts.js').Applier} Applier */
+/** @typedef {import('../core/application/close-drafts.js').DraftStorage} DraftStorage */
+/** @typedef {import('../core/application/close-drafts.js').DraftLocks} DraftLocks */
+/** @typedef {import('../core/application/close-drafts.js').DraftStore} DraftStore */
 
 /**
  * What the root needs of App: init, and the pane moves and message to the other new tabs that
@@ -261,6 +270,18 @@ const DELETING_COMMANDS = Object.freeze(['deleteNotePermanently', 'emptyTrash', 
 const NOTES_DELETED = Object.freeze(['note-deleted', 'trash-emptied', 'trash-cleaned']);
 
 /**
+ * The notes `command` can delete for good, as it names them before the kernel runs it: a
+ * permanent delete's note, and the note the Trash deletes for good when it's empty and untitled.
+ * Empty Trash, trash retention and a bulk action name theirs only in their outcome, so null.
+ * @param {import('../core/contracts/commands.js').Command} command
+ * @returns {string[] | null}
+ */
+const notesNamedBy = command => {
+  if (command.type === 'deleteNotePermanently' || command.type === 'trashNote') return [command.noteId];
+  return null;
+};
+
+/**
  * The notes `outcome` deleted for good
  * @param {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} outcome
  * @returns {string[]}
@@ -271,24 +292,120 @@ const notesDeletedBy = outcome => {
 };
 
 /**
+ * Whether `storage` gives the new tab's start work: a draft, 1.4.3's catch-up key, or an untold
+ * list, which the new tab reads for its toasts. Popup and Side Panel read no untold list, so
+ * theirs is holdsDrafts (close-drafts.js). This one and the two below are the new tab's alone, so
+ * they're here, out of the chunk its start shares with Popup's and Side Panel's.
+ * @param {DraftStorage | undefined} storage
+ * @returns {boolean}
+ */
+const holdsNewTabWork = storage => holdsKeys(storage, { catchUp: true, untold: true });
+
+/**
+ * Whether `storage` holds a key a note deleted for good could have left: a draft, or an untold
+ * list, which the store's clearNotes clears. With neither, no note has one here.
+ * @param {DraftStorage | undefined} storage
+ * @returns {boolean}
+ */
+const holdsNoteKeys = storage => holdsKeys(storage, { untold: true });
+
+/**
+ * Whether `storage` holds a key the notes `noteIds` left, which a delete of them for good clears
+ * (the store's clearNotes): a draft for one of them, a draft whose recovered note one of them is
+ * (recoveredIdOf), or an entry naming one in either untold list. Synchronous, and never throws: a
+ * page without localStorage, or without access to it, holds none, and a value that doesn't parse
+ * names no note.
+ * @param {DraftStorage | undefined} storage
+ * @param {readonly string[]} noteIds
+ * @returns {boolean}
+ */
+function holdsKeysFor(storage, noteIds) {
+  /**
+   * @param {string | null} text
+   * @returns {unknown}
+   */
+  const parsed = text => {
+    try {
+      return JSON.parse(text || 'null');
+    } catch {
+      return null;
+    }
+  };
+  /**
+   * @param {unknown} value
+   * @returns {value is Record<string, unknown>}
+   */
+  const isObject = value => typeof value === 'object' && value !== null;
+  try {
+    if (!storage) return false;
+    const ids = new Set(noteIds);
+    /** @param {unknown} id */
+    const named = id => typeof id === 'string' && ids.has(id);
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = String(storage.key(index));
+      if (!key.startsWith(DRAFT_PREFIX)) continue;
+      const draft = parsed(storage.getItem(key));
+      if (!isObject(draft)) continue;
+      if (named(draft.noteId) || (typeof draft.id === 'string' && named(recoveredIdOf({ id: draft.id })))) return true;
+    }
+    /**
+     * @param {string} key
+     * @param {string[]} fields
+     */
+    const names = (key, fields) => {
+      const list = parsed(storage.getItem(key));
+      return Array.isArray(list) && list.some(entry => isObject(entry) && fields.some(field => named(entry[field])));
+    };
+    return names(UNTOLD_KEY, ['id', 'of']) || names(SAVED_UNTOLD_KEY, ['id']);
+  } catch {
+    return false;
+  }
+}
+
+/** Tells of a delete whose clear couldn't load, never a draft's text */
+const clearLogger = Object.freeze({
+  warn: (/** @type {string} */ event, /** @type {Record<string, unknown>} */ detail) =>
+    console.warn(`NewTabNote close-time drafts: ${event}`, detail),
+});
+
+/**
  * `client`, whose every command that can delete a note for good holds the close-time drafts'
- * lock around the command and the clear of what the notes it deleted left in `store`, whatever
- * path sends it: a permanent delete, Empty Trash, trash retention, a bulk action, and the Trash,
- * which deletes an empty untitled note for good (#33, the lead's Q7). Only the outcome says what
- * was deleted, so the lock is taken first. So a delete never lands between an apply's read of a
- * draft and its command, and clearing after the commit needs nothing put back.
+ * lock around the command and the clear of what the notes it deleted left in the page's
+ * localStorage, whatever path sends it: a permanent delete, Empty Trash, trash retention, a bulk
+ * action, and the Trash, which deletes an empty untitled note for good (#33, the lead's Q7).
+ * Only the outcome says what was deleted, so the lock is taken first. So a delete never lands
+ * between an apply's read of a draft and its command, and clearing after the commit needs nothing
+ * put back. The clear is the store's, from the applier `load` hands over, inside the lock.
+ *
+ * A delete skips the lock and the load when the page holds no key its notes could have left: for
+ * one that names its note, no draft for it, no draft whose recovered note it is, and no entry
+ * naming it in either untold list (holdsKeysFor); for Empty Trash, trash retention and a bulk
+ * action, which name their notes only in their outcome, no draft and no untold list at all
+ * (holdsNoteKeys). That's safe on two counts: a draft a closing tab writes after the look can't
+ * bring a note deleted for good back, since the next start's apply drops a draft whose note is
+ * gone (rule 1); and an apply removes a draft's key only once its command has committed, so while
+ * one is under way its key is there, and a delete of its note that looks then takes the lock and
+ * waits for it. An applier that can't load clears nothing, and the delete runs: the next start's
+ * apply drops what its notes left, as rule 1 does.
  * @param {Client} client
- * @param {{store: import('../core/application/close-drafts.js').DraftStore, locks: import('../core/application/close-drafts.js').DraftLocks | null}} drafts
+ * @param {{storage: DraftStorage | undefined, locks: DraftLocks | null, load: () => Promise<Applier>, logger?: {warn: (event: string, detail: Record<string, unknown>) => void}}} drafts
  * @returns {Client}
  */
-export function withCloseDraftClears(client, { store, locks }) {
+export function withCloseDraftClears(client, { storage, locks, load, logger = clearLogger }) {
   /** @param {import('../core/contracts/commands.js').Command} command */
   const run = async command => {
+    /** @type {DraftStore | null} */
+    let store = null;
+    try {
+      store = (await load()).closeDraftStore(storage);
+    } catch (error) {
+      logger.warn('close-drafts-not-cleared', { error });
+    }
     const outcome = /** @type {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} */ (
       await client.execute(command)
     );
     const ids = notesDeletedBy(outcome);
-    if (ids.length > 0) store.clearNotes(ids);
+    if (store && ids.length > 0) store.clearNotes(ids);
     return outcome;
   };
   return Object.freeze({
@@ -297,6 +414,8 @@ export function withCloseDraftClears(client, { store, locks }) {
       /** @type {unknown} */ (
         (/** @type {import('../core/contracts/commands.js').Command} */ command) => {
           if (!DELETING_COMMANDS.includes(command.type)) return client.execute(command);
+          const named = notesNamedBy(command);
+          if (!(named ? holdsKeysFor(storage, named) : holdsNoteKeys(storage))) return client.execute(command);
           return locks ? locks.request(DRAFTS_LOCK, { mode: 'exclusive' }, () => run(command)) : run(command);
         }
       )
@@ -305,20 +424,36 @@ export function withCloseDraftClears(client, { store, locks }) {
 }
 
 /**
+ * The close-time drafts' applier, the `close-drafts-chunk` chunk, which the new tab imports only
+ * when its localStorage gives it work, as Popup and Side Panel do (close-drafts.js)
+ * @returns {Promise<Applier>}
+ */
+const loadCloseDrafts = () => import('../core/application/close-drafts-chunk.js');
+
+/**
  * The client the new tab's root hands out, on `adapter` (createNewTabClient): it wakes the worker
  * to purge after each delete for good (withPurgeWake), holds the close-time drafts' lock around
  * each command that can delete for good and clears what the deleted notes left of them
  * (withCloseDraftClears), and its whenReady resolves once the closing tabs' edits are applied,
- * so the note list's first read and App's start come after them (#33). The new tab has the
- * applier in its start, where Popup and Side Panel load it when they need it.
+ * so the note list's first read and App's start come after them (#33). Like Popup and Side Panel,
+ * the new tab loads the applier only when its localStorage holds a draft, 1.4.3's catch-up key
+ * or an untold list, which it reads for its toasts (holdsNewTabWork), so its start loads none of
+ * it (#147's heap, the lead's call).
  * @param {IndexedDbAdapter} adapter
- * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void}} [page] - the page's drafts and its wake, from its globals
+ * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<Applier>}} [page]
+ *   the page's drafts and its wake, from its globals, and the applier's load
  * @returns {ReturnType<typeof applyingCloseDrafts>}
  */
-export function createNewTabPageClient(adapter, { drafts = pageDrafts(), wake = () => wakeWorkerToPurge() } = {}) {
-  const store = closeDraftStore(drafts.storage);
-  const client = withCloseDraftClears(withPurgeWake(createNewTabClient(adapter), wake), { store, locks: drafts.locks });
-  return applyingCloseDrafts(client, drafts, { load: async () => ({ applyCloseDrafts, closeDraftStore }) });
+export function createNewTabPageClient(
+  adapter,
+  { drafts = pageDrafts(), wake = () => wakeWorkerToPurge(), load = loadCloseDrafts } = {},
+) {
+  const client = withCloseDraftClears(withPurgeWake(createNewTabClient(adapter), wake), {
+    storage: drafts.storage,
+    locks: drafts.locks,
+    load,
+  });
+  return applyingCloseDrafts(client, drafts, { load, holds: holdsNewTabWork });
 }
 
 /**
