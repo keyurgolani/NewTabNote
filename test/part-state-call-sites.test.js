@@ -560,8 +560,15 @@ async function chatPage({ plan = {} } = {}) {
   chat.partReload = app.partReload();
   chat.modelParts = app.modelParts;
   chat.saveGlobalChatHistory = async () => {};
-  // An answer's markup, which this page has no parser for
+  // An answer's markup, which this page has no parser for: sanitizeHtml passes it through, and the
+  // DOMParser AIChatController.replyHtml reads it with (#132) gives it back as parsing and
+  // serializing text does, its quotes as themselves
   env.global.sanitizeHtml = (html) => html;
+  env.global.DOMParser = class {
+    parseFromString(html) {
+      return { body: { innerHTML: html.replace(/&#39;/g, "'").replace(/&quot;/g, '"'), querySelectorAll: () => [] } };
+    }
+  };
   const part = chat.allNotesPlace();
   const ask = async (text) => {
     elements['global-chat-input'].value = text;
