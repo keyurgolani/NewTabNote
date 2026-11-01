@@ -10,14 +10,19 @@
  * A wait is an `oncomplete` or `onabort` handler set on anything, by any assignment (`=`, `??=`,
  * `||=`, ...), as an object literal's key (as Object.assign takes it), or by a call that names it
  * (Object.defineProperty, Reflect.set), and a `complete` or `abort` listener added with
- * addEventListener, called as a method, through brackets, or with `.call` or `.apply`. A
- * listener for an event the scan can't read, one named by a variable, a constant, or a loop's
- * item, counts as one too, so every event name is a literal, but in js/lib/: its vendored files,
- * each pinned by its SHA-256 (js/lib/vendor.json), name events through variables as minified
- * code does, and take every other rule. An `abort` on an AbortSignal
- * (`signal`, or a `.signal` property) or on a FileReader the file makes with `new FileReader()`
- * isn't one. Anything else fails, whatever it's on, so a new wait goes through endOf or is told
- * apart here (R131).
+ * addEventListener, called as a method, through brackets, with `.call` or `.apply`, or bound
+ * with `.bind`. A listener for an event the scan can't read, one named by a variable, a
+ * constant, or a loop's item, counts as one too, and so does a handler set on a transaction
+ * through a key it can't read (`tx[key] = …`), so every event and handler name is a literal,
+ * but in js/lib/: its vendored files, each pinned by its SHA-256 (js/lib/vendor.json), name
+ * events through variables as minified code does, and take every other rule. An `abort` on an
+ * AbortSignal (`signal`, or a `.signal` property) or on a FileReader the file makes with
+ * `new FileReader()` isn't one. Anything else fails, whatever it's on, so a new wait goes
+ * through endOf or is told apart here (R131).
+ *
+ * It guards against a wait written by accident, not one written to get past it: Reflect.apply,
+ * addEventListener taken off a transaction and called later, or a handler name built at run
+ * time on something that doesn't read as a transaction all get by.
  *
  *   node scripts/transaction-waits.js [root]   fail when js/ under root, the repository's by default, has one
  *
@@ -68,6 +73,18 @@ function keyName(name) {
 function isSignal(node) {
   const n = strip(node);
   return (ts.isIdentifier(n) && n.text === 'signal') || (ts.isPropertyAccessExpression(n) && n.name.text === 'signal');
+}
+
+/**
+ * Whether `node` reads as a transaction: `tx` or `transaction`, a name ending in `Tx` or
+ * `Transaction`, either as a property, or a `transaction(…)` call
+ */
+function isTransactionLike(node) {
+  const n = strip(node);
+  const named = text => /^(?:tx|transaction)$|(?:Tx|Transaction)$/.test(text);
+  if (ts.isIdentifier(n)) return named(n.text);
+  if (ts.isPropertyAccessExpression(n)) return named(n.name.text);
+  return ts.isCallExpression(n) && memberName(n.expression) === 'transaction';
 }
 
 /** Whether `n` is an assignment of any kind: `=`, `??=`, `||=`, `+=`, ... */
@@ -145,11 +162,14 @@ function scanSource(file, text) {
     else if (event !== null && EVENTS.has(event)) add(node, event, receiver);
   };
   (function walk(n) {
-    // x.oncomplete = …, x.onabort ??= …, x['oncomplete'] ||= …
+    // x.oncomplete = …, x.onabort ??= …, x['oncomplete'] ||= …, and tx[key] = … with a key it
+    // can't read
     if (isAssignment(n)) {
       const left = strip(n.left);
       const name = memberName(left);
       if (name !== null && HANDLERS.has(name)) add(n, HANDLERS.get(name), left.expression);
+      const unread = ts.isElementAccessExpression(left) && name === null && !vendored;
+      if (unread && isTransactionLike(left.expression)) add(n, null, left.expression, left.argumentExpression);
     }
     // { oncomplete: …, onabort() {…} }, as Object.assign(tx, …) takes it
     if (isLiteralMember(n)) {
@@ -165,7 +185,8 @@ function scanSource(file, text) {
       }
       // x.addEventListener(…), x?.addEventListener(…), x['addEventListener'](…)
       if (memberName(callee) === 'addEventListener') listener(n, n.arguments[0], callee.expression);
-      // ….addEventListener.call(x, …) and ….addEventListener.apply(x, […])
+      // ….addEventListener.call(x, …), ….addEventListener.apply(x, […]), and
+      // ….addEventListener.bind(x), whose calls name events the scan can't follow
       if ((ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) && memberName(callee.expression) === 'addEventListener') {
         const how = memberName(callee);
         if (how === 'call') listener(n, n.arguments[1], n.arguments[0]);
@@ -173,6 +194,7 @@ function scanSource(file, text) {
           const list = strip(n.arguments[1]);
           listener(n, ts.isArrayLiteralExpression(list) ? list.elements[0] || list : list, n.arguments[0]);
         }
+        if (how === 'bind' && !vendored) add(n, null, n.arguments[0] || strip(callee.expression).expression, n);
       }
     }
     ts.forEachChild(n, walk);
@@ -202,7 +224,9 @@ function collect(root = ROOT_DIR) {
 /** What a wait's problem says */
 const problemOf = wait =>
   `${wait.file}:${wait.line} ${
-    wait.event === null ? `listens on ${wait.on} for ${wait.named}, a name the scan can't read: name the event with a literal, and` : `waits on ${wait.on}'s ${wait.event}:`
+    wait.event === null
+      ? `names an event or a handler on ${wait.on} through ${wait.named}, which the scan can't read: name it with a literal, and`
+      : `waits on ${wait.on}'s ${wait.event}:`
   } wait on a transaction's end with endOf(tx) from ${ALLOWED}, which also ends when the connection closes, since Chrome fires neither event on a transaction a forced close catches`;
 
 function main(argv = process.argv.slice(2), { log = console.log, error = console.error } = {}) {
