@@ -2,9 +2,10 @@
 
 // 1.4.3 item 1 (#33): the close-time drafts' applier, on the notes database a root has open.
 // A draft is applied as a save with its deletes, recovered as a note beside the original when
-// another writer saved that note after the draft's base, dropped when its edit is already in
-// or its note is gone, and kept when its transaction fails. One applier runs at a time across
-// pages, and a permanent delete clears what a note left.
+// another writer saved that note after the draft's base, dropped when its edit is already in,
+// when it only deleted blocks of a note saved elsewhere, or when its note is gone, and kept when
+// its transaction fails. One applier runs at a time across pages, and a permanent delete clears
+// what a note left.
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -142,6 +143,21 @@ describe('the close-time draft applier: one test per path', () => {
     assert.deepEqual(plain(env.get('CloseDrafts').takeUntold(env.global.localStorage)), [{ id: recoveredId, of: 'A' }],
       'the next new tab tells about it, by IDs only');
     assert.deepEqual(draftKeys(env), []);
+  });
+
+  it('drops a draft that only deleted blocks of a note saved elsewhere since: no recovered note, and the blocks stay', async () => {
+    const other = await page({ indexedDB: env.indexedDB });
+    const elsewhere = await other.get('Storage').getNote('A');
+    await other.get('Storage').saveNoteWithBlocks(elsewhere, [block('a1', 'A', 0, 'saved in another tab'), block('a2', 'A', 1, 'alpha two')]);
+    const before = await stored(env);
+    assert.ok(before.notes.A.updatedAt > T0);
+
+    draftOfA(env, { blocks: [], deletedBlockIds: ['a2'] });
+    const result = await apply(env, { now: () => T0 + 100 });
+    assert.deepEqual(result, { ...empty, dropped: ['A'] });
+    assert.deepEqual(await stored(env), before, 'nothing is written, and a2 stays');
+    assert.deepEqual(draftKeys(env), []);
+    assert.deepEqual(plain(env.get('CloseDrafts').takeUntold(env.global.localStorage)), [], 'nothing to tell');
   });
 
   it('drops a draft whose edit is already stored, writing nothing', async () => {

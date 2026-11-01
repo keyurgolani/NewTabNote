@@ -18,6 +18,8 @@
  *    The stored `updatedAt` says who wrote last: the draft's base (the save the editor last
  *    saw commit) or one of the saves the editor issued since, in flight included
  *    (`base.issued`), is the editor's own; anything else past the base is another writer.
+ *    A draft that only deleted blocks has no text to recover, so it's removed, writing
+ *    nothing, and the blocks it meant to delete stay.
  * 4. Otherwise the save: the draft's blocks are put and its deleted blocks deleted, only the
  *    note's own, and the note gets the draft's title, preview and to-do progress, with its
  *    search entry's name and its links, as the editor's save writes them.
@@ -65,9 +67,10 @@ const CloseDrafts = (function initCloseDrafts() {
    */
 
   /**
-   * What a start's apply did, by note ID. `dropped` holds the drafts content first found
-   * already in, and `gone` the notes deleted for good since, for #33's rebuild and sweep at
-   * the same start.
+   * What a start's apply did, by note ID. `dropped` holds the drafts removed with nothing
+   * written while their note is there: those content first found already in, and those that
+   * only deleted blocks of a note saved elsewhere since. `gone` holds the notes deleted for
+   * good since. Both are for #33's rebuild and sweep at the same start.
    * @typedef {{
    *   saved: Array<string>, recovered: Array<{noteId: string, recoveredId: string}>,
    *   dropped: Array<string>, gone: Array<string>, kept: Array<string>
@@ -118,6 +121,17 @@ const CloseDrafts = (function initCloseDrafts() {
    */
   function titleOf(note) {
     return (note && note.name) || 'Untitled';
+  }
+
+  /**
+   * Whether the draft renamed the note: a title that isn't empty and isn't the one the list
+   * shows for it
+   * @param {any} original - the stored note
+   * @param {CloseDraft} draft
+   * @returns {boolean}
+   */
+  function renamed(original, draft) {
+    return typeof draft.name === 'string' && draft.name !== '' && draft.name !== titleOf(original);
   }
 
   /**
@@ -550,11 +564,22 @@ const CloseDrafts = (function initCloseDrafts() {
   }
 
   /**
+   * Rule 3's exception: the draft holds no text to recover. It changed no block and didn't
+   * rename the note, so all it did was delete blocks.
+   * @param {any} original
+   * @param {CloseDraft} draft
+   * @returns {boolean}
+   */
+  function onlyDeletes(original, draft) {
+    return draft.blocks.length === 0 && !renamed(original, draft);
+  }
+
+  /**
    * Apply one draft, in one readwrite transaction (rules 1 to 4)
    * @param {IDBDatabase} db
    * @param {CloseDraft} draft
    * @param {{now: number, trashDays: number}} context
-   * @returns {Promise<{kind: 'saved'|'recovered'|'identical'|'gone'|'kept', recoveredId?: string}>}
+   * @returns {Promise<{kind: 'saved'|'recovered'|'dropped'|'gone'|'kept', recoveredId?: string}>}
    */
   function applyOne(db, draft, { now, trashDays }) {
     return new Promise((resolve) => {
@@ -563,7 +588,7 @@ const CloseDrafts = (function initCloseDrafts() {
       const linked = db.objectStoreNames.contains('links');
       if (indexed) scope.push('search_index');
       if (linked) scope.push('links');
-      /** @type {{kind: 'saved'|'recovered'|'identical'|'gone'|'kept', recoveredId?: string}} */
+      /** @type {{kind: 'saved'|'recovered'|'dropped'|'gone'|'kept', recoveredId?: string}} */
       let outcome = { kind: 'kept' };
       /** @type {IDBTransaction} */
       let tx;
@@ -607,10 +632,15 @@ const CloseDrafts = (function initCloseDrafts() {
             return;
           }
           if (alreadyIn(original, stored, draft)) {
-            outcome = { kind: 'identical' };
+            outcome = { kind: 'dropped' };
             return;
           }
           if (savedElsewhere(original, draft)) {
+            // Only deletes: there's no text to recover, and the blocks it meant to delete stay
+            if (onlyDeletes(original, draft)) {
+              outcome = { kind: 'dropped' };
+              return;
+            }
             const stillThere = draft.deletedBlockIds.filter((id) => {
               const copy = stored.get(id);
               return copy && copy.canvasId === draft.noteId;
@@ -699,7 +729,7 @@ const CloseDrafts = (function initCloseDrafts() {
 
   /**
    * Apply every draft in `storage` to `db`, one at a time across pages, and remove each one
-   * applied, recovered, already in, or for a note that's gone. A root calls it once its
+   * applied, recovered, dropped, or for a note that's gone. A root calls it once its
    * database is open, before it reads a note. Each recovered note's ID also goes on the list
    * the next new tab's toast tells (takeUntold), whichever root made it.
    * @param {{db: IDBDatabase, storage?: Storage, locks?: (LockManager|null), now?: () => number,
@@ -730,7 +760,7 @@ const CloseDrafts = (function initCloseDrafts() {
           setUntold(drafts, [...untold(drafts), { id: entry.recoveredId, of: entry.noteId }]);
         } else if (kind === 'saved') {
           result.saved.push(draft.noteId);
-        } else if (kind === 'identical') {
+        } else if (kind === 'dropped') {
           result.dropped.push(draft.noteId);
         } else {
           result.gone.push(draft.noteId);
