@@ -185,6 +185,36 @@ describe('Settings > Data & Backup: Copy From Before the Update', () => {
     assert.deepEqual(flaky.toasts, [{ message: 'Pre-update copy not exported', kind: 'error' }]);
   });
 
+  it('App builds Settings with onOpened, which reads the section again each time Settings opens', () => {
+    // The only place the section reads its state: without it Data & Backup shows the heading
+    // with no Export button, whatever the copy (R88's read of the rebase onto #129)
+    const app = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+    assert.match(
+      app,
+      /new SettingsController\(\{[^}]*\n {6}onOpened: this\.preUpdateCopySection \? \(\) => this\.preUpdateCopySection\.refresh\(\) : null,\n/,
+    );
+  });
+
+  it('opening Settings waits for onOpened, so the section has read its state once Settings has opened', async () => {
+    const env = createLegacyEnv({ document: new FakeDocument(), worker: false });
+    env.load('js/utils.js', 'js/controllers/settings-controller.js');
+    env.document.stub(['settings-modal', 'settings-search']);
+    env.get('Utils').trapFocus = () => () => {};
+    let read = false;
+    const settings = Object.assign(Object.create(env.get('SettingsController').prototype), {
+      onCloseAllModals: null,
+      clearSettingsSearch() {},
+      switchSettingsCategory() {},
+      updateSettingsUI: async () => {},
+      onSettingsOpened: async () => {
+        await settle();
+        read = true;
+      },
+    });
+    await settings.openSettingsModal();
+    assert.equal(read, true);
+  });
+
   it("newtab.html has the section after Export & Import, its status line a polite live region from the start", () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'newtab.html'), 'utf8');
     const exportImport = html.indexOf('<h3>Export &amp; Import</h3>');

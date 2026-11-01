@@ -537,6 +537,64 @@ async function shortOfSpace(extension) {
 }
 
 /**
+ * Leave the profile as a 1.4.1 one with a note that this build's worker then upgraded (#17 PR
+ * 1b), before any page opens: CanvasTabDB again at version 8 with its ten stores and the note,
+ * and no recovery point, then a capture. The capture's command finds the worker's connection gone
+ * with the database this deleted, so it starts another attempt, which copies the note into a
+ * verified pre-migration point before it upgrades to 9. Settings > Data & Backup then has a copy
+ * to export. Test code only, as shortOfSpace is.
+ */
+async function upgradedAfterACopy(extension) {
+  await workerStorageSettled(extension);
+  await extension.worker.evaluate(async () => {
+    const done = request => new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await done(indexedDB.deleteDatabase('CanvasTabDB'));
+    await done(indexedDB.deleteDatabase('NewTabNoteRecovery'));
+    const stores = {
+      canvases: ['id', ['name', 'updatedAt']], elements: ['id', ['canvasId', 'type']], settings: ['key', []],
+      media: ['id', ['canvasId']], search_index: ['noteId', []], folders: ['id', ['parentId', 'name']],
+      links: ['id', ['fromNoteId', 'toNoteId']], themes: ['id', ['name', 'updatedAt']], vectors: ['id', []],
+      snapshots: ['id', ['noteId', 'timestamp']],
+    };
+    const request = indexedDB.open('CanvasTabDB', 8);
+    request.onupgradeneeded = () => {
+      for (const [name, [keyPath, indexes]] of Object.entries(stores)) {
+        const store = request.result.createObjectStore(name, { keyPath });
+        for (const index of indexes) store.createIndex(index, index, { unique: false });
+      }
+    };
+    const db = await done(request);
+    const at = Date.now();
+    const tx = db.transaction(['canvases', 'elements'], 'readwrite');
+    tx.objectStore('canvases').put({
+      id: 'before-the-update', name: 'Before the update', createdAt: at, updatedAt: at, archived: false, archivedAt: null,
+      titleManuallySet: true, preview: 'kept', pinned: false, todoProgress: null, isDaily: false, dateStr: null,
+      isTemplate: false, folderId: null,
+    });
+    tx.objectStore('elements').put({
+      id: 'before-the-update-1', canvasId: 'before-the-update', order: 0, type: 'text', content: 'kept',
+      createdAt: at, updatedAt: at,
+    });
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+  });
+  await captureBookmark(extension, { url: 'https://example.test/after-the-update', title: 'After the update' });
+  await expect.poll(() => extension.worker.evaluate(async () => {
+    const upgrade = await self.storageUpgrade;
+    const held = (await indexedDB.databases()).map(db => `${db.name}@${db.version}`);
+    return Boolean(upgrade && upgrade.status === 'migrated' && upgrade.recoveryPointId)
+      && held.includes('CanvasTabDB@9') && held.some(name => name.startsWith('NewTabNoteRecovery@'));
+  }), { timeout: SETTLE_TIMEOUT_MS }).toBe(true);
+}
+
+/**
  * Call background.js's captureToDailyNote(item) in the service worker
  */
 async function captureToDailyNote(extension, item) {
@@ -889,6 +947,7 @@ function recentNoteNames(popup) {
 
 module.exports = {
   shortOfSpace,
+  upgradedAfterACopy,
   trackStartup,
   afterEditorFocus,
   waitForApp,
