@@ -36,6 +36,17 @@ async function keepReplies(extension, note, global) {
   }), [note, global]);
 }
 
+/**
+ * A new tab whose two chats' history holds `note` and `global` as the assistant replies. They're
+ * kept once the first start has written its own settings, and a new start reads them.
+ */
+async function openWithReplies(extension, note, global) {
+  const page = await driver.openNewTab(extension);
+  await keepReplies(extension, note, global);
+  await driver.reload(page);
+  return page;
+}
+
 /** The assistant replies the page shows */
 const shownReplies = page => page.locator('.ai-chat-message.assistant .ai-message-content');
 
@@ -53,8 +64,7 @@ test('a stored chat reply shows its markup as text and loads nothing', async ({ 
   const markup = scope => `<img src="${HOST}/${scope}.gif"> <link rel="stylesheet" href="${HOST}/${scope}.css">`
     + `<style>@import url("${HOST}/${scope}-import.css"); #page-title { outline: 7px solid rgb(1, 2, 3); }</style>`
     + `<a href="${HOST}/${scope}.html">a link</a> <input value="${scope} field"> <button>${scope} button</button>`;
-  await keepReplies(extension, `Sure.\n\n${markup('note')}`, `Sure.\n\n${markup('global')}`);
-  const page = await driver.openNewTab(extension);
+  const page = await openWithReplies(extension, `Sure.\n\n${markup('note')}`, `Sure.\n\n${markup('global')}`);
   await expect(shownReplies(page)).toHaveCount(2);
 
   const shown = await page.evaluate(() => ({
@@ -75,8 +85,7 @@ test("a stored chat reply's base and refresh markup show as text and change noth
   const fetched = await answer(extension);
   await extension.seedOnboarded();
   const reply = `Ok <base href="${HOST}/based/"> <meta http-equiv="refresh" content="1;url=${HOST}/elsewhere.html">`;
-  await keepReplies(extension, reply, 'Ok');
-  const page = await driver.openNewTab(extension);
+  const page = await openWithReplies(extension, reply, 'Ok');
   /** A URL without its query and fragment */
   const place = url => `${new URL(url).origin}${new URL(url).pathname}`;
   const address = place(page.url());
@@ -99,8 +108,7 @@ test('a stored chat reply in plain Markdown renders as before', async ({ extensi
     '```js\nconst a = b < c && d;\n```', '| Name | Count |\n| :--- | ---: |\n| Milk | 2 |',
     'See [the docs](https://example.test/docs), [mail](mailto:team@example.test) and [[Groceries]].', '---',
   ].join('\n\n');
-  await keepReplies(extension, markdown, markdown);
-  const page = await driver.openNewTab(extension);
+  const page = await openWithReplies(extension, markdown, markdown);
   await expect(shownReplies(page)).toHaveCount(2);
 
   const { shown, before } = await page.evaluate(text => ({
@@ -124,8 +132,7 @@ test('a link in a stored reply keeps its address only when the link rule allows 
     'One [a](x:a.test/```js\ncode\n```) link.',
     'Then [b](https://example.test/ok), [c](mailto:team@example.test), [d](x:y) and [[Groceries]].',
   ].join('\n\n');
-  await keepReplies(extension, reply, reply);
-  const page = await driver.openNewTab(extension);
+  const page = await openWithReplies(extension, reply, reply);
   await expect(shownReplies(page)).toHaveCount(2);
   const kept = ['https://example.test/ok', 'mailto:team@example.test', '#'];
   expect(await shownAddresses(page)).toEqual([kept, kept]);
