@@ -386,6 +386,8 @@ class NotesManager {
           createdAt: now,
           updatedAt: now,
         }));
+        // Blocks made from the file's text are written only when each decodes as a known block (#14)
+        if (Utils.blockRefusal(records, this.logger)) throw new Error("a block made from the file isn't one NewTabNote can store");
         await this._importAsNote(noteTitle, records);
       }
     } catch (error) {

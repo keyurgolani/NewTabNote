@@ -345,7 +345,7 @@ class App {
       }, 2000);
 
       // The PiP editor gets the same ports from TabController
-      this.editorPorts = { documentClient: this.documentClient, navigation: this.editorNavigation(), ai: this.ai };
+      this.editorPorts = { documentClient: this.documentClient, navigation: this.editorNavigation(), ai: this.ai, logger: this.logger };
       this.editor = new BlockEditor({
         root: document.getElementById('editor-container'),
         onChange: editorChangeHandler,

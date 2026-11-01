@@ -760,8 +760,11 @@ export function coverageProblems(tree, given = inventory) {
 
   /** @param {string} file @param {string} port */
   const composes = (file, port) => COMPOSERS[file]?.port === port;
+  /** @param {string} file - an implementation of a contract without a suite, which its listed test loads (below) */
+  const withoutSuite = file => Object.values(WITHOUT_SUITE).some(({ implementations }) => Object.hasOwn(implementations, file));
   /** @param {string} file */
-  const classified = file => bound.has(file) || Object.hasOwn(HELPERS, file) || Object.hasOwn(UNSHARED, file) || Object.hasOwn(COMPOSERS, file);
+  const classified = file =>
+    bound.has(file) || Object.hasOwn(HELPERS, file) || Object.hasOwn(UNSHARED, file) || Object.hasOwn(COMPOSERS, file) || withoutSuite(file);
 
   // Every module under js/kernel/ outside the listed areas is classified
   for (const file of files) {

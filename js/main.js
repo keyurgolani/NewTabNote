@@ -12,8 +12,10 @@
  * at its first use, through the page's loader (js/runtime/lazy.js).
  */
 
-// The block projections the legacy scripts read blocks through (#14), before any of them
+// The block projections the legacy scripts read blocks through (#14), and the trusted-rendering
+// port they render rich text through (#14 slice 2), before any of them
 import './kernel/composition/block-projections.js';
+import './kernel/composition/rendering.js';
 
 // Core infrastructure
 import './utils.js';

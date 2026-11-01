@@ -4,7 +4,8 @@
  * sidebar, the header, the command palette, and a folder's menu; the calendar's Daily Note
  * and today's, each clicked twice at once, make one note; a Markdown file and a single-note
  * JSON export import as one note each; an open note archives and comes back; a block dropped on
- * a sidebar note goes after its last block; and a pin made mid-typing survives the save. Each test also fails on an uncaught exception that
+ * a sidebar note goes after its last block, and keeps its markup only when this page's editor
+ * started the drag; and a pin made mid-typing survives the save. Each test also fails on an uncaught exception that
  * test/known-defects.json doesn't list.
  */
 
@@ -262,6 +263,39 @@ test("a block dropped on a sidebar note goes after its last block, and one dropp
   await expect.poll(() => driver.blocks(page)).toEqual([{ type: 'text', text: 'A brand new note' }]);
   await expect(sidebarItem(page, 'A brand new note')).toHaveCount(1);
   expect(await reloads(page)).toBe(0);
+  await expectNoUncaught(extension, page);
+});
+
+test("a dropped block keeps its markup only when this page's editor started the drag", async ({ extension }) => {
+  const page = await startOn(extension, [
+    { name: 'Alpha', blocks: [{ type: 'text', content: '<b>Bold</b> body' }] },
+    { name: 'Beta', blocks: [{ type: 'text', content: 'Beta one' }] },
+  ]);
+  await driver.openNote(page, 'Alpha');
+  const betaId = await page.evaluate(async () => (await Storage.getAllNotes(true)).find(note => note.name === 'Beta').id);
+  const betaBlocks = () => page.evaluate(async id => (await Storage.getElementsByNote(id))
+    .sort((a, b) => a.order - b.order).map(block => block.content), betaId);
+  // The editor's own drag of its block, dropped on Beta while it lasts
+  await page.evaluate(() => {
+    const block = document.querySelector('#blocks-container > .block');
+    const data = new DataTransfer();
+    block.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: data }));
+    const beta = [...document.querySelectorAll('#sidebar-notes-list .sidebar-note-item')]
+      .find(item => item.querySelector('.sidebar-note-name').textContent === 'Beta');
+    beta.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+    block.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: data }));
+  });
+  await expect.poll(betaBlocks).toEqual(['Beta one', '<b>Bold</b> body']);
+  // A drag from anywhere else
+  await dropBlock(page, { name: 'Beta', text: '<b>Foreign</b> body' });
+  await expect.poll(betaBlocks).toEqual(['Beta one', '<b>Bold</b> body', '&lt;b&gt;Foreign&lt;/b&gt; body']);
+
+  await driver.openNote(page, 'Beta');
+  const contents = page.locator('#blocks-container > .block .block-content');
+  await expect(contents).toHaveCount(3);
+  await expect(contents.nth(1).locator('b')).toHaveText('Bold');
+  await expect(contents.nth(2)).toHaveText('<b>Foreign</b> body');
+  await expect(contents.nth(2).locator('b')).toHaveCount(0);
   await expectNoUncaught(extension, page);
 });
 

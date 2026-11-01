@@ -101,6 +101,9 @@ export const EVENT_CODES = Object.freeze({
   'backup.auto-succeeded': Object.freeze({ fields: Object.freeze([]), resolves: 'backup.auto-failed' }),
   'indexer.started': Object.freeze({ fields: Object.freeze(['surface']), resolves: 'indexer.start-failed' }),
   'coordinator.started': Object.freeze({ fields: Object.freeze(['surface']), resolves: 'coordinator.start-failed' }),
+  // #14's producers: a block one built that it didn't write, since it doesn't decode as a
+  // known block. The producer's own failure path says so; this records only what decode found.
+  'block.refused': Object.freeze({ fields: Object.freeze(['surface', 'errorCode']) }),
   // The Trust Center's own
   'trust.check-failed': Object.freeze({
     fields: Object.freeze(['providerId', 'durationMs', ...ERROR]),

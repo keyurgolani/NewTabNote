@@ -937,6 +937,61 @@ const Utils = {
     return text.replace(/[&<>"']/g, char => htmlEntities[char]);
   },
 
+  /** The drag data type for the token of a block drag this page's editor started (#14 slice 2) */
+  BLOCK_DRAG_TOKEN: 'application/x-block-drag-token',
+
+  /** @type {string | null} The token of the block drag this page's editor has going */
+  _blockDragToken: null,
+
+  /**
+   * A block drag this page's editor starts (#14 slice 2): a new token for its drag data, which
+   * holds until the drop that reads it (takeBlockDrag) or the drag's end (endBlockDrag),
+   * whichever comes first. A dropped block keeps its markup only when this page's editor
+   * started the drag.
+   * @returns {string}
+   */
+  startBlockDrag() {
+    this._blockDragToken = globalThis.crypto.randomUUID();
+    return this._blockDragToken;
+  },
+
+  /** The block drag this page's editor started has ended, and its token no longer holds */
+  endBlockDrag() {
+    this._blockDragToken = null;
+  },
+
+  /**
+   * Whether `token`, from a drop's data, is the token of the block drag this page's editor has
+   * going. A drop ends the drag, so the token no longer holds after it, whatever the answer.
+   * @param {unknown} token
+   * @returns {boolean}
+   */
+  takeBlockDrag(token) {
+    const own = typeof token === 'string' && token !== '' && token === this._blockDragToken;
+    this._blockDragToken = null;
+    return own;
+  },
+
+  /**
+   * Why a page may not write blocks it built from outside text (#14 slice 2, "one way in"): the
+   * first that doesn't decode as a known block, as the code of what decode found, which goes
+   * to a `block.refused` event when the logger has events. Null when it may write them all.
+   * The new tab's BlockProjections decodes them (js/kernel/composition/block-projections.js).
+   * @param {Array<Object>} records
+   * @param {{event?: Function}} [logger]
+   * @returns {string | null}
+   */
+  blockRefusal(records, logger) {
+    for (const record of records) {
+      const code = globalThis.BlockProjections.producedBlockRefusal(record);
+      if (code === null) continue;
+      console.error('Block not written:', code);
+      if (logger && typeof logger.event === 'function') logger.event('block.refused', { errorCode: code });
+      return code;
+    }
+    return null;
+  },
+
   /**
    * Parse markdown tables into HTML
    * @param {string} text - Text containing potential tables

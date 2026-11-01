@@ -31,9 +31,17 @@
     };
   }
 
+  /** What escapeHtml escaped, back: the text an attribute holding escaped text reads as */
+  function unescapeHtml(html) {
+    return html.replace(/&(amp|lt|gt|quot|#39);/g, (_, name) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[name]);
+  }
+
   /**
    * `/\[([^\]]+)\]\(([^)]+)\)/g` replaced by `<a href="$2">$1</a>`, in one pass: from a `[`,
-   * the text runs to the first `]`, which `(` must follow, and the address to the first `)`
+   * the text runs to the first `]`, which `(` must follow, and the address to the first `)`.
+   * A match whose address the inline schema doesn't link to (a scheme other than http, https or
+   * mailto) makes no link and stays as its text (#14 slice 2). `text` is escaped, so the address
+   * reads as the source wrote it.
    * @param {string} text
    * @returns {string}
    */
@@ -50,7 +58,10 @@
       const paren = nextParen(close + 2);
       if (paren === -1) break;
       if (paren === close + 2) continue;
-      out += `${text.slice(from, at)}<a href="${text.slice(close + 2, paren)}">${text.slice(at + 1, close)}</a>`;
+      const linked = global.BlockRendering.isLinkHref(unescapeHtml(text.slice(close + 2, paren)));
+      out += linked
+        ? `${text.slice(from, at)}<a href="${text.slice(close + 2, paren)}">${text.slice(at + 1, close)}</a>`
+        : text.slice(from, paren + 1);
       from = paren + 1;
       at = paren;
     }
@@ -109,6 +120,20 @@
    */
   function blockToMarkdown(block) {
     return global.BlockProjections.markdownOf(block);
+  }
+
+  /**
+   * Whether a Markdown link may become a bookmark: an absolute http or https URL
+   * @param {string} url
+   * @returns {boolean}
+   */
+  function isBookmarkUrl(url) {
+    try {
+      const { protocol } = new URL(url);
+      return protocol === 'http:' || protocol === 'https:';
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -277,8 +302,9 @@
         continue;
       }
 
+      // A bookmark only for an absolute http or https URL; any other link is text (#14 slice 2)
       const linkMatch = line.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-      if (linkMatch) {
+      if (linkMatch && isBookmarkUrl(linkMatch[2])) {
         blocks.push({
           type: 'bookmark',
           content: '',

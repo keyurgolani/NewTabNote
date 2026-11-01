@@ -6,6 +6,7 @@
  */
 
 import { previewText } from '../blocks/previews.js';
+import { escapeAttributeText, escapePlainText } from '../blocks/rich-text.js';
 
 /**
  * @typedef {object} NoteFields
@@ -445,7 +446,9 @@ export function newDailyNoteRecord({ id, name, dateStr, now }) {
 
 /**
  * Copies of a template's blocks for a new note, with {{date}}, {{time}}, {{title}}, and
- * {{datetime}} filled in, as Storage.applyTemplateToNote makes them.
+ * {{datetime}} filled in, as Storage.applyTemplateToNote makes them. The values are plain text:
+ * escaped into rich `content`, for its text and its attributes alike (#14 slice 2), and as they
+ * are in a table's plain-text cells.
  * @param {BlockRecord[]} templateBlocks
  * @param {{noteId: string, title: unknown, now: number, nextId: () => string}} target
  * @returns {BlockRecord[]}
@@ -459,22 +462,30 @@ export function blocksFromTemplate(templateBlocks, { noteId, title, now, nextId 
     ['{{title}}', typeof title === 'string' && title ? title : 'Untitled'],
     ['{{datetime}}', date.toLocaleString()],
   ];
-  /** @param {unknown} text */
-  const fill = text =>
-    typeof text === 'string' ? variables.reduce((result, [key, value]) => result.split(key).join(value), text) : text;
+  /**
+   * @param {unknown} text
+   * @param {(value: string) => string} as - how a value is written into the field
+   */
+  const fill = (text, as) =>
+    typeof text === 'string' ? variables.reduce((result, [key, value]) => result.split(key).join(as(value)), text) : text;
+  /** @param {string} value */
+  const asText = value => value;
   return templateBlocks.map(block => {
     /** @type {BlockRecord} */
     const copy = { ...block, id: nextId(), canvasId: noteId, createdAt: now, updatedAt: now };
-    if (copy.content) copy.content = fill(copy.content);
+    if (copy.content) copy.content = fill(copy.content, escapeAttributeText);
     if (Array.isArray(copy.tableData)) {
-      copy.tableData = copy.tableData.map(row => (Array.isArray(row) ? row.map(fill) : row));
+      copy.tableData = copy.tableData.map(row => (Array.isArray(row) ? row.map(cell => fill(cell, asText)) : row));
     }
     return copy;
   });
 }
 
 /**
- * The block a capture adds, as background.js has built it.
+ * The block a capture adds, as background.js has built it. A page's URL and title go into a
+ * bookmark's plain-text fields. Selected text and the page it came from are plain text in a
+ * text block's rich content, so they're escaped into it (#14 slice 2): the block shows them as
+ * they were selected.
  * @param {{id: string, noteId: string, capture: Capture, now: number}} fields
  * @returns {BlockRecord}
  */
@@ -482,6 +493,6 @@ export function captureBlock({ id, noteId, capture, now }) {
   if (capture.type === 'bookmark') {
     return { id, type: 'bookmark', content: '', url: capture.url, title: capture.title, canvasId: noteId, order: now };
   }
-  const source = capture.source ? ` (Source: ${capture.source})` : '';
-  return { id, type: 'text', content: capture.content + source, canvasId: noteId, order: now };
+  const source = capture.source ? ` (Source: ${escapePlainText(capture.source)})` : '';
+  return { id, type: 'text', content: escapePlainText(capture.content) + source, canvasId: noteId, order: now };
 }

@@ -424,7 +424,8 @@ class SidebarController {
 
     const blockContent = e.dataTransfer.getData('application/x-block-content');
     const blockType = e.dataTransfer.getData('application/x-block-type') || 'text';
-    const blockHtml = e.dataTransfer.getData('application/x-block-html') || blockContent;
+    // Its markup, and its text for a block with none, which is plain text (_droppedContent)
+    const blockHtml = this._droppedMarkup(e.dataTransfer);
 
     this._removeDropOverlay();
 
@@ -439,8 +440,45 @@ class SidebarController {
       await this._createNoteFromBlock(blockContent, blockType, blockHtml);
     } else if (noteItem && noteItem.dataset.id) {
       // Append to existing note (Req 46.3)
-      await this._appendBlockToNote(noteItem.dataset.id, blockType, blockHtml);
+      await this._appendBlockToNote(noteItem.dataset.id, blockType, blockHtml, blockContent);
     }
+  }
+
+  /**
+   * A dropped block's markup (#14 slice 2): a dropped block keeps its markup only when this
+   * page's editor started the drag (Utils.takeBlockDrag, which this drop uses up). Any other
+   * drag's markup is its text, escaped into rich text.
+   * @param {DataTransfer} dataTransfer
+   * @returns {string}
+   */
+  _droppedMarkup(dataTransfer) {
+    const own = Utils.takeBlockDrag(dataTransfer.getData(Utils.BLOCK_DRAG_TOKEN));
+    const html = dataTransfer.getData('application/x-block-html');
+    if (!html || own) return html;
+    return globalThis.BlockRendering.escapePlainText(html);
+  }
+
+  /**
+   * A dropped block's rich content (#14 slice 2): its markup as the rendering port takes rich
+   * text in, or, with none, its text, escaped into rich text
+   * @param {string} htmlContent
+   * @param {string} textContent
+   * @returns {string}
+   */
+  _droppedContent(htmlContent, textContent) {
+    if (htmlContent) return globalThis.BlockRendering.normalize(htmlContent);
+    return globalThis.BlockRendering.escapePlainText(textContent || '');
+  }
+
+  /**
+   * Refuse a dropped block that doesn't decode as a known block (#14 slice 2): a dropped block
+   * is stored only when it decodes as a known block. The drop's failure path takes it from there.
+   * @param {Object} blockData
+   * @returns {void}
+   */
+  _refuseUnknownBlock(blockData) {
+    const refused = Utils.blockRefusal([blockData], this.logger);
+    if (refused) throw new Error(`Not stored: block (refused: ${refused})`);
   }
 
   /**
@@ -457,13 +495,14 @@ class SidebarController {
       const blockData = {
         id: this.documentClient.newId(),
         type: blockType,
-        content: htmlContent || textContent || '',
+        content: this._droppedContent(htmlContent, textContent),
         order: 0,
         createdAt: now,
         updatedAt: now,
         indentLevel: 0,
         checked: false,
       };
+      this._refuseUnknownBlock(blockData);
       const noteId = await this.createNote({ name: title, blocks: [blockData] });
       if (!noteId) return;
       if (this.onOpenNoteInNewTab) await this.onOpenNoteInNewTab(noteId);
@@ -530,16 +569,18 @@ class SidebarController {
    * @param {string} noteId - Target note ID
    * @param {string} blockType - Block type
    * @param {string} htmlContent - HTML content
+   * @param {string} [textContent] - Plain text content, for a block with no HTML
    */
-  async _appendBlockToNote(noteId, blockType, htmlContent) {
+  async _appendBlockToNote(noteId, blockType, htmlContent, textContent = '') {
     try {
       const blockData = {
         id: this.documentClient.newId(),
         type: blockType,
-        content: htmlContent || '',
+        content: this._droppedContent(htmlContent, textContent),
         indentLevel: 0,
         checked: false,
       };
+      this._refuseUnknownBlock(blockData);
       const outcome = await this.documentClient.insertBlocks(noteId, [blockData]);
       if (!(await this._noteWriteDone(outcome, 'Failed to append block', 'that note was deleted'))) return;
       Utils.showToast('Block appended to note', 'success');
