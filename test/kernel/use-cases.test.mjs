@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { indexCommands } from '../../js/kernel/core/application/indexing.js';
 import { noteCommands } from '../../js/kernel/core/application/notes.js';
 import { remoteCommands } from '../../js/kernel/core/application/remote.js';
 import { derivedOnly } from '../../js/kernel/core/application/scopes.js';
@@ -38,6 +39,10 @@ function spyTx(log, records) {
     getAll: async store => {
       log.push(`getAll ${store}`);
       return all(store);
+    },
+    getAllKeys: async store => {
+      log.push(`getAllKeys ${store}`);
+      return Object.keys(records[store] || {}).sort();
     },
     getAllByIndex: async (store, index, value) => {
       log.push(`getAllByIndex ${store} ${index}`);
@@ -154,6 +159,51 @@ describe('saveNoteContent', () => {
   });
 });
 
+describe('updateSearchIndex', () => {
+  it("rebuilding the whole index reads its notes' and entries' keys alone, and a stored entry only for a batch entry that says what it was made from (R131)", async () => {
+    /** @type {import('../../js/kernel/core/contracts/commands.js').CommandOf<'updateSearchIndex'>} */
+    const command = {
+      type: 'updateSearchIndex',
+      commandId: 'c1',
+      replaceAll: true,
+      entries: [
+        { noteId: 'n1', name: 'One', content: 'Line', updatedAt: NOW },
+        { noteId: 'n2', name: 'Two', content: 'More', updatedAt: NOW, sourceRevision: 3 },
+      ],
+    };
+    /** @type {UseCaseContext} */
+    const context = {
+      adapter: createMemoryAdapter(),
+      clock: testClock(),
+      ids: testIds(),
+      run: () => assert.fail('updateSearchIndex runs no other command'),
+    };
+    const work = /** @type {Work} */ (indexCommands.updateSearchIndex(command, context));
+    const [unit] = work.effect.kind === 'units' ? work.effect.units : [];
+    /** @type {string[]} */
+    const log = [];
+    await unit.run(
+      spyTx(log, {
+        notes: { n1: { id: 'n1' }, n2: { id: 'n2' } },
+        searchIndex: {
+          n1: { noteId: 'n1', content: 'Old' },
+          n2: { noteId: 'n2', content: 'Old', sourceRevision: 2 },
+          n3: { noteId: 'n3', content: 'Gone' },
+        },
+      }),
+    );
+    assert.deepEqual(log, [
+      'has searchIndex',
+      'getAllKeys notes',
+      'getAllKeys searchIndex',
+      'put searchIndex n1',
+      'get searchIndex n2',
+      'put searchIndex n2',
+      'delete searchIndex n3',
+    ]);
+  });
+});
+
 describe('applyRemoteContent', () => {
   it("is the conflict, writing nothing, where there's no `conflicts` to keep the 1.4.x text a change that says no version would replace (R131)", async () => {
     /** @type {UseCaseContext} */
@@ -185,7 +235,7 @@ describe('applyRemoteContent', () => {
         ...spyTx(log, records),
         // A database below step 10, which has no `conflicts`, or one at it
         has: (/** @type {string} */ store) => kept || store !== 'conflicts',
-        versions: () => ({ revision: 0, placementVersion: 0 }),
+        versions: () => ({ revision: 0, placementVersion: 0, sourceRevision: 0 }),
       });
       const stop = await unit.run(tx);
       const writes = log.filter(line => line.startsWith('put') || line.startsWith('delete'));

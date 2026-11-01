@@ -121,6 +121,12 @@ function derivedTx(tx) {
         return record;
       }),
     getAll: store => tx.getAll(store).then(records => sawAll(store, records)),
+    // A note's key read here counts as the note found, for a derived record of it
+    getAllKeys: store =>
+      tx.getAllKeys(store).then(keys => {
+        if (store === 'notes') for (const key of keys) found.add(key);
+        return keys;
+      }),
     getAllByIndex: (store, index, value) =>
       tx.getAllByIndex(store, index, value).then(records => sawAll(store, records)),
     getKeysByIndex: (store, index, value) => tx.getKeysByIndex(store, index, value),

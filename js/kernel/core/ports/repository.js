@@ -77,6 +77,9 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
  * @typedef {object} ReadTx
  * @property {<S extends StoreName>(store: S, key: string) => Promise<StoreRecords[S] | undefined>} get
  * @property {<S extends StoreName>(store: S) => Promise<StoreRecords[S][]>} getAll
+ * @property {(store: StoreName) => Promise<string[]>} getAllKeys
+ *   Every record's key, in key order, without reading the records, of a store keyed by an id
+ *   (R131: the whole-index rebuild reads its notes and entries so)
  * @property {<S extends StoreName>(store: S, index: string, value: string) => Promise<StoreRecords[S][]>} getAllByIndex
  *   The records whose `index` field (each index is named after its field) holds `value`, an
  *   id. Every adapter refuses any other value, `adapter` `invalid-key`, since IndexedDB reads

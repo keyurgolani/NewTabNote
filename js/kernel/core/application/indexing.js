@@ -84,11 +84,11 @@ export const indexCommands = {
         changed = [];
         // A database without the store has no index, as Storage.setSearchIndex skipped it
         if (!tx.has('searchIndex')) return;
-        // The whole index is read at once when it's all replaced, and an entry at a time otherwise
-        const notes = replaceAll ? new Set((await tx.getAll('notes')).map(note => note.id)) : null;
-        const stored = replaceAll
-          ? new Map((await tx.getAll('searchIndex')).map(entry => [entry.noteId, entry]))
-          : null;
+        // When it's all replaced, the notes and the entries are read at once, as keys alone, so
+        // the transaction never reads the text of every note and entry (R131). Otherwise each
+        // is read on its own.
+        const notes = replaceAll ? new Set(await tx.getAllKeys('notes')) : null;
+        const stored = replaceAll ? new Set(await tx.getAllKeys('searchIndex')) : null;
         /** @type {Set<string>} */
         const kept = new Set();
         for (const entry of entries) {
@@ -96,16 +96,18 @@ export const indexCommands = {
           const found = notes ? notes.has(entry.noteId) : Boolean(await tx.get('notes', entry.noteId));
           if (!found) continue;
           kept.add(entry.noteId);
-          const before = stored ? stored.get(entry.noteId) : await tx.get('searchIndex', entry.noteId);
-          if (olderThan(entry.sourceRevision, before)) continue;
+          // Only an entry that says what it was made from reads the stored one, to drop itself
+          // when that one is newer
+          const readsStored = entry.sourceRevision !== undefined && (!stored || stored.has(entry.noteId));
+          if (readsStored && olderThan(entry.sourceRevision, await tx.get('searchIndex', entry.noteId))) continue;
           tx.put('searchIndex', /** @type {SearchEntry} */ (entry));
           changed.push(entry.noteId);
         }
         // Replacing the index drops the entry of every note the batch doesn't name or that's gone
-        const gone = stored ? [...stored.keys()].filter(noteId => !kept.has(noteId)) : [];
+        const gone = stored ? [...stored].filter(noteId => !kept.has(noteId)) : [];
         for (const noteId of new Set([...removed, ...gone])) {
-          const before = stored ? stored.get(noteId) : await tx.get('searchIndex', noteId);
-          if (!before) continue;
+          const present = stored ? stored.has(noteId) : Boolean(await tx.get('searchIndex', noteId));
+          if (!present) continue;
           tx.delete('searchIndex', noteId);
           changed.push(noteId);
         }
