@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
-import { blockDigest, recoveredIdOf } from '../../js/kernel/core/domain/close-draft.js';
+import { blockDigest, decide, recoveredIdOf } from '../../js/kernel/core/domain/close-draft.js';
 import { noteSaveMetadata } from '../../js/kernel/core/domain/note.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -580,5 +580,13 @@ describe('applyCloseDraft below version 10, where no ledger keeps a commit', () 
     } finally {
       closeAll(of);
     }
+  });
+});
+
+describe('decide, on its own', () => {
+  it('answers gone for a note that is no longer stored, rule 1, whatever the draft holds', () => {
+    const draft = /** @type {CloseDraft} */ (/** @type {unknown} */ (legacyDraft({ blocks: [block('a1', 'A', 0, 'alpha, edited')] })));
+    assert.deepEqual(decide({ draft, note: undefined, madeBefore: false, stored: new Map(), versions: undefined }), { kind: 'gone' });
+    assert.deepEqual(decide({ draft, note: undefined, madeBefore: true, stored: new Map(), versions: undefined }), { kind: 'recovered-before' }, 'rule 0 first');
   });
 });
