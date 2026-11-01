@@ -443,6 +443,15 @@ async function startCoordinator(extension) {
  */
 async function workerStorageSettled(extension) {
   await startCoordinator(extension);
+  // Since #17 PR 1b the worker's kernel runs on #17's adapter, after its migration run, and
+  // nothing in the worker opens its Storage global, so the harness opens it, as it is, once the
+  // run is in (a run that upgrades later would close it)
+  if (await extension.worker.evaluate(() => Boolean(self.storageUpgrade) && Boolean(self.Storage))) {
+    await extension.worker.evaluate(async () => {
+      await self.storageUpgrade;
+      if (self.Storage.openState !== 'open') await self.Storage.openExisting();
+    });
+  }
   if (await extension.worker.evaluate(() => Boolean(self.Storage) && 'openState' in self.Storage)) {
     await expect.poll(() => extension.worker.evaluate(() => self.Storage.openState), { timeout: SETTLE_TIMEOUT_MS }).not.toBe('closed');
     const state = await extension.worker.evaluate(() => self.Storage.openState);
@@ -487,6 +496,102 @@ async function seedNotes(extension, notes) {
       lastWrite = (await self.Storage.getNote(note.id)).updatedAt;
     }
   }, notes);
+}
+
+/**
+ * Leave the profile as a 1.4.1 one whose update to this build stopped short of space (#17 PR
+ * 1b), before any page opens: CanvasTabDB again at version 8 with its ten stores and nothing in
+ * them, no recovery point, and the worker's record of a run short of space that stands. The
+ * worker made the database at 9 when the harness installed it, so this deletes both databases
+ * first (test code only: nothing under js/ deletes a database). Seed notes after it.
+ */
+async function shortOfSpace(extension) {
+  await workerStorageSettled(extension);
+  await extension.worker.evaluate(async () => {
+    const done = request => new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await done(indexedDB.deleteDatabase('CanvasTabDB'));
+    await done(indexedDB.deleteDatabase('NewTabNoteRecovery'));
+    const stores = {
+      canvases: ['id', ['name', 'updatedAt']], elements: ['id', ['canvasId', 'type']], settings: ['key', []],
+      media: ['id', ['canvasId']], search_index: ['noteId', []], folders: ['id', ['parentId', 'name']],
+      links: ['id', ['fromNoteId', 'toNoteId']], themes: ['id', ['name', 'updatedAt']], vectors: ['id', []],
+      snapshots: ['id', ['noteId', 'timestamp']],
+    };
+    const request = indexedDB.open('CanvasTabDB', 8);
+    request.onupgradeneeded = () => {
+      for (const [name, [keyPath, indexes]] of Object.entries(stores)) {
+        const store = request.result.createObjectStore(name, { keyPath });
+        for (const index of indexes) store.createIndex(index, index, { unique: false });
+      }
+    };
+    (await done(request)).close();
+    await chrome.storage.local.set({
+      setting_storageUpgrade: {
+        status: 'space-blocked', code: 'space-short', at: Date.now(), version: chrome.runtime.getManifest().version, costly: true,
+      },
+    });
+  });
+}
+
+/**
+ * Leave the profile as a 1.4.1 one with a note that this build's worker then upgraded (#17 PR
+ * 1b), before any page opens: CanvasTabDB again at version 8 with its ten stores and the note,
+ * and no recovery point, then a capture. The capture's command finds the worker's connection gone
+ * with the database this deleted, so it starts another attempt, which copies the note into a
+ * verified pre-migration point before it upgrades to 9. Settings > Data & Backup then has a copy
+ * to export. Test code only, as shortOfSpace is.
+ */
+async function upgradedAfterACopy(extension) {
+  await workerStorageSettled(extension);
+  await extension.worker.evaluate(async () => {
+    const done = request => new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await done(indexedDB.deleteDatabase('CanvasTabDB'));
+    await done(indexedDB.deleteDatabase('NewTabNoteRecovery'));
+    const stores = {
+      canvases: ['id', ['name', 'updatedAt']], elements: ['id', ['canvasId', 'type']], settings: ['key', []],
+      media: ['id', ['canvasId']], search_index: ['noteId', []], folders: ['id', ['parentId', 'name']],
+      links: ['id', ['fromNoteId', 'toNoteId']], themes: ['id', ['name', 'updatedAt']], vectors: ['id', []],
+      snapshots: ['id', ['noteId', 'timestamp']],
+    };
+    const request = indexedDB.open('CanvasTabDB', 8);
+    request.onupgradeneeded = () => {
+      for (const [name, [keyPath, indexes]] of Object.entries(stores)) {
+        const store = request.result.createObjectStore(name, { keyPath });
+        for (const index of indexes) store.createIndex(index, index, { unique: false });
+      }
+    };
+    const db = await done(request);
+    const at = Date.now();
+    const tx = db.transaction(['canvases', 'elements'], 'readwrite');
+    tx.objectStore('canvases').put({
+      id: 'before-the-update', name: 'Before the update', createdAt: at, updatedAt: at, archived: false, archivedAt: null,
+      titleManuallySet: true, preview: 'kept', pinned: false, todoProgress: null, isDaily: false, dateStr: null,
+      isTemplate: false, folderId: null,
+    });
+    tx.objectStore('elements').put({
+      id: 'before-the-update-1', canvasId: 'before-the-update', order: 0, type: 'text', content: 'kept',
+      createdAt: at, updatedAt: at,
+    });
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+  });
+  await captureBookmark(extension, { url: 'https://example.test/after-the-update', title: 'After the update' });
+  await expect.poll(() => extension.worker.evaluate(async () => {
+    const upgrade = await self.storageUpgrade;
+    const held = (await indexedDB.databases()).map(db => `${db.name}@${db.version}`);
+    return Boolean(upgrade && upgrade.status === 'migrated' && upgrade.recoveryPointId)
+      && held.includes('CanvasTabDB@9') && held.some(name => name.startsWith('NewTabNoteRecovery@'));
+  }), { timeout: SETTLE_TIMEOUT_MS }).toBe(true);
 }
 
 /**
@@ -662,7 +767,8 @@ function exportNoticeButtonSizes(page) {
  * Click the export notice's button labeled `label`
  */
 async function chooseInExportNotice(page, label) {
-  await page.locator('#export-notice').getByRole('button', { name: label, exact: true }).click();
+  // Bounded, so a notice that never shows fails the step rather than the whole test's time
+  await page.locator('#export-notice').getByRole('button', { name: label, exact: true }).click({ timeout: SETTLE_TIMEOUT_MS });
 }
 
 /**
@@ -840,6 +946,8 @@ function recentNoteNames(popup) {
 }
 
 module.exports = {
+  shortOfSpace,
+  upgradedAfterACopy,
   trackStartup,
   afterEditorFocus,
   waitForApp,

@@ -2339,7 +2339,9 @@ export function runContractSuite(fixture) {
           { aiChatHistory: history, noteChatMessages: messages, globalChatHistory: [], globalChatMessages: [] },
         );
         assertRejected(
-          await kernel.execute(cmd('saveChatHistory', /** @type {any} */ ({ chat: 'side', history: [], messages: [] }))),
+          await kernel.execute(
+            cmd('saveChatHistory', /** @type {any} */ ({ chat: 'side', history: [], messages: [] })),
+          ),
           'validation',
           'invalid-command',
         );
@@ -2356,7 +2358,9 @@ export function runContractSuite(fixture) {
       });
 
       it('saveTheme makes a theme, then a save of it replaces its name and properties and keeps the rest', async () => {
-        const made = await run(cmd('saveTheme', { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#101010' } }));
+        const made = await run(
+          cmd('saveTheme', { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#101010' } }),
+        );
         assert.deepEqual(made.changedIds, ['th1']);
         assert.ok(!JSON.stringify(made).includes('Dusk'), 'the outcome carries no theme name');
         assert.deepEqual(await themeOf('th1'), {
@@ -2409,6 +2413,14 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await settingsIn('backup', ['preMigrationNotice']), {
           preMigrationNotice: { version: 1, outcome: 'dismissed', at: NOW + 500 },
         });
+      });
+
+      it("snoozeSpaceNotice puts the space notice off from the kernel clock's now, and getWorkspaceData reads it back (#17 PR 1b)", async () => {
+        assert.deepEqual((await run(cmd('snoozeSpaceNotice', {}))).changedIds, ['spaceNoticeSnoozedAt']);
+        assert.deepEqual(await settingsIn('upgrade', ['spaceNoticeSnoozedAt']), { spaceNoticeSnoozedAt: NOW });
+        const read = await kernel.query({ type: 'getWorkspaceData', keys: ['spaceNoticeSnoozedAt', 'storageUpgrade'] });
+        assert.equal(read.kind, 'ready');
+        assert.deepEqual(/** @type {any} */ (read).data, { spaceNoticeSnoozedAt: NOW });
       });
 
       it(
@@ -3046,6 +3058,7 @@ export function runContractSuite(fixture) {
           'setInsightsPending',
           'setPinned',
           'setPreferences',
+          'snoozeSpaceNotice',
           'trashNote',
           'unarchiveNote',
         ]);

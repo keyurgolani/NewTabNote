@@ -1,7 +1,7 @@
 /**
- * The migration runner (#17, "Hosting" and "Steps"). #17 PR 1b has the service worker's
- * composition root call it at worker start, before maintenance; no shipped file does yet.
- * Under Web Lock `storage.migrate` (exclusive), so one runner at a time:
+ * The migration runner (#17, "Hosting" and "Steps"). The service worker's composition root
+ * (js/kernel/composition/background.js) starts it at worker start, before maintenance, and no
+ * page runs it (#17 PR 1b). Under Web Lock `storage.migrate` (exclusive), so one runner at a time:
  * 1. Open CanvasTabDB without upgrading it and read its shape (shapes.js).
  * 2. Make the `pre-migration` recovery point (recovery-points.js), or reuse the verified one
  *    an interrupted run made, after the space check (space.js). Short of space: no point, no
@@ -22,6 +22,7 @@ import {
   committed,
   copyPoint,
   discardPoint,
+  dropOlderCopies,
   isQuota,
   keepVerified,
   listPoints,
@@ -233,9 +234,17 @@ async function ensurePoint(options) {
         point.sourceVersion === inspection.version &&
         sameNames(point.stores, stores);
       const reusable = points.filter(point => point.status === 'verified' && matches(point)).pop();
-      // Reused only while it still holds what the database holds, read now (review R61, Q3)
-      if (reusable && (await matchesSource({ source, point: reusable, io }))) {
-        return { status: 'ready', point: reusable };
+      // Reused only while it still holds what the database holds, read now (review R61, Q3).
+      // Nothing writes to a database this build refuses (a newer or a missing-core one), so
+      // its point is never re-read against it (carry-over 3). An unknown shape is still
+      // checked: the new tab runs on it.
+      const unwritten = target === null && (shape.kind === 'newer' || shape.kind === 'missing-core');
+      if (reusable && (unwritten || (await matchesSource({ source, point: reusable, io })))) {
+        // A run cut off after the newer copy saved can leave an older one too (carry-over 1)
+        return {
+          status: 'ready',
+          point: await dropOlderCopies({ recovery: /** @type {IDBDatabase} */ (recovery), point: reusable, io }),
+        };
       }
       if (reusable) logger.warn('storage-recovery-point-stale', { pointId: reusable.id });
 

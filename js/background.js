@@ -15,10 +15,11 @@
 // The network guard first, ahead of every other module (#21 slice 1b): it wraps the worker's
 // fetch before anything else can call it, and never throws. Its handle is the worker's alone.
 import { contextGuard } from './kernel/composition/network-guard-first.js';
-// utils.js and storage.js put Utils and Storage on self, where the worker's root finds Storage
+// utils.js and storage.js put Utils and Storage on self. The worker's kernel no longer runs on
+// Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
 import './utils.js';
 import './storage.js';
-import { createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
+import { MIGRATE_MESSAGE, createWorkerClient, installWorkerRouter } from './kernel/composition/background.js';
 import {
   coordinatorHandlers,
   coordinatorInstanceId,
@@ -29,6 +30,8 @@ import {
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { installWorkerNetwork } from './kernel/composition/worker-network.js';
 
+/** @typedef {import('./kernel/composition/background.js').WorkerClient} WorkerClient */
+
 /** This worker instance's id, which #13's router sends in each welcome (#35) */
 const instanceId = coordinatorInstanceId();
 
@@ -37,7 +40,11 @@ const instanceId = coordinatorInstanceId();
  * this file, after every listener, so a throw while building it leaves the menus, the commands
  * and #13's port listener in place. Until then, and for good if building it threw, this
  * stand-in answers that it can't serve. It opens nothing until an event needs storage: an
- * install or update, a browser start, a page's port session, or a capture.
+ * install or update, a browser start, a page's port session, a capture, or a page waiting on
+ * the migration. The kernel it builds starts #17's migration run, which upgrades the notes
+ * database after a verified recovery point, then opens the database and runs startup
+ * maintenance, and a capture waits for all of it, except while an older build's open page
+ * blocks the upgrade.
  */
 let coordinator = unavailableCoordinator(instanceId);
 
@@ -75,11 +82,54 @@ installWorkerRouter({
  */
 const workerGlobal = self;
 workerGlobal.captureToDailyNote = captureToDailyNote;
+/**
+ * The latest migration attempt's outcome, for #34's harness, which seeds a profile only once
+ * it's in. It starts the coordinator, whose kernel starts the run.
+ */
+Object.defineProperty(workerGlobal, 'storageUpgrade', { get: () => migrationDone(), configurable: true });
+
+/**
+ * The migration run of the coordinator's kernel (#17 PR 1b), after starting the coordinator:
+ * its start builds the kernel before it returns, and the kernel starts the run. Null when it
+ * has no kernel, since building it threw.
+ * @returns {WorkerClient['migration'] | null}
+ */
+function migration() {
+  coordinator.start();
+  const client = /** @type {Partial<WorkerClient>} */ (coordinator.client());
+  return client.migration || null;
+}
+
+/** @returns {WorkerClient['migration']['done'] | null} */
+function migrationDone() {
+  const run = migration();
+  return run ? run.done : null;
+}
+
+/**
+ * What a page that found no database, or an older one, hears when it waits on the migration
+ * (#17, Q12): the attempt in progress, or after one that was short of space or failed, a new
+ * one. Only its status goes back, never anything stored. js/kernel/composition/worker-network.js
+ * runs it for this extension's own senders only (#21's isOwnSender), a page in a tab included,
+ * since a new attempt can make another full recovery point, and answers any other sender
+ * `{error: 'request-refused'}`.
+ * @returns {Promise<{status: string}>}
+ */
+function migrationStatus() {
+  const run = migration();
+  if (!run) return Promise.resolve({ status: 'failed' });
+  return run.request().then(
+    outcome => ({ status: outcome.status }),
+    () => ({ status: 'failed' }),
+  );
+}
 
 /** Why a capture can't be saved (the reasons the new tab shows) */
 const CAPTURE_REFUSALS = {
   newerSchema: "Your notes were upgraded by a newer NewTabNote version. This version can't open them safely, so it won't change anything. Update NewTabNote to keep working.",
   missingCoreStores: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
+  // #17 PR 1b: the upgrade waits on an open page of an older version, and there's no journal yet
+  blockedUpgrade: 'NewTabNote is updating how your notes are stored, and an open NewTabNote tab or window is holding them. Close or reload it, then try again.',
 };
 
 /**
@@ -91,6 +141,7 @@ const CAPTURE_REFUSALS = {
 function captureRefusal({ cause, code }) {
   if (cause === 'newer-schema') return CAPTURE_REFUSALS.newerSchema;
   if (code === 'missing-core-stores') return CAPTURE_REFUSALS.missingCoreStores;
+  if (code === 'blocked-upgrade') return CAPTURE_REFUSALS.blockedUpgrade;
   return null;
 }
 
@@ -290,7 +341,9 @@ try {
 }
 // The worker's network (#21 slice 1b): its one onMessage listener, the request proxy, and the
 // guard's wiring, which journals what the guard refused into the events above. It never throws.
-installWorkerNetwork({ guard: contextGuard, events: failureEvents });
+// It hands a page's wait on the migration (#17) to migrationStatus, from this extension's own
+// senders only. Every event comes after this file has run, the coordinator's build included.
+installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus } });
 try {
   coordinator = createCoordinator({ instanceId, makeKernel: () => createWorkerClient(), events: failureEvents });
 } catch (error) {

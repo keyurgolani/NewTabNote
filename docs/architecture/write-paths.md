@@ -65,6 +65,7 @@ No row is UI-only. Presentation state (panels, the palette index, selection mode
 | `completeOnboarding` | kernel command, slice 6 | 0 |
 | `recordBackup` | kernel command, slice 6 | 0 |
 | `recordExportNotice` | kernel command, slice 6 | 0 |
+| `snoozeSpaceNotice` | kernel command, slice 6 | 0 |
 | `createAutoBackup` | kernel command, slice 6 | 0 |
 | `importBackup` | kernel command, slice 6 | 0 |
 | `saveProviderSettings` | ledgered to #11 | 6 |

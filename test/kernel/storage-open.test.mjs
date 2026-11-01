@@ -1,14 +1,19 @@
-// How #17's IndexedDB adapter opens CanvasTabDB (#17 slice 1): it changes nothing about the
-// database Storage.open wouldn't, a blocked or slow open answers within openWithinMs and keeps
-// waiting, a connection another context's upgrade or Chrome closes answers reload-required,
-// a newer database is refused and left alone, and startup maintenance writes what Storage
-// writes on a first run.
+// How #17's IndexedDB adapter opens CanvasTabDB (#17 slice 1, PR 1b): the worker's versioned
+// open brings a database to 9 only through step 9, which keeps every record, while the new
+// tab's Storage.open upgrades nothing; a page that finds no database or an older one waits on
+// the worker first (Q12); a blocked or slow open answers within openWithinMs and keeps waiting;
+// a connection another context's upgrade or Chrome closes answers reload-required; a newer
+// database is refused and left alone; and startup maintenance writes what Storage writes on a
+// first run.
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
+import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY } from '../../js/kernel/adapters/indexeddb/settings.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -98,187 +103,75 @@ const SHAPES = /** @type {const} */ ({
 });
 
 /**
- * chrome.storage.local with each recovery copy's key and time made stable, so two copies
- * written moments apart compare equal
+ * Storage.open in a page of `of`'s profile, as the new tab runs it, with no worker to wake
+ * (#17 PR 1b: it waits on the worker's run, here at once). Resolves what it threw, or null.
  * @param {Profile} of
- * @returns {Record<string, unknown>}
+ * @returns {Promise<unknown>}
  */
-function settingsOf(of) {
-  /** @type {Record<string, any>} */
-  const local = legacyEnv.plain(of.chrome.local);
-  /** @type {Record<string, unknown>} */
-  const stable = {};
-  for (const [key, value] of Object.entries(local)) {
-    if (/^recovery_backup_\d+$/.test(key)) {
-      assert.equal(typeof value.timestamp, 'number');
-      stable['recovery_backup_<time>'] = { ...value, timestamp: '<time>' };
-    } else if (key === 'recovery_copy_missing_stores') {
-      assert.ok(Object.hasOwn(local, value.key), 'the marker names the copy it was written with');
-      assert.equal(value.timestamp, local[value.key].timestamp);
-      stable[key] = { ...value, key: 'recovery_backup_<time>', timestamp: '<time>' };
-    } else {
-      stable[key] = value;
-    }
-  }
-  return stable;
-}
-
-/** @param {Profile} of */
-const copiesIn = of => Object.keys(of.chrome.local).filter(key => /^recovery_backup_\d+$/.test(key));
-
-/** The key that names the missing-stores copy, which Storage and the adapter both read first */
-const MARKER = 'recovery_copy_missing_stores';
-
-/**
- * Holds chrome.storage.local reads of the copy's marker until a second one arrives, or for 50
- * event-loop turns, so two pages that open together both look before either writes. Takes
- * Storage's callback reads and the adapter's promise reads alike.
- * @param {Profile} of
- */
-function holdMarkerReads(of) {
-  const local = of.chrome.api.storage.local;
-  const realGet = local.get.bind(local);
-  /** @type {Array<() => void>} */
-  let held = [];
-  const release = () => {
-    const run = held;
-    held = [];
-    run.forEach(read => read());
-  };
-  local.get = (/** @type {any} */ keys, /** @type {any} */ callback) => {
-    const marker = keys === MARKER || (Array.isArray(keys) && keys.length === 1 && keys[0] === MARKER);
-    if (!marker) return realGet(keys, callback);
-    const read = new Promise(resolve => held.push(() => resolve(realGet(keys, callback))));
-    if (held.length === 2) {
-      release();
-    } else {
-      let turns = 0;
-      const wait = () => {
-        if (held.length === 0) return;
-        if (++turns >= 50) release();
-        else setImmediate(wait);
-      };
-      setImmediate(wait);
-    }
-    return callback ? undefined : read;
-  };
-}
-
-/**
- * Storage.open in a page of `of`'s profile, as the new tab runs it today
- * @param {Profile} of
- * @param {{locks?: unknown}} [options]
- */
-async function storageOpen(of, { locks } = {}) {
-  const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, locks });
+async function storageOpen(of) {
+  const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
   env.load('js/utils.js', 'js/storage.js');
   const storage = env.get('Storage');
   try {
     await storage.open();
+    return null;
+  } catch (error) {
+    return error;
   } finally {
     if (storage.db) storage.db.close();
   }
 }
 
+/**
+ * Each store's records in a dump, without the store shapes
+ * @param {any} dump
+ * @returns {Record<string, unknown>}
+ */
+const recordsIn = dump =>
+  Object.fromEntries(Object.entries(dump.stores).map(([name, store]) => [name, /** @type {any} */ (store).records]));
+
 describe('opening CanvasTabDB on the IndexedDB adapter', () => {
-  it("leaves each shape exactly as a page's Storage.open leaves it: the database, and chrome.storage.local with its recovery copy", async () => {
+  it("leaves each shape as it was in a page's Storage.open and in the worker's versioned open, which makes 9 only where there's no database (review R79)", async () => {
     for (const [name, spec] of Object.entries(SHAPES)) {
-      // Storage.open, over its own copy of the shape
-      const legacy = await made(spec);
-      await storageOpen(legacy);
-      // The adapter, over another
+      // The new tab's Storage.open upgrades nothing, and makes no database (#17 PR 1b)
+      const page = await made(spec);
+      const before = spec ? await legacyEnv.dumpDatabase(page.real) : null;
+      const thrown = /** @type {any} */ (await storageOpen(page));
+      if (before) {
+        assert.deepEqual(await legacyEnv.dumpDatabase(page.real), before, `${name}: Storage.open changed it`);
+      } else {
+        assert.equal(thrown && thrown.code, 'NO_DATABASE', name);
+        assert.deepEqual(await page.real.databases(), [], `${name}: Storage.open made one`);
+      }
+      // The worker's versioned open, after its run, finds nothing to upgrade. One that finds an
+      // older database (made or replaced since the run) never upgrades it, since every step
+      // needs a verified point first: it's refused, retryable, for the worker to run the runner
+      // again, and the connection it opened is closed
       const of = await made(spec);
-      const adapter = adapterOn(of, { pageContext: true });
-      await adapter.open();
-      adapter.close();
-      assert.deepEqual(
-        await legacyEnv.dumpDatabase(of.real),
-        await legacyEnv.dumpDatabase(legacy.real),
-        `${name}: the adapter left another database than Storage.open`,
-      );
-      assert.deepEqual(settingsOf(of), settingsOf(legacy), `${name}: chrome.storage.local differs`);
+      const adapter = adapterOn(of);
+      if (before) {
+        await assert.rejects(
+          adapter.open(),
+          error => {
+            const { unavailableCause, code, retryable } = /** @type {any} */ (error);
+            return unavailableCause === 'storage' && code === 'migration-required' && retryable === true;
+          },
+          name,
+        );
+        assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before, `${name}: the versioned open changed it`);
+        assert.equal(await upgradeTo(of.real, 9), 'opened', `${name}: the refused connection is closed`);
+      } else {
+        // With nothing to keep, it makes the database at 9 through the registry's steps
+        await adapter.open();
+        adapter.close();
+        assert.deepEqual(
+          detectShape(await inspect(of.real)),
+          { kind: 'current', structuralVersion: 9, logicalVersion: 1 },
+          name,
+        );
+      }
+      assert.deepEqual(of.chrome.writes(), [], `${name}: no copy, and no setting`);
     }
-    // A version-8 database missing stores is the one shape that gets a copy
-    const holding = await made(SHAPES['version 8 without themes, holding a note, a setting, and an image']);
-    await adapterOn(holding, { pageContext: true }).open();
-    const [key] = copiesIn(holding);
-    const copy = /** @type {any} */ (holding.chrome.local[key]);
-    assert.deepEqual([copy.reason, copy.missingStores, copy.settings], ['missing-stores', ['themes'], undefined]);
-    assert.equal(copy.media[0].blob, `data:image/png;base64,${Buffer.from('png bytes').toString('base64')}`);
-  });
-
-  it('leaves the recovery copy to the next page when it opens in the service worker, as Storage does', async () => {
-    const of = await made(SHAPES['version 8 without some stores']);
-    // No document, as in the worker
-    await adapterOn(of).open();
-    await adapterOn(of, { pageContext: false }).open();
-    assert.deepEqual(copiesIn(of), []);
-  });
-
-  it('writes one copy for the same missing stores however often it opens, and never reads all of chrome.storage.local', async () => {
-    const of = await made(SHAPES['version 8 without some stores']);
-    for (const time of [1, 2, 3]) {
-      const adapter = adapterOn(of, { pageContext: true });
-      await adapter.open();
-      adapter.close();
-      assert.equal(copiesIn(of).length, 1, `open ${time}`);
-    }
-    const fullReads = /** @type {Array<{method: string, keys: unknown}>} */ (of.chrome.calls).filter(
-      call => call.method === 'get' && (call.keys === null || call.keys === undefined),
-    );
-    assert.deepEqual(fullReads, []);
-  });
-
-  it("pages opening at once write one copy between them, under Storage's lock, a legacy page included", async () => {
-    const locks = legacyEnv.createLockManager();
-    for (const pair of ['two adapters', 'Storage and the adapter']) {
-      const of = await made(SHAPES['version 8 without some stores']);
-      // Reading every store takes a while on a real profile, so each page looks for the copy
-      // while the other still reads: hold each look until the other's arrives
-      holdMarkerReads(of);
-      const first =
-        pair === 'two adapters' ? adapterOn(of, { pageContext: true, locks }).open() : storageOpen(of, { locks });
-      await Promise.all([first, adapterOn(of, { pageContext: true, locks }).open()]);
-      const writes = /** @type {Array<{method: string, keys: string[]}>} */ (of.chrome.calls).filter(
-        call => call.method === 'set' && call.keys.some(key => key.startsWith('recovery_backup_')),
-      );
-      assert.equal(writes.length, 1, pair);
-    }
-  });
-
-  it('copies a version-8 database missing its notes before it refuses it, as Storage does', async () => {
-    const spec = { omit: ['elements'], records: { canvases: [legacyEnv.note('n1')] } };
-    const legacy = await made(spec);
-    await assert.rejects(storageOpen(legacy));
-    const of = await made(spec);
-    await assert.rejects(
-      adapterOn(of, { pageContext: true }).open(),
-      error => /** @type {any} */ (error).code === 'missing-core-stores',
-    );
-    assert.deepEqual(settingsOf(of), settingsOf(legacy));
-    assert.equal(copiesIn(of).length, 1);
-  });
-
-  it("opens even when chrome.storage can't take the copy, and writes it on the next open", async () => {
-    const of = await made(SHAPES['version 8 without some stores']);
-    of.chrome.failNextSet();
-    /** @type {Array<[string, Record<string, unknown>]>} */
-    const warnings = [];
-    const logger = {
-      warn: (/** @type {string} */ event, /** @type {Record<string, unknown>} */ detail) =>
-        warnings.push([event, detail]),
-    };
-    const adapter = adapterOn(of, { pageContext: true, logger });
-    await adapter.open();
-    assert.equal((await kernelOn(adapter).query({ type: 'listNotes', view: 'active' })).kind, 'empty');
-    assert.deepEqual(copiesIn(of), []);
-    assert.deepEqual(
-      warnings.map(([event, { missingStores }]) => [event, missingStores]),
-      [['recovery-copy-failed', ['search_index', 'themes', 'snapshots']]],
-    );
-    adapter.close();
-    await adapterOn(of, { pageContext: true }).open();
-    assert.equal(copiesIn(of).length, 1);
   });
 
   it('opens a database as it is for Popup and Side Panel: no upgrade, and no database made on a profile without one', async () => {
@@ -327,7 +220,7 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
   it('refuses a database a newer build upgraded, in both modes, closes it, and leaves it as it was', async () => {
     for (const mode of /** @type {const} */ (['versioned', 'existing'])) {
       const of = await made({
-        version: 9,
+        version: 10,
         extraStores: { meta: { keyPath: 'key' } },
         records: { canvases: [legacyEnv.note('n1')] },
       });
@@ -352,22 +245,24 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
         false,
       ]);
       // No connection it made is left open to hold up the newer build's next upgrade
-      assert.equal(await upgradeTo(of.real, 10), 'opened', mode);
+      assert.equal(await upgradeTo(of.real, 11), 'opened', mode);
       const after = await legacyEnv.dumpDatabase(of.real);
       assert.deepEqual({ ...after, version: before.version }, before, mode);
     }
   });
 
-  it('refuses a version-8 database without canvases or elements when it opens versioned, as Storage.open does', async () => {
+  it('refuses a version-8 database without canvases or elements when it opens versioned, and gives it no step (Q13)', async () => {
     for (const missing of ['canvases', 'elements']) {
       const of = await made({ omit: [missing] });
       await assert.rejects(adapterOn(of).open(), error => /** @type {any} */ (error).code === 'missing-core-stores');
+      assert.equal((await legacyEnv.dumpDatabase(of.real)).version, 8, `${missing}: no step ran`);
       assert.equal(await upgradeTo(of.real, 9), 'opened', `${missing}: the refused connection is closed`);
     }
   });
 
-  it('a blocked upgrade answers blocked-upgrade within openWithinMs, keeps waiting, and commits once nothing blocks it', async () => {
+  it('a blocked open answers blocked-upgrade within openWithinMs, keeps waiting, and refuses the older database it then finds, which it leaves as it was', async () => {
     const of = await made(SHAPES['version 7 (1.2.0)']);
+    const before = await legacyEnv.dumpDatabase(of.real);
     // An older page's connection that never closes, as 1.4.x's Popup holds its own
     const blocker = /** @type {IDBDatabase} */ (await legacyEnv.requestToPromise(of.real.open('CanvasTabDB')));
     const adapter = adapterOn(of, { openWithinMs: 50 });
@@ -396,16 +291,18 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
       });
       assert.equal(of.chrome.local[INITIALIZED_KEY], true);
     } finally {
-      // The page holding it closes, the upgrade lands, and the same command commits
+      // The page holding it closes, and the open goes on
       blocker.close();
     }
-    const committed = await legacyEnv.waitFor(async () => {
+    // It finds version 7, which only the runner upgrades after its point (review R79): the same
+    // command answers migration-required. This adapter never opens again, so it isn't
+    // retryable here; the worker's client starts another attempt on that code and builds a new one
+    const refused = await legacyEnv.waitFor(async () => {
       const outcome = await tab.execute({ type: 'createNote', commandId: 'c1', noteId: 'n2' });
-      return outcome.kind === 'committed' ? outcome : null;
+      return outcome.kind === 'unavailable' && outcome.code !== 'blocked-upgrade' ? outcome : null;
     });
-    assert.equal(committed.code, 'note-created');
-    const dump = await legacyEnv.dumpDatabase(of.real);
-    assert.deepEqual([dump.version, Object.keys(dump.stores).includes('snapshots')], [8, true]);
+    assert.deepEqual(unavailableAs(refused), ['storage', 'migration-required', false]);
+    assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before);
   });
 
   it("an open that hasn't finished within openWithinMs answers open-pending, retryable, and never leaves a call waiting", async () => {
@@ -429,13 +326,18 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
 
   it("closes on another context's upgrade, so it never blocks it, and every call then answers reload-required", async () => {
     for (const mode of /** @type {const} */ (['versioned', 'existing'])) {
-      const of = await made(SHAPES['version 8 (1.3.0 to 1.4.x)']);
+      // The worker opens versioned only on the database its run made at 9; Popup opens 8 as it is
+      const of = await made(mode === 'versioned' ? undefined : SHAPES['version 8 (1.3.0 to 1.4.x)']);
       const adapter = adapterOn(of, { mode });
       await adapter.open();
       const kernel = kernelOn(adapter, undefined, mode === 'versioned' ? CALLERS.newtab : CALLERS.popup);
-      assert.equal((await kernel.query({ type: 'listNotes', view: 'active' })).kind, 'ready');
+      // The fresh database holds no note yet; version 8 holds n1
+      assert.equal(
+        (await kernel.query({ type: 'listNotes', view: 'active' })).kind,
+        mode === 'versioned' ? 'empty' : 'ready',
+      );
       // A newer build's page upgrading past this build
-      assert.equal(await within(upgradeTo(of.real, 9), 2000), 'opened', mode);
+      assert.equal(await within(upgradeTo(of.real, 10), 2000), 'opened', mode);
       for (const attempt of [1, 2]) {
         const outcome = await kernel.execute({ type: 'createNote', commandId: `c${attempt}`, noteId: 'n2' });
         assert.deepEqual(unavailableAs(outcome), ['storage', 'reload-required', false], `${mode}, attempt ${attempt}`);
@@ -449,11 +351,12 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
   });
 
   it('a connection Chrome closes itself, or one close() ends, answers reload-required', async () => {
-    const of = await made(SHAPES['version 8 (1.3.0 to 1.4.x)']);
+    // The database the worker's run made at 9
+    const of = await made();
     const adapter = adapterOn(of);
     await adapter.open();
     const tab = kernelOn(adapter);
-    assert.equal((await tab.query({ type: 'listNotes', view: 'active' })).kind, 'ready');
+    assert.equal((await tab.query({ type: 'listNotes', view: 'active' })).kind, 'empty');
     forceCloseDatabase(/** @type {IDBDatabase} */ (of.faults.connections.at(-1)));
     await legacyEnv.settle();
     assert.deepEqual(unavailableAs(await tab.execute({ type: 'createNote', commandId: 'c1', noteId: 'n2' })), [
@@ -657,4 +560,93 @@ describe('startup maintenance on the IndexedDB adapter', () => {
     assert.deepEqual(unavailableAs(outcome), ['adapter', 'maintenance-needs-versioned-open', false]);
     assert.deepEqual(of.chrome.writes(), []);
   });
+});
+
+describe('a page that finds no database, or an older one, waits on the worker first (#17 PR 1b, Q12)', () => {
+  it("Popup's and Side Panel's open waits on awaitUpgrade below 9, and not at 9, then opens what's there", async () => {
+    /** @type {Array<[string, number]>} */
+    const waits = [];
+    for (const [name, spec] of /** @type {const} */ ([
+      ['no database', undefined],
+      ['version 8', SHAPES['version 8 (1.3.0 to 1.4.x)']],
+      ['version 9', 'nine'],
+    ])) {
+      const of = await made(spec === 'nine' ? undefined : spec);
+      if (spec === 'nine')
+        await adapterOn(of)
+          .open()
+          .then(() => of.adapters.at(-1)?.close());
+      let count = 0;
+      const adapter = adapterOn(of, {
+        mode: 'existing',
+        awaitUpgrade: async () => {
+          count++;
+        },
+      });
+      const opened = await adapter.open().then(
+        () => 'open',
+        error => /** @type {any} */ (error).code,
+      );
+      waits.push([name, count]);
+      assert.equal(opened, name === 'no database' ? 'no-database' : 'open', name);
+    }
+    assert.deepStrictEqual(waits, [
+      ['no database', 1],
+      ['version 8', 1],
+      ['version 9', 0],
+    ]);
+  });
+
+  it("the new tab's Storage.open wakes the worker below 9, waits at most 5 seconds, then opens what's there", async () => {
+    const of = await made(SHAPES['version 8 (1.3.0 to 1.4.x)']);
+    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
+    /** @type {unknown[]} */
+    const sent = [];
+    // A worker that never answers
+    env.chrome.api.runtime.answerMigrate = () => {
+      sent.push('storage.migrate');
+      return new Promise(() => {});
+    };
+    env.load('js/utils.js', 'js/storage.js');
+    const storage = env.get('Storage');
+    let settled = false;
+    const opening = storage.open().then(() => {
+      settled = true;
+    });
+    await legacyEnv.waitFor(() => env.clock.pending() > 0, { message: 'the wait' });
+    assert.deepStrictEqual(sent, ['storage.migrate']);
+    assert.equal(settled, false, 'it waits for the worker');
+    env.clock.tick(5000);
+    await opening;
+    assert.equal(storage.openState, 'open');
+    assert.equal(storage.db.version, 8, 'and opens version 8 as it is');
+    storage.db.close();
+
+    // At 9 it sends nothing
+    const nine = await made();
+    await adapterOn(nine).open();
+    nine.adapters.at(-1)?.close();
+    const page = legacyEnv.createLegacyEnv({
+      context: 'page',
+      indexedDB: nine.real,
+      chrome: nine.chrome,
+      worker: false,
+    });
+    let asked = 0;
+    page.chrome.api.runtime.answerMigrate = async () => {
+      asked++;
+    };
+    page.load('js/utils.js', 'js/storage.js');
+    const current = page.get('Storage');
+    await current.open();
+    assert.equal(asked, 0);
+    assert.equal(current.db.version, 9);
+    current.db.close();
+  });
+});
+
+it("this build's version is the registry's newest, schema.js's DB_VERSION, and Storage's dbVersion, all 9 (#17 PR 1b)", () => {
+  const env = legacyEnv.createLegacyEnv({ context: 'page', worker: false });
+  env.load('js/utils.js', 'js/storage.js');
+  assert.deepStrictEqual([LATEST_STRUCTURAL, DB_VERSION, env.get('Storage').dbVersion], [9, 9, 9]);
 });

@@ -340,6 +340,15 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
       [starting.receipt.status, starting.receipt.evidence, starting.looked],
       ['unverified', { errorCode: 'open-pending' }, []],
     );
+    // Waiting on an upgrade an older build's open page holds (#17 PR 1b) is a migration, never
+    // a failure: unverified, and why
+    const migrating = await checkOf('coordinator', answering({ status: 'degraded', reason: 'migrating' }));
+    assert.deepEqual(
+      [migrating.receipt.status, migrating.receipt.evidence, migrating.receipt.consequenceKey, migrating.faults, migrating.looked],
+      ['unverified', { errorCode: 'blocked-upgrade' }, null, [], []],
+    );
+    const unknown = await checkOf('coordinator', answering({ status: 'degraded', reason: 'not-yet-known' }));
+    assert.deepEqual([unknown.receipt.status, unknown.receipt.evidence], ['unverified', {}]);
     const odd = await checkOf('coordinator', answering({ commands: [{ outcome: 'saved', count: 1 }] }));
     assert.equal(odd.receipt.status, 'unverified');
   });

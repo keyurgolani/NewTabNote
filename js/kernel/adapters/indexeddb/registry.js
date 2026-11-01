@@ -14,8 +14,8 @@
  * records stay, since 1.3.0 and 1.4.0 delete the whole database when one is missing. Transform
  * steps (`kind: 'transform'`, logical versions, #17 PR 3) run in batches outside the upgrade.
  *
- * This build defines step 9 only. #17 PR 2 adds 10 and PR 3 adds 11. Nothing opens CanvasTabDB
- * at 9 yet: schema.js's DB_VERSION stays 8 until #17 PR 1b wires the worker to migrate.js.
+ * This build defines step 9 only. #17 PR 2 adds 10 and PR 3 adds 11. Since #17 PR 1b the
+ * service worker runs it at start, through migrate.js, and schema.js's DB_VERSION is 9.
  */
 
 import { STORE_SCHEMAS } from './schema.js';

@@ -111,7 +111,7 @@ export const WITHOUT_SUITE = Object.freeze({
   'js/kernel/core/ports/policy.js': {
     types: ['PolicyPort'],
     implementations: { 'js/kernel/core/ports/policy.js': 'test/kernel/policy.test.mjs' },
-    reason: "the baseline policy is the only one until #21 replaces it behind the same port",
+    reason: 'the baseline policy is the only one until #21 replaces it behind the same port',
   },
   'js/kernel/core/ports/rendering.js': {
     types: ['RenderingPort'],
@@ -151,10 +151,21 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
 export const HELPERS = Object.freeze({
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/failures.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  'js/kernel/adapters/indexeddb/recovery.js': ['js/kernel/adapters/indexeddb/adapter.js'],
-  'js/kernel/adapters/indexeddb/requests.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
-  'js/kernel/adapters/indexeddb/schema.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
-  'js/kernel/adapters/indexeddb/settings.js': ['js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/legacy/adapter.js'],
+  // The read-only integrity check, which test/kernel/storage-integrity.test.mjs also holds to
+  // Storage's
+  'js/kernel/adapters/indexeddb/integrity.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  'js/kernel/adapters/indexeddb/requests.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
+  'js/kernel/adapters/indexeddb/schema.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
+  'js/kernel/adapters/indexeddb/settings.js': [
+    'js/kernel/adapters/indexeddb/adapter.js',
+    'js/kernel/adapters/legacy/adapter.js',
+  ],
   'js/kernel/core/memory/fingerprint.js': ['js/kernel/core/memory/adapter.js', 'js/kernel/core/memory/ledger.js'],
 });
 
@@ -198,8 +209,9 @@ export const UNSHARED = Object.freeze({
     implements: 'IntelligenceRepository (js/kernel/core/intelligence/repository.js), in memory',
     tests: 'test/kernel/intelligence-records.test.mjs',
   },
-  // #17 PR 1a's migration framework, which no shipped root loads until PR 1b; one runner, one
-  // recovery database, one registry, so nothing to share a suite with
+  // #17 PR 1a's migration framework, which the service worker's root runs since PR 1b (and the
+  // new tab's reads, for its pre-update copy); one runner, one recovery database, one registry,
+  // so nothing to share a suite with
   'js/kernel/adapters/indexeddb/migrate.js': {
     implements: "#17's migration runner (startMigrations, runMigrations), under Web Lock storage.migrate",
     tests: 'test/kernel/storage-migrate.test.mjs',
@@ -238,6 +250,11 @@ export const UNSHARED = Object.freeze({
     implements: "#17's export of a pre-migration point as 1.4.1's import file",
     tests: 'test/kernel/storage-legacy-export.test.mjs',
   },
+  // #17 PR 1b took #33's copy back to js/storage.js, and with it the module these lived in
+  'js/kernel/adapters/indexeddb/data-urls.js': {
+    implements: "Blobs as data URLs, in the pre-update copy's export and #20's salvage file",
+    tests: 'test/kernel/storage-legacy-export.test.mjs',
+  },
   // #20 slice 3's ports for the remediation pipeline (js/trust/core/remediation/ports.js), each
   // the one implementation of its port, which no shipped root makes until slice 4
   'js/kernel/adapters/indexeddb/salvage-reader.js': {
@@ -266,7 +283,8 @@ export const EXEMPT = Object.freeze({
     port: 'chrome-storage-local',
     within: 'chrome_mock_',
     owner: '#17',
-    reason: 'the localStorage stand-in for chrome.storage when a page runs from file://, which a packaged '
-      + "extension never reaches. #17 removes it, and #28's build-to scope defers deleting it here.",
+    reason:
+      'the localStorage stand-in for chrome.storage when a page runs from file://, which a packaged ' +
+      "extension never reaches. #17 removes it, and #28's build-to scope defers deleting it here.",
   },
 });

@@ -19,12 +19,13 @@ import {
   CHAT_KEYS,
   ONBOARDING_KEY,
   PROMPT_TEMPLATES_KEY,
+  UPGRADE_KEYS,
   WORKSPACE_DATA_KEYS,
   workspaceDataArea,
 } from '../domain/workspace-data.js';
 import { unitsWork } from './work.js';
 
-export { BACKUP_KEYS, CHAT_KEYS, ONBOARDING_KEY, PROMPT_TEMPLATES_KEY };
+export { BACKUP_KEYS, CHAT_KEYS, ONBOARDING_KEY, PROMPT_TEMPLATES_KEY, UPGRADE_KEYS };
 
 /**
  * @template {import('../contracts/commands.js').CommandType} T
@@ -67,6 +68,7 @@ const settingsWork = (command, area, values, code) => ({
  *   completeOnboarding: CommandHandler<'completeOnboarding'>,
  *   recordBackup: CommandHandler<'recordBackup'>,
  *   recordExportNotice: CommandHandler<'recordExportNotice'>,
+ *   snoozeSpaceNotice: CommandHandler<'snoozeSpaceNotice'>,
  *   createAutoBackup: CommandHandler<'createAutoBackup'>,
  *   importBackup: CommandHandler<'importBackup'>,
  * }}
@@ -127,6 +129,12 @@ export const workspaceDataCommands = {
     return settingsWork(command, 'backup', { [BACKUP_KEYS.exportNotice]: record }, 'export-notice-recorded');
   },
 
+  // The space notice's Not now and Done put it off, in every tab, from the kernel clock's now
+  // (#17 PR 1b)
+  snoozeSpaceNotice(command, { clock }) {
+    return settingsWork(command, 'upgrade', { [UPGRADE_KEYS.spaceNotice]: clock.now() }, 'space-notice-snoozed');
+  },
+
   createAutoBackup(command, { adapter }) {
     if (!adapter.flags.backups) return backupsUnavailable();
     return {
@@ -148,7 +156,10 @@ export const workspaceDataCommands = {
       // Only once the import's one transaction committed: the notes it added, in backup order,
       // then the folders it added, then the notes Replace all trashed
       done: receipt =>
-        committed('backup-imported', receipt ? [...receipt.importedIds, ...receipt.addedFolderIds, ...receipt.trashedIds] : []),
+        committed(
+          'backup-imported',
+          receipt ? [...receipt.importedIds, ...receipt.addedFolderIds, ...receipt.trashedIds] : [],
+        ),
     };
   },
 };
@@ -165,7 +176,7 @@ export const workspaceDataQueries = {
   async getWorkspaceData({ keys = [...WORKSPACE_DATA_KEYS] }, { adapter, clock }) {
     if (!Array.isArray(keys) || keys.some(key => typeof key !== 'string')) return failed('validation', 'invalid-query');
     if (keys.some(key => !WORKSPACE_DATA_KEYS.includes(key))) return failed('validation', 'unknown-workspace-data');
-    /** @type {Map<'chat' | 'onboarding' | 'backup', string[]>} */
+    /** @type {Map<'chat' | 'onboarding' | 'backup' | 'upgrade', string[]>} */
     const byArea = new Map();
     for (const key of keys) {
       const area = workspaceDataArea(key);
