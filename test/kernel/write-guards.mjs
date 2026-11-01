@@ -149,6 +149,10 @@ export const WRITE_GUARDS = Object.freeze({
     'content',
     "the user's revert, which first keeps the note as it is as a snapshot, so what it writes over stays in its history",
   ),
+  applyCloseDraft: unguarded(
+    'content',
+    "a closing tab's edit, whose base it checks against the note in its own transaction: a change the page never saw makes a recovered note, never a write over it",
+  ),
   emptyTrash: unguarded('placement', 'deletes what the trash holds as committed, so a note restored meanwhile stays'),
   runTrashCleanup: unguarded('placement', 'deletes what has been in the trash past its days as committed'),
   deleteFolder: unguarded(

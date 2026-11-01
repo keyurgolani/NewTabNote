@@ -64,6 +64,7 @@
     },
     "popup": {
       "page": "popup.html",
+      "lazyChunks": ["close-drafts-chunk"],
       "reason": "The Popup's start JS. Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #4's ready mark.",
       "start": {
         "js": { "raw": 117760, "gzip": 40960 },
@@ -76,6 +77,7 @@
     },
     "sidepanel": {
       "page": "sidepanel.html",
+      "lazyChunks": ["close-drafts-chunk"],
       "reason": "The Side Panel's start JS. Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #5's ready mark.",
       "start": {
         "js": { "raw": 114688, "gzip": 40960 },
