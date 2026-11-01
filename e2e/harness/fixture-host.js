@@ -13,11 +13,11 @@
  * added to the extension under test. Fixtures and dumps cross as JSON, which the format is.
  *
  * A database the target already holds at a version past the fixture's is deleted before the
- * load (deleteNewer): since #17 PR 1b the worker makes CanvasTabDB at 9 as the extension
- * installs, and a 1.4.x fixture holds it at 8. It's deleted only once the worker's run at install
- * migrated, and after the load the harness updates the extension in place, so the new worker
- * upgrades the fixture as an update to this build does, and that run has to migrate too
- * (upgradeAsUpdated). A spec then opens its pages on the upgraded database.
+ * load (deleteNewer): since #17 PR 1b the worker makes CanvasTabDB at this build's version as
+ * the extension installs, and a 1.4.x fixture holds it at 8. It's deleted only once the
+ * worker's run at install migrated, and after the load the harness updates the extension in
+ * place, so the new worker upgrades the fixture as an update to this build does, and that run
+ * has to migrate too (upgradeAsUpdated). A spec then opens its pages on the upgraded database.
  */
 
 const fs = require('fs');
@@ -52,11 +52,11 @@ function runIn(target, call, args) {
 /**
  * Deletes each database `wanted` names that `target` already holds at a version past the one
  * wanted, once the worker's migration run at install is in (test code only: nothing under js/
- * deletes a database). Since #17 PR 1b that run makes CanvasTabDB at 9, and indexedDB.open
- * refuses a 1.4.x fixture's 8 with a VersionError. It deletes only what a run that migrated
- * made: after any other run, or with no run to read (a page), it rejects and deletes nothing,
- * so the spec fails where it seeded. One at the wanted version or below is loaded into, as
- * before, so a 1.4.x package is seeded as it was. Answers the names it deleted.
+ * deletes a database). Since #17 PR 1b that run makes CanvasTabDB at this build's version, and
+ * indexedDB.open refuses a 1.4.x fixture's 8 with a VersionError. It deletes only what a run
+ * that migrated made: after any other run, or with no run to read (a page), it rejects and
+ * deletes nothing, so the spec fails where it seeded. One at the wanted version or below is
+ * loaded into, as before, so a 1.4.x package is seeded as it was. Answers the names it deleted.
  * @param {{evaluate: Function}} target
  * @param {Array<{name: string, version: number}>} wanted
  * @returns {Promise<string[]>}
