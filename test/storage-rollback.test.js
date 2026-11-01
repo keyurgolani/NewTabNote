@@ -18,13 +18,15 @@
 // Since #17 PR 4a the new tab writes through #17's adapter too (the plan's section 7): a profile
 // it wrote, with the version fields, ledger rows, and change rows that adds, is refused and left
 // as it was by both releases, and its Export JSON, which #17's adapter makes, imports through
-// the frozen v1.4.1.
+// the frozen v1.4.1. A profile the worker's run never reached stays at 8, which 1.4.1 opens: the
+// new tab's writes there, version fields included, are what 1.4.1 starts on, reads back, and
+// edits, and the new tab saves a note 1.4.1 edited (R88's read of #121).
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, runUntil, plain, waitFor, block,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, runUntil, plain, waitFor, block, note,
 } = require('./helpers/legacy-env');
 const { startWorker } = require('./helpers/load-background');
 const { loadPageModule } = require('./helpers/page-module');
@@ -33,6 +35,8 @@ const RELEASES = 'test/fixtures/storage/releases';
 const CASES = ['v8.basic', 'v8.missing-themes', 'v7.basic', 'v2-idb-settings.basic', 'v8.evening-daily-notes'];
 // The fields 1.4.x doesn't know (js/kernel/core/domain/placement.js's NEW_NOTE_FIELDS)
 const NEW_NOTE_FIELDS = ['placement', 'kind', 'lifecycle', 'dailyKey', 'dailyTimeZone', 'dailyDuplicateOf'];
+// The versions #17's adapter puts on each note it writes, at any version (versions.js)
+const VERSION_FIELDS = ['revision', 'placementVersion', 'sourceRevision'];
 // Keys a profile may hold that a rollback mustn't lose
 const KEPT_KEYS = {
   auto_backup_1760000000000: { canvases: [], elements: [], timestamp: 1760000000000 },
@@ -264,6 +268,100 @@ describe("a profile the new tab wrote through #17's adapter after the update, op
     assert.equal(recordsOf(await dumpDatabase(env.indexedDB), 'folders')[copy.folderId].name, 'After the update');
     const blocks = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements')).filter((el) => el.canvasId === copy.id);
     assert.deepStrictEqual(blocks.map((el) => el.content), ['typed after the update']);
+  });
+});
+
+/**
+ * CanvasTabDB's version, and its records by key in the stores a note's data lives in
+ * @param {IDBFactory} indexedDB
+ */
+async function noteStores(indexedDB) {
+  const dump = await dumpDatabase(indexedDB);
+  const stores = ['canvases', 'elements', 'folders', 'links', 'search_index'];
+  return { version: dump.version, ...Object.fromEntries(stores.map((name) => [name, recordsOf(dump, name)])) };
+}
+
+describe("a version-8 profile the worker's run never reached, which the new tab wrote through #17's adapter, then 1.4.1, then the new tab again (#17 PR 4a)", () => {
+  it("1.4.1 starts on it changing nothing, reads back what the new tab wrote, and edits a note, which the new tab then saves, keeping 1.4.1's name", async () => {
+    // 1.4.1's own profile: the test worker leaves a database that's there as it is, as a run
+    // short of space does, so the new tab writes at 8
+    const profile = createLegacyEnv({ worker: false });
+    await createDatabase(profile.indexedDB, {
+      records: {
+        canvases: [note('old', { name: 'From 1.4.1' }), note('target', { name: 'Linked' })],
+        elements: [block('old-b1', 'old', 0, 'written by 1.4.1')],
+      },
+    });
+    const committed = async (client, command) => {
+      const outcome = plain(await client.execute(command));
+      assert.equal(outcome.kind, 'committed', `${command.type}: ${JSON.stringify(outcome)}`);
+    };
+    const tab = await newTab(profile);
+    await committed(tab.client, { type: 'createNote', commandId: 'w1', noteId: 'tab-note', name: 'Written in the new tab' });
+    await committed(tab.client, {
+      type: 'saveNoteContent',
+      commandId: 'w2',
+      noteId: 'tab-note',
+      blocks: [block('tab-b1', 'tab-note', 0, 'typed at 8')],
+      linkedNames: ['Linked'],
+    });
+    await committed(tab.client, { type: 'setPinned', commandId: 'w3', noteId: 'tab-note', pinned: true });
+    await committed(tab.client, { type: 'createFolder', commandId: 'w4', folderId: 'tab-folder', name: 'Made at 8', parentId: null });
+    await committed(tab.client, { type: 'moveNoteToFolder', commandId: 'w5', noteId: 'tab-note', folderId: 'tab-folder' });
+    await committed(tab.client, { type: 'renameNote', commandId: 'w6', noteId: 'old', name: 'Renamed in the new tab' });
+    await committed(tab.client, { type: 'trashNote', commandId: 'w7', noteId: 'target' });
+    tab.close();
+    const written = await noteStores(profile.indexedDB);
+    assert.equal(written.version, 8, 'the run never got in, so the database stays at 8');
+    // At 8 the adapter writes the versions on each note it writes, and no field placement adds
+    const mine = written.canvases['tab-note'];
+    for (const field of VERSION_FIELDS) assert.equal(typeof mine[field], 'number', field);
+    for (const field of NEW_NOTE_FIELDS) assert.equal(field in mine, false, field);
+    assert.deepStrictEqual(
+      Object.values(written.links).map((link) => [link.fromNoteId, link.toNoteId]),
+      [['tab-note', 'target']],
+    );
+
+    // 1.4.1, as the user's rollback installs it, on the same profile
+    const old = createLegacyEnv({ indexedDB: profile.indexedDB, chrome: profile.chrome, worker: false });
+    old.load(`${RELEASES}/v1.4.1/js/utils.js`, `${RELEASES}/v1.4.1/js/storage.js`);
+    const Storage = old.get('Storage');
+    await runUntil(old, Storage.init());
+    assert.equal(Storage.openState, 'open');
+    const started = await noteStores(profile.indexedDB);
+    for (const name of ['canvases', 'elements', 'folders', 'links', 'search_index']) {
+      assert.deepStrictEqual(started[name], written[name], `1.4.1's start changed ${name}`);
+    }
+    // It reads what the new tab wrote, where 1.4.1 shows it
+    const active = plain(await Storage.getAllNotes());
+    const listed = active.find((n) => n.id === 'tab-note');
+    assert.deepStrictEqual([listed.name, listed.pinned, listed.folderId], ['Written in the new tab', true, 'tab-folder']);
+    assert.deepStrictEqual(plain(await Storage.getElementsByNote('tab-note')).map((b) => b.content), ['typed at 8']);
+    assert.equal(active.find((n) => n.id === 'old').name, 'Renamed in the new tab');
+    assert.deepStrictEqual(plain(await Storage.getTrashedNotes()).map((n) => n.id), ['target']);
+    assert.ok(plain(await Storage.getAllFolders()).some((f) => f.id === 'tab-folder'));
+    assert.deepStrictEqual(plain(await Storage.getBacklinks('target')).map((n) => n.id), ['tab-note']);
+    assert.ok(plain(await Storage.exportAll()).canvases.some((n) => n.id === 'tab-note'));
+    // And edits a note the new tab wrote
+    await Storage.updateNote({ ...(await Storage.getNote('tab-note')), name: 'Edited back in 1.4.1' });
+    Storage.db.close();
+
+    // The new tab again, once the user updates again, with the run still not in
+    const again = await newTab(profile);
+    const read = plain(await again.client.query({ type: 'getNote', noteId: 'tab-note' }));
+    assert.equal(read.kind, 'ready', JSON.stringify(read));
+    assert.equal(read.data.note.name, 'Edited back in 1.4.1');
+    await committed(again.client, {
+      type: 'saveNoteContent',
+      commandId: 'w8',
+      noteId: 'tab-note',
+      blocks: [block('tab-b1', 'tab-note', 0, 'typed again after the rollback')],
+    });
+    again.close();
+    const saved = await noteStores(profile.indexedDB);
+    assert.equal(saved.version, 8);
+    assert.equal(saved.canvases['tab-note'].name, 'Edited back in 1.4.1', 'the save kept the name 1.4.1 gave');
+    assert.equal(saved.elements['tab-b1'].content, 'typed again after the rollback');
   });
 });
 
