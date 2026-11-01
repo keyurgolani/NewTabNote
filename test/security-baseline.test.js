@@ -100,11 +100,34 @@ describe('the security baseline (scripts/build/security-baseline.js)', () => {
       'js/kernel/composition/network-guard.js',
       'js/kernel/composition/network-guard-install.js',
       'js/kernel/composition/network-guard-first.js',
+      'js/kernel/composition/network-refusals.js',
+      'js/network-guard.js',
       'js/kernel/composition/api-request.js',
       'js/kernel/composition/worker-network.js',
       'js/offscreen.js',
     ]);
     for (const file of SOURCES) driftsThenPasses({ edits: { [file]: `${read(file)}\n// an edit\n` } });
+  });
+
+  it('holds every module that runs before the guard: each first-party module the guard entries and the worker\'s network import', () => {
+    /** The first-party modules `entry` imports, itself included, by static import and re-export */
+    const graph = (entry) => {
+      const seen = new Set();
+      const visit = (file) => {
+        if (seen.has(file) || file.startsWith('js/lib/')) return;
+        seen.add(file);
+        const code = read(file).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+        for (const [, specifier] of code.matchAll(/(?:^|[\s;])(?:import|export)\b[^'"`;]*?['"]([^'"]+)['"]/g)) {
+          if (specifier.startsWith('.')) visit(path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier)));
+        }
+      };
+      visit(entry);
+      return [...seen];
+    };
+    const entries = ['js/network-guard.js', 'js/kernel/composition/network-guard-first.js', 'js/kernel/composition/worker-network.js'];
+    const modules = [...new Set(entries.flatMap(graph))].sort();
+    assert.ok(modules.includes('js/kernel/composition/network-refusals.js') && modules.includes('js/kernel/composition/destination-rows.js'), modules.join(', '));
+    assert.deepEqual(modules.filter((file) => !SOURCES.includes(file)), []);
   });
 
   it("takes an edit to js/background.js, which installs the worker's network in one call, with no entry", () => {
@@ -165,6 +188,14 @@ describe('the security baseline (scripts/build/security-baseline.js)', () => {
       assert.equal(cspOf(manifest)['form-action'], undefined, JSON.stringify(space));
       driftsThenPasses({ manifest }, ['security/csp-characters', 'security/drift']);
     }
+    // Inside a source, where the name rule doesn't look: the whole policy's characters are checked
+    const inSource = withPolicy(policy.replace('frame-src https://www.youtube.com', 'frame-src https://www.you\u00a0tube.com'));
+    assert.deepEqual(cspOf(inSource)['frame-src'].length, 2);
+    driftsThenPasses({ manifest: inSource }, ['security/csp-characters', 'security/drift']);
+    // The message shows the character escaped, since a no-break space looks like a space
+    const named = check({ manifest: withPolicy(policy.replace("form-action 'none'", "form-action\u00a0'none'")) }).problems.find((found) => found.code === 'security/csp-characters');
+    assert.match(named.message, /form-action\\u00a0'none'/);
+    assert.doesNotMatch(named.message, /[^\x20-\x7e]/);
     // A control character, and a directive name Chromium doesn't read as one
     for (const changed of [policy.replace("base-uri 'none'", "base-uri\u0000'none'"), policy.replace("base-uri 'none'", "base_uri 'none'")]) {
       const manifest = withPolicy(changed);
