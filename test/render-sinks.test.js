@@ -24,19 +24,40 @@ describe('the render-sink ledger (security/render-sinks.json)', () => {
 
   it('scans the block code that exists, the port included', () => {
     const files = scopeFiles(read(LEDGER).scope);
-    for (const file of ['js/blocks.js', 'js/editor.js', 'js/ui/formatting-toolbar.js', 'js/kernel/adapters/rendering/legacy.js']) {
+    for (const file of ['js/blocks.js', 'js/editor.js', 'js/ui/formatting-toolbar.js', 'js/kernel/adapters/rendering/legacy.js', 'js/controllers/ai-chat-controller.js', 'js/stream-renderer.js']) {
       assert.ok(files.includes(file), file);
     }
   });
 
-  it('allows a dynamic sink only in the port and for the packaged picker icons', () => {
+  it("allows a dynamic sink only in the port, where the AI chat renders a reply, and for packaged icons and labels", () => {
     const dynamic = read(LEDGER).sinks.filter(row => row.kind === 'dynamic').map(row => `${row.file}#${row.function}`);
-    assert.deepEqual(dynamic.sort(), ['js/editor.js#_pickerItem', 'js/kernel/adapters/rendering/legacy.js#render']);
+    assert.deepEqual(dynamic.sort(), [
+      'js/controllers/ai-chat-controller.js#_finalizeStreamedMessage',
+      'js/controllers/ai-chat-controller.js#_showRateLimitToast',
+      'js/controllers/ai-chat-controller.js#addChatMessage',
+      'js/controllers/ai-chat-controller.js#addGlobalChatMessage',
+      'js/controllers/ai-chat-controller.js#copyAIResponse',
+      'js/controllers/ai-chat-controller.js#renderSmartInsights',
+      'js/editor.js#_pickerItem',
+      'js/kernel/adapters/rendering/legacy.js#render',
+      'js/stream-renderer.js#_commitBlock',
+    ]);
+  });
+
+  it('renders every reply in the AI chat through one renderer, which shows plain text as text', () => {
+    const chat = fs.readFileSync(path.join(ROOT, 'js/controllers/ai-chat-controller.js'), 'utf8');
+    const rendered = scanSource(chat).filter(site => site.kind === 'dynamic').map(site => site.function);
+    for (const name of ['_finalizeStreamedMessage', 'addChatMessage', 'addGlobalChatMessage']) assert.ok(rendered.includes(name), name);
+    // Markdown becomes HTML in the chat only in replyHtml, and every streamed block goes through it
+    assert.deepEqual(chat.match(/Utils\.parseMarkdown\(/g), ['Utils.parseMarkdown(']);
+    assert.match(chat, /static replyHtml\(markdown\) \{\n {4}return sanitizeHtml\(Utils\.parseMarkdown\(markdown\)\);/);
+    assert.match(chat, /const parseBlock = \(markdown\) => AIChatController\.replyHtml\(markdown\);/);
+    assert.equal((chat.match(/AIChatController\.replyHtml\(/g) || []).length, 4);
   });
 
   it('fails on a new raw sink in any block code file', () => {
     const ledger = read(LEDGER);
-    for (const file of ['js/blocks.js', 'js/editor.js', 'js/ui/formatting-toolbar.js']) {
+    for (const file of ['js/blocks.js', 'js/editor.js', 'js/ui/formatting-toolbar.js', 'js/controllers/ai-chat-controller.js', 'js/stream-renderer.js']) {
       const text = `${fs.readFileSync(path.join(ROOT, file), 'utf8')}\nfunction added(el, html) { el.innerHTML = html; }\n`;
       const problems = ledgerProblems(markupSinks(ledger.scope, { texts: { [file]: text } }), ledger);
       assert.deepEqual(problems.map(problem => problem.split(':')[0]), [`${file}#added#dynamic`], file);
@@ -126,6 +147,14 @@ describe('the render-sink ledger (security/render-sinks.json)', () => {
       ['document.writeln', 'dynamic', 'fill'],
       ['document.write', 'dynamic', 'fill'],
     ]);
+  });
+
+  it('reads static text joined with + as packaged markup, and anything joined to it as dynamic', () => {
+    const found = scanSource(`
+      function joined(el) { el.innerHTML = '<b>' + \`<i></i>\` + ('</b>'); }
+      function mixed(el, label) { el.innerHTML = '<b>' + label + '</b>'; }
+    `);
+    assert.deepEqual(found.map(({ kind, function: name }) => [kind, name]), [['static', 'joined'], ['dynamic', 'mixed']]);
   });
 
   it("finds setAttribute('srcdoc'), and no other attribute", () => {
