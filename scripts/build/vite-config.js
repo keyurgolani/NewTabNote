@@ -352,6 +352,23 @@ function chunkFileName(root) {
   return (chunk) => (chunk.moduleIds.length === 1 && ids.has(chunk.moduleIds[0]) ? LOADER : `${ASSETS_DIR}/[name]-[hash].js`);
 }
 
+/** close-drafts-chunk's file, which only Popup and Side Panel import, and only with import() */
+const CLOSE_DRAFTS_CHUNK = /(?:^|\/)close-drafts-chunk-[A-Za-z0-9_-]+\.js$/;
+
+/**
+ * The files the bundler preloads beside a dynamic import, or beside a page's entry: none beside
+ * close-drafts-chunk, which Popup and Side Panel import on a start that finds a draft (#33,
+ * composition/close-drafts.js), so neither page's start carries a preload list for it, and
+ * every other import's own (the lead's trim 2). A start that finds a draft then loads the
+ * applier's files one after another, which the lead takes.
+ * @param {string} filename - the file imported, or the page's entry
+ * @param {string[]} deps
+ * @returns {string[]}
+ */
+function preloadsFor(filename, deps) {
+  return CLOSE_DRAFTS_CHUNK.test(filename) ? [] : deps;
+}
+
 /**
  * The pages pass
  * @param {PassOptions} options
@@ -369,8 +386,9 @@ function pagesConfig(options) {
     ...common(options),
     build: {
       ...buildOptions(options),
-      // Chrome 116 has modulepreload, so the polyfill would only add code
-      modulePreload: { polyfill: false },
+      // Chrome 116 has modulepreload, so the polyfill would only add code. close-drafts-chunk
+      // preloads nothing beside it (preloadsFor).
+      modulePreload: { polyfill: false, resolveDependencies: preloadsFor },
       rolldownOptions: {
         input: Object.fromEntries(Object.entries(PAGES).map(([name, file]) => [name, path.join(root, file)])),
         output: {
