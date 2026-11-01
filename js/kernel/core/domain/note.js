@@ -482,7 +482,10 @@ export function blocksFromTemplate(templateBlocks, { noteId, title, now, nextId 
 }
 
 /**
- * The block a capture adds, as background.js has built it. A page's URL and title go into a
+ * The block a capture adds, as background.js has built it, with the time it was captured as its
+ * createdAt and updatedAt too (#17 PR 2a). 1.4.x's capture had neither, and its id began with
+ * that time. A UUID doesn't, and the readers that list a note's blocks in the order they were
+ * made go by createdAt then (Utils.inCreationOrder). A page's URL and title go into a
  * bookmark's plain-text fields. Selected text and the page it came from are plain text in a
  * text block's rich content, so they're escaped into it (#14 slice 2): the block shows them as
  * they were selected.
@@ -490,9 +493,10 @@ export function blocksFromTemplate(templateBlocks, { noteId, title, now, nextId 
  * @returns {BlockRecord}
  */
 export function captureBlock({ id, noteId, capture, now }) {
+  const times = { order: now, createdAt: now, updatedAt: now };
   if (capture.type === 'bookmark') {
-    return { id, type: 'bookmark', content: '', url: capture.url, title: capture.title, canvasId: noteId, order: now };
+    return { id, type: 'bookmark', content: '', url: capture.url, title: capture.title, canvasId: noteId, ...times };
   }
   const source = capture.source ? ` (Source: ${escapePlainText(capture.source)})` : '';
-  return { id, type: 'text', content: escapePlainText(capture.content) + source, canvasId: noteId, order: now };
+  return { id, type: 'text', content: escapePlainText(capture.content) + source, canvasId: noteId, ...times };
 }

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { isEmpty, isUntitled } from '../../js/kernel/core/domain/note.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -397,7 +398,7 @@ describe('the legacy adapter', () => {
     assert.equal(worker.storage.openState, 'closed-by-browser');
     assertKind(await capture('third'), 'committed');
     // A newer build's upgrade: the connection closes for it, and the reopen finds the newer version
-    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', 10));
+    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1));
     /** @type {IDBDatabase} */ (upgraded).close();
     const refused = await capture('fourth');
     assert.deepEqual(refused.kind === 'unavailable' && [refused.cause, refused.code], [
@@ -445,7 +446,7 @@ describe('the legacy adapter', () => {
       'b-third',
     ]);
     // A newer build's upgrade refuses the reopen, and the next capture tries again and is refused the same way
-    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', 10));
+    const upgraded = await legacyEnv.requestToPromise(worker.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1));
     /** @type {IDBDatabase} */ (upgraded).close();
     for (const id of ['fourth', 'fifth']) {
       const refused = await capture(id);
@@ -516,7 +517,7 @@ describe('the legacy adapter', () => {
     for (const mode of /** @type {const} */ (['existing', 'versioned'])) {
       const page = context();
       await legacyEnv.createDatabase(page.env.indexedDB, {
-        version: 10,
+        version: DB_VERSION + 1,
         extraStores: { meta: { keyPath: 'key' } },
         records: { canvases: [legacyEnv.note('n1')] },
       });

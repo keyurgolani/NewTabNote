@@ -100,7 +100,15 @@ const SHAPES = /** @type {const} */ ({
       media: [{ id: 'm1', canvasId: 'n1', blob: new Blob(['png bytes'], { type: 'image/png' }), createdAt: 1 }],
     },
   },
+  'version 9 (#17 PR 1b)': {
+    version: 9,
+    extraStores: { meta: { keyPath: 'key' }, migrations: { keyPath: ['id', 'status'] } },
+    records: { canvases: [legacyEnv.note('n1')], meta: [{ key: 'schema', structuralVersion: 9, logicalVersion: 1 }] },
+  },
 });
+
+/** A database #17 PR 1b's worker upgraded to 9, which this build's worker takes to 10 */
+const AT_9 = SHAPES['version 9 (#17 PR 1b)'];
 
 /**
  * Storage.open in a page of `of`'s profile, as the new tab runs it, with no worker to wake
@@ -131,7 +139,7 @@ const recordsIn = dump =>
   Object.fromEntries(Object.entries(dump.stores).map(([name, store]) => [name, /** @type {any} */ (store).records]));
 
 describe('opening CanvasTabDB on the IndexedDB adapter', () => {
-  it("leaves each shape as it was in a page's Storage.open and in the worker's versioned open, which makes 9 only where there's no database (review R79)", async () => {
+  it("leaves each shape as it was in a page's Storage.open and in the worker's versioned open, which makes this build's version only where there's no database (review R79)", async () => {
     for (const [name, spec] of Object.entries(SHAPES)) {
       // The new tab's Storage.open upgrades nothing, and makes no database (#17 PR 1b)
       const page = await made(spec);
@@ -159,14 +167,17 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
           name,
         );
         assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before, `${name}: the versioned open changed it`);
-        assert.equal(await upgradeTo(of.real, 9), 'opened', `${name}: the refused connection is closed`);
+        // One past the database's own version, so a connection left open hears a versionchange
+        // and blocks the upgrade, as it would the runner's: at its own version none fires
+        assert.equal(await upgradeTo(of.real, before.version + 1), 'opened', `${name}: the refused connection is closed`);
       } else {
-        // With nothing to keep, it makes the database at 9 through the registry's steps
+        // With nothing to keep, it makes the database at this build's version through the
+        // registry's steps
         await adapter.open();
         adapter.close();
         assert.deepEqual(
           detectShape(await inspect(of.real)),
-          { kind: 'current', structuralVersion: 9, logicalVersion: 1 },
+          { kind: 'current', structuralVersion: DB_VERSION, logicalVersion: 1 },
           name,
         );
       }
@@ -220,7 +231,7 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
   it('refuses a database a newer build upgraded, in both modes, closes it, and leaves it as it was', async () => {
     for (const mode of /** @type {const} */ (['versioned', 'existing'])) {
       const of = await made({
-        version: 10,
+        version: DB_VERSION + 1,
         extraStores: { meta: { keyPath: 'key' } },
         records: { canvases: [legacyEnv.note('n1')] },
       });
@@ -245,7 +256,7 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
         false,
       ]);
       // No connection it made is left open to hold up the newer build's next upgrade
-      assert.equal(await upgradeTo(of.real, 11), 'opened', mode);
+      assert.equal(await upgradeTo(of.real, DB_VERSION + 2), 'opened', mode);
       const after = await legacyEnv.dumpDatabase(of.real);
       assert.deepEqual({ ...after, version: before.version }, before, mode);
     }
@@ -326,7 +337,8 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
 
   it("closes on another context's upgrade, so it never blocks it, and every call then answers reload-required", async () => {
     for (const mode of /** @type {const} */ (['versioned', 'existing'])) {
-      // The worker opens versioned only on the database its run made at 9; Popup opens 8 as it is
+      // The worker opens versioned only on the database its run made at this build's version;
+      // Popup opens 8 as it is
       const of = await made(mode === 'versioned' ? undefined : SHAPES['version 8 (1.3.0 to 1.4.x)']);
       const adapter = adapterOn(of, { mode });
       await adapter.open();
@@ -337,7 +349,7 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
         mode === 'versioned' ? 'empty' : 'ready',
       );
       // A newer build's page upgrading past this build
-      assert.equal(await within(upgradeTo(of.real, 10), 2000), 'opened', mode);
+      assert.equal(await within(upgradeTo(of.real, DB_VERSION + 1), 2000), 'opened', mode);
       for (const attempt of [1, 2]) {
         const outcome = await kernel.execute({ type: 'createNote', commandId: `c${attempt}`, noteId: 'n2' });
         assert.deepEqual(unavailableAs(outcome), ['storage', 'reload-required', false], `${mode}, attempt ${attempt}`);
@@ -563,16 +575,17 @@ describe('startup maintenance on the IndexedDB adapter', () => {
 });
 
 describe('a page that finds no database, or an older one, waits on the worker first (#17 PR 1b, Q12)', () => {
-  it("Popup's and Side Panel's open waits on awaitUpgrade below 9, and not at 9, then opens what's there", async () => {
+  it("Popup's and Side Panel's open waits on awaitUpgrade below this build's version, and not at it, then opens what's there", async () => {
     /** @type {Array<[string, number]>} */
     const waits = [];
     for (const [name, spec] of /** @type {const} */ ([
       ['no database', undefined],
       ['version 8', SHAPES['version 8 (1.3.0 to 1.4.x)']],
-      ['version 9', 'nine'],
+      ['version 9', AT_9],
+      ["this build's version", 'current'],
     ])) {
-      const of = await made(spec === 'nine' ? undefined : spec);
-      if (spec === 'nine')
+      const of = await made(spec === 'current' ? undefined : spec);
+      if (spec === 'current')
         await adapterOn(of)
           .open()
           .then(() => of.adapters.at(-1)?.close());
@@ -593,11 +606,12 @@ describe('a page that finds no database, or an older one, waits on the worker fi
     assert.deepStrictEqual(waits, [
       ['no database', 1],
       ['version 8', 1],
-      ['version 9', 0],
+      ['version 9', 1],
+      ["this build's version", 0],
     ]);
   });
 
-  it("the new tab's Storage.open wakes the worker below 9, waits at most 5 seconds, then opens what's there", async () => {
+  it("the new tab's Storage.open wakes the worker below this build's version, waits at most 5 seconds, then opens what's there", async () => {
     const of = await made(SHAPES['version 8 (1.3.0 to 1.4.x)']);
     const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
     /** @type {unknown[]} */
@@ -622,7 +636,7 @@ describe('a page that finds no database, or an older one, waits on the worker fi
     assert.equal(storage.db.version, 8, 'and opens version 8 as it is');
     storage.db.close();
 
-    // At 9 it sends nothing
+    // At this build's version it sends nothing
     const nine = await made();
     await adapterOn(nine).open();
     nine.adapters.at(-1)?.close();
@@ -640,13 +654,13 @@ describe('a page that finds no database, or an older one, waits on the worker fi
     const current = page.get('Storage');
     await current.open();
     assert.equal(asked, 0);
-    assert.equal(current.db.version, 9);
+    assert.equal(current.db.version, DB_VERSION);
     current.db.close();
   });
 });
 
-it("this build's version is the registry's newest, schema.js's DB_VERSION, and Storage's dbVersion, all 9 (#17 PR 1b)", () => {
+it("this build's version is the registry's newest, schema.js's DB_VERSION, and Storage's dbVersion, all 10 (#17 PR 2a)", () => {
   const env = legacyEnv.createLegacyEnv({ context: 'page', worker: false });
   env.load('js/utils.js', 'js/storage.js');
-  assert.deepStrictEqual([LATEST_STRUCTURAL, DB_VERSION, env.get('Storage').dbVersion], [9, 9, 9]);
+  assert.deepStrictEqual([LATEST_STRUCTURAL, DB_VERSION, env.get('Storage').dbVersion], [10, 10, 10]);
 });

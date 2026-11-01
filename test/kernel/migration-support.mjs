@@ -8,10 +8,14 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
+import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { startMigrations } from '../../js/kernel/adapters/indexeddb/migrate.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import { faultyFactory } from './storage-faults.mjs';
-import { NOW } from './support.mjs';
+import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('../fixtures/storage/load-fixture.mjs').Fixture} Fixture */
 /** @typedef {import('../../js/kernel/adapters/indexeddb/migrate.js').MigrationOptions} MigrationOptions */
@@ -46,12 +50,13 @@ export function synthesized() {
 }
 
 /**
- * The expected file for fixture `id` after the registry runs to 9
+ * The expected file for fixture `id` after the registry runs to this build's newest structural
+ * version (10 since #17 PR 2a)
  * @param {string} id
  * @returns {Fixture}
  */
 export function expectedFor(id) {
-  return JSON.parse(fs.readFileSync(path.join(FIXTURES, 'expected', `${id}.v9.json`), 'utf8'));
+  return JSON.parse(fs.readFileSync(path.join(FIXTURES, 'expected', `${id}.v${LATEST_STRUCTURAL}.json`), 'utf8'));
 }
 
 /**
@@ -106,6 +111,69 @@ export function start(of, options = {}) {
  * @param {Partial<MigrationOptions>} [options]
  */
 export const run = (of, options) => start(of, options).done;
+
+/**
+ * Commits on #17's adapter over `of`, opened as the worker opens it at this build's version,
+ * that leave a row in each of step 10's stores: ledger rows, changes, a conflict record, and
+ * a tombstone (#17 PR 2a). Answers each command's outcome.
+ * @param {Profile} of
+ * @returns {Promise<string[]>} each command's outcome kind, in order
+ */
+export async function writeHistory(of) {
+  const adapter = createIndexedDbAdapter({
+    indexedDB: of.faults.factory,
+    settings: of.chrome.api.storage.local,
+    keyRange: KeyRange,
+    clock: { now: () => NOW },
+  });
+  await adapter.open();
+  try {
+    let count = 0;
+    const ids = { next: () => `history-${(count += 1)}` };
+    const clock = { now: () => NOW };
+    const policy = createBaselinePolicy();
+    const tab = createKernel({ adapter, policy, caller: CALLERS.newtab, ids, clock });
+    const worker = createKernel({ adapter, policy, caller: CALLERS['worker-internal'], ids, clock });
+    const block = (/** @type {string} */ content) => ({ id: 'history-block', type: 'text', content, order: 0 });
+    /** @type {Array<[typeof tab, Record<string, unknown>]>} */
+    const commands = [
+      [
+        tab,
+        { type: 'createNote', commandId: 'h1', noteId: 'history-note', name: 'Kept after', blocks: [block('One')] },
+      ],
+      [tab, { type: 'saveNoteContent', commandId: 'h2', noteId: 'history-note', blocks: [block('Two')] }],
+      [
+        tab,
+        {
+          type: 'saveNoteContent',
+          commandId: 'h3',
+          noteId: 'history-note',
+          blocks: [block('Lost')],
+          expectedRevision: 1,
+        },
+      ],
+      [tab, { type: 'setPinned', commandId: 'h4', noteId: 'history-note', pinned: true }],
+      [tab, { type: 'createNote', commandId: 'h5', noteId: 'history-empty' }],
+      [tab, { type: 'trashNote', commandId: 'h6', noteId: 'history-empty' }],
+      [
+        worker,
+        {
+          type: 'captureToDailyNote',
+          commandId: 'h7',
+          noteId: 'history-daily',
+          blockId: 'history-capture',
+          capture: { type: 'text', content: 'Captured' },
+        },
+      ],
+    ];
+    /** @type {string[]} */
+    const kinds = [];
+    for (const [kernel, command] of commands) kinds.push((await kernel.execute(/** @type {any} */ (command))).kind);
+    return kinds;
+  } finally {
+    adapter.close();
+  }
+}
 
 /**
  * Everything the profile holds, in the fixture format

@@ -40,9 +40,14 @@ export const REJECT_REASONS = Object.freeze(['validation', 'policy', 'not-found'
  */
 
 /**
- * The record changed since the revision the command expected. The adapter keeps the
- * command and the committed record, and this outcome carries neither. Only adapters with
- * revisions return it.
+ * The record changed since the version the command expected. The adapter keeps the command
+ * and the committed record, and this outcome carries neither. Only adapters with revisions
+ * return it, with one of two codes (#17, "Versions"):
+ * - `revision-conflict`: a content command's `expectedRevision` is stale, and
+ *   `currentRevision` is the note's content revision.
+ * - `placement-conflict`: a placement command's `expectedPlacementVersion` is stale, and
+ *   `currentRevision` holds the note's placement version, not its content revision. The
+ *   outcome's fields are closed (#13), so the placement version takes this one.
  * @typedef {object} Conflict
  * @property {'conflict'} kind
  * @property {string} code

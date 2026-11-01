@@ -113,7 +113,7 @@ class PreUpdateCopySection {
     let point = null;
     try {
       const record = await this.readUpgrade();
-      // A record a full disk kept from being replaced says nothing once the database is at 9 (review R79)
+      // A record a full disk kept from being replaced says nothing once the database is at this build's version (review R79)
       if (record && typeof record === 'object' && record.status === 'space-blocked' && !this.isUpgraded()) {
         state = 'waiting';
       } else {

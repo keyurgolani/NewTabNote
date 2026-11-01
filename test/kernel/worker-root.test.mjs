@@ -15,11 +15,14 @@ import {
   UPGRADE_RECORD_KEY,
   createWorkerClient,
 } from '../../js/kernel/composition/background.js';
+import { SWEPT_KEY } from '../../js/kernel/adapters/indexeddb/ledger.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { listPoints, openRecovery } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { legacyEnv, profileWith, synthesized } from './migration-support.mjs';
+import { recordsOf } from './storage-fixture.mjs';
 
 /** @typedef {import('./migration-support.mjs').Profile} Profile */
 
@@ -66,6 +69,29 @@ const recoveryExists = async of =>
 const RUN_BLOCKS = Object.freeze({ withinMs: 10_000, message: "the run's upgrade to be blocked" });
 
 describe("the worker's composition root", () => {
+  it("sweeps the adapter's ledger once its kernel is ready, and not again within a day (#17 PR 2a)", async () => {
+    // v10.basic's ledger rows are from 2025, past the 30 days a row is kept
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v10.basic')));
+    assert.equal((await recordsOf(of, 'operations')).length, 3);
+    const swept = async () => (await recordsOf(of, 'meta')).find(record => record.key === SWEPT_KEY);
+    const worker = createWorkerClient(hostOf(of));
+    assert.equal(await worker.whenReady(), null);
+    assert.equal((await worker.migration.done).status, 'current');
+    // The sweep runs behind the kernel, so the test waits on it in real time
+    const deadline = Date.now() + 10_000;
+    while (!(await swept()) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    const record = await swept();
+    assert.equal(typeof record?.sweptAt, 'number');
+    assert.deepEqual(await recordsOf(of, 'operations'), []);
+    // A capture keeps its row, and the next start, within the day, sweeps nothing
+    assert.equal((await capture(worker, 'kept')).kind, 'committed');
+    const again = createWorkerClient(hostOf(of));
+    assert.equal(await again.whenReady(), null);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(await swept(), record);
+    assert.equal((await recordsOf(of, 'operations')).length, 1);
+  });
+
   it('short of space: records it, opens the database as it is, and captures still commit on 8', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const worker = createWorkerClient(hostOf(of, { estimate: CRAMPED }));
@@ -96,7 +122,7 @@ describe("the worker's composition root", () => {
     const later = createWorkerClient(hostOf(of));
     assert.equal((await later.migration.done).status, 'migrated');
     assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).status, 'migrated');
-    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
     assert.equal((await capture(later, 'on-9')).kind, 'committed');
   });
 
@@ -222,7 +248,7 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).costly, false);
     // A reload of the page asks again, and the run goes at once
     assert.equal((await worker.migration.request()).status, 'migrated');
-    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
     assert.equal((await capture(worker, 'after-retry')).kind, 'committed');
   });
 
@@ -239,8 +265,8 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     const recorded = /** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]);
     of.chrome.local[UPGRADE_RECORD_KEY] = { ...recorded, at: recorded.at - RETRY_AFTER_MS - 1 };
     assert.equal((await worker.migration.request()).status, 'migrated');
-    assert.equal((await inspect(of.real)).version, 9);
-    // Its kernel follows: a capture now lands on 9
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
+    // Its kernel follows: a capture now lands on this build's version
     assert.equal((await capture(worker, 'on-9')).kind, 'committed');
   });
 
@@ -264,20 +290,23 @@ describe('the backoff, retries within one worker, and the keepalive (review R79)
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     const worker = createWorkerClient(hostOf(of));
     assert.equal((await capture(worker, 'first')).kind, 'committed');
-    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
     // R79's probe: another context deletes it and makes it again at 8, with a note
     await legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
     await legacyEnv.createDatabase(of.real, {
       records: { canvases: [legacyEnv.note('recreated', { name: 'Recreated' })] },
     });
     assert.equal((await capture(worker, 'second')).kind, 'committed');
-    assert.equal((await inspect(of.real)).version, 9);
+    assert.equal((await inspect(of.real)).version, DB_VERSION);
     // The step ran only after a verified point of the recreated database
     const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.real, { create: false }));
     const points = await listPoints(recovery);
     recovery.close();
     const latest = points.filter(point => point.kind === 'pre-migration' && point.status === 'verified').pop();
-    assert.ok(latest && latest.sourceVersion === 8 && latest.target === 9, JSON.stringify(points.map(p => p.id)));
+    assert.ok(
+      latest && latest.sourceVersion === 8 && latest.target === DB_VERSION,
+      JSON.stringify(points.map(p => p.id)),
+    );
     const exported = await exportPoint({
       indexedDB: of.real,
       keyRange: KeyRange,
@@ -475,7 +504,7 @@ async function recording(body) {
   }
 }
 
-/** A worker client whose run took a v8 profile to 9, with that attempt's end and its record */
+/** A worker client whose run took a v8 profile to this build's version, with that attempt's end and its record */
 async function migratedWorker() {
   const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
   const worker = createWorkerClient(hostOf(of));
@@ -490,7 +519,7 @@ async function migratedWorker() {
 describe("the worker's integrity check once another context deleted the database", () => {
   it('warns and commits, as Storage.runIntegrityCheck does: no retry, no other attempt, and no database made', async () => {
     const { of, worker, first, record } = await migratedWorker();
-    assert.ok((await databasesOf(of)).includes('CanvasTabDB@9'));
+    assert.ok((await databasesOf(of)).includes(`CanvasTabDB@${DB_VERSION}`));
     await legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
     assert.ok(!(await databasesOf(of)).some(name => name.startsWith('CanvasTabDB@')), 'deleted');
 
@@ -526,6 +555,6 @@ describe("the worker's integrity check once another context deleted the database
     const outcome = await capture(worker, 'after');
     assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
     assert.notEqual(worker.migration.done, first, 'a new attempt');
-    assert.ok((await databasesOf(of)).includes('CanvasTabDB@9'), `made again: ${await databasesOf(of)}`);
+    assert.ok((await databasesOf(of)).includes(`CanvasTabDB@${DB_VERSION}`), `made again: ${await databasesOf(of)}`);
   });
 });

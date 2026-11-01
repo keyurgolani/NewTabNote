@@ -16,7 +16,6 @@ import { createInProcessTransport } from '../core/messaging/in-process.js';
 /** @typedef {import('../core/contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('../core/messaging/link.js').Connection} Connection */
 /** @typedef {import('../core/messaging/link.js').Transport} Transport */
-/** @typedef {import('../core/ports/runtime.js').Ids} Ids */
 /** @typedef {import('../core/ports/runtime.js').Timers} Timers */
 /** @typedef {import('../adapters/messaging/runtime-port.js').Runtime} Runtime */
 
@@ -31,12 +30,9 @@ export const hostTimers = Object.freeze({
   clear: handle => clearTimeout(/** @type {ReturnType<typeof setTimeout>} */ (handle)),
 });
 
-/**
- * Ids from crypto.randomUUID(), for a client's session and requests and the coordinator's
- * instance
- * @type {Ids}
- */
-export const randomIds = Object.freeze({ next: () => crypto.randomUUID() });
+// Ids from crypto.randomUUID(), for a client's session and requests and the coordinator's
+// instance, as every root's kernel has them since #17 PR 2a (ids.js)
+export { randomIds } from './ids.js';
 
 /**
  * Whether `runtime` is an extension page's chrome.runtime, which can open a port

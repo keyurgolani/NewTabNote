@@ -65,7 +65,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * result schema accepts.
  * @typedef {object} QueryData
  * @property {NoteRecord[]} listNotes
- * @property {{note: NoteRecord, revision?: number}} getNote
+ * @property {{note: NoteRecord, revision?: number, placementVersion?: number}} getNote
  * @property {BlockRecord[]} getNoteBlocks
  * @property {NoteRecord[]} getBacklinks
  * @property {{notes: NoteRecord[], folders: FolderRecord[], searchEntries: SearchEntry[]}} getNoteList

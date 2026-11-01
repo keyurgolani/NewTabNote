@@ -1,9 +1,9 @@
 // #20's slice 4 prerequisites, part 2 (on #17 PR 1b): the migration run's own event codes,
 // raised from the worker's runner with value-free evidence, and the capture and storage probes
-// below version 9. A probe probes the path capture uses (the existing-mode adapter below 9),
-// storage reports a pending, failed, or blocked migration as `degraded` with a migration fault,
-// `migration-required` is never `probe-failed`, and the run that completes resolves the
-// migration incidents through storage's next check.
+// below this build's version. A probe probes the path capture uses (the existing-mode adapter
+// below it), storage reports a pending, failed, or blocked migration as `degraded` with a
+// migration fault, `migration-required` is never `probe-failed`, and the run that completes
+// resolves the migration incidents through storage's next check.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,6 +14,7 @@ import { UPGRADE_BLOCKED_KEY, UPGRADE_RECORD_KEY, createWorkerClient, migrationE
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createMigrationReader } from '../../js/kernel/adapters/indexeddb/health.js';
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { createRegistryRoot } from '../../js/kernel/registry/root.js';
 import { createRuntime } from '../../js/kernel/registry/runtime.js';
@@ -124,8 +125,8 @@ describe('the migration event codes (#20 slice 4 prerequisites, part 2)', () => 
     report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'current', failure: null }) });
     report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'migrated', shape: 'none', to: 9, failure: null }) });
     assert.deepEqual(sent, [
-      ['storage.migration-failed', { schemaVersion: 9 }, 'schema-mismatch'],
-      ['storage.migration-blocked', { schemaVersion: 9, errorCode: 'blocked-upgrade' }, undefined],
+      ['storage.migration-failed', { schemaVersion: LATEST_STRUCTURAL }, 'schema-mismatch'],
+      ['storage.migration-blocked', { schemaVersion: LATEST_STRUCTURAL, errorCode: 'blocked-upgrade' }, undefined],
     ]);
     report({ kind: 'ended', outcome: /** @type {any} */ ({ ...failed, status: 'migrated', to: 9, failure: null }) });
     report({ kind: 'ended', outcome: /** @type {any} */ (failed) });
@@ -141,7 +142,7 @@ describe('the migration event codes (#20 slice 4 prerequisites, part 2)', () => 
   });
 });
 
-describe('the capture and storage probes below version 9 (#20 slice 4 prerequisites, part 2)', () => {
+describe("the capture and storage probes below this build's version (#20 slice 4 prerequisites, part 2)", () => {
   it("at 8 with the run short of space: capture probes the existing-mode path and verifies, storage is degraded, migration-blocked", async () => {
     const of = await profileAt8();
     of.chrome.local[UPGRADE_RECORD_KEY] = { status: 'space-blocked', code: 'space-short', at: Date.now(), version: '1.4.1', costly: true };
@@ -187,7 +188,7 @@ describe('the capture and storage probes below version 9 (#20 slice 4 prerequisi
     adapter.close();
   });
 
-  it("at 9, storage verifies and looks at every migration fault, and with a migration state it can't read it probes anyway, looking at no migration fault", async () => {
+  it("at this build's version, storage verifies and looks at every migration fault, and with a migration state it can't read it probes anyway, looking at no migration fault", async () => {
     const of = await profileAt8();
     assert.equal((await createWorkerClient(hostOf(of)).migration.done).status, 'migrated');
     const adapter = adapterOn(of, { mode: 'versioned' });
@@ -250,7 +251,7 @@ describe('the capture and storage probes below version 9 (#20 slice 4 prerequisi
     adapter.close();
   });
 
-  it("the providers' test context opens the adapter capture uses: existing below 9", async () => {
+  it("the providers' test context opens the adapter capture uses: existing below this build's version", async () => {
     const of = await profileAt8();
     const { context } = await providerContext(of);
     assert.equal(/** @type {any} */ (context.storage).mode, 'existing');
@@ -326,7 +327,7 @@ describe("the migration state storage reads, and the worker's blocked marker (#2
     adapter.close();
   });
 
-  it("a standing blocked marker reads migration-blocked below 9, and its key is outside the settings' keys", async () => {
+  it("a standing blocked marker reads migration-blocked below this build's version, and its key is outside the settings' keys", async () => {
     assert.equal(UPGRADE_BLOCKED_KEY.startsWith('setting_'), false);
     const of = await profileAt8();
     of.chrome.local[UPGRADE_BLOCKED_KEY] = { at: Date.now() };
