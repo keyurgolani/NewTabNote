@@ -609,6 +609,12 @@ export function mountRecoveryPage({
   }
 
   /**
+   * The id of the way forward in a repair's panel, where focus goes when the panel ends on one
+   * @param {string} incidentId
+   */
+  const nextId = incidentId => `flow-${incidentId}-next`;
+
+  /**
    * The repair's panel under its problem
    * @param {Problem} problem
    * @param {Flow} flow
@@ -650,19 +656,25 @@ export function mountRecoveryPage({
     } else if (flow.phase === 'still-running') {
       // The page stopped waiting for its answer; the run goes on, and the page reads its record
       busy = true;
-      body = [h('p', { class: 'trust-result', role: 'status' }, glyph('checking'), h('span', {}, REBUILD.stillRunning)), steps(flow)];
+      body = [
+        h('p', { class: 'trust-result', role: 'status' }, glyph('checking'), h('span', {}, REBUILD.stillRunning)),
+        steps(flow),
+        h('p', { class: 'trust-muted' }, REBUILD.keepOpen),
+      ];
     } else if (flow.phase === 'expired' || flow.phase === 'preview-missed') {
       // A preview it can't confirm: one that expired, or one that finished after the page
       // stopped waiting, so the page never got what it would confirm
       body = [
         h('p', { class: 'trust-result', role: 'status' }, glyph('todo'), h('span', {}, flow.phase === 'expired' ? REBUILD.previewExpired : REBUILD.previewMissed)),
-        h('div', { class: 'trust-flow-actions' }, button(REBUILD.previewAgain, () => startRepair(problem), { primary: true })),
+        h('div', { class: 'trust-flow-actions' }, button(REBUILD.previewAgain, () => startRepair(problem), { primary: true, id: nextId(incidentId) })),
       ];
     } else if (flow.phase === 'untracked') {
-      // It followed the run as long as it would, and the run's record never ended
+      // It followed the run as long as it would, and the run's record never ended. Rebuild-index
+      // never changes a note, whatever a reload cuts off
       body = [
         h('p', { class: 'trust-result', role: 'status' }, glyph('partial'), h('span', {}, REBUILD.untracked)),
-        h('div', { class: 'trust-flow-actions' }, button(PAGE.reload, () => reload(), { primary: true })),
+        h('p', { class: 'trust-muted' }, REBUILD.unchanged),
+        h('div', { class: 'trust-flow-actions' }, button(PAGE.reload, () => reload(), { primary: true, id: nextId(incidentId) })),
       ];
     } else if (flow.phase === 'checking') {
       busy = true;
@@ -921,6 +933,10 @@ export function mountRecoveryPage({
   }
 
   function render() {
+    // Focus stays where it was across a redraw: the element that had it, found again by its id,
+    // unless something asked for focus elsewhere
+    const active = doc.activeElement;
+    const kept = active && active !== doc.body && active.id ? active.id : null;
     drawHeader();
     const main = doc.getElementById('trust-main');
     if (!main) return;
@@ -932,11 +948,11 @@ export function mountRecoveryPage({
     else if (state.phase === 'unreadable') parts = unreadableView();
     else parts = state.view === 'trust' ? trustView() : recoveryView();
     for (const part of parts.flat(2)) if (part) main.appendChild(part);
-    if (state.focus) {
-      const target = doc.getElementById(state.focus);
-      state.focus = null;
-      if (target) /** @type {HTMLElement} */ (target).focus();
-    }
+    const asked = state.focus;
+    state.focus = null;
+    const target = asked ? doc.getElementById(asked) : kept ? doc.getElementById(kept) : null;
+    // Focus that only stays where it was doesn't scroll the page
+    if (target && target !== doc.activeElement) /** @type {HTMLElement} */ (target).focus(asked ? undefined : { preventScroll: true });
   }
 
   // ───────── What the user does ─────────
@@ -1053,6 +1069,7 @@ export function mountRecoveryPage({
       if (answer.state === 'succeeded' || (answer.state === 'cancelled' && answer.outcome === 'nothing-to-do')) return checkRepair(problem);
       // A confirmation sent after the preview expired: say so, and offer it again (N1)
       if (answer.state === 'cancelled' && answer.outcome === 'run-expired') {
+        state.focus = nextId(problem.incidents[0].id);
         setFlow(problem, { phase: 'expired', at: now() });
         live(REBUILD.previewExpired);
         return refreshQuietly();
@@ -1109,6 +1126,7 @@ export function mountRecoveryPage({
       const flow = state.flows.get(incidentId);
       if (!flow || flow.phase !== 'still-running') return;
       if (now() - started >= FOLLOW_MS) {
+        state.focus = nextId(incidentId);
         setFlow(problem, { phase: 'untracked', at: now() });
         live(REBUILD.untracked);
         return;
@@ -1138,6 +1156,7 @@ export function mountRecoveryPage({
       if (run.state === 'awaiting-confirmation') {
         // A preview this page never got waits for a confirmation the page can't send without
         // it, so the page offers the preview again rather than starting another run itself
+        state.focus = nextId(incidentId);
         setFlow(problem, { phase: 'preview-missed', at: now() });
         live(REBUILD.previewMissed);
         return;
@@ -1145,6 +1164,7 @@ export function mountRecoveryPage({
       if (!FINISHED_RUN_STATES.includes(/** @type {any} */ (run.state))) continue;
       if (run.state === 'succeeded' || (run.state === 'cancelled' && run.outcome === 'nothing-to-do')) return checkRepair(problem);
       if (run.state === 'cancelled' && run.outcome === 'run-expired') {
+        state.focus = nextId(incidentId);
         setFlow(problem, { phase: 'expired', at: now() });
         live(REBUILD.previewExpired);
         return;
@@ -1180,6 +1200,9 @@ export function mountRecoveryPage({
   async function confirmRepair(problem) {
     const flow = state.flows.get(problem.incidents[0].id);
     if (!flow || !flow.runId || !flow.previewDigest) return;
+    // Focus goes to the panel's heading, never to the button that turns busy, and stays there
+    // through the run and a follow's redraws
+    state.focus = `flow-${problem.incidents[0].id}-title`;
     setFlow(problem, { phase: 'running' });
     live(REBUILD.running);
     state.ownRuns.add(flow.runId);

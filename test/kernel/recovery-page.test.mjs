@@ -924,6 +924,7 @@ describe("recovery.html after #115's design review", () => {
       control(page.page.doc, REBUILD.confirm, page.panel()).click();
       await until(() => page.panel() && page.panel().getAttribute('data-state') === 'still-running', 'still running');
       assert.match(text(page.panel()), new RegExp(escape(REBUILD.stillRunning)));
+      assert.match(text(page.panel()), new RegExp(escape(REBUILD.keepOpen)));
       // Then the run's record ends, and the check after it passes
       await until(() => /Fixed just now/.test(text(page.page.doc.getElementById('trust-main'))), 'fixed');
       assert.ok(page.page.calls.includes('recovery.check'));
@@ -998,18 +999,21 @@ describe("recovery.html after #115's design review", () => {
   });
 
   /**
-   * The page following a confirmation whose call ended unknown, while the report keeps that run
-   * running as a record that never ends would, on `now`
-   * @param {() => number} [now]
+   * The page right after it sent a confirmation whose call ends unknown, so it follows the run,
+   * while the report shows that run as `as` makes it on each read (the nth), on `now`. Confirm is
+   * clicked, or with `enter`, focused and then pressed, as Enter presses a focused button.
+   * @param {{now?: () => number, as?: (run: any, reads: number) => any, enter?: boolean}} [options]
    */
-  async function followingForever(now) {
+  async function following({ now, as = run => ({ ...run, state: 'running', step: 'apply' }), enter = false } = {}) {
     const late = { kind: 'unknown', code: 'deadline-exceeded', commandId: 'x' };
     /** @type {string | null} */
     let runId = null;
-    const keepRunning = (/** @type {() => Promise<any>} */ call) =>
+    let reads = 0;
+    const shown = (/** @type {() => Promise<any>} */ call) =>
       call().then((/** @type {any} */ answer) => {
         if (answer.kind === 'ready' && runId) {
-          answer.data.runs = answer.data.runs.map((/** @type {any} */ run) => (run.id === runId ? { ...run, state: 'running', step: 'apply' } : run));
+          reads += 1;
+          answer.data.runs = answer.data.runs.map((/** @type {any} */ run) => (run.id === runId ? as(run, reads) : run));
         }
         return answer;
       });
@@ -1017,12 +1021,24 @@ describe("recovery.html after #115's design review", () => {
       now,
       answers: {
         'recovery.run': [(/** @type {() => Promise<any>} */ call) => call().then((/** @type {any} */ answer) => ((runId = answer.runId), answer)), late],
-        'trust.report': Array.from({ length: 400 }, (_, n) => (n < 2 ? undefined : keepRunning)),
+        'trust.report': Array.from({ length: 400 }, (_, n) => (n < 2 ? undefined : shown)),
       },
     });
     control(page.page.doc, REBUILD.action, page.card()).click();
     await until(() => page.panel() && page.panel().getAttribute('data-state') === 'awaiting', 'the preview');
-    control(page.page.doc, REBUILD.confirm, page.panel()).click();
+    const confirm = control(page.page.doc, REBUILD.confirm, page.panel());
+    if (enter) confirm.focus();
+    confirm.click();
+    return page;
+  }
+
+  /**
+   * The page following a confirmation whose call ended unknown, while the report keeps that run
+   * running as a record that never ends would, on `now`
+   * @param {() => number} [now]
+   */
+  async function followingForever(now) {
+    const page = await following({ now });
     await until(() => page.panel() && page.panel().getAttribute('data-state') === 'still-running', 'still running');
     return page;
   }
@@ -1055,6 +1071,7 @@ describe("recovery.html after #115's design review", () => {
       clock += FOLLOW_MS;
       await until(() => page.panel() && page.panel().getAttribute('data-state') === 'untracked', "can't tell");
       assert.match(text(page.panel()), new RegExp(escape(REBUILD.untracked)));
+      assert.match(text(page.panel()), new RegExp(escape(REBUILD.unchanged)));
       const reads = page.page.calls.filter(call => call === 'trust.report').length;
       control(page.page.doc, PAGE.reload, page.panel()).click();
       assert.equal(page.page.reloads(), 1);
@@ -1064,6 +1081,71 @@ describe("recovery.html after #115's design review", () => {
       page.close();
     }
   });
+
+  it('puts focus on Preview again when a confirmation comes back expired', async () => {
+    const run = { kind: 'remediation', state: 'cancelled', outcome: 'run-expired', runId: '00000000-0000-4000-8000-0000000000e2' };
+    const page = await recoveryOn({ answers: { 'recovery.run': [undefined, run] } });
+    try {
+      control(page.page.doc, REBUILD.action, page.card()).click();
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'awaiting', 'the preview');
+      control(page.page.doc, REBUILD.confirm, page.panel()).click();
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'expired', 'the expired preview');
+      same(page.page.doc.activeElement, control(page.page.doc, REBUILD.previewAgain, page.panel()), "Preview again doesn't have focus");
+    } finally {
+      page.close();
+    }
+  });
+
+  it('puts focus on Preview again when a run it follows ends expired', { timeout: 10_000 }, async () => {
+    const page = await following({ as: run => ({ ...run, state: 'cancelled', outcome: 'run-expired' }) });
+    try {
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'expired', 'the expired preview');
+      same(page.page.doc.activeElement, control(page.page.doc, REBUILD.previewAgain, page.panel()), "Preview again doesn't have focus");
+    } finally {
+      page.close();
+    }
+  });
+
+  it('puts focus on Preview again when a preview it follows ends waiting for its confirmation', async () => {
+    const late = (/** @type {() => Promise<any>} */ call) => (call(), { kind: 'unknown', code: 'deadline-exceeded', commandId: 'x' });
+    const page = await recoveryOn({ answers: { 'recovery.run': [late] } });
+    try {
+      control(page.page.doc, REBUILD.action, page.card()).click();
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'preview-missed', 'Preview again');
+      same(page.page.doc.activeElement, control(page.page.doc, REBUILD.previewAgain, page.panel()), "Preview again doesn't have focus");
+    } finally {
+      page.close();
+    }
+  });
+
+  it('puts focus on Reload when it stops following a run', { timeout: 10_000 }, async () => {
+    let clock = Date.now();
+    const page = await followingForever(() => clock);
+    try {
+      clock += FOLLOW_MS;
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'untracked', "can't tell");
+      same(page.page.doc.activeElement, control(page.page.doc, PAGE.reload, page.panel()), "Reload doesn't have focus");
+    } finally {
+      page.close();
+    }
+  });
+
+  for (const [how, enter] of /** @type {const} */ ([['clicked', false], ['pressed with Enter', true]])) {
+    it(`puts focus on the panel's heading when Confirm is ${how}, and keeps it there when a run it follows is drawn again`, { timeout: 10_000 }, async () => {
+      // A record that changes on every read, so each read draws the page again
+      const page = await following({ enter, as: (run, reads) => ({ ...run, state: 'running', step: 'apply', updatedAt: run.updatedAt + reads }) });
+      try {
+        same(page.page.doc.activeElement, page.panel().querySelector('h4'), "the panel's heading doesn't have focus");
+        assert.equal(page.panel().querySelector('h4').getAttribute('tabindex'), '-1');
+        await until(() => page.panel() && page.panel().getAttribute('data-state') === 'still-running', 'still running');
+        const panel = page.panel();
+        await until(() => page.panel() !== panel, 'the page drawn again');
+        same(page.page.doc.activeElement, page.panel().querySelector('h4'), "the panel's heading lost focus");
+      } finally {
+        page.close();
+      }
+    });
+  }
 
   it('keeps Dismiss busy while its own call is on its way, so a second press sends nothing', async () => {
     /** @type {(answer: unknown) => void} */

@@ -229,7 +229,7 @@ export const REBUILD = Object.freeze({
   notChecked: "The repair finished, but NewTabNote couldn't check that it's fixed yet.",
   checkAgain: 'Check again',
   // The page stopped waiting for its answer, and the run goes on under its lock
-  stillRunning: 'Still running. NewTabNote shows the result when it finishes.',
+  stillRunning: 'Still rebuilding the search index. NewTabNote shows the result here when it finishes.',
   previewExpired: 'The preview expired. Preview it again.',
   // A preview that finished after the page stopped waiting, so the page never got it
   previewMissed: 'The preview finished after this page stopped waiting for it. Preview it again.',
