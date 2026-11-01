@@ -318,6 +318,22 @@ export function runContractSuite(fixture) {
         assert.equal((await noteOf('n2'))?.name, 'First');
       });
 
+      it("createNote refuses a block another note holds, sent with no note's id or naming the new note, writes nothing, and takes nothing from that note (R131)", async () => {
+        await createNote({ noteId: 'm', name: 'Mine', blocks: [{ id: 'mb1', type: 'text', content: 'Mine', order: 0 }] });
+        const before = [await noteOf('m'), await blocksOf('m')];
+        for (const theirs of [
+          { id: 'mb1', type: 'text', content: 'Mine', order: 0 },
+          { id: 'mb1', type: 'text', content: 'Mine', order: 0, canvasId: 'n' },
+        ]) {
+          assertRejected(
+            await kernel.execute(cmd('createNote', { noteId: 'n', name: 'Next', blocks: [theirs] })),
+            'validation',
+            'block-of-another-note',
+          );
+          assert.deepEqual([await noteOf('m'), await blocksOf('m'), await noteOf('n')], [...before, undefined]);
+        }
+      });
+
       it('createNote commits the note, its search entry, and its first blocks together on every adapter', async () => {
         await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
         ctx.failNextWrite('blocks');
@@ -811,23 +827,25 @@ export function runContractSuite(fixture) {
         assert.deepEqual(await blocksOf('n1'), []);
       });
 
-      it("refuses a block another note holds that comes without its note, as the editor sends blocks, with a revision or without, and takes nothing from that note (R131)", async () => {
+      it("refuses a block another note holds, sent with no note's id, as the editor sends blocks, or naming the note it saves, with a revision or without, and takes nothing from that note (R131)", async () => {
         await createNote({ noteId: 'm', name: 'Mine', blocks: [{ id: 'mb1', type: 'text', content: 'Mine', order: 0 }] });
         await createNote({ noteId: 'n', name: 'Next', blocks: [{ id: 'nb1', type: 'text', content: 'Next', order: 0 }] });
         const state = await kernel.query({ type: 'getNote', noteId: 'n' });
         const revision = state.kind === 'ready' ? state.data.revision : undefined;
         const before = [await noteOf('m'), await blocksOf('m'), await noteOf('n'), await blocksOf('n')];
-        const blocks = [
-          { id: 'nb1', type: 'text', content: 'Next', order: 0 },
+        for (const theirs of [
           { id: 'mb1', type: 'text', content: 'Mine', order: 1 },
-        ];
-        for (const fields of [{}, revision === undefined ? {} : { expectedRevision: revision }]) {
-          assertRejected(
-            await kernel.execute(cmd('saveNoteContent', { noteId: 'n', blocks, ...fields })),
-            'validation',
-            'block-of-another-note',
-          );
-          assert.deepEqual([await noteOf('m'), await blocksOf('m'), await noteOf('n'), await blocksOf('n')], before);
+          { id: 'mb1', type: 'text', content: 'Mine', order: 1, canvasId: 'n' },
+        ]) {
+          const blocks = [{ id: 'nb1', type: 'text', content: 'Next', order: 0 }, theirs];
+          for (const fields of [{}, revision === undefined ? {} : { expectedRevision: revision }]) {
+            assertRejected(
+              await kernel.execute(cmd('saveNoteContent', { noteId: 'n', blocks, ...fields })),
+              'validation',
+              'block-of-another-note',
+            );
+            assert.deepEqual([await noteOf('m'), await blocksOf('m'), await noteOf('n'), await blocksOf('n')], before);
+          }
         }
       });
 
@@ -1219,25 +1237,30 @@ export function runContractSuite(fixture) {
         assert.deepEqual([await noteOf('n1'), await blocksOf('n1'), await listOf('n1')], before);
       });
 
-      it('restoreSnapshot refuses a block another note holds that comes without its note, and takes nothing from that note (R131)', async () => {
+      it("restoreSnapshot refuses a block another note holds, sent with no note's id or naming the note it restores, and takes nothing from that note (R131)", async () => {
         await createNote({ noteId: 'n1', name: 'One', blocks: someBlocks('n1', 1) });
         await createNote({ noteId: 'n2', name: 'Two', blocks: someBlocks('n2', 1) });
         await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 'mine', blocks: serialized(['Y']), title: 'One' }));
         const before = [await noteOf('n1'), await blocksOf('n1'), await listOf('n1'), await noteOf('n2'), await blocksOf('n2')];
-        assertRejected(
-          await kernel.execute(
-            cmd('restoreSnapshot', {
-              noteId: 'n1',
-              snapshotId: 'mine',
-              preSnapshotId: 'pre',
-              blocks: [...serialized(['Y']), { id: 'n2-block-0', type: 'text', content: 'Theirs' }],
-              name: 'One',
-            }),
-          ),
-          'validation',
-          'block-of-another-note',
-        );
-        assert.deepEqual([await noteOf('n1'), await blocksOf('n1'), await listOf('n1'), await noteOf('n2'), await blocksOf('n2')], before);
+        for (const theirs of [
+          { id: 'n2-block-0', type: 'text', content: 'Theirs' },
+          { id: 'n2-block-0', type: 'text', content: 'Theirs', canvasId: 'n1' },
+        ]) {
+          assertRejected(
+            await kernel.execute(
+              cmd('restoreSnapshot', {
+                noteId: 'n1',
+                snapshotId: 'mine',
+                preSnapshotId: 'pre',
+                blocks: [...serialized(['Y']), theirs],
+                name: 'One',
+              }),
+            ),
+            'validation',
+            'block-of-another-note',
+          );
+          assert.deepEqual([await noteOf('n1'), await blocksOf('n1'), await listOf('n1'), await noteOf('n2'), await blocksOf('n2')], before);
+        }
       });
 
       it('restoreSnapshot is one unit on every adapter: a write it fails leaves the blocks, the note, and the snapshots as they were', async () => {
@@ -1576,6 +1599,59 @@ export function runContractSuite(fixture) {
         );
         assert.deepEqual(third.changedIds, ['d3']);
       });
+
+      it("refuses a block id another note holds, as block-of-another-note, and one today's Daily Note holds, as duplicate-block, and writes nothing (R131)", async () => {
+        await createNote({
+          noteId: 'm',
+          name: 'Mine',
+          blocks: [{ id: 'mb1', type: 'text', content: 'Mine', order: 0 }],
+        });
+        const mine = [await noteOf('m'), await blocksOf('m')];
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        /**
+         * @param {string} noteId
+         * @param {string} blockId
+         */
+        const capture = (noteId, blockId) =>
+          worker.execute(cmd('captureToDailyNote', { noteId, blockId, capture: page }));
+        // Before today's Daily Note is made, so the refused capture makes none
+        assertRejected(await capture('d0', 'mb1'), 'validation', 'block-of-another-note');
+        assert.deepEqual(
+          [
+            await noteOf('d0'),
+            await searchEntryOf('d0'),
+            await ctx.adapter.read(['dailyIndex'], tx => tx.get('dailyIndex', '2026-10-20')),
+          ],
+          [undefined, undefined, undefined],
+        );
+        committedOf(await capture('d1', 'c1'));
+        const daily = [await noteOf('d1'), await blocksOf('d1')];
+        assertRejected(await capture('d2', 'mb1'), 'validation', 'block-of-another-note');
+        assertRejected(await capture('d3', 'c1'), 'validation', 'duplicate-block');
+        assert.deepEqual(
+          [await noteOf('m'), await blocksOf('m'), await noteOf('d1'), await blocksOf('d1')],
+          [...mine, ...daily],
+        );
+      });
+
+      it(
+        flags.idempotency
+          ? 'idempotency: a capture sent again once it committed gets its outcome again, not duplicate-block, and adds nothing (R131)'
+          : 'no idempotency: a capture sent again once it committed runs again, finds its block, and is refused as duplicate-block',
+        async () => {
+          const worker = ctx.kernel(CALLERS['worker-internal']);
+          // The same command again, so the same commandId and blockId, as the worker's client
+          // sends one once more after reload-required, here once it committed
+          const first = cmd('captureToDailyNote', { noteId: 'd1', blockId: 'c1', capture: page });
+          const outcome = committedOf(await worker.execute(first));
+          committedOf(await worker.execute(cmd('captureToDailyNote', { noteId: 'd2', blockId: 'c2', capture: page })));
+          const daily = [await noteOf('d1'), await blocksOf('d1')];
+          const again = await worker.execute(first);
+          if (flags.idempotency) assert.deepEqual(again, outcome);
+          else assertRejected(again, 'validation', 'duplicate-block');
+          assert.deepEqual([await noteOf('d1'), await blocksOf('d1')], daily);
+        },
+      );
     });
 
     describe('ensureDailyNote', () => {
