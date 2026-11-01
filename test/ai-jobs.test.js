@@ -528,6 +528,16 @@ describe('T4: insights write the insight fields only', () => {
       const real = page[method].bind(page);
       page[method] = (...args) => { updates.push(method); return real(...args); };
     }
+    // And through the search index handle NotesManager holds, which writes past the global (R131)
+    const handle = env.stores.searchIndex;
+    const writing = new Set(['setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'saveVector']);
+    env.stores = {
+      ...env.stores,
+      searchIndex: Object.fromEntries(Object.entries(handle).map(([method, call]) => [method, (...args) => {
+        if (writing.has(method)) updates.push(`searchIndex.${method}`);
+        return call(...args);
+      }])),
+    };
   });
 
   /** The note as stored, and what the run asked for */
