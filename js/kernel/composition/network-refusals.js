@@ -14,7 +14,7 @@
 export const REFUSAL_MESSAGE = 'NETWORK_REFUSED';
 
 /** The pages that send one, by the file the sender's URL names */
-const PAGE = /^chrome-extension:\/\/[^/]+\/(newtab|popup|sidepanel|offscreen)\.html$/;
+const PAGE = /^chrome-extension:\/\/[^/]+\/(newtab|popup|sidepanel|offscreen|recovery)\.html$/;
 
 /** The error codes a report carries (network-guard.js's RefusalCode) */
 const CODES = Object.freeze(['destination-refused', 'headers-refused', 'redirect-refused', 'registry-unreadable']);
