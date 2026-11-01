@@ -118,11 +118,12 @@ export async function pruneChanges(db, keyRange, through) {
 
 /**
  * The change log's cursor read over a connection's database (ports/commit-log.js). A
- * database without `changes` has an empty log.
- * @param {{database: () => IDBDatabase, keyRange: typeof IDBKeyRange}} options
+ * database without `changes` has an empty log. `failure` says what a failed read answers: the
+ * adapter's says reload-required on a connection that's gone or going (adapter.js).
+ * @param {{database: () => IDBDatabase, keyRange: typeof IDBKeyRange, failure?: (error: unknown) => UnavailableError}} options
  * @returns {CommitLog}
  */
-export function createIndexedDbCommitLog({ database, keyRange }) {
+export function createIndexedDbCommitLog({ database, keyRange, failure = failureOf }) {
   /**
    * The log's head record, and the rows of the commits after `cursor` up to `last`, in one
    * readonly transaction, so the rows and the head agree
@@ -144,7 +145,7 @@ export function createIndexedDbCommitLog({ database, keyRange }) {
       const rows = /** @type {ChangeRow[]} */ (await result(tx.objectStore(CHANGES_STORE).getAll(bound)));
       return { head, rows };
     } catch (error) {
-      throw failureOf(error);
+      throw failure(error);
     }
   };
 
