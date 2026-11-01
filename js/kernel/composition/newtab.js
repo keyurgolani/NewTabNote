@@ -14,6 +14,7 @@ import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy
 import { exportRawStores } from '../adapters/indexeddb/raw-export.js';
 import { NEWTAB_HANDLERS } from '../core/application/handlers-all.js';
 import { createNoteList } from '../core/application/note-list.js';
+import { unavailable } from '../core/contracts/outcomes.js';
 import {
   DRAFTS_LOCK,
   DRAFT_PREFIX,
@@ -385,8 +386,9 @@ const clearLogger = Object.freeze({
  * bring a note deleted for good back, since the next start's apply drops a draft whose note is
  * gone (rule 1); and an apply removes a draft's key only once its command has committed, so while
  * one is under way its key is there, and a delete of its note that looks then takes the lock and
- * waits for it. An applier that can't load clears nothing, and the delete runs: the next start's
- * apply drops what its notes left, as rule 1 does.
+ * waits for it. An applier that can't load can't clear, so the delete doesn't run: it answers
+ * `reload-required`, as a page whose storage went does, and the UI tells it so. Run anyway, it
+ * would leave an untold entry naming its note, which no later start drops (the review's D1).
  * @param {Client} client
  * @param {{storage: DraftStorage | undefined, locks: DraftLocks | null, load: () => Promise<Applier>, logger?: {warn: (event: string, detail: Record<string, unknown>) => void}}} drafts
  * @returns {Client}
@@ -394,18 +396,19 @@ const clearLogger = Object.freeze({
 export function withCloseDraftClears(client, { storage, locks, load, logger = clearLogger }) {
   /** @param {import('../core/contracts/commands.js').Command} command */
   const run = async command => {
-    /** @type {DraftStore | null} */
-    let store = null;
+    /** @type {DraftStore} */
+    let store;
     try {
       store = (await load()).closeDraftStore(storage);
     } catch (error) {
       logger.warn('close-drafts-not-cleared', { error });
+      return unavailable('storage', 'reload-required', false);
     }
     const outcome = /** @type {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} */ (
       await client.execute(command)
     );
     const ids = notesDeletedBy(outcome);
-    if (store && ids.length > 0) store.clearNotes(ids);
+    if (ids.length > 0) store.clearNotes(ids);
     return outcome;
   };
   return Object.freeze({
