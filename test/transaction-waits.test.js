@@ -134,6 +134,33 @@ describe("waits on a transaction's end", () => {
     assert.deepEqual(waitsIn('for (const key of keys) settings[key] = values[key];'), []);
   });
 
+  it("reads txn, and a name ending in Txn, as a transaction too, and lets one held as t by (R131's delta read)", () => {
+    const waits = waitsIn(`
+      export const abbreviated = (txn, key, done) => {
+        txn[key] = done;
+      };
+      export const suffixed = (writeTxn, key, done) => {
+        writeTxn[key] = done;
+      };
+      export const held = (store, key, done) => {
+        store.txn[key] = done;
+      };
+      export const viaRequest = (request, key, done) => {
+        request.transaction[key] = done;
+      };
+      export const short = (db, key, done) => {
+        const t = db.transaction('canvases', 'readwrite');
+        t[key] = done;
+      };
+    `);
+    assert.deepEqual(waits, [
+      'name key on txn',
+      'name key on writeTxn',
+      'name key on store.txn',
+      'name key on request.transaction',
+    ]);
+  });
+
   it(`holds the vendored libraries in ${VENDORED} to every rule but the literal name, which their minified code can't keep`, () => {
     const source = 'e.addEventListener(t, f); tx[k] = f; e.addEventListener.bind(e); tx.oncomplete = f; tx.addEventListener("abort", f);';
     assert.deepEqual(waitsIn(source, `${VENDORED}chart.js`), ['complete on tx', 'abort on tx']);

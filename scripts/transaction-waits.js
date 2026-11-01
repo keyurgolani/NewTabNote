@@ -22,7 +22,7 @@
  *
  * It guards against a wait written by accident, not one written to get past it: Reflect.apply,
  * addEventListener taken off a transaction and called later, or a handler name built at run
- * time on something that doesn't read as a transaction all get by.
+ * time on something that doesn't read as a transaction, such as one held as `t`, all get by.
  *
  *   node scripts/transaction-waits.js [root]   fail when js/ under root, the repository's by default, has one
  *
@@ -76,12 +76,12 @@ function isSignal(node) {
 }
 
 /**
- * Whether `node` reads as a transaction: `tx` or `transaction`, a name ending in `Tx` or
- * `Transaction`, either as a property, or a `transaction(…)` call
+ * Whether `node` reads as a transaction: `tx`, `txn` or `transaction`, a name ending in `Tx`,
+ * `Txn` or `Transaction`, either as a property, or a `transaction(…)` call
  */
 function isTransactionLike(node) {
   const n = strip(node);
-  const named = text => /^(?:tx|transaction)$|(?:Tx|Transaction)$/.test(text);
+  const named = text => /^(?:tx|txn|transaction)$|(?:Tx|Txn|Transaction)$/.test(text);
   if (ts.isIdentifier(n)) return named(n.text);
   if (ts.isPropertyAccessExpression(n)) return named(n.name.text);
   return ts.isCallExpression(n) && memberName(n.expression) === 'transaction';
