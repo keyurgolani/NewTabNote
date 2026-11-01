@@ -82,7 +82,7 @@
         "Cannot find name 'Logger'.": 1,
         "Cannot find name 'ResizablePanel'.": 1,
         "Cannot find name 'confirmDialog'.": 1,
-        "Cannot find name 'sanitizeHtml'.": 4
+        "Cannot find name 'sanitizeHtml'.": 1
       },
       "TS2339": {
         "Property 'AIChatController' does not exist on type 'Window & typeof globalThis'.": 1,
