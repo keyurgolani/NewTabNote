@@ -2807,6 +2807,18 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
   // ─── Smart suggestions ───
 
+  /**
+   * Related Notes' keyword pattern, at most 32 characters: the open note's name, or the start of
+   * its text when the note has no name of its own (empty, or the default)
+   * @param {{name?: string}|null|undefined} note
+   * @param {string} text
+   * @returns {string}
+   */
+  relatedNotesKeywords(note, text) {
+    const name = String((note && note.name) || '').trim();
+    return (name && name !== 'Untitled' ? name : text.trim()).slice(0, 32);
+  }
+
   async updateSmartSuggestions(force = false) {
     if (this.aiActiveTab !== 'smart' && !force) return;
 
@@ -2824,7 +2836,12 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (force) loading?.classList.remove('hidden');
 
     try {
-      const searchResults = this.searchEngine ? await this.searchEngine.search(text) : [];
+      // Fuse splits a pattern over 32 characters into 32-character pieces and runs each one over
+      // every entry, so the keyword half gets at most 32 (relatedNotesKeywords); the semantic
+      // half compares the whole text
+      const searchResults = this.searchEngine
+        ? await this.searchEngine.search(text, { keywords: this.relatedNotesKeywords(editor.noteData, text) })
+        : [];
       const relatedResults = searchResults
         .filter(r => r.id !== editor.noteId)
         .slice(0, 5)
