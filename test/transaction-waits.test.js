@@ -96,13 +96,54 @@ describe("waits on a transaction's end", () => {
       'abort on tx',
     ]);
     const [unread] = scanSource('js/x.js', 'tx.addEventListener(type, done);');
-    assert.match(problemOf(unread), /^js\/x\.js:1 listens on tx for type, a name the scan can't read: name the event with a literal, and wait on a transaction's end with endOf\(tx\)/);
+    assert.match(problemOf(unread), /^js\/x\.js:1 names an event or a handler on tx through type, which the scan can't read: name it with a literal, and wait on a transaction's end with endOf\(tx\)/);
+  });
+
+  it("finds the natural ways left: a handler set on a transaction through a key it can't read, and a bound addEventListener, and says which it lets by (R131's second read)", () => {
+    // R131's second set, the contrived three among them
+    const waits = waitsIn(`
+      export const bound = (tx, done) => {
+        const listen = tx.addEventListener.bind(tx);
+        listen('complete', done);
+      };
+      export const reflected = (tx, done) => Reflect.apply(tx.addEventListener, tx, ['complete', done]);
+      export const keyed = (tx, done) => {
+        const key = 'oncomplete';
+        tx[key] = done;
+      };
+      export const looped = (tx, done) => {
+        for (const handler of ['oncomplete', 'onabort']) tx[handler] = done;
+      };
+      export const opened = (db, handler, done) => {
+        db.transaction('x', 'readwrite')[handler] = done;
+      };
+      export const destructured = (tx, done) => {
+        const { addEventListener } = tx;
+        addEventListener.call(tx, 'complete', done);
+      };
+      export const control = (tx, done) => tx.addEventListener('abort', done);
+    `);
+    assert.deepEqual(waits, [
+      'name tx.addEventListener.bind(tx) on tx',
+      'name key on tx',
+      'name handler on tx',
+      "name handler on db.transaction('x', 'readwrite')",
+      'abort on tx',
+    ]);
+    // A computed key on anything else is any object's own business
+    assert.deepEqual(waitsIn('for (const key of keys) settings[key] = values[key];'), []);
   });
 
   it(`holds the vendored libraries in ${VENDORED} to every rule but the literal name, which their minified code can't keep`, () => {
-    const source = 'e.addEventListener(t, f); tx.oncomplete = f; tx.addEventListener("abort", f);';
+    const source = 'e.addEventListener(t, f); tx[k] = f; e.addEventListener.bind(e); tx.oncomplete = f; tx.addEventListener("abort", f);';
     assert.deepEqual(waitsIn(source, `${VENDORED}chart.js`), ['complete on tx', 'abort on tx']);
-    assert.deepEqual(waitsIn(source), ['name t on e', 'complete on tx', 'abort on tx']);
+    assert.deepEqual(waitsIn(source), [
+      'name t on e',
+      'name k on tx',
+      'name e.addEventListener.bind(e) on e',
+      'complete on tx',
+      'abort on tx',
+    ]);
   });
 
   it("leaves an AbortSignal's abort, a FileReader's, and every other event alone", () => {
