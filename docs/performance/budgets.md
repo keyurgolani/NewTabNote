@@ -4,20 +4,23 @@
 
 ## The rows
 
-| Entry | Row | Limit | On `next` at `10fdade` (headroom) |
+| Entry | Row | Limit | On `next` at `7489d7b3` (headroom) |
 | --- | --- | --- | --- |
-| New tab | start JS, raw / gzip | 700 / 200 KiB | 548.5 / 142.1 KiB (151.5 / 57.9) |
-| New tab | start CSS, raw / gzip | 105 / 19 KiB | 99.9 / 16.0 KiB (5.1 / 3.0) |
+| New tab | start JS, raw / gzip | 700 / 200 KiB | 629.3 / 171.4 KiB (70.7 / 28.6) |
+| New tab | start CSS, raw / gzip | 105 / 19 KiB | 102.0 / 16.4 KiB (3.0 / 2.6) |
 | New tab | start HTML, raw / gzip | 72 / 12 KiB | 65.9 / 10.3 KiB (6.1 / 1.7) |
-| Popup | start JS, raw / gzip | 115 / 40 KiB | 95.5 / 25.9 KiB (19.5 / 14.1) |
-| Side Panel | start JS, raw / gzip | 112 / 40 KiB | 94.0 / 25.7 KiB (18.0 / 14.3) |
+| Popup | start JS, raw / gzip | 115 / 40 KiB | 108.4 / 30.8 KiB (6.6 / 9.2) |
+| Side Panel | start JS, raw / gzip | 112 / 40 KiB | 106.9 / 30.6 KiB (5.1 / 9.4) |
+| Offscreen | start JS, raw / gzip | 29 / 9 KiB | 27.5 / 8.6 KiB (1.5 / 0.4) |
+| Offscreen | start HTML, raw / gzip | 1 / 1 KiB | 230 / 174 bytes (794 / 850 bytes) |
 | New tab | interaction-ready against 1.4.0 | median ratio at most +7% | gates the `perf` job since 2026-10-31 |
-| New tab | heap at interaction-ready | 4.45 MiB, +3% (fails above 4.58) | reported, not gated |
+| New tab | heap at interaction-ready | 2.81 MiB, +3% (fails above 2.89) | 2.68 / 2.56 MiB on `typical` / `maximal`; gates the `perf` job since 2026-11-01 |
 
 - **Start** is everything a page loads before it can run: the HTML, its module scripts with what they import, its module preloads, its stylesheets with the CSS its chunks inject, its classic scripts, and the fonts those stylesheets name. A loader chunk the page boots at its start counts as start too, with what it imports: a row's `startChunks` names it. Today that's the new tab's `workspace` chunk, which is still the whole tab until #2 builds Moment. Its root, boot guard and loader are 7.1 KiB; the workspace chunk and the host chunk it imports are the other 541.4. Counting the root alone, the 700 KiB row would check nothing. So every chunk the page's own start loads with `import()` has to be named in its row: in `startChunks` when it loads at boot, or in `lazyChunks` when it loads later. A chunk named in neither fails the build with `budget/entry`, and so does a name the build has no loader chunk for, or one nothing on the page's start loads. Emptying `startChunks`, or dropping a renamed chunk's name from it, fails rather than shrinking the row to the root. Taking the workspace out of start takes a reviewed row change that names it in `lazyChunks`, and `test/budgets.test.js` pins today's `startChunks: ["workspace"]`.
 - `npm run perf:probe`'s byte mode files every chunk behind an `import()` as lazy, the workspace too, so its start number for the new tab is the root's. The build's number, and `dist-report/chunk-graph.json`, are the start the row holds.
 - Bytes are raw and gzip at level 9, the way `npm run perf:probe` measures them.
-- Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, the offscreen document, and the service worker. The service worker's start is the whole of its one self-contained module, and its cold-start time is #35's.
+- Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, and the service worker. Offscreen loads no stylesheet, so its CSS row is `null` too.
+- Offscreen's rows are today's size plus about 5%, set on 2026-11-01 from `7489d7b3`: start JS 28,150 / 8,818 bytes (the page's module and `js/network-guard.js`), and HTML 230 / 174. Its HTML row is 1 KiB, the smallest round row, since 5% of 230 bytes is 12. The workspace coordinator decided them for the owner, who can reverse it. The service worker's start is the whole of its one self-contained module, and its cold-start time is #35's.
 - The new tab's CSS row was first 100 KiB raw, sized from CSS CleanCSS minified, before #99 moved the build to lightningcss, which doesn't merge rules that aren't next to each other: the same sources minify about 5 KiB larger raw, while gzip went down. On 2026-10-31 the raw row went to 105 KiB, today's size plus about 5%, the rule the owner set for these rows: 102,274 bytes on `next` (126 under the old row), 103,744 with #27 slice 3b's failure and status states, and about 103,860 with #20 slice 4b's Settings section. The gzip row stays 19 KiB (16,672 bytes with 3b). The workspace coordinator decided it for the owner, who can reverse it. CSS beyond the row still needs the owner's call first.
 
 ## The forbidden list
@@ -76,12 +79,12 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 - It builds the candidate.
 - It builds 1.4.0 from the `v1.4.0` tag with v1.4.0's own lockfile and build (`npm run perf:reference`) and checks it against the digest pinned in `build/budgets.json`. A mismatch fails the job: a run against any other package would compare against the wrong one.
 - It runs `npm run perf:probe` with 1.4.0, 1.4.0 again and the candidate: 12 rounds each on `typical` and `maximal`, with `--baseline build/budgets.json`.
-- `scripts/perf/gate-report.js` writes the job summary, even when the probe exits 1 for an invalid run. For each profile it shows whether the run is valid, the candidate's median ratio to both 1.4.0 runs against the 7% row, its heap against 4.45 MiB plus 3%, and the absolute milliseconds beside them. A profile is invalid when 1.4.0 against itself is more than 7% off, when any round of any package failed, when the probe reported a problem (a fixture that isn't the recorded one, for one), or when it ran fewer than 12 rounds. A package that measured nothing, say because every candidate round failed, makes it invalid too, rather than stopping the summary. Then its timing and heap both say `invalid`, with the reasons listed.
+- `scripts/perf/gate-report.js` writes the job summary, even when the probe exits 1 for an invalid run. For each profile it shows whether the run is valid, the candidate's median ratio to both 1.4.0 runs against the 7% row, its heap against 2.81 MiB plus 3%, and the absolute milliseconds beside them. A profile is invalid when 1.4.0 against itself is more than 7% off, when any round of any package failed, when the probe reported a problem (a fixture that isn't the recorded one, for one), or when it ran fewer than 12 rounds. A package that measured nothing, say because every candidate round failed, makes it invalid too, rather than stopping the summary. Then its timing and heap both say `invalid`, with the reasons listed.
 
-Timing says `mode: gate`, and heap says `mode: report`. A timing fail, or a run the summary calls invalid, fails the `perf` job. Heap is written to the summary and fails nothing.
+Both rows say `mode: gate`. A timing fail, a heap fail, or a run the summary calls invalid fails the `perf` job.
 
 - **Timing became a gate** on 2026-10-31, under the rule it reported by until then: gate after 10 CI runs if 1.4.0 against itself stayed within 7% on at least 9 and the invalid-run check would have passed. The workflow had run on 14 pushes to `next`, `f7a17e5e` to `7489d7b3`, and all 14 were valid. The worst 1.4.0-against-itself median was +2.6% on `typical` and -2.2% on `maximal`, and the candidate was 43 to 53% faster than 1.4.0 on every run.
-- **Heap stays a report** until the owner decides its row with CI's numbers. 4.45 MiB was measured on the Mac.
+- **Heap became a gate** on 2026-11-01, at today's heap plus about 5%, the rule the owner set for the byte rows. The workspace coordinator decided it for the owner, who can reverse it. CI's 1.4.0 heap is 3.94 to 3.98 MiB over 14 runs on `next`, and the Mac's is 3.94 to 4.01, so a MiB number means the same on both. The candidate measured 2.68 MiB on `typical` and 2.56 on `maximal` on `7489d7b3` (perf run 41280346766), so the row is 2.81 MiB (2.68 × 1.05), failing above 2.89 with its 3%. One number gates both profiles, so `maximal` has more room. The row it replaces, 4.45 MiB, was `next`'s heap on the Mac before slice 3 made the libraries lazy, 66% above today, and wouldn't have caught #106's 0.31 MiB.
 
 A flip changes the row's `mode` to `gate` in its own reviewed PR. From then on `gate-report.js` exits 1 on a fail or an invalid run, which fails the `perf` job. That alone blocks nothing: `perf` isn't a required check. `pr-gate` needs only `unit`, `typecheck`, `kernel`, `build` and `extension`, and the rulesets require only `pr-gate` (`test/budgets.test.js` holds both). Timing blocks a merge only once `pr-gate` needs it (a `perf` job in `.github/workflows/pr-checks.yml`, in `pr-gate`'s needs), or once a ruleset requires the `perf` check. Either is the owner's call, in the same PR as the flip.
 

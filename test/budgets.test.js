@@ -323,9 +323,12 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(entries.popup.start.js, { raw: 115 * KIB, gzip: 40 * KIB });
     assert.deepEqual(entries.sidepanel.start.js, { raw: 112 * KIB, gzip: 40 * KIB });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
-    assert.deepEqual([BUDGETS.heap.limitMiB, BUDGETS.heap.tolerancePct], [4.45, 3]);
-    // Timing gates the perf job since 14 valid CI runs; heap reports until the owner answers on its row
-    assert.deepEqual([BUDGETS.timing.mode, BUDGETS.heap.mode], ['gate', 'report']);
+    // Heap is today's 2.68 MiB plus about 5% (2026-11-01), failing above 2.89 with its 3%
+    assert.deepEqual([BUDGETS.heap.limitMiB, BUDGETS.heap.tolerancePct], [2.81, 3]);
+    // Timing gates the perf job since 14 valid CI runs, and heap since its row was set from CI's
+    assert.deepEqual([BUDGETS.timing.mode, BUDGETS.heap.mode], ['gate', 'gate']);
+    // Offscreen: 28,150 / 8,818 and 230 / 174 bytes on 7489d7b3, plus about 5%, HTML at the smallest round row
+    assert.deepEqual(entries.offscreen.start, { js: { raw: 29 * KIB, gzip: 9 * KIB }, css: null, html: { raw: 1 * KIB, gzip: 1 * KIB }, fonts: null });
     assert.equal(BUDGETS.reference.packageDigest, '50d8ddc57945dc129ddabda2304f45b9354db79eff608017da49d5b845ab554d');
   });
 
@@ -369,15 +372,15 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
 
   it('says valid, pass or fail for timing and heap, and fails nothing while the rows report', () => {
     // Against the first copy alone the candidate is +25%: the summary reads both
-    const passing = gateReport(probe(1.01, 1.05, 4.4, { first: 1.25 }), REPORTING);
+    const passing = gateReport(probe(1.01, 1.05, 2.7, { first: 1.25 }), REPORTING);
     assert.deepEqual(passing.verdicts, [{ profile: 'typical', valid: true, timing: 'pass', heap: 'pass', problems: [] }]);
     assert.equal(passing.failed, false);
-    assert.match(passing.markdown, /\| typical \| 12 \| \+1\.0% .* \| yes \| \+5\.0% .* \| pass \| 4\.40 MiB \| pass \|/);
+    assert.match(passing.markdown, /\| typical \| 12 \| \+1\.0% .* \| yes \| \+5\.0% .* \| pass \| 2\.70 MiB \| pass \|/);
     // Against the first copy alone it's +1%: the summary reads both
-    const failing = gateReport(probe(1.01, 1.09, 4.7, { first: 1.01 }), REPORTING);
+    const failing = gateReport(probe(1.01, 1.09, 3.0, { first: 1.01 }), REPORTING);
     assert.deepEqual(failing.verdicts, [{ profile: 'typical', valid: true, timing: 'fail', heap: 'fail', problems: [] }]);
     assert.equal(failing.failed, false, 'report-only rows fail nothing');
-    assert.deepEqual(gateReport(probe(1.09, 1.0, 4.4), REPORTING).verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'pass', problems: [] });
+    assert.deepEqual(gateReport(probe(1.09, 1.0, 2.7), REPORTING).verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'pass', problems: [] });
   });
 
   it('calls a profile invalid when a round failed, the probe reported a problem, or rounds fall short', () => {
@@ -388,42 +391,47 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
       [{ rounds: 9 }, '9 rounds, fewer than the 12 build/budgets.json takes'],
     ];
     for (const [options, reason] of cases) {
-      const reported = gateReport(probe(1.01, 1.05, 4.4, options), REPORTING);
+      const reported = gateReport(probe(1.01, 1.05, 2.7, options), REPORTING);
       assert.deepEqual(reported.verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'invalid', problems: [reason] }, reason);
       assert.equal(reported.failed, false, 'report mode fails nothing');
       assert.ok(reported.markdown.includes(`- typical: ${reason}`), reason);
-      assert.equal(gateReport(probe(1.01, 1.05, 4.4, options), gated).failed, true, reason);
+      assert.equal(gateReport(probe(1.01, 1.05, 2.7, options), gated).failed, true, reason);
     }
   });
 
-  it("fails the job on build/budgets.json's own rows: timing over its 7% fails, and heap over its row only reports", () => {
+  it("fails the job on build/budgets.json's own rows: timing over its 7%, and heap over 2.81 MiB plus 3%", () => {
     // Timing is a gate as shipped: a candidate 9% slower than both 1.4.0 runs fails the job
-    const slow = gateReport(probe(1.01, 1.09, 4.4), BUDGETS);
+    const slow = gateReport(probe(1.01, 1.09, 2.7), BUDGETS);
     assert.equal(slow.verdicts[0].timing, 'fail');
     assert.equal(slow.failed, true);
     // An invalid run fails it too: a gate can't pass on a run it can't read
-    assert.equal(gateReport(probe(1.09, 1.0, 4.4), BUDGETS).failed, true);
-    // Heap reports: over its row, it's written as a fail and fails nothing
-    const heavy = gateReport(probe(1.01, 1.05, 4.7), BUDGETS);
-    assert.deepEqual([heavy.verdicts[0].timing, heavy.verdicts[0].heap, heavy.failed], ['pass', 'fail', false]);
+    assert.equal(gateReport(probe(1.09, 1.0, 2.7), BUDGETS).failed, true);
+    // Heap is a gate too: over 2.89 MiB, it fails the job with timing passing
+    const heavy = gateReport(probe(1.01, 1.05, 3.0), BUDGETS);
+    assert.deepEqual([heavy.verdicts[0].timing, heavy.verdicts[0].heap, heavy.failed], ['pass', 'fail', true]);
+    // At the edge: 2.89 MiB passes, 2.91 fails
+    assert.equal(gateReport(probe(1.01, 1.05, 2.89), BUDGETS).failed, false);
+    assert.equal(gateReport(probe(1.01, 1.05, 2.91), BUDGETS).failed, true);
+    // Today's 2.68 and #90's stack head's 2.73 pass
+    for (const heapMiB of [2.68, 2.73]) assert.equal(gateReport(probe(1.01, 1.05, heapMiB), BUDGETS).verdicts[0].heap, 'pass', heapMiB);
     // Within both rows, nothing fails
-    assert.equal(gateReport(probe(1.01, 1.05, 4.4), BUDGETS).failed, false);
-    // The same slow candidate with timing back on report passes the job
-    assert.equal(gateReport(probe(1.01, 1.09, 4.4), REPORTING).failed, false);
+    assert.equal(gateReport(probe(1.01, 1.05, 2.7), BUDGETS).failed, false);
+    // The same slow, heavy candidate with both rows back on report passes the job
+    assert.equal(gateReport(probe(1.01, 1.09, 3.0), REPORTING).failed, false);
   });
 
   it('fails once a row is a gate', () => {
     const gated = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'gate' } };
-    assert.equal(gateReport(probe(1.01, 1.09, 4.4), gated).failed, true);
-    assert.equal(gateReport(probe(1.09, 1.0, 4.4), gated).failed, true, 'an invalid run fails a gate');
-    assert.equal(gateReport(probe(1.01, 1.05, 4.4), gated).failed, false);
+    assert.equal(gateReport(probe(1.01, 1.09, 2.7), gated).failed, true);
+    assert.equal(gateReport(probe(1.09, 1.0, 2.7), gated).failed, true, 'an invalid run fails a gate');
+    assert.equal(gateReport(probe(1.01, 1.05, 2.7), gated).failed, false);
   });
 
   it('writes a profile with a package that measured nothing as invalid, instead of throwing', () => {
     const gated = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'gate' }, heap: { ...BUDGETS.heap, mode: 'gate' } };
     // Every candidate round failed: the probe writes null for what it couldn't summarize
     const failures = Array.from({ length: 12 }, (_, index) => ({ round: index + 1, message: 'the page never marked ready' }));
-    const empty = probe(1.01, 1.05, 4.4, { failures });
+    const empty = probe(1.01, 1.05, 2.7, { failures });
     const typical = empty.timing.profiles.typical;
     typical.packages.candidate = { ...typical.packages.candidate, interactionReadyMs: null, heapBytes: null };
     typical.ratios.candidate = { rounds: 0, interactionReady: null, heap: null, againstBoth: { rounds: 0, interactionReady: null, heap: null } };
@@ -436,7 +444,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.match(reported.markdown, /\| typical \| 0 \| .* \| \*\*no\*\* \| n\/a \| invalid \| n\/a \| invalid \|/);
     assert.equal(gateReport(empty, gated).failed, true, 'gate mode still fails');
     // 1.4.0 measured nothing either, and a run with no pair at all
-    const none = probe(1.01, 1.05, 4.4);
+    const none = probe(1.01, 1.05, 2.7);
     none.timing.profiles.typical.ratios = {};
     const unpaired = gateReport(none, REPORTING);
     assert.equal(unpaired.failed, false);

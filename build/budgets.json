@@ -22,11 +22,11 @@
   },
   "heap": {
     "entry": "newtab",
-    "limitMiB": 4.45,
+    "limitMiB": 2.81,
     "tolerancePct": 3,
     "profiles": ["typical", "maximal"],
-    "mode": "report",
-    "modeAbout": "report: 4.45 MiB was measured on the Mac. CI's runs measure it on every PR and every push to next and write it to the summary, failing nothing. It stays report until the owner decides the row with CI's numbers."
+    "mode": "gate",
+    "modeAbout": "gate since 2026-11-01, at today's heap plus about 5%, the rule the owner approved for the byte rows; the coordinator decided it for the owner, who can reverse it. CI's 1.4.0 heap (3.94 to 3.98 MiB over 14 runs on next) matches the Mac's (3.94 to 4.01) within about 1%, so a MiB number means the same on both. The candidate measured 2.68 MiB on typical and 2.56 on maximal on 7489d7b3 (perf run 41280346766): 2.68 x 1.05 is 2.81, failing above 2.89 with the 3%. One number gates both profiles, so maximal has more room. The 4.45 MiB row it replaces was next's heap on the Mac before slice 3, 66% above today. A heap fail, or an invalid run, fails CI's perf job, which isn't in pr-gate's needs or any ruleset, so it blocks no merge."
   },
   "forbidden": {
     "chart-library": { "about": "Chart.js", "paths": ["js/lib/chart.js"] },
@@ -88,8 +88,8 @@
     },
     "offscreen": {
       "page": "offscreen.html",
-      "reason": "The offscreen document, which runs AI requests for the service worker. It has no approved numbers yet: each row stays null until the owner sets one.",
-      "start": { "js": null, "css": null, "html": null, "fonts": null },
+      "reason": "The offscreen document, which runs AI requests for the service worker. Its rows are today's size plus about 5%, decided for the owner on 2026-11-01: on 7489d7b3 its start JS was 28,150 / 8,818 bytes (the page's module and js/network-guard.js) and its HTML 230 / 174. The HTML row is 1 KiB, the smallest round row, since 5% of 230 bytes is 12. It loads no stylesheet, and no fonts.",
+      "start": { "js": { "raw": 29696, "gzip": 9216 }, "css": null, "html": { "raw": 1024, "gzip": 1024 }, "fonts": null },
       "forbidden": [],
       "dependencies": []
     },

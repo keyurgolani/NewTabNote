@@ -2,9 +2,10 @@ name: perf
 
 # #27 slice 4b: timing and heap against the frozen 1.4.0 package. This workflow is not pr-gate
 # and no ruleset requires it, so it never blocks a merge. It runs on every PR push and every push
-# to next. build/budgets.json's timing row says `gate` since 14 valid runs, so a timing fail or an
-# invalid run fails this job; its heap row says `report`. The job keeps its "perf (report)" name
-# so its run history reads as one series (docs/performance/budgets.md).
+# to next. build/budgets.json's timing row says `gate` since 14 valid runs, and its heap row since
+# its number was set from CI's runs, so a timing fail, a heap fail, or an invalid run fails this
+# job. The job keeps its "perf (report)" name so its run history reads as one series
+# (docs/performance/budgets.md).
 on:
   pull_request:
     branches: [next]
