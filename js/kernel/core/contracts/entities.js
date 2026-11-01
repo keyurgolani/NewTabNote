@@ -12,6 +12,7 @@
 
 import * as v from '../../../lib/valibot/index.mjs';
 import { ENTITY_TYPES, commitSeq, content, count, entityId, id, revision, timestamp } from './fields.js';
+import { FOLDER_OP_FIELDS, NOTE_OP_FIELDS } from './op-fields.js';
 
 /** `YYYY-MM-DD` */
 const dateStr = v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/));
@@ -152,29 +153,10 @@ export const themeRecord = v.looseObject({
   updatedAt: v.optional(timestamp),
 });
 
-/** The fields of a record no change op names: its id, and when it was last saved */
-const UNNAMED_FIELDS = new Set(['id', 'updatedAt']);
-
-/**
- * @param {Record<string, unknown>} entries - a record schema's
- * @returns {readonly string[]}
- */
-const opFieldsOf = entries =>
-  Object.freeze(
-    Object.keys(entries)
-      .filter(field => !UNNAMED_FIELDS.has(field))
-      .sort(),
-  );
-
-/**
- * The fields of a note a change op may name (#17 PR 4c): each one noteRecord names but its id
- * and `updatedAt`. A note's versions aren't schema fields, so no op names them, and a field
- * only an imported file named can't land in the log.
- */
-export const NOTE_OP_FIELDS = opFieldsOf(noteRecord.entries);
-
-/** The fields of a folder a change op may name, as NOTE_OP_FIELDS are a note's */
-export const FOLDER_OP_FIELDS = opFieldsOf(folderRecord.entries);
+// The fields of a note and of a folder a change op may name (#17 PR 4c): each one noteRecord or
+// folderRecord names but its id and `updatedAt`, as op-fields.js lists them for the differ,
+// which takes no schema code (test/kernel/schemas.test.mjs holds the lists to the schemas)
+export { FOLDER_OP_FIELDS, NOTE_OP_FIELDS };
 
 /**
  * @param {readonly string[]} fields

@@ -15,9 +15,12 @@
  * - A folder made, changed, or deleted: createFolder, updateFolder naming the fields
  *   FOLDER_OP_FIELDS lists that changed, or deleteFolder.
  * A note whose revision moved with no field or block changed takes none.
+ *
+ * It takes the field lists from op-fields.js, which holds no schema code, as #17's adapter runs
+ * it on every page, Popup's and Side Panel's included.
  */
 
-import { FOLDER_OP_FIELDS, NOTE_OP_FIELDS } from '../contracts/entities.js';
+import { FOLDER_OP_FIELDS, NOTE_OP_FIELDS } from '../contracts/op-fields.js';
 
 /** @typedef {import('../contracts/entities.js').ChangeOp} ChangeOp */
 /** @typedef {Record<string, unknown>} Row */
