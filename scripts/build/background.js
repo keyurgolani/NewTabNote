@@ -8,11 +8,11 @@
  * so does `import()`, `importScripts()`, or top-level await in a first-party module of its graph,
  * which the bundler would otherwise fold in.
  *
- * The worker has no `document` or `window` either, and its graph shares js/utils.js and
- * js/storage.js with the pages, so a first-party module in it reads them only behind a typeof
- * check (`background/dom`), in the forms scripts/build/js-scope.js knows. A name declared in a
- * scope around the read, such as a parameter or a local of an enclosing block, isn't the global,
- * and `typeof document` reads nothing.
+ * The worker has no `document` or `window` either, and its graph shares modules with the pages,
+ * such as js/kernel/composition/host.js, so a first-party module in it reads them only behind a
+ * typeof check (`background/dom`), in the forms scripts/build/js-scope.js knows. A name
+ * declared in a scope around the read, such as a parameter or a local of an enclosing block,
+ * isn't the global, and `typeof document` reads nothing.
  */
 
 const ts = require('typescript');
