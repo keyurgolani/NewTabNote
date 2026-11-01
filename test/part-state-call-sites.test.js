@@ -154,7 +154,7 @@ describe("search's place in the sidebar (#27 slice 3b)", () => {
     assert.equal(page.search.element.className, 'part-state is-narrow');
     assert.deepEqual(buttonsOf(page.search), ['Try again']);
     // Its live region is in the sidebar, outside the list each keystroke draws again
-    assert.equal(page.search.liveRegion.parentNode, page.elements.sidebar);
+    assert.ok(page.search.liveRegion.parentNode === page.elements.sidebar, 'its live region is in the sidebar');
     await page.type('pla');
     await page.type('plan');
     assert.deepEqual(page.shown(), ['search: Failed to load search. Please try again.']);
@@ -171,7 +171,7 @@ describe("search's place in the sidebar (#27 slice 3b)", () => {
     assert.equal(page.search.line.textContent, 'Failed to load search again.');
     assert.equal(page.search.lineNote.textContent, "Reloading the page may fix it, and doesn't delete your notes.");
     assert.deepEqual(buttonsOf(page.search), ['Try again', 'Reload']);
-    assert.equal(page.env.document.activeElement, page.search.tryButton);
+    assert.ok(page.env.document.activeElement === page.search.tryButton, 'focus stays on Try again');
     await page.type('plans');
     assert.equal(page.search.line.textContent, 'Failed to load search. Please try again.');
     assert.deepEqual(buttonsOf(page.search), ['Try again']);
@@ -190,7 +190,7 @@ describe("search's place in the sidebar (#27 slice 3b)", () => {
     await runUntil(page.env, settle());
     await settle();
     assert.deepEqual(page.shown(), ['empty: No matching notes']);
-    assert.equal(page.env.document.activeElement, page.elements['sidebar-search']);
+    assert.ok(page.env.document.activeElement === page.elements['sidebar-search'], 'focus is on the search field');
     assert.equal(page.searchSaid.at(-1), 'No matching notes');
     assert.deepEqual(page.loader.loads, ['fuse', 'fuse']);
   });
@@ -230,7 +230,7 @@ describe("search's place in the sidebar (#27 slice 3b)", () => {
     assert.equal(page.search.line.textContent, "Failed to save your changes, so the page didn't reload.");
     assert.equal(page.search.lineNote.textContent, 'Please try again. If it keeps failing, copy anything you need, then reload.');
     assert.deepEqual(buttonsOf(page.search), ['Try again', 'Reload anyway']);
-    assert.equal(page.env.document.activeElement, page.search.tryButton);
+    assert.ok(page.env.document.activeElement === page.search.tryButton, 'focus is on Try again');
     page.search.anywayButton.click();
     assert.deepEqual(page.loader.reloads, ['guarded', 'now']);
   });
@@ -416,7 +416,7 @@ describe("the model's failure is one state in search and Related Notes (#27 slic
     assert.equal(page.model.state, 'idle');
     assert.equal(page.relatedPart.state, 'idle');
     assert.deepEqual(page.loader.loads, ['fuse', 'transformers', 'transformers'], 'one load for both places');
-    assert.equal(page.env.document.activeElement, page.header, "focus goes to Related Notes' heading");
+    assert.ok(page.env.document.activeElement === page.header, "focus goes to Related Notes' heading");
     assert.equal(page.header.getAttribute('tabindex'), '-1');
   });
 
@@ -430,7 +430,7 @@ describe("the model's failure is one state in search and Related Notes (#27 slic
     await settle();
     assert.equal(page.model.line.textContent, 'Failed to load semantic search again.');
     assert.equal(page.relatedPart.line.textContent, 'Failed to load semantic search again.');
-    assert.equal(page.env.document.activeElement, page.model.tryButton, 'focus stays on the Try again pressed');
+    assert.ok(page.env.document.activeElement === page.model.tryButton, 'focus stays on the Try again pressed');
     assert.deepEqual(page.loader.loads, ['fuse', 'transformers', 'transformers']);
   });
 });
@@ -589,7 +589,7 @@ describe("the AI chat's All Notes (#27 slice 3b, change 13)", () => {
     await page.ask('What did I plan?');
     assert.deepEqual(page.shown(), ['ai-chat-message user: What did I plan?', 'failure: Failed to load search. Please try again.']);
     assert.deepEqual(buttonsOf(page.part), ['Try again']);
-    assert.equal(page.part.liveRegion, null, 'the messages are a live region already');
+    assert.ok(page.part.liveRegion === null, 'the messages are a live region already');
     assert.ok(page.elements['global-chat-loading'].classList.contains('hidden'));
     assert.equal(page.elements['global-chat-send'].disabled, false);
   });
@@ -668,8 +668,8 @@ describe("the Markdown export's row (#27 slice 3b, change 14)", () => {
     page.part.tryButton.focus();
     page.part.tryButton.click();
     await settle();
-    assert.equal(page.part.element.parentNode, null, 'the row goes while it runs');
-    assert.equal(page.env.document.activeElement, page.button);
+    assert.ok(page.part.element.parentNode === null, 'the row goes while it runs');
+    assert.ok(page.env.document.activeElement === page.button, 'focus is on Export All');
     assert.equal(page.button.getAttribute('aria-disabled'), 'true');
     assert.equal(page.label(), 'Export All (ZIP/MD)');
     page.env.clock.tick(400);
@@ -680,11 +680,11 @@ describe("the Markdown export's row (#27 slice 3b, change 14)", () => {
     await settle();
     assert.equal(page.label(), 'Export All (ZIP/MD)');
     assert.equal(page.button.getAttribute('aria-disabled'), null);
-    assert.equal(page.part.element.parentNode, page.section);
+    assert.ok(page.part.element.parentNode === page.section, 'the row is back in its section');
     assert.equal(page.part.line.textContent, 'Failed to export your notes as Markdown again. Export JSON still works.');
     assert.equal(page.part.lineNote.textContent, "Reloading the page may fix it, and doesn't delete your notes.");
     assert.deepEqual(buttonsOf(page.part), ['Try again', 'Reload']);
-    assert.equal(page.env.document.activeElement, page.button, 'focus stays on Export All');
+    assert.ok(page.env.document.activeElement === page.button, 'focus stays on Export All');
     assert.deepEqual(page.toasts, []);
   });
 
@@ -712,7 +712,7 @@ describe("the Markdown export's row (#27 slice 3b, change 14)", () => {
     const page = await exportPage({ plan: { jszip: ['loaded'] }, modules: { jszip: ZipStub } });
     page.env.global.URL = { createObjectURL: () => 'blob:zip', revokeObjectURL: () => {} };
     await runUntil(page.env, page.settings.exportAllAsMarkdown());
-    assert.equal(page.part.element, null);
+    assert.ok(page.part.element === null, 'it leaves no row');
     assert.deepEqual(page.toasts, [['All notes exported as ZIP', 'success']]);
   });
 });

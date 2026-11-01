@@ -263,18 +263,18 @@ describe('one note list per new tab', () => {
     env.global.Chart = class { destroy() {} };
     await analytics.renderAnalytics();
     assert.equal(renders, 0, 'opening Stats renders no sidebar');
-    assert.equal(sidebar.virtualScroller, scroller);
+    assert.ok(sidebar.virtualScroller === scroller, 'the virtual scroller is the same one');
     // Another tab's change reaches the lists through the note list's reload, which renders them
     // and keeps the scroller, as App's refresh did
     await Storage.createNote('From another tab');
     await noteList.reload();
     assert.equal(renders, 1);
-    assert.equal(sidebar.virtualScroller, scroller);
+    assert.ok(sidebar.virtualScroller === scroller, 'the virtual scroller is the same one');
     // A commit renders, and keeps it too
     await env.kernel.execute({ type: 'unarchiveNote', commandId: env.kernel.ids.next(), noteId: 'R' });
     await noteList.settled();
     assert.equal(renders, 2);
-    assert.equal(sidebar.virtualScroller, scroller);
+    assert.ok(sidebar.virtualScroller === scroller, 'the virtual scroller is the same one');
     // The sidebar's own refresh starts it over, as it always did
     await sidebar.refreshNotesList();
     assert.equal(renders, 3);

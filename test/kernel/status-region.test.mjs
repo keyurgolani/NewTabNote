@@ -226,7 +226,8 @@ describe('the status region (#13, "Accessibility and performance")', () => {
     assert.equal(client.retries, 1);
     client.emit('reconnecting');
     // Withdrawn but still focused, so it stays, disabled, and a click does nothing
-    assert.deepEqual([retry.hidden, retry.getAttribute('aria-disabled'), dom.activeElement], [false, 'true', retry]);
+    assert.deepEqual([retry.hidden, retry.getAttribute('aria-disabled')], [false, 'true']);
+    assert.ok(dom.activeElement === retry, 'focus stays on Retry');
     retry.click();
     assert.equal(client.retries, 1);
     client.emit('unavailable');
@@ -273,7 +274,7 @@ describe('the status region (#13, "Accessibility and performance")', () => {
       'connected',
     ])) {
       client.emit(state);
-      assert.equal(dom.activeElement, editor, state);
+      assert.ok(dom.activeElement === editor, `${state}: focus stays in the editor`);
     }
   });
 
@@ -294,7 +295,8 @@ describe('the status region (#13, "Accessibility and performance")', () => {
     const { dom, region, message } = mounted(client);
     region.destroy();
     client.emit('reconnecting');
-    assert.deepEqual([dom.body.children, message.writes], [[], []]);
+    assert.ok(dom.body.children.length === 0, 'nothing is left on the page');
+    assert.deepEqual(message.writes, []);
   });
 
   it("announces what #13's client goes through when the worker can't be woken, then the resolution", async () => {

@@ -569,7 +569,7 @@ describe('BlockEditor saves of a deleted note', () => {
 
     const copyId = editor.noteId;
     assert.equal(editor.noteGone, false);
-    assert.equal(noticeOf(editor), null, 'the notice is gone');
+    assert.ok(noticeOf(editor) === null, 'the notice is gone');
     let { notes, elements } = await stored();
     assert.equal(notes.A, undefined, 'A stays deleted');
     assert.equal(notes[copyId].name, 'Note A', 'the new note keeps the title');
@@ -613,7 +613,7 @@ describe('BlockEditor saves of a deleted note', () => {
     await runUntil(env, editor.loadNote('B'));
     assert.equal(editor.noteId, 'B');
     assert.equal(editor.noteGone, false);
-    assert.equal(noticeOf(editor), null);
+    assert.ok(noticeOf(editor) === null, 'no deleted-note notice');
     assert.equal((await stored()).notes.A, undefined, 'A stays deleted');
   });
 
@@ -655,7 +655,7 @@ describe('BlockEditor saves of a deleted note', () => {
     assert.deepEqual(feedback.toasts, [{ message: "A note you edited was deleted, so its last changes aren't saved.", kind: 'error' }]);
     assert.ok(!feedback.statuses.includes('Error saving'));
     assert.equal(editor.noteGone, false, 'the note on screen is fine');
-    assert.equal(noticeOf(editor), null);
+    assert.ok(noticeOf(editor) === null, 'no deleted-note notice');
   });
 });
 
@@ -1324,7 +1324,7 @@ describe('BlockEditor when the page has to reload (#12)', () => {
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed just before the upgrade' }, 'committed');
     assert.equal(editor.saveTimeout, null);
     assert.equal(editor._retryPending, false, 'nothing retries');
-    assert.equal(editor.root.querySelector('.reload-notice'), null, 'no notice until the next edit');
+    assert.ok(editor.root.querySelector('.reload-notice') === null, 'no notice until the next edit');
     assert.equal(feedback.statuses.at(-1), 'Saved');
 
     type(editor, 'typed after it');
@@ -1363,7 +1363,7 @@ describe('BlockEditor when the page has to reload (#12)', () => {
 
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed and saving as the upgrade comes' });
     assert.equal(feedback.statuses.at(-1), 'Saved', 'what was stored is not reported as unsaved');
-    assert.equal(editor.root.querySelector('.reload-notice'), null);
+    assert.ok(editor.root.querySelector('.reload-notice') === null, 'no reload notice');
     assert.equal(editor._retryPending, false);
 
     type(editor, 'typed after it');

@@ -45,7 +45,7 @@ describe("the sidebar's folder names render as text", () => {
     for (const name of names) assert.equal(name.children.length, 0, 'a name became elements');
     // The name follows the row's icons, which stay packaged markup
     const header = container.querySelector('.sidebar-folder-header');
-    assert.equal(header.children[header.children.length - 1], names[0]);
+    assert.ok(header.children[header.children.length - 1] === names[0], "the name is the row's last child");
   });
 
   it("carries the name as typed into Rename's field and Delete Folder's message", async () => {

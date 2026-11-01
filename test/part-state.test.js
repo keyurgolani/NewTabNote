@@ -148,7 +148,7 @@ describe('whileLoading (js/ui/part-state.js)', () => {
 describe('PartState (js/ui/part-state.js)', () => {
   it('puts its live region on the page when it is made, before any words, and says nothing yet', () => {
     const { live, part } = charts();
-    assert.equal(part.liveRegion.parentNode, live);
+    assert.ok(part.liveRegion.parentNode === live, 'its live region is on the page');
     assert.equal(part.liveRegion.getAttribute('role'), 'status');
     assert.equal(part.liveRegion.className, 'part-state-live');
     assert.equal(part.liveRegion.textContent, '');
@@ -186,7 +186,7 @@ describe('PartState (js/ui/part-state.js)', () => {
       placed: true, state: 'failed', form: 'part-state', line: 'Failed to load the charts. Please try again.', note: '', buttons: ['Try again'],
       said: 'Failed to load the charts. Please try again.',
     });
-    assert.equal(ctx.doc.activeElement, elsewhere);
+    assert.ok(ctx.doc.activeElement === elsewhere, 'focus stays where it was');
   });
 
   it('keeps Try again in its place and its focus while it runs, with the loading line past 400 ms, then says the second failure', async () => {
@@ -213,7 +213,7 @@ describe('PartState (js/ui/part-state.js)', () => {
       said: "Failed to load the charts again. Reloading the page may fix it, and doesn't delete your notes.",
     });
     assert.equal(ctx.part.tryButton.getAttribute('aria-disabled'), null);
-    assert.equal(ctx.doc.activeElement, ctx.part.tryButton, 'focus stays on Try again');
+    assert.ok(ctx.doc.activeElement === ctx.part.tryButton, 'focus stays on Try again');
   });
 
   it('a press while Try again runs does nothing, and a Try again that worked draws the part and moves focus to it', async () => {
@@ -227,7 +227,7 @@ describe('PartState (js/ui/part-state.js)', () => {
     assert.equal(retries, 1);
     assert.equal(shown(ctx).placed, false);
     assert.deepEqual(ctx.seen.loaded, ['Chart']);
-    assert.equal(ctx.doc.activeElement, ctx.heading);
+    assert.ok(ctx.doc.activeElement === ctx.heading, "focus is on the part's heading");
   });
 
   it('a file that threw, or another build on disk, says so with Reload alone', async () => {
@@ -253,7 +253,7 @@ describe('PartState (js/ui/part-state.js)', () => {
     ctx.part.tryButton.click();
     await settle();
     assert.equal(ctx.part.state, 'threw');
-    assert.equal(ctx.doc.activeElement, ctx.part.reloadButton);
+    assert.ok(ctx.doc.activeElement === ctx.part.reloadButton, 'focus is on Reload');
   });
 
   it('a new load shows the first failure again until Try again is pressed', async () => {
@@ -305,7 +305,7 @@ describe('PartState (js/ui/part-state.js)', () => {
       buttons: ['Try again', 'Reload anyway'],
       said: "Failed to save your changes, so the page didn't reload. Please try again. If it keeps failing, copy anything you need, then reload.",
     });
-    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    assert.ok(ctx.doc.activeElement === ctx.part.tryButton, 'focus is on Try again');
     // Try again is the reload again, and Reload anyway reloads without the guards
     ctx.part.tryButton.click();
     await settle();
@@ -333,7 +333,7 @@ describe('PartState (js/ui/part-state.js)', () => {
     const [label, reserved] = ctx.part.tryButton.children;
     assert.deepEqual([label.textContent, reserved.textContent, reserved.getAttribute('aria-hidden')], ['Saving…', 'Try again', 'true']);
     assert.equal(ctx.part.tryButton.getAttribute('aria-disabled'), 'true');
-    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    assert.ok(ctx.doc.activeElement === ctx.part.tryButton, 'focus is on Try again');
     assert.deepEqual([shown(ctx).line, shown(ctx).note, shown(ctx).said], [failed, saving, saving]);
     await settle();
     // The save failed again, in words that say so, with Try again pressable and focused
@@ -348,7 +348,7 @@ describe('PartState (js/ui/part-state.js)', () => {
     });
     assert.deepEqual([label.textContent, reserved.textContent], ['Try again', 'Saving…']);
     assert.equal(ctx.part.tryButton.getAttribute('aria-disabled'), null);
-    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    assert.ok(ctx.doc.activeElement === ctx.part.tryButton, 'focus is on Try again');
     // From the third failure the words don't change, and they're said again each time
     ctx.part.tryButton.click();
     await settle();
@@ -419,7 +419,7 @@ describe('PartState (js/ui/part-state.js)', () => {
     ctx.part.tryButton.click();
     await settle();
     assert.deepEqual([ctx.part.state, ctx.part.lineNote.textContent], ['save-failed', 'Please try again. If it keeps failing, copy anything you need, then reload.']);
-    assert.equal(ctx.doc.activeElement, notice);
+    assert.ok(ctx.doc.activeElement === notice, "focus is on the notice's button");
     assert.deepEqual(reloads, ['guarded', 'guarded']);
   });
 
@@ -430,7 +430,7 @@ describe('PartState (js/ui/part-state.js)', () => {
     ctx.part.reloadButton.click();
     await settle();
     assert.equal(ctx.part.state, 'threw', 'the row stays as it was');
-    assert.equal(ctx.doc.activeElement, ctx.notice);
+    assert.ok(ctx.doc.activeElement === ctx.notice, "focus is on the notice's button");
   });
 
   it("keeps a failed save in the row, with focus on Try again, when the editor's notice that explains it can't take focus, as on Stats where the editor is hidden", async () => {
@@ -442,12 +442,12 @@ describe('PartState (js/ui/part-state.js)', () => {
     ctx.part.reloadButton.click();
     await settle();
     assert.deepEqual([shown(ctx).state, shown(ctx).line], ['save-failed', "Failed to save your changes, so the page didn't reload."]);
-    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    assert.ok(ctx.doc.activeElement === ctx.part.tryButton, 'focus is on Try again');
     // Its Try again, stopped the same way, keeps the save's words and focus
     ctx.part.tryButton.click();
     await settle();
     assert.deepEqual([shown(ctx).state, shown(ctx).line], ['save-failed', "Failed to save your changes again, so the page didn't reload."]);
-    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    assert.ok(ctx.doc.activeElement === ctx.part.tryButton, 'focus is on Try again');
   });
 
   it('a step of its own that throws is a failure trying again cannot help', async () => {
@@ -537,7 +537,7 @@ describe("PartState's buttons keep their places (js/ui/part-state.js)", () => {
     await settle();
     assert.deepEqual(moved, []);
     assert.deepEqual(slots(ctx), ['0:·', '1:Try again', '2:Reload anyway']);
-    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    assert.ok(ctx.doc.activeElement === ctx.part.tryButton, 'focus is on Try again');
   });
 
   it('a redraw leaves the buttons where they are, and a new load starts them again', async () => {

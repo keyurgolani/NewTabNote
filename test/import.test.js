@@ -248,7 +248,7 @@ describe('Import dialogs and refused packages (AC2)', () => {
     it(`refuses ${label} before any dialog and changes nothing`, async () => {
       const before = await snapshot(env);
       await controller.importFromFile(fileOf(data));
-      assert.equal(overlay(env), null, 'no dialog opened');
+      assert.ok(overlay(env) === null, 'no dialog opened');
       assert.deepEqual(toasts, [{ message: `Import failed before any change: ${reason}`, kind: 'error' }]);
       assert.deepEqual(await snapshot(env), before);
     });
