@@ -14,6 +14,17 @@
  *   (js/kernel/composition/document.js): each names its note, and none takes a note record
  */
 class AIChatController {
+  /**
+   * A reply's HTML, as every reply is rendered, streamed, finished or restored (#21): its
+   * Markdown with its plain text shown as text (Utils.parseMarkdown), then sanitizeHtml as a
+   * second layer
+   * @param {string} markdown
+   * @returns {string}
+   */
+  static replyHtml(markdown) {
+    return sanitizeHtml(Utils.parseMarkdown(markdown));
+  }
+
   constructor({ settings, domRefs, logger, llm, documentClient }) {
     /** @type {any} The page's settings port (js/kernel/composition/settings.js): the panel's width, the chats, and the prompt templates */
     this.settings = settings;
@@ -618,9 +629,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     let hadThinking = false;   // Track if thinking phase occurred
 
     // parseBlock: convert a completed markdown block to sanitized HTML
-    const parseBlock = (markdown) => {
-      return sanitizeHtml(Utils.parseMarkdown(markdown));
-    };
+    const parseBlock = (markdown) => AIChatController.replyHtml(markdown);
 
     /**
      * Remove skeleton loader and set up the streaming message element.
@@ -1300,7 +1309,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.classList.remove('ai-streaming');
 
     // Parse markdown
-    contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(fullResponse));
+    contentEl.innerHTML = AIChatController.replyHtml(fullResponse);
 
     // Add source notes for global chat
     if (sourceNotes && sourceNotes.length > 0) {
@@ -1691,7 +1700,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.className = 'ai-message-content';
 
     if (type === 'assistant') {
-      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
+      contentEl.innerHTML = AIChatController.replyHtml(content);
     } else {
       contentEl.textContent = content;
     }
@@ -1759,7 +1768,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.className = 'ai-message-content';
 
     if (type === 'assistant') {
-      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
+      contentEl.innerHTML = AIChatController.replyHtml(content);
     } else {
       contentEl.textContent = content;
     }

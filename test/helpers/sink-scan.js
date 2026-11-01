@@ -13,7 +13,8 @@
  * - markup parsed into nodes, which the page can adopt: `parseFromString` (DOMParser's) and
  *   `parseHTMLUnsafe` (Document's). The scan can't follow the nodes, so the parse counts.
  * Each comes with the function it's in and what it puts in:
- * - `static`: a string or a template with no substitutions, which is packaged markup;
+ * - `static`: a string or a template with no substitutions, or such text joined with `+`,
+ *   which is packaged markup;
  * - `dynamic`: anything else.
  * A sink given the empty string, or an `execCommand` given no value, puts nothing in, so it
  * isn't one.
@@ -63,6 +64,17 @@ function enclosingName(node) {
 
 /** @param {ts.Node} node */
 const isStaticText = node => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
+
+/**
+ * Whether `node` is packaged markup: static text, or static text joined with `+`
+ * @param {ts.Node} node
+ * @returns {boolean}
+ */
+function isPackaged(node) {
+  const value = unwrap(node);
+  if (isStaticText(value)) return true;
+  return ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.PlusToken && isPackaged(value.left) && isPackaged(value.right);
+}
 
 /** @param {ts.Node | undefined} node */
 const isEmptyText = node => node !== undefined && isStaticText(node) && /** @type {ts.StringLiteral} */ (node).text === '';
@@ -186,7 +198,7 @@ function scanSource(source, fileName = 'source.js') {
     for (const site of sinksOf(node)) {
       found.push({
         sink: site.sink,
-        kind: site.value && isStaticText(site.value) ? 'static' : 'dynamic',
+        kind: site.value && isPackaged(site.value) ? 'static' : 'dynamic',
         function: enclosingName(node),
         line: file.getLineAndCharacterOfPosition(node.getStart()).line + 1,
       });
