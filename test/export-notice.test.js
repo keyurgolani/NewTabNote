@@ -307,7 +307,7 @@ describe('the notice', () => {
     assert.ok(shown(card));
     assert.deepEqual(buttons(card), [['Export JSON', 'primary-btn'], ['Not now', 'secondary-btn']]);
     assert.deepEqual(card.querySelectorAll('.export-notice-btn').map((b) => [b.tagName, b.type]), [['BUTTON', 'button'], ['BUTTON', 'button']]);
-    assert.equal(env.document.activeElement, focused, 'focus stays where it was');
+    assert.ok(env.document.activeElement === focused, 'focus stays where it was');
   });
 
   it('says what Export JSON holds in the same words as the Data & Backup hint, which App fills from it', async () => {
@@ -329,7 +329,7 @@ describe('the notice', () => {
     assert.equal(record(env), undefined, 'the file may not have saved');
     assert.equal(card.querySelector('.export-notice-body').textContent, CONFIRM);
     assert.deepEqual(buttons(card), [['Done', 'primary-btn'], ['Export again', 'secondary-btn'], ['Not now', 'secondary-btn']]);
-    assert.equal(env.document.activeElement, exportButton, 'focus stays on the button, now Export again');
+    assert.ok(env.document.activeElement === exportButton, 'focus stays on the button, now Export again');
 
     button(card, 'Export again').click();
     await settle();
@@ -453,7 +453,7 @@ describe('the notice', () => {
     const kept = showNotice(env);
     button(kept.card, 'Not now').click();
     await settle();
-    assert.deepEqual(kept.calls.closes, [], 'focus was elsewhere, so it stays there');
+    assert.ok(kept.calls.closes.length === 0, 'focus was elsewhere, so it stays there');
 
     const other = await setup();
     const held = showNotice(other.env);
@@ -466,7 +466,7 @@ describe('the notice', () => {
     notNow.click();
     await settle();
     assert.equal(held.calls.closes.length, 1);
-    assert.equal(held.calls.closes[0].element, block);
+    assert.ok(held.calls.closes[0].element === block, 'the close returns focus to the block');
   });
 });
 
@@ -604,7 +604,7 @@ describe('focus after the notice closes holding it (App.focusAfterExportNotice)'
     const content = elements.t2.querySelector('.block-content');
 
     focusAfter(editor, { element: content, range: caret });
-    assert.equal(env.document.activeElement, content);
+    assert.ok(env.document.activeElement === content, 'focus is on the block it named');
     assert.deepEqual(ranges, ['cleared', caret]);
     assert.deepEqual(focusedBlocks, []);
   });
@@ -621,7 +621,7 @@ describe('focus after the notice closes holding it (App.focusAfterExportNotice)'
       const { editor, elements, focusedBlocks } = activePane(env);
       focusAfter(editor, returnFocus);
       assert.deepEqual(focusedBlocks, [['t1', true]], 'the image block before it has no text');
-      assert.equal(env.document.activeElement, elements.t1.querySelector('.block-content'));
+      assert.ok(env.document.activeElement === elements.t1.querySelector('.block-content'), 'focus is on the first text block');
     }
   });
 
@@ -629,7 +629,7 @@ describe('focus after the notice closes holding it (App.focusAfterExportNotice)'
     const { env, focusAfter } = appSetup();
     const { editor, titleEl, focusedBlocks } = activePane(env, { blocks: [['image', false], ['divider', false]] });
     focusAfter(editor, null);
-    assert.equal(env.document.activeElement, titleEl);
+    assert.ok(env.document.activeElement === titleEl, 'focus is on the title');
     assert.deepEqual(focusedBlocks, []);
   });
 
@@ -637,9 +637,9 @@ describe('focus after the notice closes holding it (App.focusAfterExportNotice)'
     const { env, focusAfter } = appSetup();
     const { editor, root } = activePane(env, { noteId: null, blocks: [] });
     focusAfter(editor, null);
-    assert.equal(env.document.activeElement, root);
+    assert.ok(env.document.activeElement === root, 'focus is on the pane');
     assert.equal(root.getAttribute('tabindex'), '-1');
-    assert.notEqual(env.document.activeElement, env.document.body);
+    assert.ok(env.document.activeElement !== env.document.body, 'focus is not on the page body');
 
     root.dispatchEvent({ type: 'blur' });
     assert.equal(root.hasAttribute('tabindex'), false, 'the pane is focusable again only as the markup has it');

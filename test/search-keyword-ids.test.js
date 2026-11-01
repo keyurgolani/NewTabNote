@@ -87,7 +87,7 @@ describe('a keyword match names its note (js/search.js)', () => {
     await runUntil(env, sidebar.renderNotesList());
     const list = env.document.getElementById('sidebar-notes-list');
     assert.deepEqual(list.querySelectorAll('.sidebar-note-name').map((name) => name.textContent), ['Camping trip']);
-    assert.deepEqual(list.querySelectorAll('.sidebar-empty'), []);
+    assert.ok(list.querySelectorAll('.sidebar-empty').length === 0, 'no empty-list line');
   });
 
   it("All Notes answers from the note a word in its text matches", async () => {

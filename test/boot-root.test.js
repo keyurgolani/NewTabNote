@@ -343,7 +343,7 @@ describe('the boot guard (js/entries/boot-guard.js)', () => {
     const { fire, logged, HTMLScriptElement, listeners, drawn } = guard();
     fire('error', { target: new HTMLScriptElement('') }, true);
     assert.deepEqual(logged, [], 'a classic script is no root');
-    assert.equal(drawn(), null);
+    assert.ok(drawn() === null, 'a classic script draws no boot failure');
     fire('error', { target: new HTMLScriptElement('module') }, true);
     assert.deepEqual(lines(logged), [['NewTabNote: the new tab did not start', { buildId: null, chunk: 'newtab', reason: 'chunk-missing' }]]);
     assert.equal(listeners.size, 0, 'its listeners come off at the first failure');
@@ -360,12 +360,12 @@ describe('the boot guard (js/entries/boot-guard.js)', () => {
     assert.equal(page.reload.textContent, 'Reload');
     assert.equal(page.reload.getAttribute('aria-describedby'), 'title body');
     assert.deepEqual([page.title.id, page.body.id], ['title', 'body']);
-    assert.equal(document.activeElement, page.reload);
+    assert.ok(document.activeElement === page.reload, 'focus is on Reload');
     assert.equal(document.title, "NewTabNote couldn't start");
     // The shell is hidden and inert; the scripts stay as they are
     for (const element of Object.values(shell)) assert.deepEqual([element.hidden, element.inert, element.style.display], [true, true, 'none'], element.id);
     for (const script of document.querySelectorAll('script')) assert.equal(script.inert, undefined);
-    assert.equal(page.host.parentNode, document.body);
+    assert.ok(page.host.parentNode === document.body, 'its host is in the page body');
     page.reload.click();
     assert.deepEqual(reloads, ['reload']);
     // Nothing says to reinstall, which deletes the notes database

@@ -54,7 +54,7 @@ describe('choiceDialog', () => {
       const result = choiceDialog(options);
       dismiss(openOverlay(env));
       assert.equal(await result, 'cancel');
-      assert.equal(openOverlay(env), null);
+      assert.ok(openOverlay(env) === null, 'the dialog is gone');
     });
   }
 

@@ -207,7 +207,7 @@ describe("Stats' charts: Chart.js at the first Stats", () => {
     assert.deepEqual(made, ['line', 'doughnut', 'bar', 'polarArea']);
     assert.deepEqual(shown(), { placed: false, line: null, buttons: [], cards: ['shown', 'shown', 'shown', 'shown'] });
     const heading = grid.children[0].children[0];
-    assert.equal(env.document.activeElement, heading);
+    assert.ok(env.document.activeElement === heading, "focus is on the first chart's heading");
     assert.equal(heading.getAttribute('tabindex'), '-1');
   });
 
@@ -241,7 +241,7 @@ describe("a part's Reload: App's guarded reload and the editors' own notices", (
     assert.deepEqual(plain(await reload.guarded()), { reloaded: false });
     reload.now();
     assert.deepEqual(calls, ['guarded', 'now']);
-    assert.equal(reload.ownNotice(), null, 'no editor shows a notice');
+    assert.ok(reload.ownNotice() === null, 'no editor shows a notice');
     tabs.editor._onReloadRequired();
     // The notice's words take focus, which a second Enter can't reload from without the guards,
     // and from which Tab reaches its Reload
@@ -256,7 +256,7 @@ describe("a part's Reload: App's guarded reload and the editors' own notices", (
     const { tabs } = await page();
     tabs.editor._onReloadRequired();
     tabs.secondaryEditor._failedSeq.set('B', 3);
-    assert.equal(tabs.ownNoticeText(), null);
+    assert.ok(tabs.ownNoticeText() === null, 'no notice while the failed save has none of its own');
     tabs.secondaryEditor._failedSeq.clear();
     assert.match(tabs.ownNoticeText().textContent, /^This page lost its connection to your notes/);
   });
@@ -344,7 +344,7 @@ describe('the Markdown export: JSZip at the first export', () => {
     await noUnhandled(() => settings.exportAllAsMarkdown());
     assert.deepEqual(loader.loads, ['jszip']);
     const part = settings._exportPart;
-    assert.equal(part.element.parentNode, section);
+    assert.ok(part.element.parentNode === section, 'the row is in its section');
     assert.equal(part.element.className, 'part-state is-flat');
     assert.equal(part.line.textContent, 'Failed to export your notes as Markdown. Please try again.');
     assert.deepEqual(toasts, []);
@@ -490,9 +490,9 @@ describe("App's reload guard and the PiP window's stylesheets", () => {
       }),
     };
     await tabs.openNoteInPiP('A');
-    assert.deepEqual(registered, [pipDocument]);
+    assert.ok(registered.length === 1 && registered[0] === pipDocument, "the PiP window's document is registered");
     pipListeners.pagehide.forEach((fn) => fn({ type: 'pagehide' }));
-    assert.deepEqual(registered, []);
+    assert.ok(registered.length === 0, "the PiP window's document is let go when it closes");
     assert.match(read('js/app.js'), /registerExtraDocument: this\.loader \? \(target\) => this\.loader\.registerExtraDocument\(target\) : null,/);
   });
 });

@@ -658,7 +658,7 @@ describe("each editor menu's site places it inside the window, in the task that 
         const active = items(editor).querySelector('.slash-menu-item.active');
         assert.equal(items(editor).children.indexOf(active), step, `${menu}, ArrowDown ${step}`);
         const scrolled = scrolls.at(-1);
-        assert.equal(scrolled.element, active, `${menu}: the highlighted entry is scrolled into view`);
+        assert.ok(scrolled.element === active, `${menu}: the highlighted entry is scrolled into view`);
         assert.deepEqual({ ...scrolled.options }, { block: 'nearest' });
       }
     }
