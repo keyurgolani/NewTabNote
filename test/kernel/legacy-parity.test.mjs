@@ -174,7 +174,8 @@ async function twin(records = {}, { at } = {}) {
  * `note` without the versions #17's adapter puts on a note's record (#17 PR 2a)
  * @param {Record<string, unknown>} note
  */
-const withoutVersions = note => Object.fromEntries(Object.entries(note).filter(([field]) => !VERSION_FIELDS.includes(field)));
+const withoutVersions = note =>
+  Object.fromEntries(Object.entries(note).filter(([field]) => !VERSION_FIELDS.includes(field)));
 
 /**
  * A profile's records in the IndexedDB stores `names`, by key, with written times as 'written',
@@ -193,7 +194,9 @@ async function recordsIn(context, names) {
         if (name !== 'canvases') return [name, records];
         return [
           name,
-          Object.fromEntries(Object.entries(records).map(([key, note]) => [key, withoutVersions(withoutPlacement(note))])),
+          Object.fromEntries(
+            Object.entries(records).map(([key, note]) => [key, withoutVersions(withoutPlacement(note))]),
+          ),
         ];
       }),
     ),
@@ -1232,7 +1235,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
       ],
     });
     const asStored = legacyEnv.plain(await viaStorage.storage.getElementsByNote('n1'));
-    assert.deepEqual(asStored.map((/** @type {{id: string}} */ block) => block.id), ['B', 'a', 'c', 'm', 'q', 'z']);
+    assert.deepEqual(
+      asStored.map((/** @type {{id: string}} */ block) => block.id),
+      ['B', 'a', 'c', 'm', 'q', 'z'],
+    );
     const documentClient = createDocumentClient(/** @type {any} */ ({ ...kernel, ids: testIds('d') }));
     assert.deepEqual(legacyEnv.plain(await documentClient.blocksAsStored('n1')), asStored);
   });
@@ -1360,7 +1366,9 @@ describe("the kernel's copies of production rules, run both ways", () => {
    * @returns {Promise<Record<string, any>>}
    */
   const localOf = async context => {
-    const stored = legacyEnv.plain(await new Promise(resolve => context.env.chrome.api.storage.local.get(null, resolve)));
+    const stored = legacyEnv.plain(
+      await new Promise(resolve => context.env.chrome.api.storage.local.get(null, resolve)),
+    );
     const now = Date.now();
     return JSON.parse(
       JSON.stringify(stored, (key, value) =>
@@ -1397,7 +1405,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
     await send({ type: 'saveChatHistory', chat: 'note', history, messages });
     await send({ type: 'saveChatHistory', chat: 'global', history: [], messages: [] });
     await send({ type: 'savePromptTemplates', templates });
-    await send({ type: 'setPreferences', values: { embeddingsEnabled: true, autoTitleEnabled: true, insightsEnabled: true } });
+    await send({
+      type: 'setPreferences',
+      values: { embeddingsEnabled: true, autoTitleEnabled: true, insightsEnabled: true },
+    });
     await send({ type: 'completeOnboarding' });
     await send({ type: 'recordBackup', fullExport: true, backup: true });
     await send({ type: 'recordExportNotice', version: 1, outcome: 'exported' });
@@ -1405,7 +1416,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await localOf(viaKernel), await localOf(viaStorage));
   });
 
-  it("saveTheme stores the record Storage.saveCustomTheme stores for the Theme Builder", async () => {
+  it('saveTheme stores the record Storage.saveCustomTheme stores for the Theme Builder', async () => {
     const { viaStorage, viaKernel, kernel } = await twin();
     const properties = { '--bg-primary': '#101010', '--text-primary': '#fafafa' };
     const saved = await viaStorage.storage.saveCustomTheme({ name: 'Dusk', properties });
@@ -1517,13 +1528,19 @@ describe("the kernel's copies of production rules, run both ways", () => {
       backupCreatedAt: new Date().toISOString(),
       backupVersion: 1,
     });
-    assert.deepEqual(await fileOf(/** @type {Blob} */ (backup.kind === 'ready' && backup.data)), await fileOf(expected));
+    assert.deepEqual(
+      await fileOf(/** @type {Blob} */ (backup.kind === 'ready' && backup.data)),
+      await fileOf(expected),
+    );
   });
 
   it("profileHoldsContent decides what the export notice decided with Storage's isNoteUntitled and isNoteEmpty", async () => {
     for (const records of /** @type {Array<Record<string, unknown[]>>} */ ([
       {},
-      { canvases: [legacyEnv.note('u1', { name: 'Untitled' })], elements: [legacyEnv.block('b1', 'u1', 0, '<br>&nbsp;')] },
+      {
+        canvases: [legacyEnv.note('u1', { name: 'Untitled' })],
+        elements: [legacyEnv.block('b1', 'u1', 0, '<br>&nbsp;')],
+      },
       { canvases: [legacyEnv.note('u1', { name: 'Untitled 3' })], elements: [legacyEnv.block('b1', 'u1', 0, 'Words')] },
       { canvases: [legacyEnv.note('x1', { name: 'Plan', trashed: true, trashedAt: SEEDED_AT })] },
       { canvases: [legacyEnv.note('a1', { name: 'Kept', archived: true })] },
@@ -1595,9 +1612,17 @@ describe("the kernel's copies of production rules, run both ways", () => {
 
     /** Each context's records, with the import's new ids as the order they were made in */
     const shaped = async (/** @type {PageContext} */ context, /** @type {string} */ importedId) => {
-      const { canvases: notes, elements: blocks, folders } = await recordsIn(context, ['canvases', 'elements', 'folders']);
+      const {
+        canvases: notes,
+        elements: blocks,
+        folders,
+      } = await recordsIn(context, ['canvases', 'elements', 'folders']);
       const rename = (/** @type {any} */ value) => JSON.parse(JSON.stringify(value).replaceAll(importedId, 'IMPORTED'));
-      return rename({ notes, blocks: Object.values(blocks).map((/** @type {any} */ b) => ({ ...b, id: 'block' })), folders });
+      return rename({
+        notes,
+        blocks: Object.values(blocks).map((/** @type {any} */ b) => ({ ...b, id: 'block' })),
+        folders,
+      });
     };
     assert.deepEqual(await shaped(viaKernel, outcome.changedIds[0]), await shaped(viaStorage, result.importedIds[0]));
     const copies = async (/** @type {PageContext} */ context) =>
