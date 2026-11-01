@@ -3,8 +3,9 @@
 // holds every command and query its page sends, read from the modules the page loads, so a
 // page that sends one its table lacks fails here, never in a user's hands. Popup's, Side
 // Panel's and the worker's tables hold nothing else, so neither Popup's nor Side Panel's start
-// loads the remote apply or the index commands. A command or query the policy allows that a
-// table lacks is refused as not-registered and logged as an error, never run.
+// loads the remote apply or the index commands. A table that holds a bulk command holds its
+// refusal too. A command or query the policy allows that a table lacks is refused as
+// not-registered and logged as an error, never run.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -158,6 +159,16 @@ function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {
 const registered = table => new Set([...Object.keys(table.commands), ...Object.keys(table.queries)]);
 
 /**
+ * The bulk commands `table` holds without their refusal, which turns down one refused for its
+ * payload before the adapter recalls it, so its commandId isn't reserved (kernel.js)
+ * @param {HandlerTable} table
+ */
+const bulkWithoutRefusal = table =>
+  Object.keys(table.commands).filter(
+    type => COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].bulk && !Object.hasOwn(table.refusals, type),
+  );
+
+/**
  * Whether the catalog lets `surface` send `type`
  * @param {string} type
  * @param {Surface} surface
@@ -208,7 +219,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       });
     }
 
-    it(`${page}: the catalog allows on ${surface} every type its table holds`, () => {
+    it(`${page}: the catalog allows on ${surface} every type its table holds, and each bulk command it holds comes with its refusal`, () => {
       assert.deepEqual(
         [...registered(table)].filter(type => !allowedOn(type, surface)),
         [],
@@ -218,6 +229,9 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
         [],
         'a refusal only for a command it runs',
       );
+      // Without it, a bulk action refused for its payload keeps its commandId reserved, and the
+      // corrected one sent under that id is refused as idempotency-key-reuse (R131)
+      assert.deepEqual(bulkWithoutRefusal(table), [], 'every bulk command with its refusal');
     });
   }
 
@@ -249,6 +263,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
   it("ALL_HANDLERS, the tests' table, holds every command and query the catalog has", () => {
     assert.deepEqual([...registered(ALL_HANDLERS)].sort(), [...CATALOG_TYPES].sort());
     assert.deepEqual(Object.keys(ALL_HANDLERS.refusals).sort(), ['applyRemoteChanges', 'runBulkAction']);
+    assert.deepEqual(bulkWithoutRefusal(ALL_HANDLERS), []);
   });
 
   it("neither Popup's nor Side Panel's start loads the remote apply or the index commands while #19 isn't live", () => {
