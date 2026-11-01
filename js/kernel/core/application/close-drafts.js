@@ -176,10 +176,14 @@ export const closeDraftCommands = {
         const { residue } = decision;
         if (decision.kind === 'recover') {
           const folder = typeof note.folderId === 'string' && note.folderId !== '' ? await tx.get('folders', note.folderId) : undefined;
-          const made = recoveredNote(note, residue, draft, { now, zone, trashDays, inFolder: Boolean(folder) });
+          // Every note, so the first sentence links the original only where the link reaches it alone (V1)
+          const notes = await tx.getAll('notes');
+          const made = recoveredNote(note, residue, draft, { now, zone, trashDays, inFolder: Boolean(folder), notes });
           tx.put('notes', made.note);
           for (const block of made.blocks) tx.put('blocks', block);
           tx.put('searchIndex', newSearchEntry(made.note, now));
+          // The backlink on the original. Links the copied blocks hold come at its first save, as in 1.4.3.
+          if (made.link) tx.put('links', { id: ids.next(), fromNoteId: recoveredId, toNoteId: noteId, createdAt: now });
           applied = { code: 'close-draft-recovered', changed: [recoveredId], primary: recoveredId, revised: true };
           return;
         }
