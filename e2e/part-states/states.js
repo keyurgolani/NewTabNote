@@ -135,7 +135,10 @@ function stubProvider(page) {
 
 async function openStats(page) {
   await page.locator('#sidebar-stats').click();
-  await expect(page.locator('#stats-dashboard')).toBeVisible();
+  const view = page.locator('#stats-dashboard');
+  await expect(view).toBeVisible();
+  // The view slides up 20 px as it opens; what's on it is measured and shot once it's still
+  await expect.poll(() => view.evaluate((element) => getComputedStyle(element).transform)).toMatch(/^(none|matrix\(1, 0, 0, 1, 0, 0\))$/);
 }
 
 /** Settings > Data & Backup > Export All (ZIP/MD) */
@@ -173,18 +176,44 @@ async function tryAgain(page, place, words) {
 }
 
 /**
- * A save that fails, its retry included, as a full disk answers it, for the open editors: each
- * gets the page's document client with saveContent answering unavailable
+ * A save that fails, its retry included, for the open editors: each gets a copy of the page's
+ * document client (which is frozen) whose saveContent answers unavailable, as a full disk does
+ * (`quota`), or as a page whose connection to the notes database is gone does
+ * (`reload-required`), which the editor's own notice explains
  */
-function failingSaves(page) {
-  return page.evaluate(() => {
+function failingSaves(page, code = 'quota') {
+  return page.evaluate((answer) => {
     for (const editor of app.tabController.getOpenEditors()) {
-      const client = editor.documentClient;
-      const unavailable = () => Promise.resolve({ kind: 'unavailable', cause: 'quota', code: 'quota', retryable: false });
-      editor.documentClient = new Proxy(client, { get: (target, key) => (key === 'saveContent' ? unavailable : target[key]) });
+      editor.documentClient = Object.freeze({
+        ...editor.documentClient,
+        saveContent: () => Promise.resolve({ kind: 'unavailable', cause: answer, code: answer, retryable: false }),
+        // A connection that's gone was gone before the save, or the editor counts the save stored
+        ...(answer === 'reload-required' ? { connectionOpen: () => false } : {}),
+      });
     }
+  }, code);
+}
+
+/** A locator's box on the page: where it's drawn, whatever the page's scroll */
+function boxOf(locator) {
+  return locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return { x: box.x + window.scrollX, y: box.y + window.scrollY, width: box.width, height: box.height };
   });
 }
+
+/** Within a pixel, as layout rounds */
+const NEAR = 1;
+
+/** Whether box `outer` holds all of box `inner`, so a pointer anywhere on `inner` is on `outer` */
+const holds = (outer, inner) => outer.x <= inner.x + NEAR && outer.y <= inner.y + NEAR
+  && outer.x + outer.width >= inner.x + inner.width - NEAR && outer.y + outer.height >= inner.y + inner.height - NEAR;
+
+/** Whether two boxes share more than a pixel */
+const overlaps = (a, b) => a.x < b.x + b.width - NEAR && b.x < a.x + a.width - NEAR && a.y < b.y + b.height - NEAR && b.y < a.y + a.height - NEAR;
+
+/** Whether two boxes are the same, within a pixel */
+const same = (a, b) => ['x', 'y', 'width', 'height'].every((key) => Math.abs(a[key] - b[key]) <= NEAR);
 
 /** Put a library's file back where the session loaded the extension from, as a repaired install does */
 function restoreLibrary(extension, name) {
@@ -199,14 +228,22 @@ async function typeLine(page, text) {
   await page.keyboard.type(text);
 }
 
-/** u5: the charts' Reload, whose save guard failed, with the failed save in Reload's place */
+/**
+ * u5: the charts' Reload, whose save guard failed, with the failed save in Reload's place. Try
+ * again lands where the Reload pressed was, and Reload anyway lands clear of it.
+ */
 async function saveFailed(page) {
   await failingSaves(page);
   await typeLine(page, ' and a line never stored');
   await openStats(page);
   const panel = page.locator(PLACES.charts);
-  await panel.locator('button.part-state-swap').click();
+  const reload = panel.locator('button.part-state-reload');
+  await expect(reload).toBeVisible();
+  const pressed = await boxOf(reload);
+  await reload.click();
   await expect(panel).toContainText("Failed to save your changes, so the page didn't reload.", { timeout: 15_000 });
+  expect(holds(await boxOf(panel.locator('button.part-state-try')), pressed), 'Try again takes the place of the Reload pressed').toBe(true);
+  expect(overlaps(await boxOf(panel.locator('button.part-state-anyway')), pressed), 'Reload anyway lands clear of it').toBe(false);
   return panel;
 }
 
@@ -367,23 +404,60 @@ const STATES = [
     reach: saveFailed,
   },
   {
-    name: 'u5-trying-again', about: "u5's Try again while the guards run: the failed save's words over \"Saving your changes before reloading.\", Try again held with focus", build: () => threw('chart'),
+    name: 'u5-trying-again', about: "u5's Try again while the guards run: Saving… at Try again's width, held with focus, over \"Saving your changes before reloading.\"", build: () => threw('chart'),
     said: 'Saving your changes before reloading.',
     reach: async (page) => {
       const panel = await saveFailed(page);
       // This time the guard never answers, so the state stays for its 10 s
       await page.evaluate(() => { app.tabController.saveOpenEditors = () => new Promise(() => {}); });
-      const tryAgainButton = panel.getByRole('button', { name: 'Try again' });
+      const tryAgainButton = panel.locator('button.part-state-try');
+      const before = await boxOf(tryAgainButton);
       await tryAgainButton.click();
       await expect(tryAgainButton).toHaveAttribute('aria-disabled', 'true');
+      await expect(tryAgainButton).toHaveAccessibleName('Saving…');
       await expect(tryAgainButton).toBeFocused();
       await expect(panel.locator('.part-state-note')).toHaveText('Saving your changes before reloading.');
+      expect(same(await boxOf(tryAgainButton), before), 'Try again keeps its place and width as it reads Saving…').toBe(true);
       return panel;
+    },
+  },
+  {
+    name: 'u5-notice', about: "a part's Reload whose failed save the editor's own notice explains: the notice speaks and takes focus, and the row stays as it was", build: () => threw('fuse'),
+    // The row said the guards were saving, then the notice speaks for the failure
+    said: 'Saving your changes before reloading.',
+    reach: async (page) => {
+      await driver.searchNotes(page, 'plan');
+      const panel = page.locator(PLACES.search);
+      await expect(panel).toContainText('Failed to load search.');
+      // The page's connection to the notes database is gone, which the editor's notice says
+      await failingSaves(page, 'reload-required');
+      await typeLine(page, ' and a line never stored');
+      const notice = page.locator('.reload-notice');
+      await expect(notice).toBeVisible();
+      await panel.locator('button.part-state-reload').click();
+      await expect(notice.getByRole('button', { name: 'Reload' })).toBeFocused({ timeout: 15_000 });
+      await expect(panel).toContainText('Failed to load search.');
+      return panel;
+    },
+  },
+  {
+    name: 'm5-related-first-download', about: "the model's first download in Related Notes: its status line says the model downloads the first time", build: () => ({}),
+    said: 'The model downloads the first time, which can take a minute.',
+    reach: async (page) => {
+      // The model's files take their time coming from the network, which is never reached here
+      await page.route(/^https:\/\/huggingface\.co\//, () => {});
+      await stubProvider(page);
+      await modelVectors(page);
+      await openAITab(page, 'smart');
+      const line = page.locator(PLACES.related);
+      await expect(line).toContainText('Loading semantic search…');
+      await expect(line).toContainText('The model downloads the first time, which can take a minute.', { timeout: 15_000 });
+      return line;
     },
   },
 ];
 
 module.exports = {
   NOTES, LIBRARY_FILES, PLACES, STATES, withBuild, missing, threw, otherBuild, noWorkspace, openTab, untilIdleWorkRan, slowLibrary,
-  modelVectors, stubProvider, openStats, exportMarkdown, openAITab, tryAgain, failingSaves, restoreLibrary, typeLine,
+  modelVectors, stubProvider, openStats, exportMarkdown, openAITab, tryAgain, failingSaves, restoreLibrary, typeLine, boxOf, holds, overlaps, same,
 };

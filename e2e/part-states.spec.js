@@ -57,7 +57,9 @@ const BUTTONS = {
   'm4-related-failed': ['Try again'],
   'a1-all-notes-failed': ['Try again'],
   'u5-save-failed': ['Try again', 'Reload anyway'],
-  'u5-trying-again': ['Try again', 'Reload anyway'],
+  'u5-trying-again': ['Saving…', 'Reload anyway'],
+  'u5-notice': ['Reload'],
+  'm5-related-first-download': [],
 };
 
 for (const width of WIDTHS) {
@@ -95,6 +97,18 @@ for (const width of WIDTHS) {
         // It fits the window
         const rect = await panel.evaluate((element) => element.getBoundingClientRect().toJSON());
         expect(rect.right).toBeLessThanOrEqual(width);
+        // On Stats it wraps inside the view, which is as wide with it as without it
+        const widens = await panel.evaluate((element) => {
+          const view = element.closest('.stats-container');
+          if (!view) return 0;
+          const withIt = view.getBoundingClientRect().width;
+          // Over the panel's own display: flex, which [hidden] doesn't beat
+          element.style.display = 'none';
+          const without = view.getBoundingClientRect().width;
+          element.style.display = '';
+          return withIt - without;
+        });
+        expect(widens, 'how much wider the stats view is with the panel').toBe(0);
         expect(await page.evaluate(() => window.__ntnToasts.filter(({ success }) => !success).map(({ text }) => text))).toEqual([]);
         await expectNoUncaught(extension, page);
       });
@@ -173,7 +187,7 @@ test("a part's Reload whose save guard never answers stays after 10 s, and says 
     await states.openStats(page);
     const panel = page.locator(states.PLACES.charts);
     // Reload, which keeps its place as it reads Saving…
-    const reload = panel.locator('button.part-state-swap');
+    const reload = panel.locator('button.part-state-reload');
     await reload.click();
     // Saving… at Reload's width, aria-disabled, with focus kept
     await expect(reload).toHaveAttribute('aria-disabled', 'true');
@@ -196,5 +210,86 @@ test("a part's Reload whose save guard fails stays, the editor's header says Err
     // Reload anyway reloads without the guards
     await panel.getByRole('button', { name: 'Reload anyway' }).click();
     await expect.poll(() => driver.wasReloaded(page).catch(() => true)).toBe(true);
+  });
+});
+
+/** Whether a part's buttons sit beside its words, at the row's end, rather than under them */
+const beside = (panel) => panel.locator('.part-state-actions').evaluate((actions) => getComputedStyle(actions).flexDirection === 'row-reverse');
+
+for (const width of WIDTHS) {
+  test(`at ${width}, the charts' button pressed stays where it was, and nothing riskier lands under the pointer`, async ({ playwright, headless }, testInfo) => {
+    await onTab({ playwright, headless }, testInfo, states.missing('chart'), { width }, async (extension, page) => {
+      await states.failingSaves(page);
+      await states.typeLine(page, ' and a line never stored');
+      await states.openStats(page);
+      const panel = page.locator(states.PLACES.charts);
+      const tryAgain = panel.locator('button.part-state-try');
+      const reload = panel.locator('button.part-state-reload');
+      await expect(panel).toContainText('Failed to load the charts. Please try again.');
+      // The second failure fits beside the words at both widths, as the view keeps its width
+      expect(await beside(panel)).toBe(true);
+      const first = await states.boxOf(tryAgain);
+      // Try again failed: it stays where it was, and Reload goes on the far side, to its left
+      await tryAgain.click();
+      await expect(panel).toContainText('Failed to load the charts again.');
+      const again = await states.boxOf(tryAgain);
+      expect(states.same(again, first), `Try again stays where it was: ${JSON.stringify({ first, again })}`).toBe(true);
+      const pressed = await states.boxOf(reload);
+      expect(pressed.x + pressed.width).toBeLessThanOrEqual(first.x);
+      // Reload's save failed: Try again takes its place, and Reload anyway lands clear of it
+      await reload.click();
+      await expect(panel).toContainText("Failed to save your changes, so the page didn't reload.", { timeout: 15_000 });
+      // Measured as soon as the words are there: a place drawn a frame late is a place missed
+      const taken = await states.boxOf(tryAgain);
+      const anyway = await states.boxOf(panel.locator('button.part-state-anyway'));
+      expect(states.holds(taken, pressed), `Try again takes the place of the Reload pressed: ${JSON.stringify({ pressed, taken })}`).toBe(true);
+      expect(states.overlaps(anyway, pressed), `Reload anyway lands clear of it: ${JSON.stringify({ pressed, anyway })}`).toBe(false);
+      await expect(tryAgain).toBeFocused();
+      // Its Try again, failing again, keeps every button where it is
+      const buttons = [tryAgain, panel.locator('button.part-state-anyway')];
+      const placed = await Promise.all(buttons.map(states.boxOf));
+      await tryAgain.click();
+      await expect(panel).toContainText("Failed to save your changes again, so the page didn't reload.", { timeout: 15_000 });
+      const after = await Promise.all(buttons.map(states.boxOf));
+      expect(after.every((box, i) => states.same(box, placed[i])), 'every button stays where it was').toBe(true);
+      await expectNoUncaught(extension, page);
+    });
+  });
+
+  test(`at ${width}, the export's Try again stays where it was when it fails again, with Reload on the far side`, async ({ playwright, headless }, testInfo) => {
+    await onTab({ playwright, headless }, testInfo, states.missing('jszip'), { width }, async (extension, page) => {
+      await states.exportMarkdown(page);
+      const row = page.locator(states.PLACES.export);
+      const tryAgain = row.locator('button.part-state-try');
+      await expect(row).toContainText('Failed to export your notes as Markdown. Please try again.');
+      // Where the second failure can't fit beside the words, the first already puts Try again under them
+      const besideWords = await beside(row);
+      expect(besideWords).toBe(width === 1440);
+      const first = await states.boxOf(tryAgain);
+      await tryAgain.click();
+      await expect(row).toContainText('Failed to export your notes as Markdown again. Export JSON still works.');
+      const after = await states.boxOf(tryAgain);
+      // Under the words, the longer words may push the buttons down a line, never sideways
+      const kept = besideWords ? states.same(after, first) : states.same({ ...after, y: first.y, height: first.height }, first);
+      expect(kept, 'Try again stays where it was').toBe(true);
+      const reloadBox = await states.boxOf(row.locator('button.part-state-reload'));
+      if (besideWords) expect(reloadBox.x + reloadBox.width).toBeLessThanOrEqual(first.x);
+      else expect(reloadBox.x).toBeGreaterThanOrEqual(first.x + first.width);
+      await expectNoUncaught(extension, page);
+    });
+  });
+}
+
+test("on Stats, where the editor is hidden, a failed save its notice explains stays in the row, with focus on Try again", async ({ playwright, headless }, testInfo) => {
+  await onTab({ playwright, headless }, testInfo, states.threw('chart'), { width: 1440 }, async (extension, page) => {
+    await states.failingSaves(page, 'reload-required');
+    await states.typeLine(page, ' and a line never stored');
+    await expect(page.locator('.reload-notice')).toBeVisible();
+    await states.openStats(page);
+    const panel = page.locator(states.PLACES.charts);
+    await panel.locator('button.part-state-reload').click();
+    await expect(panel).toContainText("Failed to save your changes, so the page didn't reload.", { timeout: 15_000 });
+    await expect(panel.locator('button.part-state-try')).toBeFocused();
+    await expectNoUncaught(extension, page);
   });
 });
