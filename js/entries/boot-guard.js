@@ -7,9 +7,17 @@
  * later error is the app's. A rejection on the page doesn't count: one may not stop the start,
  * and the root reports a failure of its own start itself.
  *
- * A failure goes to showBootFailure, state 1's seam. #27 slice 3b shows "NewTabNote couldn't
- * start. Reloading doesn't delete your notes." with Reload there; in slice 3 it logs one line,
- * with the build ID, what didn't start, and why, and the page stays the shell it is today.
+ * A failure logs one line, with the build ID, what didn't start, and why, and shows the boot
+ * failure (#27 slice 3b): "NewTabNote couldn't start." and "Reloading doesn't delete your notes."
+ * with Reload, in #20's storage guard's geometry, so the two screens are one. The shell behind it
+ * is hidden and inert, and nothing says to reinstall, which deletes the notes database.
+ *
+ * It draws without the page's CSS, which may be what failed: in a shadow root, from a constructed
+ * stylesheet, in the system's colours (Canvas and CanvasText under `color-scheme: light dark`),
+ * which follow the OS's dark setting and stay readable whatever loaded, with Chrome's own focus
+ * ring. The words go out as an alert, Reload takes focus with the two sentences as its
+ * description, and the tab's title says it, since a new tab keeps keyboard focus in the address
+ * bar.
  */
 
 /**
@@ -22,12 +30,131 @@
 (function bootGuard() {
   'use strict';
 
+  const TITLE = "NewTabNote couldn't start.";
+  const BODY = "Reloading doesn't delete your notes.";
+  const DOCUMENT_TITLE = "NewTabNote couldn't start";
+
   /**
-   * State 1's seam: today, the line in the console, and nothing on the page
+   * #20's storage guard's geometry (css/editor.css .storage-guard), in the system's colours: a
+   * column up to 560 px wide, centred on the window, its title at 22 px
+   */
+  const STYLES = `
+:host {
+  all: initial;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  color-scheme: light dark;
+  background: Canvas;
+  color: CanvasText;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.failure {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+}
+h1 {
+  margin: 0;
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+p {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: color-mix(in srgb, CanvasText 64%, Canvas);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 10px 20px;
+  border: 1px solid ButtonBorder;
+  border-radius: 6px;
+  background: ButtonFace;
+  color: ButtonText;
+  font: 500 0.875rem/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  cursor: pointer;
+}
+`;
+
+  /**
+   * State 1: the line in the console, and the boot failure in place of the shell
    * @param {BootFailure} failure
    */
   function showBootFailure(failure) {
     console.error('NewTabNote: the new tab did not start', failure);
+    try {
+      drawBootFailure();
+    } catch (error) {
+      // The page stays the shell it is, as before 3b, and the line above says why
+      console.error('NewTabNote: the boot failure could not be drawn', error);
+    }
+  }
+
+  function drawBootFailure() {
+    // Nothing to draw on, as in a context with no page
+    if (typeof document === 'undefined' || !document.body) return;
+    if (document.getElementById('ntn-boot-failure')) return;
+    // Everything the page had stops taking focus and input: a shell that looks like an editor
+    // but can't save anything
+    for (const child of Array.from(document.body.children)) {
+      if (child.tagName === 'SCRIPT') continue;
+      const shell = /** @type {HTMLElement} */ (child);
+      shell.inert = true;
+      shell.hidden = true;
+      // Over the page's own display rules, such as #app's flex, when its CSS loaded
+      shell.style.display = 'none';
+    }
+    document.title = DOCUMENT_TITLE;
+
+    const host = document.createElement('div');
+    host.id = 'ntn-boot-failure';
+    const root = host.attachShadow({ mode: 'open' });
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(STYLES);
+    root.adoptedStyleSheets = [sheet];
+
+    const column = document.createElement('div');
+    column.className = 'failure';
+    column.setAttribute('role', 'alert');
+    const title = document.createElement('h1');
+    title.id = 'title';
+    title.textContent = TITLE;
+    const body = document.createElement('p');
+    body.id = 'body';
+    body.textContent = BODY;
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const reload = document.createElement('button');
+    reload.type = 'button';
+    reload.textContent = 'Reload';
+    reload.setAttribute('aria-describedby', 'title body');
+    reload.addEventListener('click', () => location.reload());
+    actions.appendChild(reload);
+    column.appendChild(title);
+    column.appendChild(body);
+    column.appendChild(actions);
+    root.appendChild(column);
+    document.body.appendChild(host);
+    reload.focus();
   }
 
   let watching = true;

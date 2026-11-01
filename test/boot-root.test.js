@@ -3,8 +3,8 @@
 // #27 slice 3, "Entries": the new tab's boot root (js/entries/newtab.js, js/entries/boot.js),
 // which holds ntn-boot while the tab starts and loads the workspace chunk through the loader,
 // and the boot guard (js/entries/boot-guard.js), which watches for a start that fails before
-// the workspace chunk's boot() has returned. State 1's seam, showBootFailure, logs one line and
-// shows nothing.
+// the workspace chunk's boot() has returned. A failure logs one line and shows the boot failure
+// (#27 slice 3b, state 1) in place of the shell.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { htmlTags } = require('../scripts/build/markup.js');
+const { FakeDocument, FakeElement } = require('./helpers/legacy-env');
 
 const ROOT = path.join(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -269,7 +270,9 @@ describe("the composition root, which the workspace chunk's boot() runs (js/kern
 describe('the boot guard (js/entries/boot-guard.js)', () => {
   /**
    * The guard run as the classic script it is, on a window that records its listeners, with the
-   * console line it logs
+   * console line it logs, over a page with newtab.html's shell: the app, a skip link, and the two
+   * scripts. A shadow root here is an element its host holds, and a constructed stylesheet keeps
+   * its text.
    */
   function guard() {
     const listeners = new Map();
@@ -281,6 +284,17 @@ describe('the boot guard (js/entries/boot-guard.js)', () => {
         this.type = type;
       }
     }
+    class CSSStyleSheet {
+      replaceSync(text) { this.text = text; }
+    }
+    const document = new FakeDocument();
+    document.title = 'New Tab Note';
+    const shell = document.stub(['app', 'skip-to-content']);
+    for (const src of ['js/entries/boot-guard.js', 'js/entries/newtab.js']) {
+      const script = document.createElement('script');
+      script.setAttribute('src', src);
+      document.body.appendChild(script);
+    }
     const window = {
       addEventListener(type, fn, capture) { listeners.set(`${type}${capture ? ' capture' : ''}`, fn); },
       removeEventListener(type, fn, capture) {
@@ -288,14 +302,35 @@ describe('the boot guard (js/entries/boot-guard.js)', () => {
         if (listeners.get(key) === fn) listeners.delete(key);
       },
     };
-    const context = vm.createContext({ window, Element, HTMLScriptElement, console: { error: (...args) => logged.push(args) } });
+    const reloads = [];
+    const location = { reload: () => reloads.push('reload') };
+    const context = vm.createContext({
+      window, document, location, Element, HTMLScriptElement, CSSStyleSheet, console: { error: (...args) => logged.push(args) },
+    });
     vm.runInContext(read('js/entries/boot-guard.js'), context, { filename: 'js/entries/boot-guard.js' });
     const fire = (type, event = {}, capture = false) => {
       const fn = listeners.get(`${type}${capture ? ' capture' : ''}`);
       if (fn) fn({ type, ...event });
     };
-    return { listeners, logged, fire, Element, HTMLScriptElement };
+    /** The boot failure as drawn, or null */
+    const drawn = () => {
+      const host = document.getElementById('ntn-boot-failure');
+      if (!host) return null;
+      const root = host.shadowRoot;
+      const [column] = root.children;
+      const [title, body, actions] = column.children;
+      const [reload] = actions.children;
+      return { host, root, column, title, body, reload };
+    };
+    return { listeners, logged, fire, Element, HTMLScriptElement, document, shell, drawn, reloads };
   }
+
+  // A shadow root, as far as the guard uses one: an element of its own, under the host
+  FakeElement.prototype.attachShadow = function attachShadow() {
+    this.shadowRoot = new FakeElement('#shadow-root', this.ownerDocument);
+    this.shadowRoot.adoptedStyleSheets = [];
+    return this.shadowRoot;
+  };
 
   const lines = (logged) => logged.map(([message, failure]) => [message, { ...failure }]);
 
@@ -304,13 +339,57 @@ describe('the boot guard (js/entries/boot-guard.js)', () => {
     assert.deepEqual([...listeners.keys()].sort(), ['error capture', 'ntn:boot', 'ntn:boot-failed']);
   });
 
-  it("logs a line and shows nothing when the root's module script doesn't load", () => {
-    const { fire, logged, HTMLScriptElement, listeners } = guard();
+  it("logs a line and shows the boot failure when the root's module script doesn't load", () => {
+    const { fire, logged, HTMLScriptElement, listeners, drawn } = guard();
     fire('error', { target: new HTMLScriptElement('') }, true);
     assert.deepEqual(logged, [], 'a classic script is no root');
+    assert.equal(drawn(), null);
     fire('error', { target: new HTMLScriptElement('module') }, true);
     assert.deepEqual(lines(logged), [['NewTabNote: the new tab did not start', { buildId: null, chunk: 'newtab', reason: 'chunk-missing' }]]);
     assert.equal(listeners.size, 0, 'its listeners come off at the first failure');
+    assert.ok(drawn());
+  });
+
+  it("shows the two fixed sentences as an alert, with Reload focused and described by them, in place of the shell", () => {
+    const { fire, document, shell, drawn, reloads } = guard();
+    fire('ntn:boot-failed', { detail: { buildId: 'build-a', chunk: 'workspace', reason: 'chunk-missing' } });
+    const page = drawn();
+    assert.equal(page.column.getAttribute('role'), 'alert');
+    assert.equal(page.title.tagName, 'H1');
+    assert.deepEqual([page.title.textContent, page.body.textContent], ["NewTabNote couldn't start.", "Reloading doesn't delete your notes."]);
+    assert.equal(page.reload.textContent, 'Reload');
+    assert.equal(page.reload.getAttribute('aria-describedby'), 'title body');
+    assert.deepEqual([page.title.id, page.body.id], ['title', 'body']);
+    assert.equal(document.activeElement, page.reload);
+    assert.equal(document.title, "NewTabNote couldn't start");
+    // The shell is hidden and inert; the scripts stay as they are
+    for (const element of Object.values(shell)) assert.deepEqual([element.hidden, element.inert, element.style.display], [true, true, 'none'], element.id);
+    for (const script of document.querySelectorAll('script')) assert.equal(script.inert, undefined);
+    assert.equal(page.host.parentNode, document.body);
+    page.reload.click();
+    assert.deepEqual(reloads, ['reload']);
+    // Nothing says to reinstall, which deletes the notes database
+    assert.doesNotMatch(page.column.textContent, /reinstall/i);
+  });
+
+  it("draws without the page's CSS: a constructed stylesheet in the system's colours and #20's storage guard's geometry", () => {
+    const { fire, drawn } = guard();
+    fire('error', { target: {}, message: 'x' }, true);
+    const [sheet] = drawn().root.adoptedStyleSheets;
+    assert.match(sheet.text, /color-scheme: light dark;/);
+    assert.match(sheet.text, /background: Canvas;\n  color: CanvasText;/);
+    assert.match(sheet.text, /max-width: 560px;[\s\S]*padding: 32px 24px;[\s\S]*justify-content: center;\n  gap: 12px;/);
+    assert.match(sheet.text, /h1 \{\n  margin: 0;\n  font-size: 1\.375rem;\n  font-weight: 600;\n  line-height: 1\.3;/);
+    assert.match(sheet.text, /min-height: 44px;/);
+    assert.doesNotMatch(sheet.text, /#[0-9a-f]{3,8}\b|prefers-color-scheme|outline/i, "no colour of its own, and Chrome's own focus ring");
+  });
+
+  it('draws once, however many failures come', () => {
+    const { fire, drawn, document } = guard();
+    fire('ntn:boot-failed', { detail: {} });
+    fire('error', { target: {}, message: 'x' }, true);
+    assert.ok(drawn());
+    assert.equal(document.querySelectorAll('#ntn-boot-failure').length, 1);
   });
 
   it("logs the build, the chunk, and the reason the root's ntn:boot-failed carries", () => {
