@@ -361,6 +361,18 @@ describe('the close-time draft applier: what it never does', () => {
     assert.deepEqual(copies.slice(1).map((row) => row.content), ['alpha, edited', 'a block of B, as if it were A\'s'], 'both edits, as copies');
   });
 
+  it("deletes none of another note's blocks when a saved draft lists one among its deletes", async () => {
+    // The draft holds only A's block, so unlike the one above it's saved, and the save's own check
+    // on each delete is what keeps b1 with B
+    draftOfA(env, { deletedBlockIds: ['b1'] });
+    const result = await apply(env, { now: () => T0 + 100 });
+    assert.deepEqual(result, { ...empty, saved: ['A'] });
+    const after = await stored(env);
+    assert.equal(after.blocks.a1.content, 'alpha, edited as the tab closed', "A's edit is saved");
+    assert.ok(after.blocks.b1, 'B keeps its block');
+    assert.deepEqual([after.blocks.b1.canvasId, after.blocks.b1.content], ['B', 'bravo'], 'under B, as it was');
+  });
+
   it('a generated title never replaces one set by hand', async () => {
     const A = await env.get('Storage').getNote('A');
     await env.get('Storage').updateNote({ ...A, titleManuallySet: true, updatedAt: T0 });
