@@ -8,8 +8,8 @@
  * this file, its fakes, and its read, not the assertions.
  *
  * background.js runs as Chrome runs it, a module service worker (#12 slice 1): startWorker
- * evaluates it and the modules it imports, the real js/utils.js, js/storage.js, and its
- * kernel composition root, as ES modules in test/helpers/legacy-env.js's worker context,
+ * evaluates it and the modules it imports, its kernel composition root's graph (since #17 PR 4a
+ * no js/utils.js or js/storage.js), as ES modules in test/helpers/legacy-env.js's worker context,
  * on fake-indexeddb, with chrome.* fakes that record listeners. That takes
  * vm.SourceTextModule, so node runs with --experimental-vm-modules (npm test passes it).
  * This file adds fakes for what the tests look at: the context menus created, the active

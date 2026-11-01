@@ -8,10 +8,6 @@
  * `npm run check:dist` checks the await, and e2e/worker.spec.js the registrations.
  */
 
-// utils.js and storage.js put Utils and Storage on self. The worker's kernel no longer runs on
-// Storage (#17 PR 1b), and nothing here opens it; #34's harness seeds profiles through it.
-import './utils.js';
-import './storage.js';
 import {
   MIGRATE_MESSAGE,
   PURGE_MESSAGE,
