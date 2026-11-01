@@ -11,7 +11,7 @@
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
-import { ENTITY_TYPES, commitSeq, content, entityId, id, revision, timestamp } from './fields.js';
+import { ENTITY_TYPES, commitSeq, content, count, entityId, id, revision, timestamp } from './fields.js';
 
 /** `YYYY-MM-DD` */
 const dateStr = v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/));
@@ -206,16 +206,18 @@ export const changeOp = v.variant('op', [
 
 /**
  * One entry of #17's change log, which #13's CommitFeed reads from a cursor: an entity a commit
- * changed, at its revision, with the ops it took (#17 PR 4c). #19 fills `parentRevisionIds`
- * and `originDeviceId`.
+ * changed, at its revision, with the ops it took (#17 PR 4c), and on #17's adapter its
+ * `position` among its commit's rows. #19 fills `parentRevisionIds` and `originDeviceId`. It's
+ * strict, so a field a row gains has to be named here first (R131).
  */
-export const changeRecord = v.looseObject({
+export const changeRecord = v.strictObject({
   seq: commitSeq,
   entityType: v.picklist(ENTITY_TYPES),
   entityId: id,
   revision,
   opId: id,
   ops: v.array(changeOp),
+  position: v.optional(count),
   parentRevisionIds: v.optional(v.array(v.string())),
   originDeviceId: v.optional(v.nullable(v.string())),
 });
