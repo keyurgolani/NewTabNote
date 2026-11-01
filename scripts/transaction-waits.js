@@ -15,10 +15,12 @@
  * constant, or a loop's item, counts as one too, and so does a handler set on a transaction
  * through a key it can't read (`tx[key] = …`), so every event and handler name is a literal,
  * but in js/lib/: its vendored files, each pinned by its SHA-256 (js/lib/vendor.json), name
- * events through variables as minified code does, and take every other rule. An `abort` on an
- * AbortSignal (`signal`, or a `.signal` property) or on a FileReader the file makes with
- * `new FileReader()` isn't one. Anything else fails, whatever it's on, so a new wait goes
- * through endOf or is told apart here (R131).
+ * events through variables as minified code does, and take every other rule. A `const` item of
+ * a loop over string literals alone is read as each of them, as the network guard's refused
+ * socket names its `error` and `close` listeners. An `abort` on an AbortSignal (`signal`, or a
+ * `.signal` property) or on a FileReader the file makes with `new FileReader()` isn't one.
+ * Anything else fails, whatever it's on, so a new wait goes through endOf or is told apart here
+ * (R131).
  *
  * It guards against a wait written by accident, not one written to get past it: Reflect.apply,
  * addEventListener taken off a transaction and called later, or a handler name built at run
@@ -53,6 +55,41 @@ function strip(node) {
 function literal(node) {
   const n = node && strip(node);
   return n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : null;
+}
+
+/** Whether `block`'s own statements declare `name`, which then hides a loop's item of that name */
+function declares(block, name) {
+  return block.statements.some(
+    statement =>
+      (ts.isVariableStatement(statement) &&
+        statement.declarationList.declarations.some(d => ts.isIdentifier(d.name) && d.name.text === name)) ||
+      ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name && statement.name.text === name),
+  );
+}
+
+/**
+ * The names `node` takes when it's the item of a `for (const name of ['a', 'b'])` loop around it
+ * over string literals alone, which the scan reads as those literals, or null. A function, or a
+ * block or another loop that declares the name, between them hides the item, so it's null then.
+ */
+function loopNames(node) {
+  const n = node && strip(node);
+  if (!n || !ts.isIdentifier(n)) return null;
+  let child = n;
+  for (let at = n.parent; at; child = at, at = at.parent) {
+    if (ts.isFunctionLike(at) || ts.isCatchClause(at)) return null;
+    if (ts.isBlock(at) && declares(at, n.text)) return null;
+    const head = ts.isForStatement(at) || ts.isForInStatement(at) || ts.isForOfStatement(at) ? at.initializer : null;
+    if (!head || !ts.isVariableDeclarationList(head)) continue;
+    const bound = head.declarations.some(d => ts.isIdentifier(d.name) && d.name.text === n.text);
+    if (!bound) continue;
+    if (!ts.isForOfStatement(at) || child !== at.statement || !(head.flags & ts.NodeFlags.Const)) return null;
+    const items = strip(at.expression);
+    if (!ts.isArrayLiteralExpression(items) || head.declarations.length !== 1) return null;
+    const names = items.elements.map(literal);
+    return names.every(name => name !== null) ? names : null;
+  }
+  return null;
 }
 
 /** The member `node` reads, `x.name` or `x['name']`, or null */
@@ -158,8 +195,9 @@ function scanSource(file, text) {
   const listener = (node, name, receiver) => {
     if (!name) return;
     const event = literal(name);
-    if (event === null && !vendored) add(node, null, receiver, name);
-    else if (event !== null && EVENTS.has(event)) add(node, event, receiver);
+    const events = event === null ? loopNames(name) : [event];
+    if (events === null && !vendored) add(node, null, receiver, name);
+    for (const each of events || []) if (EVENTS.has(each)) add(node, each, receiver);
   };
   (function walk(n) {
     // x.oncomplete = …, x.onabort ??= …, x['oncomplete'] ||= …, and tx[key] = … with a key it
@@ -169,7 +207,11 @@ function scanSource(file, text) {
       const name = memberName(left);
       if (name !== null && HANDLERS.has(name)) add(n, HANDLERS.get(name), left.expression);
       const unread = ts.isElementAccessExpression(left) && name === null && !vendored;
-      if (unread && isTransactionLike(left.expression)) add(n, null, left.expression, left.argumentExpression);
+      if (unread && isTransactionLike(left.expression)) {
+        const handlers = loopNames(left.argumentExpression);
+        if (handlers === null) add(n, null, left.expression, left.argumentExpression);
+        for (const each of handlers || []) if (HANDLERS.has(each)) add(n, HANDLERS.get(each), left.expression);
+      }
     }
     // { oncomplete: …, onabort() {…} }, as Object.assign(tx, …) takes it
     if (isLiteralMember(n)) {
