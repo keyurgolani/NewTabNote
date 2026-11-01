@@ -9,7 +9,9 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, createDatabase, note, block, plain, startNewTabKernel } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, createDatabase, note, block, plain, releaseStorage, settingsOf, startNewTabKernel,
+} = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 
@@ -52,15 +54,15 @@ describe('auto-backup to chrome.storage.local', () => {
   });
 
   it('createAutoBackup sets lastBackupAt', async () => {
-    const { env, storage, settings } = await started();
+    const { env, settings } = await started();
     const before = Date.now();
     await settings.createAutoBackup();
     assert.ok(env.chrome.local.setting_lastBackupAt >= before);
-    assert.ok(await storage.getSetting('lastBackupAt', 0) >= before);
+    assert.ok(await settingsOf(env).getSetting('lastBackupAt', 0) >= before);
   });
 
   it('keeps only the newest three backups', async () => {
-    const { storage, settings, backupKeys } = await started();
+    const { env, settings, backupKeys } = await started();
     const made = [];
     for (let i = 0; i < 4; i++) {
       await settings.createAutoBackup();
@@ -69,7 +71,9 @@ describe('auto-backup to chrome.storage.local', () => {
     }
     assert.equal(new Set(made).size, 4, 'each backup got its own key');
     assert.deepEqual(backupKeys(), made.slice(1), 'the oldest one is gone');
-    assert.deepEqual(plain(await storage.getAutoBackups()).map((b) => b.key), made.slice(1).reverse());
+    // As 1.4.x's Storage lists them, newest first: the frozen 1.4.1 release's (#17 PR 4b)
+    const release = await releaseStorage(env);
+    assert.deepEqual(plain(await release.getAutoBackups()).map((b) => b.key), made.slice(1).reverse());
   });
 
   it('getAutoBackups lists none when there are none', async () => {
