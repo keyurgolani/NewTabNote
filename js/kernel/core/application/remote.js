@@ -17,10 +17,11 @@
  * A change that says nothing it was made from counts as made from version 0, so it never lands
  * over an edit made here since #17. Otherwise that part is a conflict, which the adapter keeps
  * in `conflicts` with the part as the remote had it, the remote's text included, and the note
- * stays as it is. One that lands on a note at version 0, as 1.4.x stored it, keeps the title
- * and blocks it replaced there instead, since neither side saw the other's text. A part the
- * note already has changes nothing, whatever its version, so no resend moves a version or keeps
- * a conflict.
+ * stays as it is. One made from version 0 that lands on a note at version 0, as 1.4.x stored
+ * it, keeps the title and blocks it replaced there instead, since nothing shows the remote saw
+ * that text, and a trash in the same change is a conflict, so that text isn't on its way out
+ * (R131). A part the note already has changes nothing, whatever its version, so no resend moves
+ * a version or keeps a conflict.
  *
  * A note this profile doesn't have is made as the remote has it, unless it was deleted here for
  * good: then it stays deleted, and nothing of it is kept, since a conflict record would hold its
@@ -150,7 +151,7 @@ function placementOf(fields) {
 
 /**
  * The content part's code when it replaced the title and blocks of a note at version 0, as
- * 1.4.x stored it, under a change that says nothing it was made from, and kept them as a
+ * 1.4.x stored it, under a change made from version 0 or that says none, and kept them as a
  * conflict record (R131): a legacy replacement, which #6's conflict view tells from a conflict
  */
 const REPLACED_LEGACY = 'remote-content-replaced-legacy';
@@ -170,12 +171,13 @@ function partCode(part, outcome) {
 }
 
 /**
- * The note's outcome in a remote change, which says what each part did (R131). With nothing
- * landed, it's the first part's that didn't commit, else the content part's. A part that landed
- * with the other doing nothing answers as itself. A part that landed beside another that did
- * something answers `committed`, so the list counts the note, with a code naming each part's in
- * order, `remote-content-conflict-placement-applied` for a pin that landed beside text that
- * didn't, say. It's a warning when part of the note went to `conflicts`.
+ * The note's outcome in a remote change, which says what each part did (R131). A part that did
+ * something beside the other doing nothing answers as itself, and two that did nothing answer
+ * as the content part. With both, the code names each part's in order. When neither landed,
+ * it's the content part's outcome under that code, `remote-content-conflict-placement-conflict`
+ * for two conflicts, say. When one landed, it's `committed`, so the list counts the note,
+ * `remote-content-conflict-placement-applied` for a pin that landed beside text that didn't,
+ * and a warning when part of the note went to `conflicts`.
  * @param {Outcome} content
  * @param {Outcome | undefined} placement
  * @returns {Outcome}
@@ -186,11 +188,15 @@ function noteOutcome(content, placement) {
   const landed = [];
   for (const part of [content, placement])
     if (part.kind === 'committed' && part.changedIds.length > 0) landed.push(part);
+  const codes = [partCode('content', content), partCode('placement', placement)].filter(Boolean);
   if (landed.length === 0) {
+    if (content.kind !== 'committed' && placement.kind !== 'committed') {
+      const code = `remote-${codes.join('-')}`;
+      return { ...content, code, messageKey: `${content.kind}.${code}` };
+    }
     if (content.kind !== 'committed') return content;
     return placement.kind !== 'committed' ? placement : content;
   }
-  const codes = [partCode('content', content), partCode('placement', placement)].filter(Boolean);
   if (codes.length === 1) return landed[0];
   const last = landed[landed.length - 1];
   const setAside = content.kind !== 'committed' || placement.kind !== 'committed' || content.code === REPLACED_LEGACY;
@@ -226,17 +232,18 @@ export const remoteCommands = {
         noteId,
         note,
         blocks,
-        // None said, which counts as version 0 (applyRemoteContent)
-        expectedRevision: expectedRevision ?? null,
+        expectedRevision: expectedRevision ?? 0,
       });
       // A note it made has the remote's placement already, and one it couldn't write has none
       // to change. Its placement is applied whatever its content met, each on its own version.
       const placing =
         content.kind === 'conflict' || (content.kind === 'committed' && content.code !== 'remote-note-created');
       // The text revision a trash lands on: the one the content part left, which holds the
-      // remote's text or text the same, or, when that part conflicted, the one the change was
-      // made from, which the note has moved past
-      const textRevision = content.kind === 'committed' ? content.revision : (expectedRevision ?? 0);
+      // remote's text or text the same. Otherwise it's the one the change was made from, which
+      // the note has moved past: when that part conflicted, or when it replaced a 1.4.x note's
+      // text, which a trash would put on its way out with the remote's (R131)
+      const textRevision =
+        content.kind === 'committed' && content.code !== REPLACED_LEGACY ? content.revision : (expectedRevision ?? 0);
       const placed = placing
         ? await run({
             type: 'applyRemotePlacement',
@@ -256,10 +263,8 @@ export const remoteCommands = {
     const { noteId, note: remote, blocks, expectedRevision } = command;
     if (!isId(noteId) || !isRecord(remote) || remote.id !== noteId) return invalid();
     if (remote.name !== undefined && typeof remote.name !== 'string') return invalid();
-    // Each part says the version it was made from, null when the change said none, which
-    // counts as version 0 (applyRemoteChanges)
-    if (expectedRevision === undefined) return invalid();
-    if (expectedRevision !== null && !isOptionalVersion(expectedRevision)) return invalid();
+    // Each part says the version it was made from (applyRemoteChanges gives 0 for none)
+    if (expectedRevision === undefined || !isOptionalVersion(expectedRevision)) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     const now = clock.now();
@@ -312,13 +317,14 @@ export const remoteCommands = {
         const name = typeof remote.name === 'string' ? remote.name : local.name;
         // Already the note's title and blocks: nothing to apply, so no version moves
         if (name === local.name && sameRecords(stored, records)) return;
-        const stale = versionConflict(tx, noteId, { expectedRevision: expectedRevision ?? 0 });
+        const stale = versionConflict(tx, noteId, { expectedRevision });
         if (stale) return stale;
-        if (expectedRevision === null) {
-          // A change that says nothing it was made from lands only on a note at version 0, as
-          // 1.4.x stored it, though neither side saw the other's text. So the title and blocks
-          // it replaces are kept as a conflict record, as a stale save's are, under this part's
-          // commandId (R131). With no `conflicts` to keep them in, the change is the conflict.
+        if (expectedRevision === 0) {
+          // A change made from version 0, or that says none, lands only on a note nothing here
+          // has moved from version 0, as 1.4.x stored it, whose text nothing shows the remote
+          // saw. So the title and blocks it replaces are kept as a conflict record, as a stale
+          // save's are, under this part's commandId (R131). With no `conflicts` to keep them
+          // in, the change is the conflict.
           const current = tx.versions('notes', noteId)?.revision ?? 0;
           if (!tx.has('conflicts')) return conflict('revision-conflict', current);
           const mine = {
@@ -332,7 +338,7 @@ export const remoteCommands = {
             id: command.commandId,
             noteId,
             scope: 'content',
-            expected: null,
+            expected: 0,
             current,
             at: now,
             command: /** @type {any} */ (mine),

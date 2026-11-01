@@ -5,9 +5,9 @@
  * save and an insert have them. A note that's moved past `expectedRevision` is a
  * `revision-conflict`, kept in `conflicts` with the remote's title and blocks, and changes in
  * nothing; one whose title and blocks are already the remote's changes in nothing either.
- * `expectedRevision` is null when the change said none, which counts as 0: one that lands then,
- * on a note as 1.4.x stored it, keeps the title and blocks it replaced in `conflicts` and
- * answers `remote-content-replaced-legacy` (R131). A note this profile doesn't have is made as
+ * One made from 0, as a change that says none counts, that lands on a note as 1.4.x stored it,
+ * at 0, keeps the title and blocks it replaced in `conflicts` and answers
+ * `remote-content-replaced-legacy` (R131). A note this profile doesn't have is made as
  * the remote has it, its flags and folder included, unless it was deleted here for good, which
  * answers `note-deleted` and keeps nothing.
  */
@@ -22,7 +22,7 @@ export const payload = commandPayload('applyRemoteContent', {
   noteId: entityId('note'),
   note: content(noteRecord),
   blocks: v.array(blockInput),
-  expectedRevision: v.nullable(revision),
+  expectedRevision: revision,
 });
 
 export const result = outcomeSchema;
