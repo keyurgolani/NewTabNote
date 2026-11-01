@@ -125,7 +125,7 @@ test('a stored chat reply in plain Markdown renders as before', async ({ extensi
 const shownAddresses = page => page.evaluate(() => [...document.querySelectorAll('.ai-chat-message.assistant .ai-message-content')]
   .map(reply => [...reply.querySelectorAll('a[href]')].map(link => link.getAttribute('href'))));
 
-test('a link in a stored reply keeps its address only when the link rule allows it, code in its address included', async ({ extension }) => {
+test('a link in a stored reply keeps its address only when the link rule allows it', async ({ extension }) => {
   test.setTimeout(60_000);
   await extension.seedOnboarded();
   const reply = [
@@ -148,6 +148,7 @@ test('the link rule reads each address as the sanitized HTML holds it', async ({
     '<a href="https://example.test/y">h</a>',
     '<a href="MAILTO:team@example.test">m</a>',
     '<a href="#" class="wiki-link" data-note-name="Groceries">w</a>',
+    '<a href="x:y" class="wiki-link" data-note-name="Groceries">k</a>',
     '<a href="#">p</a>',
     '<a href="other.html">r</a>',
   ].join(' ')));
@@ -156,6 +157,7 @@ test('the link rule reads each address as the sanitized HTML holds it', async ({
     '<a href="https://example.test/y">h</a>',
     '<a href="MAILTO:team@example.test">m</a>',
     '<a href="#" class="wiki-link" data-note-name="Groceries">w</a>',
+    '<a class="wiki-link" data-note-name="Groceries">k</a>',
     '<a>p</a>',
     '<a>r</a>',
   ].join(' '));
