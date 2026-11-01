@@ -83,12 +83,12 @@ import { hostTimers, randomIds } from './messaging.js';
  *   report that throws changes nothing the run does.
  * @property {boolean} [purgeRecoveryPoints] - PURGE_RECOVERY_POINTS unless a test says otherwise
  * @property {PurgeEvents | null} [events] - the worker's failure events (#20), which a stopped
- *   purge and its end go to
+ *   purge or stopped transforms, and their ends, go to
  */
 
 /**
- * Where the worker's purge journals a stop and its end: the worker's failure events
- * (composition/trust.js), best effort
+ * Where the worker's purge and its transforms journal a stop and its end: the worker's failure
+ * events (composition/trust.js), best effort
  * @typedef {{event: (code: string, fields?: Record<string, unknown>, failure?: unknown) => void}} PurgeEvents
  */
 
@@ -159,6 +159,34 @@ export function journalPurge(events, outcome) {
     }
   } catch {
     // Best effort: the purge never hears of the journal's
+  }
+}
+
+/**
+ * Journals what the data transforms stopped at and their end (#20): `storage.transforms-stopped`
+ * with the code of a run that stopped or failed, once per code. So not a run whose code the
+ * stop it found recorded has (`previous`), since a start before it journaled that code: a retry
+ * that stops the same way, or a run that backed off on that stop. And
+ * `storage.transforms-completed` once they reach this build's logical version, which takes the
+ * stop record with it, so a later stop is journaled again, but not on a database the run only
+ * made (`made`), where they had nothing to change, as the run's own end isn't journaled there
+ * (migrationEvents). Neither raises an incident in R1 (event-codes.js). Codes only.
+ * @param {PurgeEvents | null | undefined} events
+ * @param {TransformOutcome | null} ended
+ * @param {{made?: boolean}} [options] - `made`: the attempt before them made the database
+ */
+export function journalTransforms(events, ended, { made = false } = {}) {
+  if (!events || !ended) return;
+  try {
+    if (ended.status === 'transformed') {
+      if (!made) events.event('storage.transforms-completed', {});
+    } else if (ended.status === 'space-blocked' || ended.status === 'failed') {
+      const code = ended.failure ? ended.failure.code : null;
+      // The code goes as the failure's, so the journal keeps it only when it's a registered one
+      if (!ended.previous || ended.previous.code !== code) events.event('storage.transforms-stopped', {}, { code });
+    }
+  } catch {
+    // Best effort: the transforms never hear of the journal's
   }
 }
 
@@ -564,24 +592,26 @@ export function createWorkerClient(host = workerHost()) {
   /**
    * The transforms the database still needs (transforms.js), once the latest attempt is in and
    * left it at this build's version. The kernel never waits for them: they run under the points
-   * lock, in batches a page's commit goes between. The keepalive spans them.
+   * lock, in batches a page's commit goes between. The keepalive spans them, and the journal
+   * hears what they stopped at and their end (journalTransforms).
    * @returns {Promise<TransformOutcome | null>}
    */
   const requestTransforms = () => {
     const next = done
-      .then(ended =>
-        ended.status === 'migrated' || ended.status === 'current'
-          ? runTransforms({
-              indexedDB: host.indexedDB,
-              keyRange: host.keyRange,
-              locks: host.locks,
-              estimate: host.estimate,
-              crypto: host.crypto,
-              clock: systemClock,
-              logger: storageLogger,
-            })
-          : null,
-      )
+      .then(async attempt => {
+        if (attempt.status !== 'migrated' && attempt.status !== 'current') return null;
+        const ended = await runTransforms({
+          indexedDB: host.indexedDB,
+          keyRange: host.keyRange,
+          locks: host.locks,
+          estimate: host.estimate,
+          crypto: host.crypto,
+          clock: systemClock,
+          logger: storageLogger,
+        });
+        journalTransforms(host.events, ended, { made: attempt.shape === 'none' });
+        return ended;
+      })
       .catch(error => {
         storageLogger.warn('storage-transform-not-started', { code: failureOf(error).code });
         return null;

@@ -310,6 +310,26 @@ describe('logger.event (#20 slice 1, AC3)', () => {
     );
   });
 
+  it("appends the data transforms' stop and end as plain events, with no incident to raise or resolve in R1 (#17 PR 3a)", async () => {
+    assert.deepEqual(EVENT_CODES['storage.transforms-stopped'], { fields: ['errorCode', 'surface'] });
+    assert.deepEqual(EVENT_CODES['storage.transforms-completed'], { fields: ['surface'] });
+    const { journal, records } = await journalOn({ strict: true });
+    assert.equal(
+      journal.event('storage.transforms-stopped', { surface: 'worker-internal', errorCode: 'space-short' }),
+      true,
+    );
+    assert.equal(journal.event('storage.transforms-completed', { surface: 'worker-internal' }), true);
+    await journal.flush();
+    assert.deepEqual(
+      (await records.events()).map(event => [event.code, event.fields]),
+      [
+        ['storage.transforms-stopped', { surface: 'worker-internal', errorCode: 'space-short' }],
+        ['storage.transforms-completed', { surface: 'worker-internal' }],
+      ],
+    );
+    assert.deepEqual(await records.incidents(), []);
+  });
+
   it('gives a logger an event method and leaves its level methods console-only', () => {
     const logger = createLogger('warn');
     const journal = /** @type {any} */ ({ event: () => true });

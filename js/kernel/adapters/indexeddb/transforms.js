@@ -28,6 +28,8 @@
  * A run that read every store and then stopped, short of space or on a point that didn't
  * verify, records the stop in `meta` (TRANSFORM_STOP_KEY), and the worker's starts in the next
  * TRANSFORM_RETRY_AFTER_MS don't read them all again, as the runner's starts don't (review R79).
+ * Each outcome holds the stop the run found recorded (`previous`), so the worker journals a
+ * stop once per code (composition/background.js, #20); a completed step takes the stop with it.
  *
  * Logical 2 gives each note without a placement its placement, kind, and lifecycle from its
  * flags, by #1's rules (domain/placement.js). It also gives a note whose `updatedAt` no index
@@ -141,13 +143,24 @@ const STRICT = Object.freeze({ durability: 'strict' });
  * @property {string | null} recoveryPointId
  * @property {{code: string} | null} failure
  * @property {boolean} backedOff - it found a standing stop, and read nothing
+ * @property {{status: TransformStop['status'], code: string} | null} previous - the stop an
+ *   earlier run recorded, as this one found it in `meta`, standing or not, which the worker
+ *   journals a stop against, once per code (#20)
  */
 
 /**
  * @param {Partial<TransformOutcome> & {status: TransformStatus}} fields
  * @returns {TransformOutcome}
  */
-const outcome = fields => ({ steps: [], filled: 0, recoveryPointId: null, failure: null, backedOff: false, ...fields });
+const outcome = fields => ({
+  steps: [],
+  filled: 0,
+  recoveryPointId: null,
+  failure: null,
+  backedOff: false,
+  previous: null,
+  ...fields,
+});
 
 /** @returns {TransformCounts} */
 const noCounts = () => ({ read: 0, filled: 0, staleFolder: 0, dailyWithoutDate: 0 });
@@ -487,12 +500,13 @@ async function transform(options) {
     }
     const state = await readState(db);
     const { schema, stop } = state;
+    const previous = stop && typeof stop.code === 'string' ? { status: stop.status, code: stop.code } : null;
     const from = schema && typeof schema.logicalVersion === 'number' ? schema.logicalVersion : null;
-    if (!schema || from === null) return outcome({ status: 'failed', failure: { code: 'meta-unreadable' } });
+    if (!schema || from === null) return outcome({ status: 'failed', failure: { code: 'meta-unreadable' }, previous });
     const steps = pendingTransforms(from);
-    if (steps.length === 0) return outcome({ status: 'current' });
+    if (steps.length === 0) return outcome({ status: 'current', previous });
     if (standing(stop, clock.now(), retryAfterMs)) {
-      return outcome({ status: stop.status, failure: { code: stop.code }, backedOff: true });
+      return outcome({ status: stop.status, failure: { code: stop.code }, backedOff: true, previous });
     }
     // A cut-off run's progress, unless it names a step this build doesn't run
     const progress = state.progress && steps.some(step => step.id === state.progress?.id) ? state.progress : undefined;
@@ -512,13 +526,13 @@ async function transform(options) {
           counts: scan.counts,
         });
       }
-      return outcome({ status: 'transformed', steps: steps.map(step => step.id) });
+      return outcome({ status: 'transformed', steps: steps.map(step => step.id), previous });
     }
 
     const made = await pointForRun({ ...options, db, io, schema, progress });
     if (made.status !== 'ready') {
       if (made.read) await recordStop(db, { status: made.status, code: made.code, at: clock.now() }, logger);
-      return outcome({ status: made.status, failure: { code: made.code } });
+      return outcome({ status: made.status, failure: { code: made.code }, previous });
     }
     const recoveryPointId = made.point.id;
     await between('point-ready');
@@ -554,7 +568,7 @@ async function transform(options) {
       at = step.to;
       await between('step-done');
     }
-    return outcome({ status: 'transformed', steps: recorded, filled, recoveryPointId });
+    return outcome({ status: 'transformed', steps: recorded, filled, recoveryPointId, previous });
   } finally {
     db.close();
   }

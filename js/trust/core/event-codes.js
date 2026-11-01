@@ -148,6 +148,13 @@ export const EVENT_CODES = Object.freeze({
     fields: Object.freeze(['subjectId']),
     resolves: 'storage.purge-stopped',
   }),
+  // #17 PR 3a's data transforms in the worker (transforms.js): a run that stopped short of
+  // space or on a point that didn't verify, or failed, with why, once per code until the code
+  // changes or the transforms complete, and their end, once they reach this build's logical
+  // version. Neither raises an incident in R1. The incident comes with #20's next slice, beside
+  // `transforms-pending`, and with it `resolves` and SUCCESS_SITES' entry for the end.
+  'storage.transforms-stopped': Object.freeze({ fields: Object.freeze(['errorCode', 'surface']) }),
+  'storage.transforms-completed': Object.freeze({ fields: Object.freeze(['surface']) }),
 });
 
 /** Every registered code, sorted */
