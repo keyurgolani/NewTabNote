@@ -512,11 +512,16 @@ describe('the recovered note, as the Design gate approved it', () => {
     assert.deepEqual(recovered.todoProgress, { completed: 1, total: 2 });
   });
 
-  it('a draft that renamed the note and only deleted blocks keeps the new title in a recovered note', async () => {
-    const { blocks } = await recover({ blocks: [], deletedBlockIds: ['a2'], name: 'Alpha plan, renamed', titleOrigin: 'typed' });
-    assert.deepEqual(blocks.map((row) => row.type), ['callout']);
-    assert.equal(blocks[0].content, `${CLOSED_A} ${SAVED_ELSEWHERE} ${ONLY_CHANGED} That tab also deleted a block, which is still in that note.`
-      + ` That tab also renamed it “Alpha plan, renamed”. ${COPY}`);
+  it("a draft that renamed the note and changed no block keeps the typed name in a recovered note, under the original's title", async () => {
+    const renamedOnly = { blocks: [], name: 'Alpha plan, renamed', titleOrigin: 'typed' };
+    const withDeletes = await recover({ ...renamedOnly, deletedBlockIds: ['a2'] });
+    assert.equal(withDeletes.recovered.name, RECOVERED_A);
+    assert.deepEqual(withDeletes.blocks.map((row) => row.type), ['callout']);
+    assert.equal(withDeletes.blocks[0].content, `${CLOSED_A} ${SAVED_ELSEWHERE} That tab also deleted a block, which is still in that note.`
+      + ` That tab also renamed it “Alpha plan, renamed”. ${COPY}`, 'nothing below, so no word of blocks below');
+    const alone = await recover(renamedOnly);
+    assert.equal(alone.recovered.name, RECOVERED_A);
+    assert.equal(alone.blocks[0].content, `${CLOSED_A} ${SAVED_ELSEWHERE} That tab also renamed it “Alpha plan, renamed”. ${COPY}`);
   });
 
   it('the toast says where both notes are, with the title cut at 40', () => {

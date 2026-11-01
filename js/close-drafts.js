@@ -163,7 +163,9 @@ const CloseDrafts = (function initCloseDrafts() {
     } else {
       sentences.push(`That ${kind} was saved elsewhere too, so NewTabNote kept the changes here as a regular note and left it as it is.`);
     }
-    sentences.push('Below are only the blocks that tab changed.');
+    // With no changed block the draft renamed the note (a deletes-only one is dropped), so nothing
+    // comes below, and the new name is in the rename sentence: working text until the director looks
+    if (draft.blocks.length > 0) sentences.push('Below are only the blocks that tab changed.');
     if (stillThere === 1) sentences.push('That tab also deleted a block, which is still in that note.');
     else if (stillThere > 1) sentences.push(`That tab also deleted ${stillThere} blocks, which are still in that note.`);
     if (renamed(original, draft)) sentences.push(`That tab also renamed it “${draft.name}”.`);
