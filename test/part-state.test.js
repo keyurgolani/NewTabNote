@@ -66,6 +66,21 @@ function shown({ part, host }) {
   };
 }
 
+/** Everything the live region says from now on, in order, without the emptying before each */
+function sayings(part) {
+  const words = [];
+  let text = part.liveRegion.textContent;
+  Object.defineProperty(part.liveRegion, 'textContent', {
+    configurable: true,
+    get: () => text,
+    set: (value) => {
+      text = String(value);
+      if (text) words.push(text);
+    },
+  });
+  return words;
+}
+
 /** A load that answers when `finish(result)` is called */
 function deferred() {
   let finish;
@@ -276,6 +291,66 @@ describe('PartState (js/ui/part-state.js)', () => {
     await settle();
     ctx.part.anywayButton.click();
     assert.deepEqual(ctx.seen.reloads, ['guarded', 'guarded', 'now']);
+  });
+
+  it("Try again after a failed save says it's saving while the guards run, and says the failure again when the save fails again", async () => {
+    const failed = "Failed to save your changes, so the page didn't reload.";
+    const tryLine = 'Please try again. If it keeps failing, copy anything you need, then reload.';
+    const saving = 'Saving your changes before reloading.';
+    const ctx = charts({ saves: false });
+    await ctx.part.load(async () => ({ status: 'failed', reason: 'evaluation-failed', retry: null }));
+    ctx.part.reloadButton.focus();
+    ctx.part.reloadButton.click();
+    await settle();
+    const words = sayings(ctx.part);
+    ctx.part.tryButton.click();
+    // Try again keeps its place and focus, aria-disabled, and the row says what the guards do
+    // where "Please try again." was, as Reload reads Saving… on itself
+    assert.equal(ctx.part.tryButton.getAttribute('aria-disabled'), 'true');
+    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    assert.deepEqual(shown(ctx), {
+      placed: true,
+      state: 'save-failed',
+      form: 'part-state',
+      line: failed,
+      note: saving,
+      buttons: ['Try again', 'Reload anyway'],
+      said: saving,
+    });
+    await settle();
+    // The save failed again, and the row says so again, with Try again pressable and focused
+    assert.deepEqual(shown(ctx), {
+      placed: true,
+      state: 'save-failed',
+      form: 'part-state',
+      line: failed,
+      note: tryLine,
+      buttons: ['Try again', 'Reload anyway'],
+      said: `${failed} ${tryLine}`,
+    });
+    assert.deepEqual(words, [saving, `${failed} ${tryLine}`]);
+    assert.equal(ctx.part.tryButton.getAttribute('aria-disabled'), null);
+    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    assert.deepEqual(ctx.seen.reloads, ['guarded', 'guarded']);
+  });
+
+  it("Try again after a failed save gives way to an editor's own notice that now explains it, with the save's words back", async () => {
+    let notice = null;
+    const reloads = [];
+    const ctx = charts({
+      part: { reload: { guarded: async () => { reloads.push('guarded'); return { reloaded: false }; }, now: () => {}, ownNotice: () => notice } },
+    });
+    await ctx.part.load(async () => ({ status: 'failed', reason: 'evaluation-failed', retry: null }));
+    ctx.part.reloadButton.click();
+    await settle();
+    notice = ctx.doc.createElement('button');
+    ctx.doc.body.appendChild(notice);
+    ctx.part.tryButton.focus();
+    ctx.part.tryButton.click();
+    await settle();
+    assert.deepEqual([ctx.part.state, ctx.part.lineNote.textContent], ['save-failed', 'Please try again. If it keeps failing, copy anything you need, then reload.']);
+    assert.equal(ctx.doc.activeElement, notice);
+    assert.deepEqual(reloads, ['guarded', 'guarded']);
   });
 
   it("lets an editor's own notice speak when it explains the failed save, and moves focus to its button", async () => {
