@@ -95,9 +95,11 @@ describe('the security baseline (scripts/build/security-baseline.js)', () => {
   it('fails on an edit to each source that holds the network rules with no entry, and passes with one', () => {
     assert.deepEqual(SOURCES, [
       'js/kernel/composition/destinations.js',
+      'js/kernel/composition/destination-rows.js',
       'js/kernel/composition/destination-match.js',
       'js/kernel/composition/network-guard.js',
       'js/kernel/composition/network-guard-install.js',
+      'js/kernel/composition/network-guard-first.js',
       'js/kernel/composition/api-request.js',
       'js/kernel/composition/worker-network.js',
       'js/offscreen.js',
@@ -156,9 +158,28 @@ describe('the security baseline (scripts/build/security-baseline.js)', () => {
     assert.deepEqual(codes(check({ manifest: later }).problems), ['security/csp-repeated']);
   });
 
+  it("reads the policy's characters as Chromium does: only ASCII whitespace separates, and anything else unprintable fails", () => {
+    const policy = MANIFEST.content_security_policy.extension_pages;
+    for (const space of ['\u00a0', '\u2003', '\u3000', '\ufeff']) {
+      const manifest = withPolicy(policy.replace("form-action 'none'", `form-action${space}'none'`));
+      assert.equal(cspOf(manifest)['form-action'], undefined, JSON.stringify(space));
+      driftsThenPasses({ manifest }, ['security/csp-characters', 'security/drift']);
+    }
+    // A control character, and a directive name Chromium doesn't read as one
+    for (const changed of [policy.replace("base-uri 'none'", "base-uri\u0000'none'"), policy.replace("base-uri 'none'", "base_uri 'none'")]) {
+      const manifest = withPolicy(changed);
+      assert.equal(cspOf(manifest)['base-uri'], undefined, JSON.stringify(changed.slice(0, 40)));
+      driftsThenPasses({ manifest }, ['security/csp-characters', 'security/drift']);
+    }
+    // Tabs, line feeds, form feeds and carriage returns are ASCII whitespace, and read as spaces
+    const spaced = withPolicy(policy.replace("form-action 'none'", "form-action\t'none'").replace("base-uri 'none'", "\r\nbase-uri\f'none'"));
+    assert.deepEqual(cspOf(spaced), cspOf(MANIFEST));
+    assert.deepEqual(check({ manifest: spaced }).problems, []);
+  });
+
   it('compares hash and nonce sources with their case, and keywords, schemes and hosts without', () => {
-    assert.deepEqual(cspOf(withPolicy("SCRIPT-SRC 'SELF' 'SHA256-AbC=' 'nonce-XyZ' HTTPS: HTTPS://Example.TEST/Path")), {
-      'script-src': ["'nonce-XyZ'", "'self'", "'sha256-AbC='", 'https:', 'https://example.test/Path'],
+    assert.deepEqual(cspOf(withPolicy("SCRIPT-SRC 'SELF' 'SHA256-AbC=' 'nonce-XyZ' HTTPS: HTTPS://Example.TEST/Path Example.TEST/Other *.Example.test")), {
+      'script-src': ["'nonce-XyZ'", "'self'", "'sha256-AbC='", '*.example.test', 'example.test/Other', 'https:', 'https://example.test/Path'],
     });
     const policy = MANIFEST.content_security_policy.extension_pages.replace("script-src 'self'", "script-src 'self' 'sha256-AbC='");
     const { inputs } = check({ manifest: withPolicy(policy) });
@@ -240,6 +261,80 @@ describe('security/changes.json only grows (checkHistory)', () => {
     assert.match(lines.join('\n'), /can't read/);
     lines.length = 0;
     assert.equal(cli.main(['--history-only'], { ...io, env: { CI: 'true' } }), 1, lines.join('\n'));
+  });
+});
+
+describe('npm run check:security-baseline -- --base, on a git repository', () => {
+  const os = require('node:os');
+  const { execFileSync } = require('node:child_process');
+
+  /** A repository holding this tree's security/changes.json at HEAD, and a build dir with the manifest */
+  function repository() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-history-'));
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=ntn', '-c', 'user.email=ntn@example.test', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, stdio: 'pipe' });
+    git('init', '-q');
+    fs.mkdirSync(path.join(dir, 'security'));
+    fs.writeFileSync(path.join(dir, 'security', 'changes.json'), read('security/changes.json'));
+    git('add', '.');
+    git('commit', '-q', '-m', 'base');
+    return dir;
+  }
+  const run = (argv, root, env = { CI: 'true' }) => {
+    const lines = [];
+    const code = cli.main(argv, { log: (line) => lines.push(line), error: (line) => lines.push(line), env, root });
+    return { code, text: lines.join('\n') };
+  };
+
+  it('fails on a committed entry rewritten, and passes once it is restored', () => {
+    const dir = repository();
+    try {
+      const file = path.join(dir, 'security', 'changes.json');
+      const kept = fs.readFileSync(file, 'utf8');
+      assert.equal(run(['--history-only', '--base', 'HEAD'], dir).code, 0);
+      const rewritten = JSON.parse(kept);
+      rewritten.entries[0].summary = 'rewritten';
+      fs.writeFileSync(file, JSON.stringify(rewritten));
+      const failed = run(['--history-only', '--base', 'HEAD'], dir);
+      assert.equal(failed.code, 1, failed.text);
+      assert.match(failed.text, /security\/history/);
+      fs.writeFileSync(file, kept);
+      assert.equal(run(['--history-only', '--base', 'HEAD'], dir).code, 0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('with --print, still fails on the history', () => {
+    const dir = repository();
+    try {
+      const file = path.join(dir, 'security', 'changes.json');
+      const rewritten = JSON.parse(fs.readFileSync(file, 'utf8'));
+      rewritten.entries[0].summary = 'rewritten';
+      fs.writeFileSync(file, JSON.stringify(rewritten));
+      fs.mkdirSync(path.join(dir, 'dist'));
+      fs.writeFileSync(path.join(dir, 'dist', 'manifest.json'), JSON.stringify(MANIFEST));
+      for (const file of [...SOURCES, 'security/destinations.json', 'security/network-ledger.json']) {
+        fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        fs.copyFileSync(path.join(ROOT, file), path.join(dir, file));
+      }
+      const printed = run([path.join(dir, 'dist'), '--print', '--base', 'HEAD'], dir);
+      assert.equal(printed.code, 1, printed.text);
+      assert.match(printed.text, /"digest"/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("tells a base with no file from one git can't read, and in CI fails on the second", () => {
+    const answers = (lsTree) => (args) => {
+      if (args[0] === 'rev-parse') return 'abc\n';
+      if (args[0] === 'ls-tree') return lsTree();
+      if (args[0] === 'show') return '{"entries": []}';
+      throw new Error(`unexpected git ${args.join(' ')}`);
+    };
+    assert.deepEqual(cli.baseCopy('HEAD', ROOT, answers(() => '')), { text: null });
+    assert.deepEqual(cli.baseCopy('HEAD', ROOT, answers(() => 'security/changes.json\n')), { text: '{"entries": []}' });
+    assert.ok('unreadable' in cli.baseCopy('HEAD', ROOT, answers(() => { throw new Error('fatal: bad object'); })));
   });
 });
 

@@ -640,6 +640,8 @@ describe('the service worker, whose first module is the guard (js/background.js)
     const send = (message, sender) => started.dispatch('runtime.onMessage', message, sender, () => {});
     await send({ type: 'NETWORK_REFUSED', report }, SENDER);
     await send({ type: 'NETWORK_REFUSED', report: { ...report, surface: 'sidepanel' } }, { id: 'another', url: 'chrome-extension://another/x.html' });
+    // Another extension's page with one of this one's page names: only the sender check stops it
+    await send({ type: 'NETWORK_REFUSED', report }, { id: 'another', url: 'chrome-extension://another/sidepanel.html' });
     await send({ type: 'NETWORK_REFUSED', report: { ...report, errorCode: 'note text' } }, SENDER);
     await send({ type: 'NETWORK_REFUSED', report }, { id: 'test-extension', url: 'chrome-extension://test-extension/js/background.js' });
     await started.drain();

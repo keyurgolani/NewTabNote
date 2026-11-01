@@ -22,10 +22,22 @@ before(async () => {
   network = await import(`../${MODULE}`);
 });
 
-/** A runtime that records the listeners added to it */
-function runtime() {
+/**
+ * chrome.runtime stubbed on globalThis, which the module reads itself, recording the listeners
+ * added to it: `run` installs with it in place, and puts back what was there
+ */
+function withRuntime(run) {
   const listeners = [];
-  return { id: 'test-extension', onMessage: { addListener: (listener) => listeners.push(listener) }, listeners };
+  const chrome = { runtime: { id: 'test-extension', onMessage: { addListener: (listener) => listeners.push(listener) } } };
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'chrome');
+  globalThis.chrome = chrome;
+  try {
+    run();
+  } finally {
+    if (before) Object.defineProperty(globalThis, 'chrome', before);
+    else delete globalThis.chrome;
+  }
+  return { listeners };
 }
 
 /** What the listener answers `message` from `sender` with, and whether it kept the channel open */
@@ -38,10 +50,15 @@ function ask(listener, message, sender) {
 }
 
 describe("the worker's network (js/kernel/composition/worker-network.js)", () => {
+  it("listens on chrome.runtime itself, whatever runtime it's handed", async () => {
+    const handed = [];
+    const chrome = withRuntime(() => network.installWorkerNetwork({ runtime: { id: 'another', onMessage: { addListener: (listener) => handed.push(listener) } } }));
+    assert.deepEqual([handed.length, chrome.listeners.length], [0, 1]);
+  });
+
   it("adds the worker's one onMessage listener, and runs a handler it's given for this extension's own senders only", async () => {
-    const chrome = runtime();
     const asked = [];
-    network.installWorkerNetwork({ runtime: chrome, ownHandlers: { 'an.own.message': async (request) => (asked.push(request.value), { ok: request.value }) } });
+    const chrome = withRuntime(() => network.installWorkerNetwork({ ownHandlers: { 'an.own.message': async (request) => (asked.push(request.value), { ok: request.value }) } }));
     assert.equal(chrome.listeners.length, 1);
     const [listener] = chrome.listeners;
     assert.deepEqual(await ask(listener, { type: 'an.own.message', value: 1 }, OWN), { answer: { ok: 1 }, kept: true });
@@ -52,14 +69,12 @@ describe("the worker's network (js/kernel/composition/worker-network.js)", () =>
   });
 
   it('answers a handler that throws or rejects with its error, and leaves a message nobody handles alone', async () => {
-    const chrome = runtime();
-    network.installWorkerNetwork({
-      runtime: chrome,
+    const chrome = withRuntime(() => network.installWorkerNetwork({
       ownHandlers: {
         throws: () => { throw new Error('thrown'); },
         rejects: async () => { throw new Error('rejected'); },
       },
-    });
+    }));
     const [listener] = chrome.listeners;
     assert.deepEqual((await ask(listener, { type: 'throws' }, OWN)).answer, { error: 'thrown' });
     assert.deepEqual((await ask(listener, { type: 'rejects' }, OWN)).answer, { error: 'rejected' });
@@ -68,12 +83,12 @@ describe("the worker's network (js/kernel/composition/worker-network.js)", () =>
   });
 
   it("never lets a handler it's given take one of its own messages", async () => {
-    const chrome = runtime();
     const taken = [];
     const handlers = Object.fromEntries(network.MESSAGE_TYPES.map((type) => [type, () => { taken.push(type); return {}; }]));
-    network.installWorkerNetwork({ runtime: chrome, ownHandlers: handlers, quiet: true });
+    const chrome = withRuntime(() => network.installWorkerNetwork({ ownHandlers: handlers, quiet: true }));
     const [listener] = chrome.listeners;
-    for (const type of network.MESSAGE_TYPES) await ask(listener, { type, report: {}, url: 'https://example.test/', options: {} }, { id: 'another' });
+    // From this extension's own page, so the sender check lets each through to whoever takes it
+    for (const type of network.MESSAGE_TYPES) await ask(listener, { type, report: {}, url: 'https://example.test/', options: {} }, OWN);
     assert.deepEqual(taken, []);
     assert.deepEqual([...network.MESSAGE_TYPES].sort(), ['API_REQUEST', 'NETWORK_REFUSED', 'OFFSCREEN_API_REQUEST']);
   });
@@ -85,6 +100,8 @@ describe('js/background.js installs it, and handles none of its messages itself'
 
   it('calls installWorkerNetwork once, and adds no onMessage listener, proxy or offscreen document of its own', () => {
     assert.equal(code.match(/\binstallWorkerNetwork\(/g)?.length, 1);
+    // With the guard and the journal, and nothing else
+    assert.match(code, /\binstallWorkerNetwork\(\{ guard: contextGuard, events: failureEvents \}\);/);
     assert.match(code, /import \{[^}]*\binstallWorkerNetwork\b[^}]*\} from '\.\/kernel\/composition\/worker-network\.js';/);
     for (const pattern of [/onMessage\s*\.\s*addListener/, /\bonMessage\b/, /API_REQUEST/, /NETWORK_REFUSED|REFUSAL_MESSAGE/, /createDocument/, /\bcheckRequest\b/, /\bsend\(/, /api-request\.js/, /network-refusals\.js/, /\brefuseAll\b/, /\bonRefused\b/]) {
       assert.doesNotMatch(code, pattern);

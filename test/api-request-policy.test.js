@@ -302,6 +302,19 @@ async function worker({ offscreenAnswer = async () => ({ ok: true, status: 200, 
 }
 
 describe('API_REQUEST in the worker (js/background.js)', () => {
+  it("refuses another extension's or a web page's message for a row the proxy reaches, and fetches only its own page's", async () => {
+    const { fetches, ask } = await worker();
+    const message = { type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/models', options: {} };
+    for (const sender of [{ id: 'another-extension', url: 'chrome-extension://another-extension/newtab.html' }, { id: 'test-extension', url: 'https://evil.example/', tab: { id: 1 } }]) {
+      const answer = await ask(message, sender);
+      assert.deepEqual(answer, { error: 'request-refused' }, JSON.stringify(sender));
+    }
+    assert.deepEqual(fetches, []);
+    // The control: the same request from this extension's own page goes
+    assert.equal((await ask(message, page())).status, 200);
+    assert.deepEqual(fetches.map((fetched) => fetched.url), ['https://api.z.ai/api/paas/v4/models']);
+  });
+
   it("refuses another extension's or a web page's message, and fetches nothing", async () => {
     const { fetches, ask } = await worker();
     const message = { type: 'API_REQUEST', url: 'https://api.openai.com/v1/models', options: {} };
