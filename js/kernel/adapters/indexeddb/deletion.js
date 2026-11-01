@@ -13,7 +13,7 @@
 
 import { PURGE_PENDING } from '../../core/domain/tombstone.js';
 import { TOMBSTONES_STORE } from './registry.js';
-import { result } from './requests.js';
+import { committed, result } from './requests.js';
 
 /** @typedef {import('../../core/domain/tombstone.js').TombstoneRecord} TombstoneRecord */
 
@@ -22,17 +22,6 @@ export const PURGE_INDEX = 'purge';
 
 /** @type {IDBTransactionOptions} */
 const STRICT = Object.freeze({ durability: 'strict' });
-
-/**
- * Resolves when `tx` commits, and rejects with its error when it aborts
- * @param {IDBTransaction} tx
- * @returns {Promise<void>}
- */
-const committed = tx =>
-  new Promise((resolve, reject) => {
-    tx.addEventListener('complete', () => resolve());
-    tx.addEventListener('abort', () => reject(tx.error || new DOMException('The transaction aborted', 'AbortError')));
-  });
 
 /**
  * Puts the tombstones a commit's units put again, with the deleted note's last content

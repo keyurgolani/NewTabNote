@@ -23,7 +23,7 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { failureOf, isTransient, openFailureOf } from './failures.js';
-import { abort, result } from './requests.js';
+import { abort, endOf, result } from './requests.js';
 
 /** @typedef {import('../../../trust/core/ports.js').TrustStore} TrustStore */
 /** @typedef {import('../../../trust/core/ports.js').TrustStoreName} TrustStoreName */
@@ -72,16 +72,8 @@ export const TRUST_OPEN_WITHIN_MS = 5000;
 /** @type {IDBTransactionOptions} */
 const STRICT = Object.freeze({ durability: 'strict' });
 
-/**
- * @param {IDBTransaction} tx
- * @returns {Promise<{committed: true} | {committed: false, error: DOMException | null}>}
- */
-function ending(tx) {
-  return new Promise(resolve => {
-    tx.addEventListener('complete', () => resolve({ committed: true }));
-    tx.addEventListener('abort', () => resolve({ committed: false, error: tx.error }));
-  });
-}
+/** How a transaction ends, Chrome's close of its connection included (requests.js) */
+const ending = endOf;
 
 /**
  * Creates each store and index version 1 has that `db` lacks. Runs only inside the upgrade.

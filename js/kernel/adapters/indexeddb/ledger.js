@@ -25,7 +25,7 @@ import { UnavailableError, rejected } from '../../core/contracts/outcomes.js';
 import { digestOf } from '../../core/memory/fingerprint.js';
 import { failureOf } from './failures.js';
 import { META_STORE, OPERATIONS_STORE } from './registry.js';
-import { result } from './requests.js';
+import { committed, endOf, result } from './requests.js';
 
 /** @typedef {import('../../core/contracts/outcomes.js').Committed} Committed */
 /** @typedef {import('../../core/contracts/outcomes.js').Conflict} Conflict */
@@ -156,8 +156,9 @@ function sweepBatch(db, { cutoff, maxRows, batch }) {
         cursor.continue();
       };
     };
-    tx.oncomplete = () => resolve(deleted);
-    tx.onabort = () => reject(tx.error || new DOMException('The transaction was aborted', 'AbortError'));
+    endOf(tx).then(end =>
+      end.committed ? resolve(deleted) : reject(end.error || new DOMException('The transaction was aborted', 'AbortError')),
+    );
   });
 }
 
@@ -195,10 +196,7 @@ export async function sweepLedger({
     }
     const done = db.transaction(META_STORE, 'readwrite', STRICT);
     done.objectStore(META_STORE).put({ key: SWEPT_KEY, sweptAt: now });
-    await new Promise((resolve, reject) => {
-      done.oncomplete = () => resolve(undefined);
-      done.onabort = () => reject(done.error);
-    });
+    await committed(done);
     return { swept: true, deleted };
   } catch (error) {
     throw failure(error);
