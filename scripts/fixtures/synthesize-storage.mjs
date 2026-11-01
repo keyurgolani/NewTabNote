@@ -582,6 +582,42 @@ v8(
   },
 );
 
+// After every other fixture too (#17 PR 4a, Q8): the block types the e2e specs seed through
+// test/fixtures/storage/profile-store.mjs that v8.basic has none of, as the block serializer
+// writes them, which recorded/v8.v1.4.0.blocks.json records from v1.4.0's own editor save
+v8(
+  'v8.block-types',
+  "A code block, a bookmark and a table, as v1.4.0's block serializer writes them, with the fields each type adds.",
+  r => {
+    const typed = note('v8', 'block-types-note', 'Block types', { createdAt: T0 + 90000, updatedAt: T0 + 90000 });
+    return {
+      ...r,
+      canvases: [...r.canvases, typed],
+      elements: [
+        ...r.elements,
+        block('block-types-code', typed.id, 0, 'npm run build', { type: 'code' }),
+        block('block-types-bookmark', typed.id, 1, '', {
+          type: 'bookmark',
+          url: 'https://example.test/docs',
+          title: 'Build docs',
+          description: '',
+          favicon: '',
+        }),
+        block('block-types-table', typed.id, 2, '', {
+          type: 'table',
+          rows: 2,
+          cols: 2,
+          tableData: [
+            ['a', 'b'],
+            ['1', '2'],
+          ],
+          hasHeaderRow: true,
+        }),
+      ],
+    };
+  },
+);
+
 fs.mkdirSync(OUT, { recursive: true });
 for (const value of fixtures) {
   fs.writeFileSync(path.join(OUT, `${value.header.id}.json`), `${JSON.stringify(value, null, 2)}\n`);
