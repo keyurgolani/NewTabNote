@@ -442,6 +442,45 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
   });
 
+  it("closing the whole tab commits the pop-out's pending edit with the page's own close, its blocks alone and at once, and the pop-out's close after it writes nothing more (#33)", { timeout: 10_000 }, async () => {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    type(pip, 'charlie in the pop-out');
+    const opened = spyTransactions(Storage);
+    const committed = spyCommits(Storage);
+    // The page's pagehide fires first, then the pop-out's
+    env.window.fire('pagehide', { persisted: false });
+    assert.deepEqual(writesOf(opened), [{ stores: ['elements'], mode: 'readwrite' }], "the pop-out's blocks, over the blocks alone");
+    assert.deepEqual(committed, [['elements']], 'committed before the page goes');
+    pipWindow.fire('pagehide');
+    assert.equal(writesOf(opened).length, 1, "the pop-out's own close finds it written");
+    await settle();
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
+  });
+
+  it("a page hidden into the back/forward cache leaves the pop-out's edit to its own save (#33)", { timeout: 10_000 }, async () => {
+    const { pip } = await openPiP(env, 'C');
+    type(pip, 'charlie in the pop-out');
+    const opened = spyTransactions(Storage);
+    env.window.fire('pagehide', { persisted: true });
+    assert.equal(writesOf(opened).length, 0);
+    assert.notEqual(pip.saveTimeout, null, "the pop-out's debounce runs on");
+  });
+
+  it("a pop-out closed earlier leaves no listener on the page, so the page's own close writes nothing for it (#33)", { timeout: 10_000 }, async () => {
+    const listening = () => (env.window.listeners.pagehide || []).length;
+    const before = listening();
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    assert.equal(listening(), before + 1, "the pop-out's editor listens for the page's close");
+    type(pip, 'charlie in the pop-out');
+    pipWindow.fire('pagehide');
+    await settle();
+    assert.equal(listening(), before, 'its listener went with the pop-out');
+    const opened = spyTransactions(Storage);
+    env.window.fire('pagehide', { persisted: false });
+    assert.equal(writesOf(opened).length, 0);
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
+  });
+
   it('switching panes: each editor keeps its own pending edit on its own note', async () => {
     const secondary = makeEditor(env);
     await secondary.loadNote('B');

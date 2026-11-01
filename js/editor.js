@@ -4306,7 +4306,8 @@ class BlockEditor {
 
   /**
    * Write pending edits when the page is hidden or closed. Each editor listens
-   * on its own document and window, so the PiP editor covers the PiP window.
+   * on its own document and window, so the PiP editor covers the PiP window,
+   * and the PiP editor also listens for this page's own close.
    * @returns {void}
    */
   _bindLifecycleFlush() {
@@ -4332,7 +4333,21 @@ class BlockEditor {
           if (!event.persisted) writeCloseDrafts();
         });
       }
-      win.addEventListener('pagehide', (event) => this._writePendingNow({ closing: ownPage && !event.persisted }));
+      // The pop-out's editor writes through this page's connection, and when the whole tab
+      // closes, this page's pagehide fires before the pop-out's, so a write the pop-out opens
+      // after it is lost. So the pop-out's editor also writes at this page's own close, with the
+      // page's closing writes (#33). Its listener goes when the pop-out closes, so a pop-out
+      // closed earlier leaves none on the page.
+      const pageClose = ownPage ? null : new AbortController();
+      if (pageClose) {
+        window.addEventListener('pagehide', (event) => {
+          if (!event.persisted) this._writePendingNow({ closing: true });
+        }, { signal: pageClose.signal });
+      }
+      win.addEventListener('pagehide', (event) => {
+        if (pageClose && !event.persisted) pageClose.abort();
+        this._writePendingNow({ closing: ownPage && !event.persisted });
+      });
     }
   }
 
