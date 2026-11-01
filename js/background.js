@@ -300,7 +300,8 @@ async function captureToDailyNote(item) {
       blockData = {
         id: Utils.generateId(),
         type: 'text',
-        content: item.content + (item.source ? ` (Source: ${item.source})` : ''),
+        // The selection and its page are plain text, escaped into the block's rich content
+        content: Utils.escapePlainText(item.content) + (item.source ? ` (Source: ${Utils.escapePlainText(item.source)})` : ''),
         canvasId: note.id,
         order: Date.now()
       };

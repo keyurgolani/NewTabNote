@@ -3144,9 +3144,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
   stripHtml(html) {
     if (!html) return '';
-    const div = document.createElement('div');
+    // Parsed in a document of its own, never an element of the page's
+    const div = document.implementation.createHTMLDocument('').createElement('div');
     div.innerHTML = html;
-    return div.textContent || div.innerText || '';
+    return div.textContent || '';
   }
 
   generateContentHash(content) {

@@ -41,6 +41,30 @@ const NON_TEXT_INPUTS = ['button', 'checkbox', 'color', 'file', 'hidden', 'image
  * @property {boolean} isRetry - The retry after a failed save; failing again shows the error toast
  */
 
+/** The note icon the wiki-link and template pickers show, packaged markup */
+const NOTE_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+  <polyline points="14 2 14 8 20 8"></polyline>
+</svg>`;
+
+/**
+ * The drag data type of a block drag's token. The editor puts a fresh token in each block
+ * drag it starts, so a drop can tell a drag this page's editor started from any other that
+ * carries the same data types (BlockEditor.takeOwnBlockDrag). A token holds for one drop at
+ * most: the drop that reads it uses it up, a drop on the editor clears it, and so do the next
+ * dragstart and the dragend.
+ */
+const BLOCK_DRAG_TOKEN_TYPE = 'application/x-block-token';
+
+/** @type {string|null} The token of the block drag this page's editor has in progress */
+let ownBlockDragToken = null;
+
+/** A new block drag token: 128 random bits, as hex */
+function newBlockDragToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 class BlockEditor {
   constructor(config = {}) {
     this.root = config.root || document;
@@ -827,9 +851,44 @@ class BlockEditor {
    */
   stripHtmlTags(html) {
     if (!html) return '';
-    const div = this.doc.createElement('div');
+    // Parsed in a document of its own, never an element of the page's
+    const inert = this.doc.implementation.createHTMLDocument('');
+    const div = inert.createElement('div');
     div.innerHTML = html;
-    return div.textContent || div.innerText || '';
+    return div.textContent || '';
+  }
+
+  /**
+   * One picker item, as the slash menu, the wiki-link picker, and the template picker show it:
+   * `iconHtml` is packaged markup, and the title and description are set as text, so a name
+   * shows exactly as typed
+   * @param {string} className
+   * @param {string} iconHtml
+   * @param {string} title
+   * @param {string} [description]
+   * @returns {HTMLElement}
+   */
+  _pickerItem(className, iconHtml, title, description) {
+    const item = this.doc.createElement('div');
+    item.className = className;
+    const icon = this.doc.createElement('div');
+    icon.className = 'slash-menu-item-icon';
+    icon.innerHTML = iconHtml;
+    const text = this.doc.createElement('div');
+    text.className = 'slash-menu-item-text';
+    const titleEl = this.doc.createElement('div');
+    titleEl.className = 'slash-menu-item-title';
+    titleEl.textContent = title;
+    text.appendChild(titleEl);
+    if (description !== undefined) {
+      const desc = this.doc.createElement('div');
+      desc.className = 'slash-menu-item-desc';
+      desc.textContent = description;
+      text.appendChild(desc);
+    }
+    item.appendChild(icon);
+    item.appendChild(text);
+    return item;
   }
 
   /**
@@ -1145,9 +1204,10 @@ class BlockEditor {
     const beforeSnapshot = this.snapshotBlock(block);
     const oldType = block.type;
 
-    // Extract text content from incompatible block types (Req 12.3)
+    // Extract text content from incompatible block types (Req 12.3): plain text, such as a
+    // table's cells, escaped into the rich content
     if (['image', 'video', 'file', 'bookmark', 'equation', 'table'].includes(oldType)) {
-      block.content = this.extractBlockTextContent(block) || '';
+      block.content = Utils.escapePlainText(this.extractBlockTextContent(block) || '');
     }
 
     block.type = newType;
@@ -1579,19 +1639,7 @@ class BlockEditor {
     }
 
     filtered.forEach((name, index) => {
-      const item = this.doc.createElement('div');
-      item.className = `slash-menu-item ${index === this.wikiMenuIndex ? 'active' : ''}`;
-      item.innerHTML = `
-        <div class="slash-menu-item-icon">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
-        </div>
-        <div class="slash-menu-item-text">
-          <div class="slash-menu-item-title">${name}</div>
-        </div>
-      `;
+      const item = this._pickerItem(`slash-menu-item ${index === this.wikiMenuIndex ? 'active' : ''}`, NOTE_ICON, name);
       item.addEventListener('click', () => this.selectWikiMenuItem(name));
       this.wikiMenuItems.appendChild(item);
     });
@@ -1744,19 +1792,7 @@ class BlockEditor {
     }
 
     filtered.forEach((template, index) => {
-      const item = this.doc.createElement('div');
-      item.className = `slash-menu-item ${index === this.templateMenuIndex ? 'active' : ''}`;
-      item.innerHTML = `
-        <div class="slash-menu-item-icon">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
-        </div>
-        <div class="slash-menu-item-text">
-          <div class="slash-menu-item-title">${template.name}</div>
-        </div>
-      `;
+      const item = this._pickerItem(`slash-menu-item ${index === this.templateMenuIndex ? 'active' : ''}`, NOTE_ICON, template.name);
       item.addEventListener('click', () => this.selectTemplateItem(template.id));
       this.templateMenuItems.appendChild(item);
     });
@@ -1795,9 +1831,9 @@ class BlockEditor {
       // Clone block data and generate new ID
       const newData = { ...blockData, id: Utils.generateId(), canvasId: this.noteId };
 
-      // Variable replacement
+      // Variable replacement: escaped in the rich content; a table's cells take them as plain text
       if (newData.content) {
-        newData.content = this.processTemplateVariables(newData.content);
+        newData.content = this.processTemplateVariables(newData.content, { rich: true });
       }
       if (newData.tableData) {
         newData.tableData = newData.tableData.map(row =>
@@ -1829,22 +1865,27 @@ class BlockEditor {
   }
 
   /**
-   * Process variables in template content
+   * Process variables in template content. The values are plain text: in a block's rich
+   * content (`rich`) they go in escaped, so they read as text there and in an attribute's
+   * value, quoted either way; a table's cells hold plain text and take them as they are.
+   * @param {string} text
+   * @param {{rich?: boolean}} [options]
+   * @returns {string}
    */
-  processTemplateVariables(text) {
+  processTemplateVariables(text, { rich = false } = {}) {
     if (typeof text !== 'string') return text;
 
     const now = new Date();
     const variables = {
       '{{date}}': now.toLocaleDateString(),
       '{{time}}': now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      '{{title}}': this.noteData?.name || 'Untitled',
+      '{{title}}': String(this.noteData?.name || 'Untitled'),
       '{{datetime}}': now.toLocaleString(),
     };
 
     let result = text;
     for (const [key, value] of Object.entries(variables)) {
-      result = result.split(key).join(value);
+      result = result.split(key).join(rich ? Utils.escapeHtml(value) : value);
     }
     return result;
   }
@@ -2793,18 +2834,10 @@ class BlockEditor {
 
     types.forEach((type, index) => {
       const info = BlockTypes[type];
-      const item = this.doc.createElement('div');
-      item.className = 'slash-menu-item';
+      // The icon is packaged markup; the name and description are set as text
+      const item = this._pickerItem('slash-menu-item', info.icon, info.name, info.description);
       item.dataset.type = type;
-      item.dataset.index = index;
-
-      item.innerHTML = `
-        <div class="slash-menu-item-icon">${info.icon}</div>
-        <div class="slash-menu-item-text">
-          <div class="slash-menu-item-title">${info.name}</div>
-          <div class="slash-menu-item-desc">${info.description}</div>
-        </div>
-      `;
+      item.dataset.index = String(index);
 
       this.slashMenuItems.appendChild(item);
     });
@@ -2900,9 +2933,23 @@ class BlockEditor {
   // ============ Drag and Drop ============
 
   /**
+   * Whether `dataTransfer` belongs to the block drag this page's editor has in progress: it
+   * carries the token the editor put in it at dragstart. The drop that asks uses the token up.
+   * @param {DataTransfer} dataTransfer
+   * @returns {boolean}
+   */
+  static takeOwnBlockDrag(dataTransfer) {
+    const own = ownBlockDragToken !== null && dataTransfer.getData(BLOCK_DRAG_TOKEN_TYPE) === ownBlockDragToken;
+    ownBlockDragToken = null;
+    return own;
+  }
+
+  /**
    * Handle drag start
    */
   onDragStart(e) {
+    // A new drag ends any token an earlier one left
+    ownBlockDragToken = null;
     const blockEl = e.target.closest('.block');
     if (!blockEl) return;
 
@@ -2920,6 +2967,9 @@ class BlockEditor {
       e.dataTransfer.setData('application/x-block-content', textContent || '');
       e.dataTransfer.setData('application/x-block-type', block.type || 'text');
       e.dataTransfer.setData('application/x-block-html', block.content || '');
+      // A fresh token for this drag: a drop takes the rich content only from a drag with it
+      ownBlockDragToken = newBlockDragToken();
+      e.dataTransfer.setData(BLOCK_DRAG_TOKEN_TYPE, ownBlockDragToken);
     }
   }
 
@@ -2927,6 +2977,7 @@ class BlockEditor {
    * Handle drag end
    */
   onDragEnd(e) {
+    ownBlockDragToken = null;
     this.isDragging = false;
     this.draggedBlock = null;
 
@@ -2967,6 +3018,9 @@ class BlockEditor {
    */
   onDrop(e) {
     e.preventDefault();
+    // The drag ends here. Its token goes now: a reorder renders the blocks again, so the
+    // dragend after it reaches a removed element and never gets to onDragEnd
+    ownBlockDragToken = null;
     this.container.classList.remove('drag-over');
 
     // Handle file drop
@@ -4975,7 +5029,8 @@ class BlockEditor {
       if (result && result.trim()) {
         // Record undo before replacing content (Req 20.3)
         const beforeSnapshot = this.snapshotBlock(block);
-        block.content = result.trim();
+        // The model's reply is plain text, escaped into the block's rich content
+        block.content = Utils.escapePlainText(result.trim());
         this.pushUndo({
           type: 'content',
           blockId: block.id,

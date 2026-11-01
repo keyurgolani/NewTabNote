@@ -250,6 +250,18 @@ function replaceTags(text, by, nonEmpty) {
 
 const Utils = {
   /**
+   * Plain text as rich text: the HTML Standard's escaping of a text node, which is what an
+   * element that holds only that text serializes to, so it renders as the text and nothing
+   * else. Anything but a string reads as its string, and null or undefined as empty.
+   * @param {unknown} text
+   * @returns {string}
+   */
+  escapePlainText(text) {
+    const value = text === null || text === undefined ? '' : String(text);
+    return value.replace(/[&\u00a0<>]/g, char => ({ '&': '&amp;', '\u00a0': '&nbsp;', '<': '&lt;', '>': '&gt;' })[char]);
+  },
+
+  /**
    * `<[^>]*>` (or `<[^>]+>`, with `nonEmpty`) replaced by `by`, in one pass (replaceTags above)
    * @param {string} text
    * @param {string} by
