@@ -334,7 +334,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.notEqual(editor.saveTimeout, null);
   });
 
-  it('pagehide (closing the tab) commits the pending edit\'s blocks before the handler returns (#142)', async () => {
+  it('pagehide (closing the tab) commits the pending edit\'s blocks before the handler returns (#33)', async () => {
     const opened = spyTransactions(Storage);
     const committed = spyCommits(Storage);
     type(editor, 'tab closing');
@@ -346,7 +346,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.equal((await Storage.getNote('A')).preview, '', "the note's record catches up on its next save");
   });
 
-  it('pagehide writes nothing for a note the editor found deleted, as a closing write commits without the read that finds it gone (#142)', async () => {
+  it('pagehide writes nothing for a note the editor found deleted, as a closing write commits without the read that finds it gone (#33)', async () => {
     type(editor, 'typed into A');
     await Storage.permanentlyDeleteNote('A'); // another tab
     await runUntil(env, editor.flushSave());
@@ -425,7 +425,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'alpha in main' });
   });
 
-  it("closing the pop-out writes its whole pending save, title included, as this page and its connection stay (#142)", async () => {
+  it("closing the pop-out writes its whole pending save, title included, as this page and its connection stay (#33)", async () => {
     const { pip, pipWindow } = await openPiP(env, 'C');
     pip.noteData.name = 'Renamed in the pop-out';
     type(pip, 'charlie in the pop-out');

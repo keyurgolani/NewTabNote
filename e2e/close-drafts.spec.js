@@ -1,6 +1,6 @@
 /**
  * 1.4.3 item 1 (#33): text typed into a note just before its tab closes is kept even while
- * another page's transaction holds the notes' blocks. The close's own commit (#142) waits
+ * another page's transaction holds the notes' blocks. The close's own commit (#33) waits
  * behind that transaction and is lost with the page, so the editor also writes a close-time
  * draft to localStorage at pagehide, and the next start applies it before it shows the note.
  * Each round types a word inside the save's 500 ms debounce, has the Popup hold the blocks in

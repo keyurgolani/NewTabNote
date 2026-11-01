@@ -4317,7 +4317,7 @@ class BlockEditor {
     });
     const win = doc.defaultView;
     if (win) {
-      // A page that goes runs no more callbacks, so what this writes commits at once (#142).
+      // A page that goes runs no more callbacks, so what this writes commits at once (#33).
       // Only this page's own close is one: the pop-out's (Document PiP) editor lives in the
       // pop-out's document, and when the pop-out closes, this page and its connection stay, so
       // its pending save is written whole, title included. In a page, doc === document exactly
@@ -4359,7 +4359,7 @@ class BlockEditor {
     for (const copy of work.others) this._rewrite(copy, closing);
     if (!work.loaded && waiting.length === 0) return;
     // A closing write commits without the read that finds a deleted note gone, so a note this
-    // editor already found deleted stays deleted, its blocks included (#142)
+    // editor already found deleted stays deleted, its blocks included (#33)
     if (closing && this.noteGone) return;
 
     const isRetry = work.loaded ? work.loadedIsRetry : waiting.every((state) => state.isRetry);
