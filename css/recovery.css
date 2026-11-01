@@ -316,8 +316,16 @@ html {
   height: 1.4rem;
 }
 
-.trust-headline h1:focus {
+/* A heading the page moves focus to shows the ring only after keyboard use, and the ring hugs its text */
+.trust-headline h1:focus:not(:focus-visible),
+.trust-flow h4:focus:not(:focus-visible) {
   outline: none;
+  box-shadow: none;
+}
+
+.trust-headline h1,
+.trust-flow h4 {
+  width: fit-content;
 }
 
 .trust-headline-body {
@@ -670,10 +678,6 @@ html {
   margin-top: var(--space-region);
   padding-top: var(--space-region);
   border-top: 1px solid var(--seam);
-}
-
-.trust-flow h4:focus {
-  outline: none;
 }
 
 .trust-result {
