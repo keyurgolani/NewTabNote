@@ -983,15 +983,18 @@ class DatabaseManager {
     const variables = {
       '{{date}}': now.toLocaleDateString(),
       '{{time}}': now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      '{{title}}': note.name || 'Untitled',
+      '{{title}}': String(note.name || 'Untitled'),
       '{{datetime}}': now.toLocaleString(),
     };
 
-    const processText = (text) => {
+    // The values are plain text: in a block's rich content (`rich`) they go in escaped, so they
+    // read as text there and in an attribute's value, quoted either way; a table's cells hold
+    // plain text and take them as they are
+    const processText = (text, rich) => {
       if (typeof text !== 'string') return text;
       let result = text;
       for (const [key, value] of Object.entries(variables)) {
-        result = result.split(key).join(value);
+        result = result.split(key).join(rich ? Utils.escapeHtml(value) : value);
       }
       return result;
     };
@@ -1007,11 +1010,11 @@ class DatabaseManager {
       };
 
       if (newElement.content) {
-        newElement.content = processText(newElement.content);
+        newElement.content = processText(newElement.content, true);
       }
       if (newElement.tableData) {
         newElement.tableData = newElement.tableData.map(row =>
-          row.map(cell => processText(cell))
+          row.map(cell => processText(cell, false))
         );
       }
 

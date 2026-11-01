@@ -6,6 +6,8 @@ global.document = {
   getElementById: () => null,
   querySelector: () => null,
   querySelectorAll: () => [],
+  // A document of its own, where stripHtml parses stored HTML; its elements are this stub's
+  implementation: { createHTMLDocument: () => ({ createElement: (tag) => global.document.createElement(tag) }) },
   createElement: (tag) => {
     const el = {
       tagName: tag.toUpperCase(),

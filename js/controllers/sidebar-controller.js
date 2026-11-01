@@ -310,14 +310,28 @@ class SidebarController {
     }
   }
 
+  /**
+   * What a block drop stores. A drag this page's editor started (BlockEditor.takeOwnBlockDrag)
+   * gives the block's rich content; any other drag gives its plain text, escaped into rich
+   * content. The type is one the editor knows, or text.
+   * @param {DataTransfer} dataTransfer
+   * @returns {{text: string, type: string, html: string}}
+   */
+  _blockDropData(dataTransfer) {
+    const text = dataTransfer.getData('application/x-block-content');
+    const type = dataTransfer.getData('application/x-block-type');
+    const own = typeof BlockEditor !== 'undefined' && BlockEditor.takeOwnBlockDrag(dataTransfer);
+    const html = own ? dataTransfer.getData('application/x-block-html') : '';
+    const known = typeof BlockTypes !== 'undefined' && Object.prototype.hasOwnProperty.call(BlockTypes, type);
+    return { text, type: known ? type : 'text', html: html || Utils.escapePlainText(text) };
+  }
+
   async _onSidebarDrop(e) {
     if (!this._isBlockDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
 
-    const blockContent = e.dataTransfer.getData('application/x-block-content');
-    const blockType = e.dataTransfer.getData('application/x-block-type') || 'text';
-    const blockHtml = e.dataTransfer.getData('application/x-block-html') || blockContent;
+    const { text: blockContent, type: blockType, html: blockHtml } = this._blockDropData(e.dataTransfer);
 
     this._removeDropOverlay();
 
@@ -350,7 +364,8 @@ class SidebarController {
       const blockData = {
         id: typeof Utils !== 'undefined' ? Utils.generateId() : Date.now().toString(36),
         type: blockType,
-        content: htmlContent || textContent || '',
+        // With no rich content, the plain text goes in escaped
+        content: htmlContent || Utils.escapePlainText(textContent),
         canvasId: note.id,
         order: 0,
         createdAt: Date.now(),
@@ -965,8 +980,12 @@ class SidebarController {
         <svg class="folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
         </svg>
-        <span class="folder-name">${folder.name}</span>
       `;
+      // The icons are packaged markup; the folder's name is set as text
+      const nameEl = document.createElement('span');
+      nameEl.className = 'folder-name';
+      nameEl.textContent = folder.name;
+      header.appendChild(nameEl);
 
       header.addEventListener('click', async (e) => {
         e.stopPropagation();

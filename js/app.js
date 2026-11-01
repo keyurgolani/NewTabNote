@@ -2652,8 +2652,12 @@ class App {
         <svg class="folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
         </svg>
-        <span class="folder-name">${folder.name}</span>
       `;
+      // The icons are packaged markup; the folder's name is set as text
+      const nameEl = document.createElement('span');
+      nameEl.className = 'folder-name';
+      nameEl.textContent = folder.name;
+      header.appendChild(nameEl);
 
       header.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -4834,7 +4838,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     contentEl.className = 'ai-message-content';
 
     if (type === 'assistant') {
-      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
+      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdownText(content));
     } else {
       contentEl.textContent = content;
     }
@@ -4999,7 +5003,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
     // For assistant messages, render markdown; for user messages, use plain text
     if (type === 'assistant') {
-      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdown(content));
+      contentEl.innerHTML = sanitizeHtml(Utils.parseMarkdownText(content));
     } else {
       contentEl.textContent = content;
     }
@@ -6079,9 +6083,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    */
   stripHtml(html) {
     if (!html) return '';
-    const div = document.createElement('div');
+    // Parsed in a document of its own, never an element of the page's
+    const div = document.implementation.createHTMLDocument('').createElement('div');
     div.innerHTML = html;
-    return div.textContent || div.innerText || '';
+    return div.textContent || '';
   }
 
   /**
@@ -6090,8 +6095,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   htmlToMarkdown(html) {
     if (!html) return '';
 
-    // Create temporary element to parse HTML
-    const div = document.createElement('div');
+    // Create temporary element to parse HTML, in a document of its own, never the page's
+    const div = document.implementation.createHTMLDocument('').createElement('div');
     div.innerHTML = html;
 
     // Replace formatting tags with markdown equivalents
