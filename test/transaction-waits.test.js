@@ -81,7 +81,9 @@ describe("waits on a transaction's end", () => {
       export const method = (tx) => Object.assign(tx, { onabort() {} });
     `);
     assert.deepEqual(waits, [
-      'name type on tx',
+      // A const loop over literal names is read as each name
+      'complete on tx',
+      'abort on tx',
       'name END on tx',
       'complete on tx',
       'abort on tx',
@@ -126,7 +128,8 @@ describe("waits on a transaction's end", () => {
     assert.deepEqual(waits, [
       'name tx.addEventListener.bind(tx) on tx',
       'name key on tx',
-      'name handler on tx',
+      'complete on tx',
+      'abort on tx',
       "name handler on db.transaction('x', 'readwrite')",
       'abort on tx',
     ]);
@@ -158,6 +161,53 @@ describe("waits on a transaction's end", () => {
       'name key on writeTxn',
       'name key on store.txn',
       'name key on request.transaction',
+    ]);
+  });
+
+  it("reads a const loop's item over literal names as each of them, as the network guard names its refused socket's listeners, and no other loop's (the rebase onto #121's catch-up)", () => {
+    const waits = waitsIn(`
+      class Refused extends EventTarget {
+        constructor() {
+          super();
+          for (const type of ['error', 'close']) this.addEventListener(type, () => {});
+        }
+      }
+      export const handlers = (tx, done) => {
+        for (const handler of ['onerror', 'onsuccess']) tx[handler] = done;
+      };
+      export const one = (tx, done) => {
+        for (const type of ['error', 'abort']) tx.addEventListener(type, done);
+      };
+      export const reassignable = (tx, done) => {
+        for (let type of ['error']) tx.addEventListener(type, done);
+      };
+      export const listed = (tx, types, done) => {
+        for (const type of types) tx.addEventListener(type, done);
+      };
+      export const spread = (tx, more, done) => {
+        for (const type of ['error', ...more]) tx.addEventListener(type, done);
+      };
+      export const hidden = (tx, pick, done) => {
+        for (const type of ['error']) {
+          const type = pick();
+          tx.addEventListener(type, done);
+        }
+      };
+      export const later = (tx, done) => {
+        for (const type of ['error']) setTimeout((type) => tx.addEventListener(type, done));
+      };
+      export const keyed = (tx, done) => {
+        for (const [type] of [['error']]) tx.addEventListener(type, done);
+      };
+    `);
+    assert.deepEqual(waits, [
+      'abort on tx',
+      'name type on tx',
+      'name type on tx',
+      'name type on tx',
+      'name type on tx',
+      'name type on tx',
+      'name type on tx',
     ]);
   });
 
