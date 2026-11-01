@@ -114,6 +114,9 @@ describe('the packaged list of uncovered egress (#20 slice 2)', () => {
     const hosts = MANIFEST.host_permissions.map((/** @type {string} */ origin) => origin.replace(/\/\*$/, ''));
     const uncovered = sources.filter(source => {
       if (source === 'http://localhost:*') return !hosts.includes('http://localhost');
+      // An Ollama URL on 127.0.0.1 is one the user enters, which the list leaves out (egress.js),
+      // and the CSP reaches it with no host permission (#21 slice 1b, security/changes.json)
+      if (source === 'http://127.0.0.1:*') return false;
       return !hosts.includes(source);
     });
     assert.deepEqual(

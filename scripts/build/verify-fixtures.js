@@ -13,6 +13,10 @@
  *            use, the build and npm run package pass, and the secret is in neither their logs
  *            nor dist/ nor the zip (#27 AC9)
  *
+ * A fixture for another rule whose edits change what security/changes.json records sets
+ * securityEntry: the runner adds the entry a reviewed change would, so the build reports the
+ * fixture's rule and not security/drift as well (#21 slice 1b).
+ *
  *   npm run verify:fixtures                        every fixture
  *   npm run verify:fixtures -- <name>...           the ones named
  *   npm run verify:fixtures -- --jobs <n> ...      at most n at once (4 by default)
@@ -25,6 +29,7 @@ const path = require('node:path');
 const { CODES, plural } = require('./diagnostics.js');
 const { canaryLeaks } = require('./environment.js');
 const { fromDirectory } = require('./package-files.js');
+const { recordOf, inputsFrom, CHANGES_FILE } = require('./security-baseline.js');
 const { copyTree, runScript } = require('./tree.js');
 
 /** @typedef {import('./tree.js').Run} Run */
@@ -60,6 +65,7 @@ const CANARY_NAMES = Object.freeze(['NTN_CANARY_SECRET', 'VITE_NTN_CANARY_SECRET
  * @property {Edit[]} [edits]
  * @property {Edit[]} [distEdits] - for a package fixture, edits to the built tree before packaging
  * @property {Record<string, string>} [env] - set in the build's environment
+ * @property {boolean} [securityEntry] - add a security/changes.json entry for the edits
  */
 
 /**
@@ -104,6 +110,25 @@ function applyEdits(dir, edits) {
     if (next === text) throw new Error(`the edit to ${edit.file} changes nothing`);
     fs.writeFileSync(target, next);
   }
+}
+
+/**
+ * Add the security/changes.json entry a reviewed change would make for the tree at `dir` as
+ * edited: its issue, the parts it changes, the fixture's rule as why, and what it records. Edits
+ * that change nothing the latest entry records throw, so the flag can't outlive its reason.
+ * @param {string} dir
+ * @param {Fixture} fixture
+ */
+function recordSecurityEntry(dir, fixture) {
+  const file = path.join(dir, CHANGES_FILE);
+  const changes = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const latest = changes.entries[changes.entries.length - 1];
+  const { digest, parts } = recordOf(inputsFrom(dir, dir));
+  const files = Object.keys(parts).filter((name) => latest.parts[name] !== parts[name]);
+  if (files.length === 0) throw new Error(`securityEntry is set, and the edits change nothing ${CHANGES_FILE} records`);
+  // #27, the build fixtures' issue
+  changes.entries.push({ issue: 27, summary: `verify:fixtures: ${fixture.name}`, files, rationale: [{ change: 'the fixture\'s edits', why: fixture.rule }], digest, parts });
+  fs.writeFileSync(file, `${JSON.stringify(changes, null, 2)}\n`);
 }
 
 /**
@@ -172,6 +197,7 @@ async function runFixture(fixture) {
   try {
     copyTree(ROOT, dir);
     applyEdits(dir, fixture.edits || []);
+    if (fixture.securityEntry) recordSecurityEntry(dir, fixture);
 
     if (kind === 'build') {
       for (const mode of fixture.modes || MODES) {
@@ -282,4 +308,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }
 
-module.exports = { readFixtures, applyEdits, reportedCodes, runFixture, FIXTURES, CANARY_NAMES };
+module.exports = { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, runFixture, FIXTURES, CANARY_NAMES };

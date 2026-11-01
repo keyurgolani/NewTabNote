@@ -60,7 +60,7 @@ describe('privacy policy (AC9)', () => {
 
   it('is updated and no longer claims a wildcard host permission', () => {
     assert.doesNotMatch(policy, /https:\/\/_\/_/);
-    assert.match(policy, /\*\*Last Updated: October 20, 2026\*\*/);
+    assert.match(policy, /\*\*Last Updated: October 31, 2026\*\*/);
     assert.match(policy, /leave out trash, themes, version history, AI chat history, and settings/);
   });
 
@@ -74,6 +74,14 @@ describe('privacy policy (AC9)', () => {
       'PRIVACY_POLICY.md doesn\'t list the "sidePanel" permission',
       'PRIVACY_POLICY.md lists "tabs", which manifest.json doesn\'t request',
     ]);
+  });
+
+  it("takes the destinations the policy has to name from the registry, so a row added is one more it names", () => {
+    const { policyDestinations } = require('../scripts/check-notices.js');
+    const rows = JSON.parse(fs.readFileSync(path.join(ROOT, 'security', 'destinations.json'), 'utf8')).destinations;
+    assert.deepEqual(REQUIRED_DESTINATIONS, policyDestinations(rows));
+    const added = policyDestinations([...rows, { ...rows.find((row) => row.location === 'remote' && row.reachedBy === 'fetch'), id: 'example', origin: 'https://example.test' }]);
+    assert.deepEqual(added.filter((name) => !REQUIRED_DESTINATIONS.includes(name)), ['example.test']);
   });
 
   it('flags each missing network destination and undescribed host', () => {

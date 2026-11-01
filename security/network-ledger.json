@@ -382,7 +382,7 @@
   "proxies": [
     {
       "message": "API_REQUEST",
-      "handler": "js/background.js",
+      "handler": "js/kernel/composition/worker-network.js",
       "owner": 11,
       "removeWhen": "#11 moves the provider request proxy into its AI adapter"
     },

@@ -37,7 +37,8 @@ const { checkNoticeFiles, checkBanners, checkSourceMaps, checkVendor, checkBundl
 const { checkEnvironment, checkSourceEnvironment } = require('./environment.js');
 const { checkCommonJs } = require('./commonjs.js');
 const { checkBackgroundOutput, checkBackgroundSources } = require('./background.js');
-const { checkGuardPages, checkGuardScript } = require('./guard.js');
+const { checkGuardPages, checkGuardRows, checkGuardScript } = require('./guard.js');
+const { checkSecurityBaseline, firstPartyScripts } = require('./security-baseline.js');
 const { sourceInfo, buildId: computeBuildId, kernelVersions, writeBuildInfo } = require('./build-info.js');
 const { bundle } = require('./bundle.js');
 const { listedInputs } = require('./inputs.js');
@@ -201,6 +202,23 @@ function firstParty(sources) {
 }
 
 /**
+ * The security baseline (scripts/build/security-baseline.js) on the manifest the build wrote
+ * and the sources at `root`. A manifest that doesn't parse is the closure check's to report.
+ * @param {import('./package-files.js').PackageFiles} files
+ * @param {string} root
+ * @returns {Problem[]}
+ */
+function securityBaseline(files, root) {
+  let manifest;
+  try {
+    manifest = JSON.parse(files.text('manifest.json'));
+  } catch {
+    return [];
+  }
+  return checkSecurityBaseline({ manifest, read: (file) => fs.readFileSync(path.join(root, file), 'utf8'), scripts: firstPartyScripts(root) });
+}
+
+/**
  * Every check on what the build wrote and on the modules the bundle holds
  * @param {string} outDir
  * @param {Bundled} bundled
@@ -238,6 +256,8 @@ function checkOutput(outDir, bundled, root) {
     // The network guard first on every page, and the one the pages run (#21 slice 1b)
     ...checkGuardPages(files),
     ...checkGuardScript(files),
+    // The CSP, the permissions, the destinations and the network sources against security/
+    ...securityBaseline(files, root),
     ...checkBackgroundSources(firstParty(sources).filter(({ file }) => background.has(file))),
   ];
 }
@@ -311,7 +331,7 @@ async function build(argv = process.argv.slice(2)) {
 
     // 4. What the build wrote
     console.log('\n🔎 Checking the output...');
-    const checked = checkOutput(staging, bundled, ROOT_DIR);
+    const checked = [...checkOutput(staging, bundled, ROOT_DIR), ...await checkGuardRows(fromDirectory(staging, 'the build'), ROOT_DIR)];
     if (checked.length > 0) {
       checked.forEach(report);
       removeOutput(staging);

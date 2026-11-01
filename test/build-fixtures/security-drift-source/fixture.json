@@ -1,0 +1,12 @@
+{
+  "rule": "a source that holds the network rules changes with no security/changes.json entry that records it",
+  "expect": [
+    "security/drift"
+  ],
+  "edits": [
+    {
+      "file": "js/kernel/composition/network-guard.js",
+      "append": "\n// An edit with no entry\n"
+    }
+  ]
+}

@@ -146,6 +146,14 @@ test('the check:boundaries step passes --base whenever ledger-base.js wrote one'
   assert.match(step, /npm run check:boundaries -- \$\{BASE:\+--base "\$BASE"\}/);
 });
 
+test("the kernel job holds security/changes.json's history to the same base (#21 slice 1b)", () => {
+  const steps = WORKFLOW.split(/\n(?= {6}- name: )/);
+  const step = steps.find(text => text.startsWith('      - name: npm run check:security-baseline -- --history-only'));
+  assert.ok(step, 'no history step in the kernel job');
+  assert.match(step, /BASE: \$\{\{ steps\.ledger-base\.outputs\.base \}\}/);
+  assert.match(step, /npm run check:security-baseline -- --history-only \$\{BASE:\+--base "\$BASE"\}/);
+});
+
 test("pr-gate prints the kernel job's own local command instead of working out the base again", () => {
   const kernel = WORKFLOW.split('\n').find(line => /"kernel":/.test(line));
   assert.ok(kernel, 'no "kernel" entry in pr-gate COMMANDS');

@@ -20,6 +20,7 @@ const { buildEntries } = require('./inputs.js');
  */
 function copyTree(root, dest) {
   for (const entry of buildEntries()) {
+    fs.mkdirSync(path.dirname(path.join(dest, entry)), { recursive: true });
     fs.cpSync(path.join(root, entry), path.join(dest, entry), { recursive: true });
   }
   fs.symlinkSync(path.join(root, 'node_modules'), path.join(dest, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');

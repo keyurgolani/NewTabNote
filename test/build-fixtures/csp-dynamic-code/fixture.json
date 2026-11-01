@@ -3,6 +3,7 @@
   "expect": [
     "csp/dynamic-code"
   ],
+  "securityEntry": true,
   "edits": [
     {
       "file": "js/offscreen.js",

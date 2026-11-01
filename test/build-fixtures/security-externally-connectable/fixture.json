@@ -1,0 +1,14 @@
+{
+  "rule": "the manifest lets a web page or another extension connect to this one",
+  "expect": [
+    "security/drift",
+    "security/externally-connectable"
+  ],
+  "edits": [
+    {
+      "file": "manifest.json",
+      "replace": "  \"manifest_version\": 3,\n",
+      "with": "  \"manifest_version\": 3,\n  \"externally_connectable\": { \"ids\": [] },\n"
+    }
+  ]
+}

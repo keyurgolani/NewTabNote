@@ -3,6 +3,7 @@
   "expect": [
     "csp/policy"
   ],
+  "securityEntry": true,
   "edits": [
     {
       "file": "manifest.json",

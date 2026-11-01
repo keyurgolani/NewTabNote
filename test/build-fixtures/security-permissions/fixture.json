@@ -1,0 +1,14 @@
+{
+  "rule": "the manifest asks for a permission security/permissions.json doesn't list",
+  "expect": [
+    "security/drift",
+    "security/permissions"
+  ],
+  "edits": [
+    {
+      "file": "manifest.json",
+      "replace": "    \"sidePanel\"\n",
+      "with": "    \"sidePanel\",\n    \"tabs\"\n"
+    }
+  ]
+}

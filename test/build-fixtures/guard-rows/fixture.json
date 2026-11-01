@@ -1,0 +1,13 @@
+{
+  "rule": "the build inlines rows in the page guard that the validated registry doesn't have",
+  "expect": [
+    "guard/rows"
+  ],
+  "edits": [
+    {
+      "file": "scripts/build/vite-config.js",
+      "replace": "`export const DESTINATION_ROWS = ${JSON.stringify(rows)};\\n`",
+      "with": "`export const DESTINATION_ROWS = ${JSON.stringify({ compact: [.../** @type {any} */ (rows).compact, { origin: 'https://example.test', pathPrefix: '/' }] })};\\n`"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "about": "The permissions, host permissions and optional permissions v1.4.0 shipped with (git show v1.4.0:manifest.json), which test/security-baseline.test.js holds the required set to: no new install warning.",
+  "version": "1.4.0",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "offscreen",
+    "contextMenus",
+    "notifications",
+    "activeTab",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://openrouter.ai/*",
+    "https://api.x.ai/*",
+    "https://api.deepseek.com/*",
+    "https://api.mistral.ai/*",
+    "https://api.groq.com/*",
+    "https://dashscope-intl.aliyuncs.com/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://api.z.ai/*",
+    "https://open.bigmodel.cn/*",
+    "https://api.moonshot.ai/*",
+    "https://api.moonshot.cn/*",
+    "https://api.minimax.io/*",
+    "https://api.minimax.chat/*",
+    "http://localhost/*"
+  ],
+  "optional_permissions": [],
+  "optional_host_permissions": []
+}

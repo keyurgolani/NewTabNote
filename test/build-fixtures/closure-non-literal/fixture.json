@@ -3,9 +3,10 @@
   "expect": [
     "closure/non-literal"
   ],
+  "securityEntry": true,
   "edits": [
     {
-      "file": "js/background.js",
+      "file": "js/kernel/composition/worker-network.js",
       "replace": "documentUrls: [chrome.runtime.getURL('offscreen.html')]",
       "with": "documentUrls: [chrome.runtime.getURL(['offscreen', 'html'].join('.'))]"
     }

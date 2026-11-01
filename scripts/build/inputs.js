@@ -11,8 +11,8 @@ const { PAGES, BACKGROUND_ENTRY, CLASSIC_SCRIPTS, STATIC_FILES } = require('./vi
 
 /**
  * What the build reads besides the files it bundles and copies: the toolchain pin, the
- * lockfile, the type gate's projects and baseline, the reviewed lists the checks read, and the
- * build code
+ * lockfile, the type gate's projects and baseline, the reviewed lists the checks read, the
+ * security baseline (security/, and #16's counts it reads, #21 slice 1b), and the build code
  */
 const BUILD_INPUTS = Object.freeze([
   '.nvmrc',
@@ -24,6 +24,8 @@ const BUILD_INPUTS = Object.freeze([
   'ci',
   'build',
   'scripts',
+  'security',
+  'test/fixtures/design-token-baseline.json',
 ]);
 
 /** The directories the pages' stylesheets and every module graph read from */
@@ -38,7 +40,7 @@ function listedInputs() {
 }
 
 /**
- * The top-level entries a build reads, sorted
+ * The entries a build reads, sorted: top-level ones, and a file deeper down a check reads
  * @returns {string[]}
  */
 function buildEntries() {

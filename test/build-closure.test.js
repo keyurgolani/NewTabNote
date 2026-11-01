@@ -55,7 +55,7 @@ describe('the closure check on the sources the bundler reads', () => {
   });
 
   it('fails on a getURL or createDocument path built at run time, as ensureOffscreenDocument had', () => {
-    const background = 'js/background.js';
+    const background = 'js/kernel/composition/worker-network.js';
     const text = fs.readFileSync(path.join(__dirname, '..', background), 'utf8');
     const edited = text.replace(
       "documentUrls: [chrome.runtime.getURL('offscreen.html')]",
@@ -65,7 +65,7 @@ describe('the closure check on the sources the bundler reads', () => {
     const { problems } = checkClosure(sourcePackage({ edits: { [background]: edited } }));
     const nonLiteral = problems.filter(({ code }) => code === 'closure/non-literal');
     assert.equal(nonLiteral.length, 2, found(problems).join('\n'));
-    assert.ok(nonLiteral.every(({ subject }) => /^js\/background\.js:\d+:\d+$/.test(subject)));
+    assert.ok(nonLiteral.every(({ subject }) => /^js\/kernel\/composition\/worker-network\.js:\d+:\d+$/.test(subject)));
     assert.match(nonLiteral.map(({ message }) => message).join('\n'), /chrome\.runtime\.getURL gets a path built at run time[\s\S]*createDocument's url gets a path/);
     // And with the paths unknown, nothing names the offscreen document
     const offscreen = found(problems.filter(({ code }) => code === 'closure/unreferenced')).filter((line) => /offscreen/.test(line));
