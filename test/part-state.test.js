@@ -5,11 +5,15 @@
 // a failure says what fixes it, with Try again, then Reload beside it once Try again failed, or
 // Reload alone when trying again can't help; Try again and Reload keep their place and focus while
 // they run; Reload runs the page's save guards first and says when a save stopped it. Every state
-// is said once through a live region that's on the page before its words.
+// is said once through a live region that's on the page before its words. The status line's arc
+// turns for its first 5 s, and not at all under reduced motion.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { createLegacyEnv, settle } = require('./helpers/legacy-env');
+const { parse, walk, splitTopLevel } = require('../scripts/css-parser.js');
 
 /** A file that didn't load, as the loader answers it: with its retry, which fails again unless given */
 const missing = (retry) => ({ status: 'failed', reason: 'chunk-missing', retry: retry || (async () => missing()) });
@@ -367,5 +371,50 @@ describe('PartState (js/ui/part-state.js)', () => {
     const ctx = charts();
     await ctx.part.load(async () => { throw new Error('the place threw'); });
     assert.equal(ctx.part.state, 'threw');
+  });
+});
+
+/** Every rule in css/ that names the status line's arc, with the at-rules around it */
+function arcRules() {
+  const dir = path.join(__dirname, '..', 'css');
+  const rules = [];
+  for (const file of fs.readdirSync(dir).filter((name) => name.endsWith('.css')).sort()) {
+    walk(parse(fs.readFileSync(path.join(dir, file), 'utf8')), (node, ancestors) => {
+      if (node.type !== 'rule') return;
+      if (!splitTopLevel(node.prelude).some((selector) => /\.part-state-spin(?![\w-])/.test(selector))) return;
+      rules.push({
+        file,
+        at: ancestors.filter((ancestor) => ancestor.type === 'at-rule').map((ancestor) => `@${ancestor.name} ${ancestor.prelude}`),
+        values: Object.fromEntries(node.declarations.map(({ property, value, important }) => [property, important ? `${value} !important` : value])),
+      });
+    });
+  }
+  return rules;
+}
+
+/**
+ * How long an `animation` shorthand turns, in seconds: its duration times its iteration count
+ * @param {string} animation
+ */
+function turnsFor(animation) {
+  const words = animation.split(/\s+/);
+  const duration = words.find((word) => /^\d*\.?\d+m?s$/.test(word));
+  const count = words.find((word) => /^(\d*\.?\d+|infinite)$/.test(word));
+  if (!duration) return 0;
+  if (count === 'infinite') return Infinity;
+  const seconds = duration.endsWith('ms') ? parseFloat(duration) / 1000 : parseFloat(duration);
+  return seconds * (count ? Number(count) : 1);
+}
+
+describe("the status line's arc (css/editor.css)", () => {
+  it('turns for its first 5 s, then holds still beside the words, and not at all under reduced motion', () => {
+    const rules = arcRules();
+    assert.deepEqual(rules, [
+      { file: 'editor.css', at: [], values: { animation: 'spin 1s linear 5' } },
+      { file: 'editor.css', at: ['@media (prefers-reduced-motion: reduce)'], values: { animation: 'none' } },
+    ]);
+    // Motion past 5 s beside content needs a way to stop it (WCAG 2.2.2), and the model's load
+    // can run a minute
+    assert.equal(turnsFor(rules[0].values.animation), 5);
   });
 });
