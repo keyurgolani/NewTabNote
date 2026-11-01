@@ -45,6 +45,7 @@
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
+import { recoveredIdOf } from './close-draft-keys.js';
 
 /** @typedef {import('./note.js').NoteRecord} NoteRecord */
 /** @typedef {import('./note.js').BlockRecord} BlockRecord */
@@ -143,13 +144,9 @@ export function digest(block) {
  */
 export const blockDigest = (block, noteId) => digest({ ...block, canvasId: noteId });
 
-/**
- * The id of a draft's recovered note, the same at every start, so rule 0 finds the one an
- * earlier start made, a 1.4.3 start's included
- * @param {{id: string}} draft
- * @returns {string}
- */
-export const recoveredIdOf = draft => `${draft.id}-recovered`;
+// The id of a draft's recovered note lives beside the keys (close-draft-keys.js), so a page can
+// tell which notes a draft is for without loading these rules
+export { recoveredIdOf };
 
 /**
  * Whether `value` is a draft the applier can apply: 1.4.3's own check (isDraft), with ids that
