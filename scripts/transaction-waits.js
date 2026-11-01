@@ -7,11 +7,17 @@
  * `close`. Chrome fires neither event on a transaction a forced close catches, so a wait on them
  * alone never settles.
  *
- * A wait is an `oncomplete` or `onabort` handler set on anything, or a `complete` or `abort`
- * listener added with addEventListener. An `abort` on an AbortSignal (`signal`, a name ending in
- * `Signal`, or a `.signal` property) or on a FileReader the file makes with `new FileReader()`
+ * A wait is an `oncomplete` or `onabort` handler set on anything, by any assignment (`=`, `??=`,
+ * `||=`, ...), as an object literal's key (as Object.assign takes it), or by a call that names it
+ * (Object.defineProperty, Reflect.set), and a `complete` or `abort` listener added with
+ * addEventListener, called as a method, through brackets, or with `.call` or `.apply`. A
+ * listener for an event the scan can't read, one named by a variable, a constant, or a loop's
+ * item, counts as one too, so every event name is a literal, but in js/lib/: its vendored files,
+ * each pinned by its SHA-256 (js/lib/vendor.json), name events through variables as minified
+ * code does, and take every other rule. An `abort` on an AbortSignal
+ * (`signal`, or a `.signal` property) or on a FileReader the file makes with `new FileReader()`
  * isn't one. Anything else fails, whatever it's on, so a new wait goes through endOf or is told
- * apart here.
+ * apart here (R131).
  *
  *   node scripts/transaction-waits.js [root]   fail when js/ under root, the repository's by default, has one
  *
@@ -27,6 +33,8 @@ const ts = require('typescript');
 const ROOT_DIR = path.join(__dirname, '..');
 /** The one file that waits on a transaction's end, with the connection's close beside it */
 const ALLOWED = 'js/kernel/adapters/indexeddb/requests.js';
+/** The vendored libraries, minified, whose event names the scan doesn't hold to literals */
+const VENDORED = 'js/lib/';
 const EVENTS = new Set(['complete', 'abort']);
 const HANDLERS = new Map([['oncomplete', 'complete'], ['onabort', 'abort']]);
 
@@ -42,12 +50,40 @@ function literal(node) {
   return n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : null;
 }
 
-/** Whether `node` names an AbortSignal: `signal`, a name ending in `Signal`, or `x.signal` */
+/** The member `node` reads, `x.name` or `x['name']`, or null */
+function memberName(node) {
+  const n = strip(node);
+  if (ts.isPropertyAccessExpression(n)) return n.name.text;
+  if (ts.isElementAccessExpression(n)) return literal(n.argumentExpression);
+  return null;
+}
+
+/** An object literal member's name, a plain, quoted, or computed one, or null */
+function keyName(name) {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) return name.text;
+  return ts.isComputedPropertyName(name) ? literal(name.expression) : null;
+}
+
+/** Whether `node` names an AbortSignal: `signal`, or `x.signal` */
 function isSignal(node) {
   const n = strip(node);
-  const name = ts.isIdentifier(n) ? n.text : ts.isPropertyAccessExpression(n) ? n.name.text : null;
-  return name !== null && (name === 'signal' || /Signal$/.test(name));
+  return (ts.isIdentifier(n) && n.text === 'signal') || (ts.isPropertyAccessExpression(n) && n.name.text === 'signal');
 }
+
+/** Whether `n` is an assignment of any kind: `=`, `??=`, `||=`, `+=`, ... */
+const isAssignment = n =>
+  ts.isBinaryExpression(n) &&
+  n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+  n.operatorToken.kind <= ts.SyntaxKind.LastAssignment;
+
+/** Whether `n` is a member of an object literal with a name: a property, a method, an accessor */
+const isLiteralMember = n =>
+  (ts.isPropertyAssignment(n) ||
+    ts.isShorthandPropertyAssignment(n) ||
+    ts.isMethodDeclaration(n) ||
+    ts.isGetAccessorDeclaration(n) ||
+    ts.isSetAccessorDeclaration(n)) &&
+  ts.isObjectLiteralExpression(n.parent);
 
 /** Whether `node` is `new FileReader()` */
 function isNewReader(node) {
@@ -68,35 +104,76 @@ function readersOf(sf) {
 }
 
 /**
- * Each wait on a transaction's end in one file's source, as {file, line, event, on}: the event
- * waited for, and what it's set on as the source writes it
+ * What an object literal holding a handler sets it on: the first argument of the call it's
+ * passed to after it, as in Object.assign(tx, {…}), or the literal itself
+ */
+function holderOf(object) {
+  const call = object.parent;
+  if (ts.isCallExpression(call) && call.arguments.length > 1 && call.arguments[0] !== object) return call.arguments[0];
+  return object;
+}
+
+/**
+ * Each wait on a transaction's end in one file's source, as {file, line, event, named, on}: the
+ * event waited for, or null with `named`, the expression, for an event name the scan can't read,
+ * and what it's set on as the source writes it
  */
 function scanSource(file, text) {
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const readers = readersOf(sf);
   const waits = [];
-  const add = (node, event, receiver) => {
-    const on = strip(receiver);
-    if (event === 'abort' && (isSignal(on) || isNewReader(on) || (ts.isIdentifier(on) && readers.has(on.text)))) return;
+  const textOf = node => node.getText(sf).replace(/\s+/g, ' ').slice(0, 60);
+  /**
+   * @param {ts.Node} node - where the wait is
+   * @param {'complete' | 'abort' | null} event - null for a name the scan can't read
+   * @param {ts.Node | undefined} receiver
+   * @param {ts.Node} [named] - the expression naming an event the scan can't read
+   */
+  const add = (node, event, receiver, named) => {
+    const on = receiver ? strip(receiver) : node;
+    const exempt = isSignal(on) || isNewReader(on) || (ts.isIdentifier(on) && readers.has(on.text));
+    if (event !== 'complete' && exempt) return;
     const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-    waits.push({ file, line: line + 1, event, on: on.getText(sf).replace(/\s+/g, ' ').slice(0, 60) });
+    waits.push({ file, line: line + 1, event, named: named ? textOf(named) : null, on: textOf(on) });
+  };
+  const vendored = file.startsWith(VENDORED);
+  /** A listener for the event `name` names, added on `receiver` */
+  const listener = (node, name, receiver) => {
+    if (!name) return;
+    const event = literal(name);
+    if (event === null && !vendored) add(node, null, receiver, name);
+    else if (event !== null && EVENTS.has(event)) add(node, event, receiver);
   };
   (function walk(n) {
-    // x.oncomplete = …, x.onabort = …, and x['oncomplete'] = …
-    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    // x.oncomplete = …, x.onabort ??= …, x['oncomplete'] ||= …
+    if (isAssignment(n)) {
       const left = strip(n.left);
-      const name = ts.isPropertyAccessExpression(left)
-        ? left.name.text
-        : ts.isElementAccessExpression(left)
-          ? literal(left.argumentExpression)
-          : null;
+      const name = memberName(left);
       if (name !== null && HANDLERS.has(name)) add(n, HANDLERS.get(name), left.expression);
     }
-    // x.addEventListener('complete' | 'abort', …)
-    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(strip(n.expression))) {
+    // { oncomplete: …, onabort() {…} }, as Object.assign(tx, …) takes it
+    if (isLiteralMember(n)) {
+      const name = keyName(n.name);
+      if (name !== null && HANDLERS.has(name)) add(n, HANDLERS.get(name), holderOf(n.parent));
+    }
+    if (ts.isCallExpression(n)) {
       const callee = strip(n.expression);
-      const event = literal(n.arguments[0]);
-      if (callee.name.text === 'addEventListener' && event !== null && EVENTS.has(event)) add(n, event, callee.expression);
+      // Object.defineProperty(x, 'oncomplete', …), Reflect.set(x, 'onabort', …)
+      for (const arg of n.arguments) {
+        const name = literal(arg);
+        if (name !== null && HANDLERS.has(name)) add(n, HANDLERS.get(name), arg === n.arguments[0] ? undefined : n.arguments[0]);
+      }
+      // x.addEventListener(…), x?.addEventListener(…), x['addEventListener'](…)
+      if (memberName(callee) === 'addEventListener') listener(n, n.arguments[0], callee.expression);
+      // ….addEventListener.call(x, …) and ….addEventListener.apply(x, […])
+      if ((ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) && memberName(callee.expression) === 'addEventListener') {
+        const how = memberName(callee);
+        if (how === 'call') listener(n, n.arguments[1], n.arguments[0]);
+        if (how === 'apply' && n.arguments[1]) {
+          const list = strip(n.arguments[1]);
+          listener(n, ts.isArrayLiteralExpression(list) ? list.elements[0] || list : list, n.arguments[0]);
+        }
+      }
     }
     ts.forEachChild(n, walk);
   })(sf);
@@ -124,7 +201,9 @@ function collect(root = ROOT_DIR) {
 
 /** What a wait's problem says */
 const problemOf = wait =>
-  `${wait.file}:${wait.line} waits on ${wait.on}'s ${wait.event}: wait on a transaction's end with endOf(tx) from ${ALLOWED}, which also ends when the connection closes, since Chrome fires neither event on a transaction a forced close catches`;
+  `${wait.file}:${wait.line} ${
+    wait.event === null ? `listens on ${wait.on} for ${wait.named}, a name the scan can't read: name the event with a literal, and` : `waits on ${wait.on}'s ${wait.event}:`
+  } wait on a transaction's end with endOf(tx) from ${ALLOWED}, which also ends when the connection closes, since Chrome fires neither event on a transaction a forced close catches`;
 
 function main(argv = process.argv.slice(2), { log = console.log, error = console.error } = {}) {
   const root = argv[0] ? path.resolve(argv[0]) : ROOT_DIR;
@@ -139,4 +218,4 @@ function main(argv = process.argv.slice(2), { log = console.log, error = console
 
 if (require.main === module) process.exitCode = main();
 
-module.exports = { ALLOWED, scanSource, listFiles, collect, problemOf, main };
+module.exports = { ALLOWED, VENDORED, scanSource, listFiles, collect, problemOf, main };
