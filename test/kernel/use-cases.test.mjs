@@ -377,7 +377,7 @@ describe('units an adapter runs again', () => {
     const { log } = await runUnits(work, { notes: { 'their-daily': today } });
     // A Daily Note no index names is found by a scan, and gets its key and its entry (#17 PR 3b),
     // each going by logical 3's kept answer while its batches run, which this one has none of
-    // (#17 PR 4a, F10)
+    // (#17 PR 4a, F10). The capture reads its block's id before it puts the block (R131).
     assert.deepEqual(log, [
       'dailyAnswer',
       `get dailyIndex ${day}`,
@@ -385,6 +385,7 @@ describe('units an adapter runs again', () => {
       'has dailyIndex',
       'put notes their-daily',
       `put dailyIndex ${day}`,
+      'get blocks k1',
       'put blocks k1',
     ]);
     assert.deepEqual(work.done().changedIds, ['their-daily']);

@@ -454,6 +454,10 @@ export const noteCommands = {
           return rejected('not-found', 'folder-not-found');
         }
         if (await tx.get('notes', noteId)) return rejected('validation', 'note-exists');
+        // A new note holds no block yet, so a block id that's stored is another note's, which
+        // a create never takes from it, whatever note the block names (R131)
+        const stored = await Promise.all(records.map(block => tx.getKey('blocks', block.id)));
+        if (stored.some(key => key !== undefined)) return rejected('validation', 'block-of-another-note');
         tx.put('notes', note);
         tx.put('searchIndex', newSearchEntry(note, now));
         for (const block of records) tx.put('blocks', block);
@@ -930,6 +934,12 @@ export const noteCommands = {
       {
         stores: ['blocks'],
         async run(tx) {
+          // A capture adds a block under an id of its own, so one that's stored is refused, as
+          // insertBlocks refuses it: today's Daily Note's own, or another note's, which a capture
+          // never takes (R131). The record says which note holds it, where its key alone wouldn't.
+          const stored = await tx.get('blocks', blockId);
+          if (stored && stored.canvasId !== dailyId) return rejected('validation', 'block-of-another-note');
+          if (stored) return rejected('validation', 'duplicate-block');
           // A new Daily Note starts with the Daily Note template's blocks, as in Storage.ensureDailyNote
           if (created) {
             const copies = await dailyTemplateBlocks(tx, templateId, {
