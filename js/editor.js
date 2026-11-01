@@ -4325,7 +4325,8 @@ class BlockEditor {
    * @returns {void}
    */
   _leavePageWhenSaved() {
-    Promise.all(this._activeSaves().map((entry) => entry.promise)).then(() => {
+    // allSettled, so a save that ever rejects still leaves the decision to what's pending
+    Promise.allSettled(this._activeSaves().map((entry) => entry.promise)).then(() => {
       if (!this._hasPendingSave()) pageEditors.delete(this);
     });
   }
