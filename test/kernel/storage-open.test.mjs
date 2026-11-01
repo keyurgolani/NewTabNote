@@ -167,7 +167,9 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
           name,
         );
         assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before, `${name}: the versioned open changed it`);
-        assert.equal(await upgradeTo(of.real, 9), 'opened', `${name}: the refused connection is closed`);
+        // One past the database's own version, so a connection left open hears a versionchange
+        // and blocks the upgrade, as it would the runner's: at its own version none fires
+        assert.equal(await upgradeTo(of.real, before.version + 1), 'opened', `${name}: the refused connection is closed`);
       } else {
         // With nothing to keep, it makes the database at this build's version through the
         // registry's steps
