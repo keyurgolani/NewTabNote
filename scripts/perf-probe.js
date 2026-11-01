@@ -40,7 +40,7 @@ const { PROFILES, profileFixture } = require('./perf/profiles');
 const ROOT = path.join(__dirname, '..');
 const FORMAT = 'ntn-perf-probe/2';
 const DEFAULT_RUNS = 11;
-const TIMED = ['interactionReadyMs', 'markMs', 'heapBytes', 'driverMs', 'throttledAtMs', 'documentAtMs', 'domContentLoadedMs', 'keyTries'];
+const TIMED = ['interactionReadyMs', 'markMs', 'heapBytes', 'saveMs', 'driverMs', 'throttledAtMs', 'documentAtMs', 'domContentLoadedMs', 'keyTries'];
 
 /**
  * The options in `argv`, or a thrown Error that names what's wrong
@@ -156,7 +156,7 @@ function roundOrder(count, round) {
  */
 async function measureTiming({ packages, runs, profiles, log }) {
   // Loaded only for --timing, so the bytes alone need no browser
-  const { installCold, THROTTLE, SETTLE_MS, EDITOR, KEY } = require('./perf/timing');
+  const { installCold, THROTTLE, SETTLE_MS, EDITOR, KEY, SAVE_WAIT_MS } = require('./perf/timing');
   const result = {
     runs,
     order: packages.length > 1 ? `interleaved: every round runs each package once, rotated one place each round, balanced every ${packages.length} rounds` : 'one package',
@@ -165,6 +165,7 @@ async function measureTiming({ packages, runs, profiles, log }) {
     settleMs: SETTLE_MS,
     editor: EDITOR,
     key: KEY,
+    heap: `after a collection, once the save the key sets off has committed (saveMs), or ${SAVE_WAIT_MS} ms after the echo`,
     browser: null,
     reference: packages[0].label,
     profiles: {},
@@ -181,7 +182,7 @@ async function measureTiming({ packages, runs, profiles, log }) {
           const run = await installCold({ dist, fixture });
           result.browser = run.browser;
           measured[index][round] = run;
-          log(`${name} round ${round + 1}/${runs} ${label}: interaction-ready ${run.interactionReadyMs} ms, heap ${(run.heapBytes / 1048576).toFixed(2)} MiB`);
+          log(`${name} round ${round + 1}/${runs} ${label}: interaction-ready ${run.interactionReadyMs} ms, heap ${(run.heapBytes / 1048576).toFixed(2)} MiB, save ${run.saveMs === null ? 'none' : `+${run.saveMs} ms`}`);
         } catch (error) {
           measured[index][round] = null;
           failures[index].push({ round: round + 1, message: String(error && error.message ? error.message : error).split('\n')[0] });
