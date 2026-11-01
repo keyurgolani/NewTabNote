@@ -17,12 +17,18 @@ class AIChatController {
   /**
    * A reply's HTML, as every reply is rendered, streamed, finished or restored (#21): its
    * Markdown with its plain text shown as text (Utils.parseMarkdown), then sanitizeHtml as a
-   * second layer
+   * second layer. The link rule (BlockRendering.isLinkHref) then reads each link's address as
+   * the parsed HTML holds it, and a link it refuses keeps its text and loses its address.
    * @param {string} markdown
    * @returns {string}
    */
   static replyHtml(markdown) {
-    return sanitizeHtml(Utils.parseMarkdown(markdown));
+    const parsed = new DOMParser().parseFromString(sanitizeHtml(Utils.parseMarkdown(markdown)), 'text/html');
+    const { isLinkHref } = globalThis.BlockRendering;
+    for (const link of parsed.body.querySelectorAll('a[href]')) {
+      if (!isLinkHref(link.getAttribute('href'))) link.removeAttribute('href');
+    }
+    return parsed.body.innerHTML;
   }
 
   constructor({ settings, domRefs, logger, llm, documentClient }) {

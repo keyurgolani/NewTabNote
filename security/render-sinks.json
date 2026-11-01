@@ -94,6 +94,15 @@
     },
     {
       "file": "js/controllers/ai-chat-controller.js",
+      "function": "replyHtml",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 renders a reply through the inline schema's renderer",
+      "note": "A reply's sanitized HTML, parsed in an inert document so the link rule reads each link's address as parsed; its HTML is what the chat renders"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
       "function": "_finalizeStreamedMessage",
       "kind": "dynamic",
       "count": 1,
