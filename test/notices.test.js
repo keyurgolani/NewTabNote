@@ -41,7 +41,7 @@ describe('privacy policy (AC9)', () => {
 
   it('is updated and no longer claims a wildcard host permission', () => {
     assert.doesNotMatch(policy, /https:\/\/_\/_/);
-    assert.match(policy, /\*\*Last Updated: October 20, 2026\*\*/);
+    assert.match(policy, /\*\*Last Updated: November 1, 2026\*\*/);
     assert.match(policy, /leave out trash, themes, version history, AI chat history, and settings/);
   });
 

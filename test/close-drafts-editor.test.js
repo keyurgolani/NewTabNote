@@ -157,6 +157,24 @@ describe("the close-time draft's writer", () => {
     assert.equal(rows.a1.content, 'alpha, with a2 gone');
   });
 
+  it('lists a block added and saved since the load, then deleted with its delete lost, and the next start deletes it', async () => {
+    const added = env.get('Block').deserialize({ type: 'text', content: 'added after the load' });
+    editor.blocks.push(added);
+    editor.scheduleSave();
+    await runUntil(env, editor.flushSave());
+    Object.assign(editor, { removeBlockDOM() {}, focusBlock() {} });
+    Storage.deleteElement = () => new Promise(() => {}); // its transaction is lost with the page
+    Storage.saveNoteWithBlocks = (n, els, options) => (options && options.closing
+      ? new Promise(() => {})
+      : Storage.constructor.prototype.saveNoteWithBlocks.call(Storage, n, els, options));
+    editor.deleteBlock(added.id);
+    env.window.fire('pagehide');
+    const [draft] = drafts(env);
+    assert.deepEqual(draft.deletedBlockIds, [added.id], 'the save it saw commit had the block');
+    await nextStart(env);
+    assert.equal((await elementsById(env))[added.id], undefined);
+  });
+
   it('writes nothing when every edit has committed, and nothing for a bfcache hide', async () => {
     type(editor, 'saved before the close');
     await runUntil(env, editor.flushSave());

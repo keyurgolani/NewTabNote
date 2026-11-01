@@ -1232,9 +1232,25 @@ class DatabaseManager {
    * Permanently delete note (used for emptying trash)
    */
   async permanentlyDeleteNote(id) {
-    // Its close-time drafts go first (#33): the last edit of a note deleted for good isn't
-    // kept anywhere, and no new tab tells about it as a recovered note
-    if (typeof CloseDrafts !== 'undefined') CloseDrafts.clearNotes(CloseDrafts.pageStorage(), [id]);
+    // Its close-time drafts go first (#33): the last edit of a note deleted for good isn't kept
+    // anywhere, no new tab tells about it as a recovered note, and a start applying drafts while
+    // this deletes finds them gone. A delete that fails puts them back, so the note keeps its edit.
+    const drafts = typeof CloseDrafts === 'undefined' ? undefined : CloseDrafts.pageStorage();
+    const cleared = drafts === undefined ? null : CloseDrafts.clearNotes(drafts, [id]);
+    try {
+      await this._deleteNoteForGood(id);
+    } catch (error) {
+      if (cleared) CloseDrafts.putBack(drafts, cleared);
+      throw error;
+    }
+  }
+
+  /**
+   * permanentlyDeleteNote's deletes: the note's blocks, media, vectors, snapshots and record
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  async _deleteNoteForGood(id) {
     // Delete all elements for this note
     await this.deleteElementsByNote(id);
     // Delete all media for this note

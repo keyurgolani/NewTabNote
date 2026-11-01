@@ -3,29 +3,36 @@
  * commit writes that edit here, to this extension's localStorage, which a closing page writes
  * at once, whatever IndexedDB is doing. Chrome aborts the IndexedDB writes a closing page
  * hasn't committed, and another page's transaction over the blocks holds the close's own commit
- * back (#142), so without the draft the edit can be lost.
+ * back (#33), so without the draft the edit can be lost.
  *
  * The next start of the new tab, Popup or Side Panel applies the drafts, on the notes database
  * that root has open, before it reads a note. Its apply holds the Web Lock `ntn-close-drafts`
  * across reading the drafts, applying each, and removing it, so two roots starting together
- * take turns and the second finds the drafts gone. Each draft, in the order the tabs closed:
+ * take turns and the second finds the drafts gone. It reads each draft's key again right before
+ * applying it, so a permanent delete that cleared the draft meanwhile wins. Each draft, in the
+ * order the tabs closed:
+ * 0. Its recovered note is already stored: an earlier start made it, and its page went before
+ *    removing the draft. The draft is removed, writing nothing.
  * 1. A note that's gone (deleted for good since): the draft is removed, writing nothing.
  * 2. Content first: when the stored blocks already equal the draft's, the times aside, with none
- *    of its deleted blocks left, and the stored name equals the draft's when it carries one,
- *    the edit is already in. The draft is removed, writing nothing.
+ *    of its deleted blocks left, and the stored name equals the draft's wherever the save would
+ *    write it, the edit is already in. The draft is removed, writing nothing.
  * 3. The newer-note rule: when another writer saved the note after the draft's base, the
  *    draft becomes one recovered note beside it, and never overwrites it (recoveredNote()).
  *    The stored `updatedAt` says who wrote last: the draft's base (the save the editor last
  *    saw commit) or one of the saves the editor issued since, in flight included
- *    (`base.issued`), is the editor's own; anything else past the base is another writer.
- *    A draft that only deleted blocks has no text to recover, so it's removed, writing
- *    nothing, and the blocks it meant to delete stay.
+ *    (`base.issued`), is the editor's own; anything else past the base is another writer, a
+ *    change to the record alone included. A draft that only deleted blocks, maybe with an AI
+ *    title, has no text to recover, so it's removed, writing nothing, and the blocks it meant to
+ *    delete stay. A draft holding a block that another note's stored copy has becomes a
+ *    recovered note too, since that block can't be saved in place.
  * 4. Otherwise the save: the draft's blocks are put and its deleted blocks deleted, only the
  *    note's own, and the note gets the draft's title, preview and to-do progress, with its
- *    search entry's name and its links, as the editor's save writes them.
+ *    search entry's name and its links, as the editor's save writes them. A stored copy with no
+ *    note ID belongs to no note, so it's taken as this note's and put back under it.
  * Each draft is one readwrite transaction over the notes and their blocks, which every editor
  * save also takes, so nothing writes the note between the read and the write. A transaction that
- * fails keeps its draft for the next start.
+ * fails keeps its draft for the next start, and every start after that, until one applies it.
  *
  * A draft is JSON under `ntn-close-draft:<id>`:
  *   {v: 1, id, noteId, base: {revision, updatedAt, issued}, at, blocks, deletedBlockIds,
@@ -38,9 +45,11 @@
  * the stack's applier reads the same format.
  *
  * The draft is a second place a note's text sits outside IndexedDB, until the next start
- * (PRIVACY_POLICY.md says so). Deleting a note for good removes its drafts
- * (Storage.permanentlyDeleteNote). NewTabNote has no locked or encrypted notes, so no draft
- * skips one; a feature that adds them has to make the writer skip them.
+ * (PRIVACY_POLICY.md says so). A draft in a format this build doesn't know is removed, since
+ * nothing could apply it. Deleting a note for good removes its drafts, and the drafts whose
+ * recovered note it is, and puts them back if the delete fails (Storage.permanentlyDeleteNote).
+ * NewTabNote has no locked or encrypted notes, so no draft skips one; a feature that adds them
+ * has to make the writer skip them.
  */
 
 const CloseDrafts = (function initCloseDrafts() {
@@ -49,8 +58,11 @@ const CloseDrafts = (function initCloseDrafts() {
   const PREFIX = 'ntn-close-draft:';
   const LOCK = 'ntn-close-drafts';
   const VERSION = 1;
-  /** The recovered notes no new tab has told the user about yet: their IDs, never their text */
-  const UNTOLD_KEY = 'ntn-close-drafts:recovered';
+  /**
+   * The recovered notes no new tab has told the user about yet: their IDs, never their text. Far
+   * from PREFIX, so no draft key can be taken for it.
+   */
+  const UNTOLD_KEY = 'ntn-recovered-untold';
   // A block's times change on every edit, so content first compares the blocks without them
   const TIMES = ['createdAt', 'updatedAt'];
   const PREVIEW_LENGTH = 120;
@@ -68,9 +80,10 @@ const CloseDrafts = (function initCloseDrafts() {
 
   /**
    * What a start's apply did, by note ID. `dropped` holds the drafts removed with nothing
-   * written while their note is there: those content first found already in, and those that
-   * only deleted blocks of a note saved elsewhere since. `gone` holds the notes deleted for
-   * good since. Both are for #33's rebuild and sweep at the same start.
+   * written while their note is there: those content first found already in, and those with no
+   * text to recover over a note saved elsewhere since. `gone` holds the notes deleted for good
+   * since. Both are for #33's rebuild and sweep at the same start. `recovered` also has a draft
+   * whose recovered note an earlier start made.
    * @typedef {{
    *   saved: Array<string>, recovered: Array<{noteId: string, recoveredId: string}>,
    *   dropped: Array<string>, gone: Array<string>, kept: Array<string>
@@ -143,8 +156,18 @@ const CloseDrafts = (function initCloseDrafts() {
   }
 
   /**
+   * @param {number} count
+   * @returns {string} "1 day" or "7 days"
+   */
+  function days(count) {
+    return `${count} ${count === 1 ? 'day' : 'days'}`;
+  }
+
+  /**
    * The first block's words, which say what the recovered note is. They name the original once,
-   * in the first sentence, and call it that note, that template or that Daily Note after it.
+   * in the first sentence, and call it that note, that template or that Daily Note after it. A
+   * draft that changed no block is a typed new name, the only one rule 3 recovers, and gets the
+   * words for that.
    * @param {any} original - the stored note
    * @param {CloseDraft} draft
    * @param {number} stillThere - how many of the blocks the draft deleted the original still has
@@ -152,10 +175,25 @@ const CloseDrafts = (function initCloseDrafts() {
    * @returns {string}
    */
   function explanation(original, draft, stillThere, trashDays) {
-    const sentences = [`These changes to “${titleOf(original)}” are from a tab that closed on ${longTime(draft.at)}, before they were saved.`];
     let kind = 'note';
     if (original.isTemplate) kind = 'template';
     else if (original.isDaily) kind = 'Daily Note';
+    const deletes = [];
+    if (stillThere === 1) deletes.push('That tab also deleted a block, which is still in that note.');
+    else if (stillThere > 1) deletes.push(`That tab also deleted ${stillThere} blocks, which are still in that note.`);
+    // The Trash's own keeping time from this start; none when it keeps notes until it's emptied
+    const keeping = trashDays > 0 ? ` Otherwise the Trash deletes it in ${days(trashDays)}.` : '';
+    if (draft.blocks.length === 0) {
+      return [
+        `A tab that closed on ${longTime(draft.at)} renamed “${titleOf(original)}” to “${draft.name}” before the new name was saved.`,
+        original.trashed
+          ? 'That note is in the Trash, so NewTabNote kept the new name here and put this note in the Trash too.'
+          : `That ${kind} was saved elsewhere too, so NewTabNote kept the new name here and left it as it is.`,
+        ...deletes,
+        original.trashed ? `Restore this note to keep the new name.${keeping}` : `To use the new name, rename that ${kind}, then delete this one.`,
+      ].join(' ');
+    }
+    const sentences = [`These changes to “${titleOf(original)}” are from a tab that closed on ${longTime(draft.at)}, before they were saved.`];
     if (original.trashed) {
       sentences.push('That note is in the Trash, so NewTabNote kept the changes here and put this note in the Trash too.');
     } else if (kind === 'note') {
@@ -163,20 +201,9 @@ const CloseDrafts = (function initCloseDrafts() {
     } else {
       sentences.push(`That ${kind} was saved elsewhere too, so NewTabNote kept the changes here as a regular note and left it as it is.`);
     }
-    // With no changed block the draft renamed the note (a deletes-only one is dropped), so nothing
-    // comes below, and the new name is in the rename sentence: working text until the director looks
-    if (draft.blocks.length > 0) sentences.push('Below are only the blocks that tab changed.');
-    if (stillThere === 1) sentences.push('That tab also deleted a block, which is still in that note.');
-    else if (stillThere > 1) sentences.push(`That tab also deleted ${stillThere} blocks, which are still in that note.`);
+    sentences.push('Below are only the blocks that tab changed.', ...deletes);
     if (renamed(original, draft)) sentences.push(`That tab also renamed it “${draft.name}”.`);
-    if (original.trashed) {
-      // The Trash's own keeping time from this start, in days: Settings offers 7 to 90, or Never
-      sentences.push(trashDays > 0
-        ? `Restore this note to keep them. Otherwise the Trash deletes it in ${trashDays} days.`
-        : 'Restore this note to keep them.');
-    } else {
-      sentences.push(`Copy what you need into that ${kind}, then delete this one.`);
-    }
+    sentences.push(original.trashed ? `Restore this note to keep them.${keeping}` : `Copy what you need into that ${kind}, then delete this one.`);
     return sentences.join(' ');
   }
 
@@ -197,15 +224,25 @@ const CloseDrafts = (function initCloseDrafts() {
   }
 
   /**
+   * The ID of `draft`'s recovered note, the same at every start, so a start that finds the note
+   * already made (rule 0) makes no second one
+   * @param {CloseDraft} draft
+   * @returns {string}
+   */
+  function recoveredIdOf(draft) {
+    return `${draft.id}-recovered`;
+  }
+
+  /**
    * The recovered note for `draft`, whose note `original` another writer saved after the
    * draft's base: an ordinary note, as Storage.createNote makes one, which says what it is in its
    * title and its first block, followed by copies of the draft's blocks under new IDs, made at
-   * this start. It sits beside the original, with its viewport and grid: in its folder while that
-   * folder exists, with its pin, and with its times less 1 ms, so it sorts right under it by
-   * Recent and by Created. It's archived with an archived original, 1 ms before it, and in the
-   * Trash with a trashed one, unpinned and on top, with the Trash's whole keeping time from this
-   * start. It's never a Daily Note or a template itself, and a template's pin stays the
-   * template's.
+   * this start. Its ID and its blocks' come from the draft's (recoveredIdOf). It sits beside the
+   * original, with its viewport and grid: in its folder while that folder exists, with its pin,
+   * and with its times less 1 ms, so it sorts right under it by Recent and by Created. It's
+   * archived with an archived original, 1 ms before it, and in the Trash with a trashed one,
+   * unpinned and on top, with the Trash's whole keeping time from this start. It's never a Daily
+   * Note or a template itself, and a template's pin stays the template's.
    * @param {any} original - the stored note
    * @param {CloseDraft} draft
    * @param {{now: number, stillThere: number, trashDays: number, inFolder: boolean}} context -
@@ -213,11 +250,11 @@ const CloseDrafts = (function initCloseDrafts() {
    * @returns {{note: any, blocks: Array<any>}}
    */
   function recoveredNote(original, draft, { now, stillThere, trashDays, inFolder }) {
-    const id = newId();
+    const id = recoveredIdOf(draft);
     const trashed = Boolean(original.trashed);
     const archived = !trashed && Boolean(original.archived);
     const first = {
-      id: newId(),
+      id: `${id}-0`,
       type: 'callout',
       content: escapeHtml(explanation(original, draft, stillThere, trashDays)),
       indentLevel: 0,
@@ -231,7 +268,7 @@ const CloseDrafts = (function initCloseDrafts() {
     };
     const changed = [...draft.blocks]
       .sort((a, b) => (a.order || 0) - (b.order || 0))
-      .map((block, index) => ({ ...block, id: newId(), createdAt: now, updatedAt: now, canvasId: id, order: index + 1 }));
+      .map((block, index) => ({ ...block, id: `${id}-${index + 1}`, createdAt: now, updatedAt: now, canvasId: id, order: index + 1 }));
     const note = {
       id,
       name: `Recovered: ${titleOf(original)} (${shortTime(draft.at)})`,
@@ -378,6 +415,19 @@ const CloseDrafts = (function initCloseDrafts() {
   /**
    * @param {Storage|undefined} storage
    * @param {string} key
+   * @returns {boolean} whether `key` is still stored
+   */
+  function present(storage, key) {
+    try {
+      return storage.getItem(key) !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * @param {Storage|undefined} storage
+   * @param {string} key
    */
   function remove(storage, key) {
     try {
@@ -428,24 +478,51 @@ const CloseDrafts = (function initCloseDrafts() {
   }
 
   /**
-   * Remove what `noteIds` left here, as a note's permanent delete does: their drafts, and their
-   * IDs among the recovered notes no new tab has told about. Never throws.
+   * What clearNotes removed, for putBack
+   * @typedef {{drafts: Array<{key: string, value: string}>, untold: Array<{id: string, of: string}>}} Cleared
+   */
+
+  /**
+   * Remove what `noteIds` left here, as a note's permanent delete does: their drafts, the drafts
+   * whose recovered note one of them is, and the entries among the recovered notes no new tab has
+   * told about that are one of them or whose original is. Never throws.
    * @param {Storage|undefined} storage
    * @param {Array<string>} noteIds
-   * @returns {number} how many drafts it removed
+   * @returns {Cleared} what it removed
    */
   function clearNotes(storage, noteIds) {
     const ids = new Set(noteIds);
-    let removed = 0;
+    /** @type {Cleared} */
+    const cleared = { drafts: [], untold: [] };
     for (const { key, draft } of list(storage)) {
-      if (!ids.has(draft.noteId)) continue;
+      if (!ids.has(draft.noteId) && !ids.has(recoveredIdOf(draft))) continue;
+      cleared.drafts.push({ key, value: JSON.stringify(draft) });
       remove(storage, key);
-      removed += 1;
     }
     const entries = untold(storage);
-    const kept = entries.filter((entry) => !ids.has(entry.id));
+    const kept = entries.filter((entry) => !ids.has(entry.id) && !ids.has(entry.of));
+    cleared.untold = entries.filter((entry) => !kept.includes(entry));
     if (kept.length !== entries.length) setUntold(storage, kept);
-    return removed;
+    return cleared;
+  }
+
+  /**
+   * Put back what clearNotes removed, for a permanent delete that failed. Never throws.
+   * @param {Storage|undefined} storage
+   * @param {Cleared} cleared
+   */
+  function putBack(storage, cleared) {
+    for (const { key, value } of cleared.drafts) {
+      try {
+        storage.setItem(key, value);
+      } catch {
+        // The draft doesn't fit back; the note keeps what IndexedDB has
+      }
+    }
+    if (cleared.untold.length > 0) {
+      const entries = untold(storage);
+      setUntold(storage, [...entries, ...cleared.untold.filter((entry) => !entries.some((e) => e.id === entry.id))]);
+    }
   }
 
   // ─── The applier ───
@@ -481,7 +558,28 @@ const CloseDrafts = (function initCloseDrafts() {
   }
 
   /**
-   * Rule 2, content first: the draft's edit is already stored
+   * Whether a stored block is the note's own: under its ID, or under none, which no note shows
+   * (1.4.x's /template leaves a note's blocks so until its save lands)
+   * @param {any} copy - the stored block, if any
+   * @param {string} noteId
+   * @returns {boolean}
+   */
+  function ownCopy(copy, noteId) {
+    return Boolean(copy) && (!copy.canvasId || copy.canvasId === noteId);
+  }
+
+  /**
+   * Whether the draft's title is one the save writes: not a generated title over one set by hand
+   * @param {any} original - the stored note
+   * @param {CloseDraft} draft
+   * @returns {boolean}
+   */
+  function writesName(original, draft) {
+    return typeof draft.name === 'string' && !(draft.titleOrigin === 'generated' && original.titleManuallySet);
+  }
+
+  /**
+   * Rule 2, content first: the draft's edit is already stored, as far as the save would write it
    * @param {any} original - the stored note
    * @param {Map<string, any>} stored - the stored blocks the draft names, by ID
    * @param {CloseDraft} draft
@@ -495,10 +593,9 @@ const CloseDrafts = (function initCloseDrafts() {
       }
     }
     for (const id of draft.deletedBlockIds) {
-      const copy = stored.get(id);
-      if (copy && copy.canvasId === draft.noteId) return false;
+      if (ownCopy(stored.get(id), draft.noteId)) return false;
     }
-    return typeof draft.name !== 'string' || original.name === draft.name;
+    return !writesName(original, draft) || original.name === draft.name;
   }
 
   /**
@@ -570,18 +667,19 @@ const CloseDrafts = (function initCloseDrafts() {
   }
 
   /**
-   * Rule 3's exception: the draft holds no text to recover. It changed no block and didn't
-   * rename the note, so all it did was delete blocks.
+   * Rule 3's exception: the draft holds no text to recover. It changed no block and gave the note
+   * no typed name, so all it did was delete blocks, or take an AI title, which the save treats as
+   * replaceable too.
    * @param {any} original
    * @param {CloseDraft} draft
    * @returns {boolean}
    */
   function onlyDeletes(original, draft) {
-    return draft.blocks.length === 0 && !renamed(original, draft);
+    return draft.blocks.length === 0 && !(renamed(original, draft) && draft.titleOrigin !== 'generated');
   }
 
   /**
-   * Apply one draft, in one readwrite transaction (rules 1 to 4)
+   * Apply one draft, in one readwrite transaction (rules 0 to 4)
    * @param {IDBDatabase} db
    * @param {CloseDraft} draft
    * @param {{now: number, trashDays: number}} context
@@ -634,9 +732,16 @@ const CloseDrafts = (function initCloseDrafts() {
         let everyNote = [];
         /** @type {Set<unknown>} */
         let folderIds = new Set();
-        let waiting = 1 + ids.length + (linked ? 1 : 0) + (foldered ? 1 : 0);
+        /** @type {any} */
+        let madeBefore;
+        let waiting = 2 + ids.length + (linked ? 1 : 0) + (foldered ? 1 : 0);
 
         const decide = () => {
+          // Rule 0: an earlier start made this draft's recovered note and went before removing it
+          if (madeBefore) {
+            outcome = { kind: 'recovered', recoveredId: madeBefore.id };
+            return;
+          }
           if (!original) {
             outcome = { kind: 'gone' };
             return;
@@ -645,12 +750,19 @@ const CloseDrafts = (function initCloseDrafts() {
             outcome = { kind: 'dropped' };
             return;
           }
-          if (savedElsewhere(original, draft)) {
-            // Only deletes: there's no text to recover, and the blocks it meant to delete stay
-            if (onlyDeletes(original, draft)) {
-              outcome = { kind: 'dropped' };
-              return;
-            }
+          const elsewhere = savedElsewhere(original, draft);
+          // Only deletes, maybe with an AI title: there's no text to recover, and the blocks it
+          // meant to delete stay
+          if (elsewhere && onlyDeletes(original, draft)) {
+            outcome = { kind: 'dropped' };
+            return;
+          }
+          // No block moves notes, so one whose stored copy is another note's can't be saved here
+          const foreign = draft.blocks.some((block) => {
+            const copy = stored.get(block.id);
+            return Boolean(copy) && !ownCopy(copy, draft.noteId);
+          });
+          if (elsewhere || foreign) {
             const stillThere = draft.deletedBlockIds.filter((id) => {
               const copy = stored.get(id);
               return copy && copy.canvasId === draft.noteId;
@@ -667,15 +779,10 @@ const CloseDrafts = (function initCloseDrafts() {
           }
           const note = savedNote(original, draft, now);
           notes.put(note);
-          for (const block of draft.blocks) {
-            const copy = stored.get(block.id);
-            // No block moves notes: one stored under another note stays there
-            if (copy && copy.canvasId !== draft.noteId) continue;
-            elements.put({ ...block, canvasId: draft.noteId });
-          }
+          // Every block here is the note's own, new, or under no note, which it takes back
+          for (const block of draft.blocks) elements.put({ ...block, canvasId: draft.noteId });
           for (const id of draft.deletedBlockIds) {
-            const copy = stored.get(id);
-            if (copy && copy.canvasId === draft.noteId) elements.delete(id);
+            if (ownCopy(stored.get(id), draft.noteId)) elements.delete(id);
           }
           if (indexed) {
             const searchIndex = tx.objectStore('search_index');
@@ -697,6 +804,11 @@ const CloseDrafts = (function initCloseDrafts() {
           }
         };
 
+        const prior = notes.get(recoveredIdOf(draft));
+        prior.onsuccess = () => {
+          madeBefore = prior.result;
+          arrived();
+        };
         const read = notes.get(draft.noteId);
         read.onsuccess = () => {
           original = read.result;
@@ -769,6 +881,8 @@ const CloseDrafts = (function initCloseDrafts() {
       if (found.length === 0) return result;
       const days = await trashDays();
       for (const { key, draft } of found) {
+        // A permanent delete may have cleared it since the list, and then the delete wins
+        if (!present(drafts, key)) continue;
         const { kind, recoveredId } = await applyOne(db, draft, { now: now(), trashDays: days });
         if (kind === 'kept') {
           result.kept.push(draft.noteId);
@@ -777,7 +891,9 @@ const CloseDrafts = (function initCloseDrafts() {
         if (kind === 'recovered') {
           const entry = { noteId: draft.noteId, recoveredId: String(recoveredId) };
           result.recovered.push(entry);
-          setUntold(drafts, [...untold(drafts), { id: entry.recoveredId, of: entry.noteId }]);
+          // Once, even when an earlier start made the note and listed it before its page went
+          const told = untold(drafts);
+          if (!told.some((e) => e.id === entry.recoveredId)) setUntold(drafts, [...told, { id: entry.recoveredId, of: entry.noteId }]);
         } else if (kind === 'saved') {
           result.saved.push(draft.noteId);
         } else if (kind === 'dropped') {
@@ -820,9 +936,11 @@ const CloseDrafts = (function initCloseDrafts() {
     has,
     list,
     clearNotes,
+    putBack,
     takeUntold,
     fingerprint,
     digest,
+    recoveredIdOf,
     recoveredNote,
     apply,
     pageStorage,

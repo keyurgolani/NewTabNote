@@ -18,6 +18,8 @@ const APP_FILES = [
   'js/ui/export-notice.js', 'js/close-drafts.js', 'js/storage.js', 'js/search.js', 'js/app.js',
 ];
 const T0 = 1700000000000;
+/** The recovered notes no new tab has told about yet, by ID (CloseDrafts.UNTOLD_KEY) */
+const UNTOLD = 'ntn-recovered-untold';
 
 /** Note A, with blocks a1 and a2 */
 async function profile(factory, a = {}) {
@@ -90,7 +92,7 @@ describe('the new tab applies the close-time drafts at its start', () => {
     const told = toasts.filter((t) => t.message.startsWith('Kept your changes'));
     assert.deepEqual(told, [{ message: 'Kept your changes to “Alpha plan” from a closed tab in a recovered note.', kind: 'info', duration: 6000 }],
       "1.4.x's text-only toast, for 6 s, as import's summary shows");
-    assert.equal(shared.localStorage.getItem('ntn-close-drafts:recovered'), null, 'told once: the list is cleared');
+    assert.equal(shared.localStorage.getItem(UNTOLD), null, 'told once: the list is cleared');
     await app.tellRecoveredNotes();
     assert.equal(toasts.filter((t) => t.message.startsWith('Kept your changes')).length, 1);
   });
@@ -107,6 +109,43 @@ describe('the new tab applies the close-time drafts at its start', () => {
     await app.tellRecoveredNotes();
     assert.deepEqual(toasts.filter((t) => t.message.startsWith('Kept your changes')).map((t) => t.message),
       ['Kept your changes to “Alpha plan” from a closed tab in a recovered note. Both are in Archive.']);
+  });
+
+  it('says both notes are in the Trash only while both are', async () => {
+    const shared = { indexedDB: undefined, localStorage: createLocalStorage() };
+    const seed = createLegacyEnv({ localStorage: shared.localStorage });
+    shared.indexedDB = seed.indexedDB;
+    await profile(seed.indexedDB, { updatedAt: T0 + 5, trashed: true, trashedAt: T0 + 3 });
+    seed.load('js/close-drafts.js');
+    leaveDraft(seed);
+
+    const { app, env, toasts } = await startNewTab(shared);
+    // The original comes back from the Trash before this new tab tells about its recovered note
+    const Storage = env.get('Storage');
+    const A = await Storage.getNote('A');
+    const tx = Storage.db.transaction(['canvases'], 'readwrite');
+    tx.objectStore('canvases').put({ ...A, trashed: false, trashedAt: null });
+    await new Promise((resolve) => { tx.oncomplete = resolve; });
+    await app.tellRecoveredNotes();
+    assert.deepEqual(toasts.filter((t) => t.message.startsWith('Kept your changes')).map((t) => t.message),
+      ['Kept your changes to “Alpha plan” from a closed tab in a recovered note.']);
+  });
+
+  it('tells nothing of a recovered note whose original is gone, rather than name it "Untitled"', async () => {
+    const shared = { indexedDB: undefined, localStorage: createLocalStorage() };
+    const seed = createLegacyEnv({ localStorage: shared.localStorage });
+    shared.indexedDB = seed.indexedDB;
+    await profile(seed.indexedDB, { updatedAt: T0 + 5 });
+    seed.load('js/close-drafts.js');
+    leaveDraft(seed);
+
+    const { app, env, toasts } = await startNewTab(shared);
+    const Storage = env.get('Storage');
+    const tx = Storage.db.transaction(['canvases'], 'readwrite');
+    tx.objectStore('canvases').delete('A');
+    await new Promise((resolve) => { tx.oncomplete = resolve; });
+    await app.tellRecoveredNotes();
+    assert.deepEqual(toasts.filter((t) => t.message.startsWith('Kept your changes')), []);
   });
 
   it("has the toasts' live region on the page from the start, empty, so a screen reader reads the first toast", () => {
@@ -134,12 +173,12 @@ describe('Popup and the Side Panel apply the close-time drafts at their start', 
     popup.load('js/close-drafts.js', 'js/popup.js');
     await Promise.all(popup.document.fire('DOMContentLoaded'));
     assert.equal(draftCount(shared.localStorage), 0, 'the Popup applied the draft');
-    const untold = JSON.parse(shared.localStorage.getItem('ntn-close-drafts:recovered'));
+    const untold = JSON.parse(shared.localStorage.getItem(UNTOLD));
     assert.equal(untold.length, 1);
     assert.deepEqual(Object.keys(untold[0]).sort(), ['id', 'of'], 'IDs only, never the text');
 
     // A second recovered note whose record is gone by the time a new tab starts
-    shared.localStorage.setItem('ntn-close-drafts:recovered', JSON.stringify([...untold, { id: 'no-such-note', of: 'A' }]));
+    shared.localStorage.setItem(UNTOLD, JSON.stringify([...untold, { id: 'no-such-note', of: 'A' }]));
     const { app, toasts } = await startNewTab(shared);
     await app.tellRecoveredNotes();
     assert.deepEqual(toasts.filter((t) => t.message.startsWith('Kept your changes')).map((t) => t.message),
@@ -176,6 +215,6 @@ describe('Popup and the Side Panel apply the close-time drafts at their start', 
     await Storage.init();
     const result = await seed.get('CloseDrafts').apply({ db: Storage.db });
     await Storage.permanentlyDeleteNote(result.recovered[0].recoveredId);
-    assert.equal(shared.localStorage.getItem('ntn-close-drafts:recovered'), null);
+    assert.equal(shared.localStorage.getItem(UNTOLD), null);
   });
 });

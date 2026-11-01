@@ -13,7 +13,7 @@ process.env.TZ = 'UTC';
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, createLocalStorage, createLockManager, note, block, plain,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, createLocalStorage, createLockManager, note, block, plain, settle,
 } = require('./helpers/legacy-env');
 const SidebarUtils = require('../js/sidebar-utils.js');
 
@@ -168,6 +168,47 @@ describe('the close-time draft applier: one test per path', () => {
     assert.deepEqual(plain(env.get('CloseDrafts').takeUntold(env.global.localStorage)), [], 'nothing to tell');
   });
 
+  it('drops a draft whose only change is an AI title, over a note saved elsewhere since', async () => {
+    const Storage = env.get('Storage');
+    await Storage.updateNote(await Storage.getNote('A')); // another tab's write moves its updatedAt
+    const before = await stored(env);
+    draftOfA(env, { blocks: [], name: 'An AI title', titleOrigin: 'generated' });
+    const result = await apply(env, { now: () => T0 + 100 });
+    assert.deepEqual(result, { ...empty, dropped: ['A'] });
+    assert.deepEqual(await stored(env), before, 'nothing is written: the save treats an AI title as replaceable');
+  });
+
+  it("saves the title of a draft whose blocks the closing write stored and whose title it didn't", async () => {
+    // #133's closing write puts the blocks alone, so the record keeps the base's stamp and name
+    const edited = block('a1', 'A', 0, 'alpha, edited as the tab closed', { updatedAt: T0 + 5 });
+    const tx = env.get('Storage').db.transaction(['elements'], 'readwrite');
+    tx.objectStore('elements').put(edited);
+    await new Promise((resolve) => { tx.oncomplete = resolve; });
+    draftOfA(env, { blocks: [edited], name: 'A typed title', titleOrigin: 'typed' });
+    const result = await apply(env, { now: () => T0 + 100 });
+    assert.deepEqual(result, { ...empty, saved: ['A'] });
+    const after = await stored(env);
+    assert.deepEqual([after.notes.A.name, after.notes.A.titleManuallySet], ['A typed title', true]);
+  });
+
+  it("takes back a block stored under no note, as 1.4.x's /template leaves them, and deletes one the draft deleted", async () => {
+    // selectTemplateItem puts each block's serialize(), which has no canvasId and no order
+    const tx = env.get('Storage').db.transaction(['elements'], 'readwrite');
+    for (const row of [block('a1', 'A', 0, 'alpha'), block('a2', 'A', 1, 'alpha two')]) {
+      const serialized = { ...row };
+      delete serialized.canvasId;
+      delete serialized.order;
+      tx.objectStore('elements').put(serialized);
+    }
+    await new Promise((resolve) => { tx.oncomplete = resolve; });
+    draftOfA(env, { blocks: [block('a2', 'A', 1, 'alpha two, edited')], deletedBlockIds: ['a1'] });
+    const result = await apply(env, { now: () => T0 + 100 });
+    assert.deepEqual(result, { ...empty, saved: ['A'] });
+    const shown = await env.get('Storage').getElementsByNote('A');
+    assert.deepEqual(shown.map((row) => [row.id, row.content]), [['a2', 'alpha two, edited']]);
+    assert.equal((await stored(env)).blocks.a1, undefined, 'the block it deleted is gone');
+  });
+
   it('drops a draft whose edit is already stored, writing nothing', async () => {
     const before = await stored(env);
     // The same text, with the times the editor gave the block since
@@ -199,7 +240,7 @@ describe('the close-time draft applier: one test per path', () => {
     assert.equal(full.length, 0);
   });
 
-  it('a permanent delete clears that note\'s drafts and its untold recovered note', async () => {
+  it("a permanent delete clears that note's drafts, the drafts whose recovered note it is, and its untold entries", async () => {
     draftOfA(env);
     const CloseDrafts = env.get('CloseDrafts');
     const other = CloseDrafts.draftOf({
@@ -207,11 +248,25 @@ describe('the close-time draft applier: one test per path', () => {
       deletedBlockIds: [], preview: '', todoProgress: null, linkedNames: [],
     });
     CloseDrafts.write(env.global.localStorage, other);
-    env.global.localStorage.setItem(CloseDrafts.UNTOLD_KEY, JSON.stringify([{ id: 'A', of: 'Z' }, { id: 'R', of: 'B' }]));
+    env.global.localStorage.setItem(CloseDrafts.UNTOLD_KEY, JSON.stringify([{ id: 'A', of: 'Z' }, { id: 'R', of: 'B' }, { id: 'R2', of: 'A' }]));
 
     await env.get('Storage').permanentlyDeleteNote('A');
     assert.deepEqual(draftKeys(env), [`ntn-close-draft:${other.id}`], "B's draft stays");
-    assert.deepEqual(plain(CloseDrafts.takeUntold(env.global.localStorage)), [{ id: 'R', of: 'B' }]);
+    assert.deepEqual(plain(CloseDrafts.takeUntold(env.global.localStorage)), [{ id: 'R', of: 'B' }],
+      "A goes from the list as a recovered note and as one's original, so the toast never names a note that's gone");
+
+    // B's draft is left over from a start that made its recovered note: deleting that note takes it
+    await env.get('Storage').permanentlyDeleteNote(CloseDrafts.recoveredIdOf(other));
+    assert.deepEqual(draftKeys(env), []);
+  });
+
+  it('a permanent delete that fails puts the drafts back, so the note keeps its last edit', async () => {
+    draftOfA(env);
+    const Storage = env.get('Storage');
+    Storage.deleteElementsByNote = () => Promise.reject(new DOMException('test: the disk is gone', 'UnknownError'));
+    await assert.rejects(Storage.permanentlyDeleteNote('A'), { name: 'UnknownError' });
+    assert.equal(draftKeys(env).length, 1, 'the draft is back');
+    assert.deepEqual(await apply(env, { now: () => T0 + 100 }), { ...empty, saved: ['A'] });
   });
 
   it('keeps a draft whose transaction fails, for the next start', async () => {
@@ -292,15 +347,18 @@ describe('the close-time draft applier: what it never does', () => {
     env = await page();
   });
 
-  it('moves no block between notes and deletes none of another note\'s', async () => {
+  it("moves no block between notes and deletes none of another note's: a draft holding one becomes a recovered note, and drops no edit", async () => {
     draftOfA(env, {
       blocks: [block('a1', 'A', 0, 'alpha, edited'), block('b1', 'A', 1, 'a block of B, as if it were A\'s')],
       deletedBlockIds: ['b1'],
     });
-    await apply(env);
+    const result = await apply(env, { now: () => T0 + 100 });
+    assert.deepEqual({ ...result, recovered: [] }, empty, "not saved, since one of its blocks is another note's");
     const after = await stored(env);
-    assert.equal(after.blocks.a1.content, 'alpha, edited');
+    assert.equal(after.blocks.a1.content, 'alpha', 'A as it was');
     assert.deepEqual([after.blocks.b1.canvasId, after.blocks.b1.content], ['B', 'bravo']);
+    const copies = Object.values(after.blocks).filter((row) => row.canvasId === result.recovered[0].recoveredId).sort((x, y) => x.order - y.order);
+    assert.deepEqual(copies.slice(1).map((row) => row.content), ['alpha, edited', 'a block of B, as if it were A\'s'], 'both edits, as copies');
   });
 
   it('a generated title never replaces one set by hand', async () => {
@@ -365,6 +423,75 @@ describe('the close-time draft applier across pages', () => {
     assert.equal(after.notes.A.updatedAt, T0 + 100, 'not written again');
     assert.equal(Object.keys(after.notes).length, 2, 'no recovered note');
   });
+
+  it('an applier stopped after its recovered note commits and before its remove leaves the draft, and the next start makes no second one', async () => {
+    const renamedOnly = { blocks: [], deletedBlockIds: ['a2'], name: 'Alpha plan, renamed', titleOrigin: 'typed' };
+    // The page goes right after the commit: before the remove, and before or after the untold list
+    for (const [fields, untoldLost] of [[{}, false], [renamedOnly, true]]) {
+      const env = await page({ profile: { a: { updatedAt: T0 + 5 } } });
+      const CloseDrafts = env.get('CloseDrafts');
+      draftOfA(env, fields);
+      const storage = env.global.localStorage;
+      const removeItem = storage.removeItem.bind(storage);
+      const setItem = storage.setItem.bind(storage);
+      storage.removeItem = () => {};
+      if (untoldLost) storage.setItem = (key, value) => { if (key !== CloseDrafts.UNTOLD_KEY) setItem(key, value); };
+      const first = await apply(env, { now: () => T0 + 100 });
+      storage.removeItem = removeItem;
+      storage.setItem = setItem;
+      assert.equal(draftKeys(env).length, 1);
+
+      const second = await apply(env, { now: () => T0 + 200 });
+      assert.deepEqual(second, { ...empty, recovered: first.recovered }, 'the one it made');
+      const names = Object.values((await stored(env)).notes).map((n) => n.name);
+      assert.equal(names.filter((name) => name.startsWith('Recovered: ')).length, 1);
+      assert.deepEqual(draftKeys(env), []);
+      assert.deepEqual(plain(CloseDrafts.takeUntold(storage)), [{ id: first.recovered[0].recoveredId, of: 'A' }], 'told once');
+    }
+  });
+
+  it('an applier stopped after a save that kept the hand-set title over an AI one leaves the draft, which the next start drops', async () => {
+    const env = await page({ profile: { a: { titleManuallySet: true } } });
+    draftOfA(env, { name: 'An AI title', titleOrigin: 'generated' });
+    const storage = env.global.localStorage;
+    const removeItem = storage.removeItem.bind(storage);
+    storage.removeItem = () => {};
+    assert.deepEqual(await apply(env, { now: () => T0 + 100 }), { ...empty, saved: ['A'] });
+    storage.removeItem = removeItem;
+    assert.deepEqual(await apply(env, { now: () => T0 + 200 }), { ...empty, dropped: ['A'] }, "the save never writes that title, so it's in");
+    const after = await stored(env);
+    assert.equal(after.notes.A.name, 'Alpha plan');
+    assert.equal(Object.keys(after.notes).length, 2, 'no recovered note');
+  });
+
+  it('a permanent delete that clears a draft while a start is between its list and its apply wins: no recovered copy of the note', async () => {
+    const localStorage = createLocalStorage();
+    const locks = createLockManager();
+    // In the Trash, so trashing it moved its updatedAt past the draft's base, as Empty Trash finds it
+    const env = await page({ localStorage, locks, profile: { a: { trashed: true, trashedAt: T0 + 5, updatedAt: T0 + 5 } } });
+    const other = await page({ localStorage, locks, indexedDB: env.indexedDB });
+    draftOfA(env);
+    let release = () => {};
+    const gate = new Promise((resolve) => { release = resolve; });
+    let waiting = false;
+    // The start lists the draft, then waits for the Trash's keeping time
+    const applying = apply(env, { now: () => T0 + 100, trashDays: () => { waiting = true; return gate.then(() => 30); } });
+    await settle();
+    assert.equal(waiting, true, 'the start has listed the draft');
+    const Storage = other.get('Storage');
+    const deleteElements = Storage.deleteElementsByNote.bind(Storage);
+    // Empty Trash's delete, in another page: the start goes on once the blocks are gone, before the record
+    Storage.deleteElementsByNote = async (id) => {
+      await deleteElements(id);
+      release();
+      await settle();
+    };
+    const [result] = await Promise.all([applying, Storage.permanentlyDeleteNote('A')]);
+    assert.deepEqual(result, empty, 'the draft was gone by its turn');
+    const after = await stored(env);
+    assert.equal(after.notes.A, undefined);
+    assert.deepEqual(Object.values(after.notes).map((n) => n.name), ['Bravo'], 'no recovered copy of a note deleted for good');
+  });
 });
 
 describe('the close-time draft applier on a note in the Trash', () => {
@@ -413,6 +540,15 @@ describe('the close-time draft applier on a note in the Trash', () => {
     assert.equal(first.content, `${CLOSED_A} That note is in the Trash, so NewTabNote kept the changes here and put this note in the Trash too.`
       + ' Below are only the blocks that tab changed. Restore this note to keep them.');
   });
+
+  it('says a day as "1 day"', async () => {
+    const env = await page({ profile: { a: { trashed: true, trashedAt, updatedAt: T0 + 50 } } });
+    draftOfA(env);
+    const result = await apply(env, { trashDays: () => Promise.resolve(1) });
+    const { recoveredId } = result.recovered[0];
+    const first = Object.values((await stored(env)).blocks).find((row) => row.canvasId === recoveredId && row.order === 0);
+    assert.match(first.content, / Restore this note to keep them\. Otherwise the Trash deletes it in 1 day\.$/);
+  });
 });
 
 describe('the recovered note, as the Design gate approved it', () => {
@@ -420,12 +556,12 @@ describe('the recovered note, as the Design gate approved it', () => {
 
   /**
    * Note A with `a`'s fields, saved in another tab after the draft's base, and the note the
-   * draft (`fields`) is recovered as
+   * draft (`fields`) is recovered as, with `trashDays` the Trash's keeping time
    */
-  async function recover({ a = {}, records = {}, ...fields } = {}) {
+  async function recover({ a = {}, records = {}, trashDays = 30, ...fields } = {}) {
     const env = await page({ profile: { a: { updatedAt: T0 + 5, ...a }, records } });
     draftOfA(env, fields);
-    const result = await apply(env, { now: () => NOW });
+    const result = await apply(env, { now: () => NOW, trashDays: () => Promise.resolve(trashDays) });
     assert.equal(result.recovered.length, 1);
     const { recoveredId } = result.recovered[0];
     const after = await stored(env);
@@ -512,16 +648,27 @@ describe('the recovered note, as the Design gate approved it', () => {
     assert.deepEqual(recovered.todoProgress, { completed: 1, total: 2 });
   });
 
-  it("a draft that renamed the note and changed no block keeps the typed name in a recovered note, under the original's title", async () => {
+  it("a draft that renamed the note and changed no block keeps the typed name in a recovered note, under the original's title, in words of its own", async () => {
     const renamedOnly = { blocks: [], name: 'Alpha plan, renamed', titleOrigin: 'typed' };
+    const RENAMED = 'A tab that closed on Oct 31, 2026 at 9:41 PM renamed “Alpha plan” to “Alpha plan, renamed” before the new name was saved.';
     const withDeletes = await recover({ ...renamedOnly, deletedBlockIds: ['a2'] });
     assert.equal(withDeletes.recovered.name, RECOVERED_A);
     assert.deepEqual(withDeletes.blocks.map((row) => row.type), ['callout']);
-    assert.equal(withDeletes.blocks[0].content, `${CLOSED_A} ${SAVED_ELSEWHERE} That tab also deleted a block, which is still in that note.`
-      + ` That tab also renamed it “Alpha plan, renamed”. ${COPY}`, 'nothing below, so no word of blocks below');
+    assert.equal(withDeletes.blocks[0].content, `${RENAMED} That note was saved elsewhere too, so NewTabNote kept the new name here and left it as it is.`
+      + ' That tab also deleted a block, which is still in that note. To use the new name, rename that note, then delete this one.');
     const alone = await recover(renamedOnly);
     assert.equal(alone.recovered.name, RECOVERED_A);
-    assert.equal(alone.blocks[0].content, `${CLOSED_A} ${SAVED_ELSEWHERE} That tab also renamed it “Alpha plan, renamed”. ${COPY}`);
+    assert.equal(alone.blocks[0].content, `${RENAMED} That note was saved elsewhere too, so NewTabNote kept the new name here and left it as it is.`
+      + ' To use the new name, rename that note, then delete this one.');
+    const template = await recover({ ...renamedOnly, a: { isTemplate: true } });
+    assert.equal(template.blocks[0].content, `${RENAMED} That template was saved elsewhere too, so NewTabNote kept the new name here and left it as it is.`
+      + ' To use the new name, rename that template, then delete this one.');
+    const trashed = await recover({ ...renamedOnly, a: { trashed: true, trashedAt: T0 + 3 }, trashDays: 7 });
+    assert.equal(trashed.blocks[0].content, `${RENAMED} That note is in the Trash, so NewTabNote kept the new name here and put this note in the Trash too.`
+      + ' Restore this note to keep the new name. Otherwise the Trash deletes it in 7 days.');
+    const kept = await recover({ ...renamedOnly, a: { trashed: true, trashedAt: T0 + 3 }, trashDays: 0 });
+    assert.equal(kept.blocks[0].content, `${RENAMED} That note is in the Trash, so NewTabNote kept the new name here and put this note in the Trash too.`
+      + ' Restore this note to keep the new name.', 'with the Trash keeping notes until emptied');
   });
 
   it('the toast says where both notes are, with the title cut at 40', () => {

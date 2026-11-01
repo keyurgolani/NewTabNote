@@ -404,7 +404,8 @@ class App {
 
   /**
    * The toast for the recovered notes no new tab has told about, whichever start made them:
-   * this one, or a Popup or Side Panel start before it. It counts only notes that still exist.
+   * this one, or a Popup or Side Panel start before it. It counts only notes that still exist,
+   * with their originals, and says both are in Archive or the Trash only when both are.
    * Text only, for 6 s, as import's summary shows; it never takes focus.
    * @returns {Promise<void>}
    */
@@ -414,12 +415,12 @@ class App {
       const recovered = [];
       for (const { id, of } of CloseDrafts.takeUntold(CloseDrafts.pageStorage())) {
         const note = await appStorage().getNote(id);
-        if (!note) continue;
-        const original = await appStorage().getNote(of);
+        const original = note ? await appStorage().getNote(of) : null;
+        if (!note || !original) continue;
         recovered.push({
-          title: (original && original.name) || 'Untitled',
-          archived: Boolean(note.archived),
-          trashed: Boolean(note.trashed),
+          title: original.name || 'Untitled',
+          archived: Boolean(note.archived && original.archived),
+          trashed: Boolean(note.trashed && original.trashed),
         });
       }
       if (recovered.length > 0) Utils.showToast(CloseDrafts.TEXT.toast(recovered), 'info', 6000);
