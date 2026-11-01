@@ -27,6 +27,7 @@ import './ui/export-notice.js';
 
 // Data & Services
 import './close-drafts.js';
+import './start-catch-up.js';
 import './storage.js';
 import './theme-engine.js';
 import './virtual-scroller.js';

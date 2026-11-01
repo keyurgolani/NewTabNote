@@ -182,6 +182,8 @@ class App {
       this.reportMissingStores();
       // The edits a closed tab left as close-time drafts, before anything reads a note (#33)
       await this.applyCloseDrafts();
+      // Then the notes those drafts named, and those a Popup or Side Panel start's named (#33)
+      await this.catchUpAfterDrafts();
 
       // The export notice decides now, before any note renders and before a first note exists
       this.exportNotice = new ExportNotice({
@@ -315,6 +317,7 @@ class App {
           await this.notesManager.deferredInit();
           this.indexerWorker = this.notesManager.indexerWorker;
         }
+        await this.checkRecordsWeekly();
       };
 
       if (typeof requestIdleCallback === 'function') {
@@ -399,6 +402,59 @@ class App {
     } catch (error) {
       // The drafts stay for the next start
       console.error('Close-time drafts were not applied:', error);
+    }
+  }
+
+  /**
+   * Catch up the notes the close-time drafts named (js/start-catch-up.js, #33): a draft already
+   * in the blocks leaves its note's record to catch up with them, and a note deleted for good
+   * leaves records that name it. This start's drafts and those a Popup or Side Panel start
+   * passed on, by ID. The IDs are dropped once caught up; a failure leaves them for the next
+   * start and the weekly pass.
+   * @returns {Promise<void>}
+   */
+  async catchUpAfterDrafts() {
+    const catchUp = /** @type {any} */ (globalThis).StartCatchUp;
+    if (!catchUp) return;
+    try {
+      const own = this.closeDrafts || { dropped: [], gone: [] };
+      const storage = catchUp.pageStorage();
+      const passed = catchUp.pending(storage);
+      const dropped = [...own.dropped, ...passed.dropped];
+      const gone = [...own.gone, ...passed.gone];
+      if (dropped.length === 0 && gone.length === 0) return;
+      await catchUp.catchUp({ db: appStorage().db, dropped, gone });
+      catchUp.forget(storage, [...passed.dropped, ...passed.gone]);
+    } catch (error) {
+      console.error('The notes the drafts named were not caught up:', error);
+    }
+  }
+
+  /**
+   * The full catch-up pass at idle (js/start-catch-up.js, #33): at the first start with it,
+   * then once its last run is more than seven days old. Another new tab running it at the
+   * same time makes this one skip it. The lists refresh when it changed anything.
+   * @returns {Promise<void>}
+   */
+  async checkRecordsWeekly() {
+    const catchUp = /** @type {any} */ (globalThis).StartCatchUp;
+    if (!catchUp) return;
+    try {
+      const checkedAt = await Storage.getSetting(catchUp.CHECKED_SETTING, null);
+      if (!catchUp.due(checkedAt, Date.now())) return;
+      const run = async (lock) => {
+        if (lock === null) return null;
+        const result = await catchUp.fullPass({ db: appStorage().db });
+        await Storage.setSetting(catchUp.CHECKED_SETTING, Date.now());
+        return result;
+      };
+      const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+      const result = locks && typeof locks.request === 'function'
+        ? await locks.request('ntn-start-catch-up', { ifAvailable: true }, run)
+        : await run(undefined);
+      if (result && (result.rebuilt > 0 || result.removed > 0)) await this.refreshNotesList();
+    } catch (error) {
+      console.error('The weekly catch-up pass failed:', error);
     }
   }
 
