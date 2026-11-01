@@ -410,10 +410,46 @@ for (const fixture of FIXTURES) {
         assert.deepEqual(copies.map(row => row.type), ['callout'], 'only the callout: no repeat of c1');
         assert.equal(
           copies[0].content,
-          'A tab that closed on Oct 31, 2026 at 9:41 PM renamed “Alpha plan” to “Alpha plan, renamed” before the new name was saved.'
+          'A tab that closed on Oct 31, 2026 at 9:41 PM renamed <a href="#" class="wiki-link" data-note-name="Alpha plan">[[Alpha plan]]</a> to “Alpha plan, renamed” before the new name was saved.'
             + ' That note was saved elsewhere too, so NewTabNote kept the new name here and left it as it is.'
             + ' To use the new name, rename that note, then delete this one.',
         );
+      });
+
+      it("links the original from the recovered note, which has its own times, and gives the original its backlink until the recovered note is deleted for good (V1)", async () => {
+        await profileOf(ctx, { a: { updatedAt: T0 + 70 } });
+        const before = await recordOf(ctx, 'notes', 'A');
+        const draft = legacyDraft({ blocks: [block('a1', 'A', 0, 'alpha, edited as the tab closed', { updatedAt: T0 + 9 })] });
+        const recoveredId = recoveredIdOf(draft);
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-recovered', [recoveredId]]);
+        const callout = (await blocksOf(ctx, recoveredId))[`${recoveredId}-0`];
+        assert.ok(String(callout.content).startsWith('These changes to <a href="#" class="wiki-link" data-note-name="Alpha plan">[[Alpha plan]]</a> are from a tab that closed on'), String(callout.content));
+        const made = (await recordOf(ctx, 'notes', recoveredId)).record;
+        assert.equal(made.createdAt, made.updatedAt);
+        assert.ok(made.createdAt > T0 + 70, 'its own times, from this start');
+        assert.deepEqual((await recordOf(ctx, 'notes', 'A')).record, before.record, 'the original as it was');
+        /** @param {Row[]} rows */
+        const pairs = rows => rows.map(row => [row.fromNoteId, row.toNoteId]);
+        assert.deepEqual(pairs(await allOf(ctx, 'links')), [[recoveredId, 'A']], "the original's backlink");
+        // In the Trash it stays in the original's backlinks, as any trashed note that links somewhere does
+        const trashed = await ctx.kernel.execute(/** @type {Command} */ ({ type: 'trashNote', commandId: ctx.ids.next(), noteId: recoveredId }));
+        assert.equal(trashed.kind, 'committed', JSON.stringify(trashed));
+        assert.deepEqual(pairs(await allOf(ctx, 'links')), [[recoveredId, 'A']]);
+        const deleted = await ctx.kernel.execute(
+          /** @type {Command} */ ({ type: 'deleteNotePermanently', commandId: ctx.ids.next(), noteId: recoveredId }),
+        );
+        assert.equal(deleted.kind, 'committed', JSON.stringify(deleted));
+        assert.deepEqual(await allOf(ctx, 'links'), [], 'deleted for good, it takes the backlink with it');
+      });
+
+      it('keeps the quoted title and writes no link when a namesake in the Trash could take the link (V1)', async () => {
+        await profileOf(ctx, { a: { updatedAt: T0 + 70 }, notes: [note('T', { name: 'Alpha plan', trashed: true, trashedAt: T0 })] });
+        const draft = legacyDraft({ blocks: [block('a1', 'A', 0, 'alpha, edited as the tab closed', { updatedAt: T0 + 9 })] });
+        const recoveredId = recoveredIdOf(draft);
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-recovered', [recoveredId]]);
+        const callout = (await blocksOf(ctx, recoveredId))[`${recoveredId}-0`];
+        assert.ok(String(callout.content).startsWith('These changes to “Alpha plan” are from a tab that closed on'), String(callout.content));
+        assert.deepEqual(await allOf(ctx, 'links'), []);
       });
 
       it('drops one whose only change is an AI title, over a note saved elsewhere since', async () => {

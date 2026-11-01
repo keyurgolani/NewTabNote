@@ -72,19 +72,59 @@ const days = count => `${count} ${count === 1 ? 'day' : 'days'}`;
  * @property {string} zone - the clock's time zone
  * @property {number} trashDays - the Trash's keeping time from this start, 0 for Never
  * @property {boolean} inFolder - whether the original's folder exists
+ * @property {readonly NoteRecord[]} notes - every note the profile has, the original's included
  */
+
+/**
+ * The editor's own wiki-link markup for `name`, the name escaped (editor.js, selectWikiMenuItem)
+ * @param {string} name
+ * @returns {string}
+ */
+export const wikiLink = name => {
+  const escaped = escapeHtml(name);
+  return `<a href="#" class="wiki-link" data-note-name="${escaped}">[[${escaped}]]</a>`;
+};
+
+/**
+ * Whether the recovered note's first sentence links `original` (V1, as R's model has it): only
+ * when a click on the link and the recovered note's next save both reach the original, and
+ * nothing else.
+ * - The original is in Notes or the Archive and isn't a template. A click looks only in the
+ *   `active` view and then the `archived` one (app.js, openNoteByName), and a save only in
+ *   `withArchived` (linkTargets).
+ * - No other note has its name in any letter case, the Trash, the Archive and the templates
+ *   counted. A click wants the exact name, but a save finds a link's note without case, and a
+ *   restore or a conversion brings a namesake back.
+ * - The wiki-link syntax holds the name as it is: not empty, no space at either end, and no `]`,
+ *   which wikiLinkNames reads up to, nor a `[[` or a line break, which read badly in a sentence.
+ * Otherwise the sentence keeps 1.4.3's quoted title.
+ * @param {NoteRecord} original
+ * @param {readonly NoteRecord[]} notes - every note the profile has, the original's included
+ * @returns {boolean}
+ */
+export function linkable(original, notes) {
+  if (original.trashed || original.isTemplate) return false;
+  const { name } = original;
+  if (typeof name !== 'string' || name === '' || name !== name.trim() || /\]|\[\[|[\r\n]/.test(name)) return false;
+  const wanted = name.toLowerCase();
+  return notes.every(
+    other => other.id === original.id || typeof other.name !== 'string' || other.name.toLowerCase() !== wanted,
+  );
+}
 
 /**
  * The callout's words, as HTML. They name the original once, in the first sentence, and call it
  * that note, that template or that Daily Note after it. A residue that's only a name gets the
- * words for a new name the note never saved.
+ * words for a new name the note never saved. With `link` the first sentence names it by the
+ * editor's wiki link, and every word around the link stays escaped text, as 1.4.3 escapes it.
  * @param {NoteRecord} original
  * @param {Residue} residue
  * @param {CloseDraft} draft
  * @param {Making} making
+ * @param {boolean} link
  * @returns {string}
  */
-function explanation(original, residue, draft, { zone, trashDays }) {
+function explanation(original, residue, draft, { zone, trashDays }, link) {
   let kind = 'note';
   if (original.isTemplate) kind = 'template';
   else if (original.isDaily) kind = 'Daily Note';
@@ -94,12 +134,12 @@ function explanation(original, residue, draft, { zone, trashDays }) {
   else if (stillThere > 1) deletes.push(`That tab also deleted ${stillThere} blocks, which are still in that note.`);
   // The Trash's own keeping time from this start, none when it keeps notes until it's emptied
   const keeping = trashDays > 0 ? ` Otherwise the Trash deletes it in ${days(trashDays)}.` : '';
-  const title = `“${titleOf(original)}”`;
+  const title = link ? wikiLink(/** @type {string} */ (original.name)) : escapeHtml(`“${titleOf(original)}”`);
   const closed = longTime(draft.at, zone);
   if (residue.blocks.length === 0) {
-    return escapeHtml(
+    const first = `${escapeHtml(`A tab that closed on ${closed} renamed `)}${title}${escapeHtml(` to “${residue.name}” before the new name was saved.`)}`;
+    return `${first} ${escapeHtml(
       [
-        `A tab that closed on ${closed} renamed ${title} to “${residue.name}” before the new name was saved.`,
         original.trashed
           ? 'That note is in the Trash, so NewTabNote kept the new name here and put this note in the Trash too.'
           : `That ${kind} was saved elsewhere too, so NewTabNote kept the new name here and left it as it is.`,
@@ -108,9 +148,11 @@ function explanation(original, residue, draft, { zone, trashDays }) {
           ? `Restore this note to keep the new name.${keeping}`
           : `To use the new name, rename that ${kind}, then delete this one.`,
       ].join(' '),
-    );
+    )}`;
   }
-  const sentences = [`These changes to ${title} are from a tab that closed on ${closed}, before they were saved.`];
+  const first = `${escapeHtml('These changes to ')}${title}${escapeHtml(` are from a tab that closed on ${closed}, before they were saved.`)}`;
+  /** @type {string[]} */
+  const sentences = [];
   if (original.trashed) {
     sentences.push('That note is in the Trash, so NewTabNote kept the changes here and put this note in the Trash too.');
   } else if (kind === 'note') {
@@ -123,29 +165,31 @@ function explanation(original, residue, draft, { zone, trashDays }) {
   sentences.push(
     original.trashed ? `Restore this note to keep them.${keeping}` : `Copy what you need into that ${kind}, then delete this one.`,
   );
-  return escapeHtml(sentences.join(' '));
+  return `${first} ${escapeHtml(sentences.join(' '))}`;
 }
 
 /**
  * The recovered note for `draft`'s residue over `original`, and its blocks: an ordinary note, as
- * createNote makes one, under recoveredIdOf(draft), with its preview and to-do progress made
- * from its blocks, as a save makes them
+ * createNote makes one at this start, under recoveredIdOf(draft), with its preview and to-do
+ * progress made from its blocks, as a save makes them. `link` says whether its first sentence
+ * links the original (linkable), whose backlink the caller writes.
  * @param {NoteRecord} original - the draft's note, as stored
  * @param {Residue} residue
  * @param {CloseDraft} draft
  * @param {Making} making
- * @returns {{note: NoteRecord, blocks: BlockRecord[]}}
+ * @returns {{note: NoteRecord, blocks: BlockRecord[], link: boolean}}
  */
 export function recoveredNote(original, residue, draft, making) {
   const { now, inFolder } = making;
   const id = recoveredIdOf(draft);
   const trashed = Boolean(original.trashed);
   const archived = !trashed && Boolean(original.archived);
+  const link = linkable(original, making.notes);
   /** @type {BlockRecord} */
   const first = {
     id: `${id}-0`,
     type: 'callout',
-    content: explanation(original, residue, draft, making),
+    content: explanation(original, residue, draft, making, link),
     indentLevel: 0,
     checked: false,
     imageUrl: null,
@@ -159,8 +203,6 @@ export function recoveredNote(original, residue, draft, making) {
     .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
     .map((block, index) => ({ ...block, id: `${id}-${index + 1}`, createdAt: now, updatedAt: now, canvasId: id, order: index + 1 }));
   const blocks = [first, ...changed];
-  /** @param {unknown} at */
-  const before = at => (typeof at === 'number' ? at - 1 : now);
   const made = newNoteRecord({
     id,
     name: `Recovered: ${titleOf(original)} (${shortTime(draft.at, making.zone)})`,
@@ -169,19 +211,18 @@ export function recoveredNote(original, residue, draft, making) {
     pinned: !trashed && !original.isTemplate && Boolean(original.pinned),
     titleManuallySet: true,
   });
-  // Its group follows the flags it ends with: Archive's or the Trash's beside the original's
+  // Its own times, as createNote gives them, so it sits at the top of Recent and Created (V1).
+  // Its group follows the flags it ends with: Archive's or the Trash's beside the original's.
   const note = /** @type {NoteRecord} */ (withNewPlacement({
     ...made,
-    createdAt: before(original.createdAt),
-    updatedAt: before(original.updatedAt),
     archived,
-    archivedAt: archived && typeof original.archivedAt === 'number' ? original.archivedAt - 1 : null,
+    archivedAt: archived ? now : null,
     ...noteSaveMetadata(blocks),
     viewport: { ...(original.viewport || made.viewport) },
     settings: { ...(original.settings || made.settings) },
     ...(trashed ? { trashed: true, trashedAt: now } : {}),
   }));
-  return { note, blocks };
+  return { note, blocks, link };
 }
 
 /**
