@@ -17,7 +17,9 @@
  *                build's (build-mismatch, which only a dev build written over an open tab makes):
  *                its words over the reload line, with Reload alone, since trying again can't help
  *   save-failed  Reload didn't reload, because a save failed with no notice of its own: the
- *                save's words, with Try again (the reload again) and Reload anyway
+ *                save's words, with Try again (the reload again) and Reload anyway. While Try
+ *                again's guards run, the second line says they're saving, and a save that fails
+ *                again is said again.
  *
  * Try again keeps its place and its focus while it runs, aria-disabled, and past
  * LOADING_AFTER_MS its line reads the part's loading words with the arc where the cross was. A part
@@ -398,9 +400,10 @@ class PartState {
    * @param {string} words
    * @param {string} note
    * @param {Array<'try' | 'reload' | 'anyway'>} buttons
+   * @param {boolean} [sayAgain] - say it even when it's what was said last, as a save that failed again
    * @returns {void}
    */
-  _draw(state, words, note, buttons) {
+  _draw(state, words, note, buttons, sayAgain = false) {
     const element = this._panel();
     element.className = `part-state${this.form === 'card' ? '' : ` is-${this.form}`}`;
     this.state = state;
@@ -411,7 +414,7 @@ class PartState {
     this.reloadButton.hidden = !buttons.includes('reload');
     this.anywayButton.hidden = !buttons.includes('anyway');
     this.place(element);
-    this._say([words, note].filter(Boolean).join(' '));
+    this._say([words, note].filter(Boolean).join(' '), sayAgain);
   }
 
   /**
@@ -499,26 +502,36 @@ class PartState {
     this.load(() => this.tryAgainLoad(failure), { pressed: true });
   }
 
-  /** Reload, after the page's save guards. It stays when a save failed, and says why. */
+  /**
+   * Reload, after the page's save guards. It stays when a save failed, and says why. After a failed
+   * save, Try again is this reload again: while the guards run, the row's second line says
+   * they're saving, as Reload reads Saving… on itself, and a save that fails again is said again.
+   */
   async _onReload() {
-    const button = /** @type {HTMLButtonElement} */ (this.state === 'save-failed' ? this.tryButton : this.reloadButton);
-    this._busy(button, true, button === this.reloadButton);
+    const retrying = this.state === 'save-failed';
+    const button = /** @type {HTMLButtonElement} */ (retrying ? this.tryButton : this.reloadButton);
+    this._busy(button, true, !retrying);
+    if (retrying) {
+      this.lineNote.textContent = PART_NOTES.saving;
+      this._say(PART_NOTES.saving);
+    }
     let answer;
     try {
       answer = await this.reload.guarded();
     } catch {
       answer = { reloaded: false };
     }
-    this._busy(button, false, button === this.reloadButton);
+    this._busy(button, false, !retrying);
     if (answer && answer.reloaded) return;
     // An open editor's own notice says what it couldn't save: it speaks, the row stays as it is,
     // and focus goes to the notice's button
     const notice = this.reload.ownNotice();
     if (notice) {
+      if (retrying) this.lineNote.textContent = PART_NOTES.saveFailedNote;
       this._focus(notice);
       return;
     }
-    this._draw('save-failed', PART_NOTES.saveFailed, PART_NOTES.saveFailedNote, ['try', 'anyway']);
+    this._draw('save-failed', PART_NOTES.saveFailed, PART_NOTES.saveFailedNote, ['try', 'anyway'], true);
     this._focus(this.tryButton);
   }
 
