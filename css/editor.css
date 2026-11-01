@@ -5746,8 +5746,11 @@ kbd {
 
 /* A part that loads at its first use says how its load went where the part goes (#27 slice 3b,
    js/ui/part-state.js): a failure in the export notice's form, or a status line once a load has run
-   400 ms. Screen readers hear the words through .part-state-live, on the page before they change. */
+   400 ms. Screen readers hear the words through .part-state-live, on the page before they change.
+   Its width is its place's, never its words', so a long failure wraps instead of widening the stats
+   view at 800, and its buttons go beside or under the words by that width. */
 .part-state {
+  container-type: inline-size;
   gap: 12px 20px;
   margin: 0;
   padding: 14px 16px;
@@ -5776,16 +5779,14 @@ kbd {
   background: none;
 }
 
+/* The buttons go under the words, where one added later goes to the right of those there, so the
+   one pressed stays where it was (#129's design review) */
 .part-state-text {
-  flex: 1 1 260px;
+  flex: 1 1 100%;
   display: flex;
   gap: 10px;
   min-width: 0;
   margin: 0;
-}
-
-.is-narrow .part-state-text {
-  flex-basis: 100%;
 }
 
 .part-state-note {
@@ -5797,6 +5798,48 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* Beside the words where the second failure's words and both its buttons fit in one row (260 px
+   of words, Try again and Reload): the buttons end the row, one added later goes to the left of
+   those there, and they keep to the row's top, where the words grow from */
+@container (min-width: 470px) {
+  .part-state:not(.is-narrow) > .part-state-text {
+    flex-basis: 0;
+  }
+
+  .part-state:not(.is-narrow) > .part-state-actions {
+    flex-direction: row-reverse;
+    flex-wrap: nowrap;
+    align-self: flex-start;
+  }
+}
+
+/* A button's slot, from where the buttons start (js/ui/part-state.js, _arrange) */
+.part-state-actions > [data-slot="1"] {
+  order: 1;
+}
+
+.part-state-actions > [data-slot="2"] {
+  order: 2;
+}
+
+/* Reload anyway, the quiet one: no fill or border, the secondary label, still a 44 px target */
+.part-state-anyway {
+  border-color: transparent;
+  background: none;
+  color: var(--text-secondary);
+}
+
+.part-state-anyway:hover {
+  background: none;
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+/* Try again's slot, kept empty at its width while Try again stands in a Reload's place */
+.part-state-spacer {
+  visibility: hidden;
 }
 
 /* The glyph's shape and the words carry the state; #20's role colour comes back as a token with #16 */

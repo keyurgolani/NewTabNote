@@ -17,9 +17,9 @@
  *                build's (build-mismatch, which only a dev build written over an open tab makes):
  *                its words over the reload line, with Reload alone, since trying again can't help
  *   save-failed  Reload didn't reload, because a save failed with no notice of its own: the
- *                save's words, with Try again (the reload again) and Reload anyway. While Try
- *                again's guards run, the second line says they're saving, and a save that fails
- *                again is said again.
+ *                save's words, with Try again (the reload again) and a quiet Reload anyway. While
+ *                Try again's guards run it reads Saving…, and the second line says they're
+ *                saving; a save that fails again says so in its own words.
  *
  * Try again keeps its place and its focus while it runs, aria-disabled, and past
  * LOADING_AFTER_MS its line reads the part's loading words with the arc where the cross was. A part
@@ -27,8 +27,16 @@
  * runs one load, and its answer draws in both.
  * Reload runs the page's save guards first (the loader's reloadAfterGuards) and reads "Saving…"
  * at the same width meanwhile; when an open editor shows its own notice for what it couldn't
- * save, that notice speaks, and focus goes to its button. Everything is said once, through a
- * polite live region the PartState puts on the page when it's made, before any words go in.
+ * save, that notice speaks, and focus goes to its button, unless the notice can't take focus, as
+ * on Stats, where the editor is hidden. Each state is said once, through a polite live region the
+ * PartState puts on the page when it's made, before any words go in; a failure that comes again
+ * in the same words, from the third on, is said again where it was pressed.
+ *
+ * The button someone pressed stays where it was, and nothing riskier lands under the pointer
+ * (#129's design review): each shown button has a slot, counted from where the buttons start (the
+ * row's end beside the words, the line's start under them; css/editor.css picks by the width).
+ * After a press, Try again takes the pressed button's slot, a button still shown keeps its own, one
+ * newly shown goes on the far side, and a slot nothing takes stays empty at Try again's width.
  * The styles are the page's own (css/editor.css), since they draw when a chunk didn't load.
  */
 
@@ -83,6 +91,9 @@ const PART_NOTES = Object.freeze({
   saving: 'Saving your changes before reloading.',
   saveFailed: "Failed to save your changes, so the page didn't reload.",
   saveFailedNote: 'Please try again. If it keeps failing, copy anything you need, then reload.',
+  // The save's Try again failed too: the editor's own reload-required words
+  saveFailedAgain: "Failed to save your changes again, so the page didn't reload.",
+  saveFailedAgainNote: 'Copy anything you need, then reload.',
 });
 
 const BUTTONS = Object.freeze({ tryAgain: 'Try again', reload: 'Reload', saving: 'Saving…', reloadAnyway: 'Reload anyway' });
@@ -145,6 +156,8 @@ const PLAIN_RELOAD = {
   ownNotice: () => null,
 };
 
+/** @typedef {'try' | 'reload' | 'anyway'} ButtonKey */
+
 class PartState {
   /**
    * @param {object} options
@@ -189,6 +202,8 @@ class PartState {
     this._loadingNote = '';
     /** Each load's turn: an answer that isn't the newest load's draws nothing */
     this._turn = 0;
+    /** @type {Array<ButtonKey | 'spacer'>} The shown buttons by slot, from where the buttons start */
+    this._slots = [];
     /** @type {HTMLElement | null} */
     this.element = null;
     /** @type {string} What the live region last said */
@@ -252,26 +267,30 @@ class PartState {
 
   /**
    * Show the failure the loader answered: the first failure's words, a second failure's after
-   * Try again, or the reload's alone when trying again can't help
+   * Try again, or the reload's alone when trying again can't help. After a press, the buttons keep
+   * their places, and the place pressed says a failure again even in the words it said last.
    * @param {any} failure - the loader's failed Result
-   * @param {{pressed?: boolean, focus?: boolean}} [options]
+   * @param {{pressed?: boolean, focus?: boolean, redraw?: boolean}} [options] - `redraw` when only
+   *   the note under the words changed, and nothing was pressed
    * @returns {void}
    */
-  fail(failure, { pressed = false, focus = pressed } = {}) {
+  fail(failure, { pressed = false, focus = pressed, redraw = false } = {}) {
     this.failure = failure;
     this._pressed = pressed;
+    /** @type {{pressed: ButtonKey | null, sayAgain: boolean}} */
+    const press = { pressed: pressed && !redraw ? 'try' : null, sayAgain: pressed && focus && !redraw };
     const reason = failure && failure.reason;
     const cantRetry = reason === 'evaluation-failed' || reason === 'build-mismatch' || !failure || typeof failure.retry !== 'function';
     if (cantRetry) {
-      this._draw('threw', this.words.threw, this._withReloadLine(this.note()), ['reload']);
+      this._draw('threw', this.words.threw, this._withReloadLine(this.note()), ['reload'], press);
       if (focus) this._focus(this.reloadButton);
       return;
     }
     if (pressed && this.takesAgain(failure)) {
-      this._draw('again', this.words.again, this._withReloadLine(this.note()), ['try', 'reload']);
+      this._draw('again', this.words.again, this._withReloadLine(this.note()), ['try', 'reload'], press);
       return;
     }
-    this._draw('failed', this.words.failed, this.note(), ['try']);
+    this._draw('failed', this.words.failed, this.note(), ['try'], press);
   }
 
   /**
@@ -281,7 +300,7 @@ class PartState {
    */
   redraw() {
     if (this.state === 'failed' || this.state === 'again' || this.state === 'threw') {
-      this.fail(this.failure, { pressed: this._pressed, focus: false });
+      this.fail(this.failure, { pressed: this._pressed, focus: false, redraw: true });
     }
   }
 
@@ -300,6 +319,7 @@ class PartState {
   clear() {
     this.state = 'idle';
     this.failure = null;
+    this._slots = [];
     if (this.element) this.place(null);
   }
 
@@ -350,9 +370,14 @@ class PartState {
     text.appendChild(words);
     this.actions = doc.createElement('div');
     this.actions.className = 'part-state-actions';
-    this.tryButton = this._button(BUTTONS.tryAgain, () => this._onTryAgain());
-    this.reloadButton = this._button(BUTTONS.reload, () => this._onReload(), BUTTONS.saving);
-    this.anywayButton = this._button(BUTTONS.reloadAnyway, () => this.reload.now());
+    // Try again reads Saving… while a failed save's reload runs again, at its own width
+    this.tryButton = this._button('try', BUTTONS.tryAgain, () => this._onTryAgain(), BUTTONS.saving);
+    this.reloadButton = this._button('reload', BUTTONS.reload, () => this._onReload(), BUTTONS.saving);
+    this.anywayButton = this._button('anyway', BUTTONS.reloadAnyway, () => this.reload.now());
+    // Try again's twin, which keeps its slot empty at its width while Try again stands elsewhere
+    this.spacer = this._button('spacer', BUTTONS.tryAgain, () => {}, BUTTONS.saving);
+    this.spacer.setAttribute('aria-hidden', 'true');
+    this.spacer.tabIndex = -1;
     element.appendChild(text);
     element.appendChild(this.actions);
     this.element = element;
@@ -360,19 +385,22 @@ class PartState {
   }
 
   /**
+   * @param {ButtonKey | 'spacer'} kind
    * @param {string} label
    * @param {() => void} act
    * @param {string} [busyLabel] - a second label it may show, which it keeps the width of
    * @returns {HTMLButtonElement}
    */
-  _button(label, act, busyLabel) {
+  _button(kind, label, act, busyLabel) {
     const doc = this.doc;
     const button = /** @type {HTMLButtonElement} */ (doc.createElement('button'));
     button.type = 'button';
-    button.className = 'secondary-btn part-state-btn';
+    button.className = `secondary-btn part-state-btn part-state-${kind}`;
+    button.dataset.label = label;
     if (busyLabel) {
       // Both labels sit in one cell, so it's as wide as the wider one in both states
       button.classList.add('part-state-swap');
+      button.dataset.busyLabel = busyLabel;
       const shown = doc.createElement('span');
       const reserved = doc.createElement('span');
       reserved.setAttribute('data-reserved', '');
@@ -395,26 +423,63 @@ class PartState {
 
   /**
    * Draw a state: its glyph, words, and buttons. Buttons it doesn't show are hidden, not taken
-   * out, so the one with focus never moves.
+   * out, so the one with focus never moves, and each shown one goes in its slot (_arrange).
    * @param {'failed' | 'again' | 'threw' | 'save-failed'} state
    * @param {string} words
    * @param {string} note
-   * @param {Array<'try' | 'reload' | 'anyway'>} buttons
-   * @param {boolean} [sayAgain] - say it even when it's what was said last, as a save that failed again
+   * @param {Array<ButtonKey>} buttons - in their order from where the buttons start
+   * @param {{pressed?: ButtonKey | null, sayAgain?: boolean}} [how] - the button whose press this
+   *   answers, and whether to say it even in the words said last
    * @returns {void}
    */
-  _draw(state, words, note, buttons, sayAgain = false) {
+  _draw(state, words, note, buttons, { pressed = null, sayAgain = false } = {}) {
     const element = this._panel();
     element.className = `part-state${this.form === 'card' ? '' : ` is-${this.form}`}`;
     this.state = state;
     this._glyph('failed');
     this.line.textContent = words;
     this.lineNote.textContent = note;
-    this.tryButton.hidden = !buttons.includes('try');
-    this.reloadButton.hidden = !buttons.includes('reload');
-    this.anywayButton.hidden = !buttons.includes('anyway');
+    this._slots = this._arrange(buttons, pressed);
+    /** @type {Array<[ButtonKey | 'spacer', HTMLElement]>} */
+    const items = [['try', this.tryButton], ['reload', this.reloadButton], ['anyway', this.anywayButton], ['spacer', this.spacer]];
+    for (const [key, item] of items) {
+      const slot = this._slots.indexOf(key);
+      item.hidden = slot === -1;
+      item.dataset.slot = String(Math.max(slot, 0));
+    }
+    this.actions.hidden = this._slots.length === 0;
     this.place(element);
     this._say([words, note].filter(Boolean).join(' '), sayAgain);
+  }
+
+  /**
+   * Each shown button's slot, counted from where the buttons start: the row's end beside the
+   * words, the line's start under them. After a press, Try again takes the pressed button's slot,
+   * a button still shown keeps its own, one newly shown goes on the far side, and a slot nothing
+   * takes stays empty at Try again's width, since only Try again ever leaves one. Drawn with
+   * nothing pressed, a state keeps the slots its buttons have, or starts them again in its order.
+   * @param {Array<ButtonKey>} buttons
+   * @param {ButtonKey | null} pressed
+   * @returns {Array<ButtonKey | 'spacer'>}
+   */
+  _arrange(buttons, pressed) {
+    const was = this._slots;
+    if (!pressed || !was.includes(pressed)) {
+      const kept = was.filter((key) => key !== 'spacer');
+      const same = kept.length === buttons.length && buttons.every((key) => kept.includes(key));
+      return same ? was : [...buttons];
+    }
+    /** @type {Array<ButtonKey | 'spacer'>} */
+    const slots = was.map(() => 'spacer');
+    if (buttons.includes('try')) slots[was.indexOf(pressed)] = 'try';
+    for (const key of buttons) {
+      if (slots.includes(key)) continue;
+      const at = was.indexOf(key);
+      if (at !== -1 && slots[at] === 'spacer') slots[at] = key;
+      else slots.push(key);
+    }
+    while (slots[slots.length - 1] === 'spacer') slots.pop();
+    return slots;
   }
 
   /**
@@ -434,7 +499,8 @@ class PartState {
     this.lineNote.textContent = this._loadingNote || (pressed ? this.note() : '');
     if (!pressed) {
       element.className = 'part-state is-line';
-      for (const button of [this.tryButton, this.reloadButton, this.anywayButton]) button.hidden = true;
+      for (const button of [this.tryButton, this.reloadButton, this.anywayButton, this.spacer]) button.hidden = true;
+      this.actions.hidden = true;
     }
     this.place(element);
     this._say([this.words.loading, this._loadingNote].filter(Boolean).join(' '));
@@ -504,40 +570,46 @@ class PartState {
 
   /**
    * Reload, after the page's save guards. It stays when a save failed, and says why. After a failed
-   * save, Try again is this reload again: while the guards run, the row's second line says
-   * they're saving, as Reload reads Saving… on itself, and a save that fails again is said again.
+   * save, Try again is this reload again: while the guards run it reads Saving… as Reload does,
+   * and the row's second line says they're saving. A save that fails again says so in its own
+   * words, which from the third failure on are said again each time.
    */
   async _onReload() {
     const retrying = this.state === 'save-failed';
+    /** @type {ButtonKey} */
+    const pressed = retrying ? 'try' : 'reload';
     const button = /** @type {HTMLButtonElement} */ (retrying ? this.tryButton : this.reloadButton);
-    this._busy(button, true, !retrying);
-    if (retrying) {
-      this.lineNote.textContent = PART_NOTES.saving;
-      this._say(PART_NOTES.saving);
-    }
+    const note = this.lineNote ? this.lineNote.textContent : '';
+    this._busy(button, true, true);
+    if (retrying) this.lineNote.textContent = PART_NOTES.saving;
     let answer;
     try {
       answer = await this.reload.guarded();
     } catch {
       answer = { reloaded: false };
     }
-    this._busy(button, false, !retrying);
+    this._busy(button, false, true);
     if (answer && answer.reloaded) return;
     // An open editor's own notice says what it couldn't save: it speaks, the row stays as it is,
-    // and focus goes to the notice's button
+    // and focus goes to the notice's button. A notice that can't take focus, as on Stats, where
+    // the editor is hidden, leaves it to the row.
     const notice = this.reload.ownNotice();
     if (notice) {
-      if (retrying) this.lineNote.textContent = PART_NOTES.saveFailedNote;
       this._focus(notice);
-      return;
+      if (this.doc.activeElement === notice) {
+        if (retrying) this.lineNote.textContent = note;
+        return;
+      }
     }
-    this._draw('save-failed', PART_NOTES.saveFailed, PART_NOTES.saveFailedNote, ['try', 'anyway'], true);
+    if (retrying) this._draw('save-failed', PART_NOTES.saveFailedAgain, PART_NOTES.saveFailedAgainNote, ['try', 'anyway'], { pressed, sayAgain: true });
+    else this._draw('save-failed', PART_NOTES.saveFailed, PART_NOTES.saveFailedNote, ['try', 'anyway'], { pressed, sayAgain: true });
     this._focus(this.tryButton);
   }
 
   /**
    * Mark a button busy, or not: aria-disabled keeps it focusable and in its place, where
-   * disabled would drop focus to the page. Reload swaps to its "Saving…" label.
+   * disabled would drop focus to the page. A reload's button swaps to its "Saving…" label, at
+   * the width it keeps for both, and the live region says the guards are saving.
    * @param {HTMLElement | undefined} button
    * @param {boolean} busy
    * @param {boolean} [swap]
@@ -549,8 +621,10 @@ class PartState {
     else button.removeAttribute('aria-disabled');
     if (swap && button.children.length === 2) {
       const [shown, reserved] = button.children;
-      shown.textContent = busy ? BUTTONS.saving : BUTTONS.reload;
-      reserved.textContent = busy ? BUTTONS.reload : BUTTONS.saving;
+      const label = button.dataset.label || '';
+      const busyLabel = button.dataset.busyLabel || '';
+      shown.textContent = busy ? busyLabel : label;
+      reserved.textContent = busy ? label : busyLabel;
       if (busy) this._say(PART_NOTES.saving);
     }
   }
