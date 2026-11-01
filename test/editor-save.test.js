@@ -425,6 +425,23 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'alpha in main' });
   });
 
+  it("closing the pop-out writes its whole pending save, title included, as this page and its connection stay (#142)", async () => {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    pip.noteData.name = 'Renamed in the pop-out';
+    type(pip, 'charlie in the pop-out');
+    const opened = spyTransactions(Storage);
+    const committed = spyCommits(Storage);
+    pipWindow.fire('pagehide');
+    assert.deepEqual(writesOf(opened), [{ stores: ['canvases', 'elements'], mode: 'readwrite' }],
+      "the note's record and its blocks, opened before the handler returns");
+    assert.deepEqual(committed, [], 'not the closing write: only the pop-out went');
+    await settle();
+    const stored = await Storage.getNote('C');
+    assert.equal(stored.name, 'Renamed in the pop-out');
+    assert.equal(stored.preview, 'charlie in the pop-out');
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
+  });
+
   it('switching panes: each editor keeps its own pending edit on its own note', async () => {
     const secondary = makeEditor(env);
     await secondary.loadNote('B');

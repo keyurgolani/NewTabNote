@@ -4138,8 +4138,13 @@ class BlockEditor {
     });
     const win = doc.defaultView;
     if (win) {
-      // A page that goes runs no more callbacks, so what this writes commits at once (#142)
-      win.addEventListener('pagehide', (event) => this._writePendingNow({ closing: !event.persisted }));
+      // A page that goes runs no more callbacks, so what this writes commits at once (#142).
+      // Only this page's own close is one: the pop-out's (Document PiP) editor lives in the
+      // pop-out's document, and when the pop-out closes, this page and its connection stay, so
+      // its pending save is written whole, title included. In a page, doc === document exactly
+      // when win === window.
+      const ownPage = doc === document;
+      win.addEventListener('pagehide', (event) => this._writePendingNow({ closing: ownPage && !event.persisted }));
     }
   }
 
