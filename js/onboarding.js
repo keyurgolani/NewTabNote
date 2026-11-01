@@ -41,13 +41,14 @@ class OnboardingManager {
   }
 
   /**
-   * Configure default settings for first-run users.
+   * Configure default settings for first-run users. Both background AI jobs, titles and
+   * insights, start off; the user turns them on in Settings.
    * @returns {Promise<void>}
    */
   static async setupFirstRun() {
     await Storage.setSetting('embeddingsEnabled', true);
-    await Storage.setSetting('autoTitleEnabled', true);
-    await Storage.setSetting('insightsEnabled', true);
+    await Storage.setSetting('autoTitleEnabled', false);
+    await Storage.setSetting('insightsEnabled', false);
   }
 
   /**

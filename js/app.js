@@ -789,6 +789,13 @@ class App {
     this.aiChatController.onLoadEmbeddingsModel = () => {
       if (this.notesManager) this.notesManager.loadEmbeddingsModel();
     };
+    // Settings' two background-job switches save through NotesManager, which starts, stops or restarts the job
+    this.aiChatController.onUpdateAutoTitleSettings = async (enabled, interval) => {
+      if (this.notesManager) await this.notesManager.updateAutoTitleSettings(enabled, interval);
+    };
+    this.aiChatController.onUpdateInsightsSettings = async (enabled, interval) => {
+      if (this.notesManager) await this.notesManager.updateInsightsSettings(enabled, interval);
+    };
 
     await this.aiChatController.init();
 
@@ -838,6 +845,9 @@ class App {
       } else {
         this.renderAIPromptTemplateSettings();
       }
+    };
+    this.settingsController.onUpdateLLMSettingsUI = async () => {
+      if (this.aiChatController) await this.aiChatController.updateLLMSettingsUI();
     };
 
     // Settings sync callbacks

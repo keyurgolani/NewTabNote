@@ -644,6 +644,9 @@ class NotesManager {
     if (enabled && this.llm.isConfigured()) {
       await this.checkMissedAutoTitles(interval);
       this.startAutoTitleInterval(interval);
+    } else {
+      // Off, here or in another new tab whose change the settings sync passes on
+      this.stopAutoTitleInterval();
     }
   }
 
@@ -825,6 +828,9 @@ class NotesManager {
     if (enabled && this.llm.isConfigured()) {
       await this.checkMissedInsightsExtraction(interval);
       this.startInsightsInterval(interval);
+    } else {
+      // Off, here or in another new tab whose change the settings sync passes on
+      this.stopInsightsInterval();
     }
   }
 

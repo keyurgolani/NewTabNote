@@ -64,6 +64,8 @@ class AIChatController {
     this.onGetNotes = null;          // () => Note[]
     this.onTriggerIndexing = null;   // () => void
     this.onLoadEmbeddingsModel = null; // () => void
+    this.onUpdateAutoTitleSettings = null; // (enabled, intervalMinutes) => Promise<void>
+    this.onUpdateInsightsSettings = null;  // (enabled, intervalMinutes) => Promise<void>
   }
 
   /** Initialize AI chat: load templates, wire DOM listeners, load history. */
@@ -2276,6 +2278,66 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         Utils.showToast('API key cleared', 'success');
       });
     });
+
+    // The two background jobs: each switch and interval saves the moment it changes, and
+    // NotesManager starts, stops or restarts the job
+    this.bindBackgroundJob('auto-title-enabled', 'auto-title-interval', 15,
+      (enabled, minutes) => this.onUpdateAutoTitleSettings && this.onUpdateAutoTitleSettings(enabled, minutes));
+    this.bindBackgroundJob('insights-enabled', 'insights-interval', 360,
+      (enabled, minutes) => this.onUpdateInsightsSettings && this.onUpdateInsightsSettings(enabled, minutes));
+  }
+
+  /**
+   * Save a background job's switch and interval whenever the user changes either one: the
+   * rows follow the switch at once, then `save` stores both and starts, stops or restarts the job
+   * @param {string} switchId - The job's checkbox
+   * @param {string} intervalId - The job's interval select, in minutes
+   * @param {number} defaultMinutes - The interval when the select has none
+   * @param {(enabled: boolean, minutes: number) => any} save
+   */
+  bindBackgroundJob(switchId, intervalId, defaultMinutes, save) {
+    const toggle = /** @type {HTMLInputElement|null} */ (document.getElementById(switchId));
+    const interval = /** @type {HTMLSelectElement|null} */ (document.getElementById(intervalId));
+    const changed = async () => {
+      const minutes = parseInt(interval ? interval.value : '', 10);
+      this.updateLLMSettingsVisibility(this.llm.provider);
+      await save(Boolean(toggle && toggle.checked), Number.isFinite(minutes) ? minutes : defaultMinutes);
+    };
+    toggle?.addEventListener('change', changed);
+    interval?.addEventListener('change', changed);
+  }
+
+  /**
+   * Draw the key field masked, with its reveal button back on "Show API key"
+   * @param {HTMLInputElement} input
+   */
+  maskApiKey(input) {
+    input.type = 'password';
+    const reveal = input.closest('.api-key-input-group')?.querySelector('.api-key-toggle-btn');
+    if (!reveal) return;
+    /** @type {HTMLElement} */ (reveal).title = 'Show API key';
+    reveal.querySelector('.eye-icon')?.classList.remove('hidden');
+    reveal.querySelector('.eye-off-icon')?.classList.add('hidden');
+  }
+
+  /**
+   * The stored model as the model list's one option, selected, with the name the provider's
+   * built-in list gives it, and no request for the list. With none stored, the option says so.
+   * @param {string} provider
+   * @param {string} model
+   */
+  showStoredModel(provider, model) {
+    const modelSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('llm-model-select'));
+    if (!modelSelect) return;
+    modelSelect.innerHTML = '';
+    if (provider === 'none') return;
+    const known = model ? this.llm.getFallbackModels(provider).find(m => m.id === model) : null;
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model ? (known ? known.name : model) : 'No model selected';
+    option.selected = true;
+    modelSelect.appendChild(option);
+    modelSelect.value = model;
   }
 
   updateLLMSettingsVisibility(provider) {
@@ -2327,50 +2389,48 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   }
 
   /**
-   * Populate LLM settings values when settings modal opens.
+   * Show the AI settings in effect, read from storage each time Settings opens: the provider,
+   * the key (masked), the model, the Ollama URL, and both background jobs with their
+   * intervals, then the rows those settings turn on. It sends no request and writes no
+   * setting: the stored model shows as the selected option, and the model list loads only on
+   * the user's own actions, a provider change or the refresh button.
    */
   async updateLLMSettingsUI() {
     const provider = await this.storage.getSetting('llmProvider', 'none');
     const apiKey = await this.storage.getSetting('llmApiKey', '');
     const model = await this.storage.getSetting('llmModel', '');
     const ollamaUrl = await this.storage.getSetting('ollamaUrl', 'http://localhost:11434');
-
-    const providerSelect = document.getElementById('llm-provider-select');
-    if (providerSelect) providerSelect.value = provider;
-
-    const apiKeyInput = document.getElementById('llm-api-key');
-    if (apiKeyInput) apiKeyInput.value = apiKey;
-
-    const ollamaUrlInput = document.getElementById('ollama-url');
-    if (ollamaUrlInput) ollamaUrlInput.value = ollamaUrl;
-
-    this.updateLLMSettingsVisibility(provider);
-    await this.loadAndPopulateModels(provider, apiKey);
-
-    if (model) {
-      const modelSelect = document.getElementById('llm-model-select');
-      if (modelSelect) modelSelect.value = model;
-    }
-
-    // Auto-title settings
     const autoTitleEnabled = await this.storage.getSetting('autoTitleEnabled', false);
     const autoTitleInterval = await this.storage.getSetting('autoTitleInterval', 15);
-
-    const autoTitleEnabledCheckbox = document.getElementById('auto-title-enabled');
-    const autoTitleIntervalSelect = document.getElementById('auto-title-interval');
-
-    if (autoTitleEnabledCheckbox) autoTitleEnabledCheckbox.checked = autoTitleEnabled;
-    if (autoTitleIntervalSelect) autoTitleIntervalSelect.value = autoTitleInterval.toString();
-
-    // Insights extraction settings
     const insightsEnabled = await this.storage.getSetting('insightsEnabled', false);
     const insightsInterval = await this.storage.getSetting('insightsInterval', 360);
 
-    const insightsEnabledCheckbox = document.getElementById('insights-enabled');
-    const insightsIntervalSelect = document.getElementById('insights-interval');
+    const providerSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('llm-provider-select'));
+    if (providerSelect) providerSelect.value = provider;
 
-    if (insightsEnabledCheckbox) insightsEnabledCheckbox.checked = insightsEnabled;
-    if (insightsIntervalSelect) insightsIntervalSelect.value = insightsInterval.toString();
+    const apiKeyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('llm-api-key'));
+    if (apiKeyInput) {
+      apiKeyInput.value = apiKey;
+      this.maskApiKey(apiKeyInput);
+    }
+
+    const ollamaUrlInput = /** @type {HTMLInputElement|null} */ (document.getElementById('ollama-url'));
+    if (ollamaUrlInput) ollamaUrlInput.value = ollamaUrl;
+
+    this.showStoredModel(provider, model);
+
+    const autoTitleEnabledCheckbox = /** @type {HTMLInputElement|null} */ (document.getElementById('auto-title-enabled'));
+    const autoTitleIntervalSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('auto-title-interval'));
+    if (autoTitleEnabledCheckbox) autoTitleEnabledCheckbox.checked = Boolean(autoTitleEnabled);
+    if (autoTitleIntervalSelect) autoTitleIntervalSelect.value = String(autoTitleInterval);
+
+    const insightsEnabledCheckbox = /** @type {HTMLInputElement|null} */ (document.getElementById('insights-enabled'));
+    const insightsIntervalSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('insights-interval'));
+    if (insightsEnabledCheckbox) insightsEnabledCheckbox.checked = Boolean(insightsEnabled);
+    if (insightsIntervalSelect) insightsIntervalSelect.value = String(insightsInterval);
+
+    // After the switches, so each interval row follows its switch
+    this.updateLLMSettingsVisibility(provider);
   }
 
   async loadAndPopulateModels(provider, apiKey, forceRefresh = false) {
@@ -2822,6 +2882,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   }
 
   async updateSmartSuggestions(force = false) {
+    // The Insights tab reads the note only while the AI sidebar is open, forced or not
+    if (!this.aiSidebarOpen) return;
     if (this.aiActiveTab !== 'smart' && !force) return;
 
     const editor = this.getEditor ? this.getEditor() : null;
