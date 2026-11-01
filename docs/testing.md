@@ -18,6 +18,8 @@ How the tests are set up, what they're allowed to fake, and the three records th
 
 `test/test-files-run.test.js` fails `npm test` when a `*.test.js` or `*.test.mjs` under `test/` isn't reached by a script the workflow runs, so a test file in a new folder can't sit there unrun.
 
+`npm test` and `test:kernel` load `test/helpers/element-assert-guard.mjs` first, so `node:assert`'s comparisons throw a `TypeError` for a DOM node, a document or a window, or a value that directly holds one, because a failing comparison's diff prints the whole document an element is in. Compare elements by identity, as in `assert.ok(actual === expected, message)`.
+
 ## Fixture rules
 
 1. Tests load the production files. No copy of a production method, no reimplementation of what it does. `test/helpers/legacy-env.js` loads the legacy 1.4.x scripts unmodified into a `node:vm` context, as classic scripts, the way 1.4.x loaded them. The bundler folds them into chunks since #27 slice 2, so a legacy file holds nothing a classic script can't parse, such as `import.meta`, and the composition root hands it what needs one (the indexer's starter, `js/kernel/composition/workers.js`). Kernel tests import the modules under `js/kernel/` directly.
