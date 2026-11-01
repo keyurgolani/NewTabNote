@@ -31,9 +31,10 @@
  * sources sorted), its permissions, host permissions, optional ones, externally_connectable,
  * and every other key but the cosmetic ones (COSMETIC_KEYS); the offscreen document's reasons,
  * wherever a first-party script creates it; the destination registry and the network ledger;
- * and the sources that hold the network rules: the destination client, the rows it imports and
- * its rule module, the network guard, its installer and the module that installs it first, the
- * proxy policy, the worker's network module, and the offscreen document. An entry records each part's SHA-256 and one digest over them all. `npm
+ * and the sources that hold the network rules: every first-party module that runs before the
+ * guard (the destination client, the rows it imports and its rule module, the network guard, its
+ * installer, the module that installs it first, its refusal reports, and the pages' guard entry),
+ * the proxy policy, the worker's network module, and the offscreen document. An entry records each part's SHA-256 and one digest over them all. `npm
  * run check:security-baseline -- --print` prints what an entry for the tree as it is would record.
  */
 
@@ -44,7 +45,11 @@ const { problem } = require('./diagnostics.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 
-/** The sources whose network rules the baseline holds (Q7 of the plan) */
+/**
+ * The sources whose network rules the baseline holds (Q7 of the plan): every first-party module
+ * that runs before the guard, the import graphs of the pages' guard entry, the guard's first
+ * module and the worker's network (test/security-baseline.test.js), and the proxies
+ */
 const SOURCES = Object.freeze([
   'js/kernel/composition/destinations.js',
   'js/kernel/composition/destination-rows.js',
@@ -52,6 +57,8 @@ const SOURCES = Object.freeze([
   'js/kernel/composition/network-guard.js',
   'js/kernel/composition/network-guard-install.js',
   'js/kernel/composition/network-guard-first.js',
+  'js/kernel/composition/network-refusals.js',
+  'js/network-guard.js',
   'js/kernel/composition/api-request.js',
   'js/kernel/composition/worker-network.js',
   'js/offscreen.js',
@@ -107,6 +114,16 @@ const POLICY_CHARACTERS = /^[\t\n\f\r\x20-\x7e]*$/;
 const DIRECTIVE_NAME = /^[a-z0-9-]+$/;
 
 /**
+ * `text` quoted, with each character outside printable ASCII written as its \\u escape, so a
+ * no-break space doesn't pass for a space in a message
+ * @param {string} text
+ * @returns {string}
+ */
+function asciiText(text) {
+  return JSON.stringify(text).replace(/[^\x20-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
  * A CSP source as Chromium compares it: a keyword, a scheme and a host without case, and a
  * hash's or nonce's value, and a path, with it, a source with no scheme included
  * @param {string} source
@@ -142,7 +159,7 @@ function parsePolicy(policy) {
     if (!rawName) continue;
     const name = rawName.toLowerCase();
     if (!DIRECTIVE_NAME.test(name)) {
-      unreadable.push(`the directive name ${JSON.stringify(rawName)}`);
+      unreadable.push(`the directive name ${asciiText(rawName)}`);
       continue;
     }
     if (Object.hasOwn(directives, name)) {
