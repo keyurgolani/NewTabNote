@@ -1,10 +1,12 @@
 'use strict';
 
-// #17 PR 1b in the shipped service worker (js/background.js): it upgrades a version-8 profile
-// to 9 at start, answers a page's storage.migrate once its run has finished (Q12), and while an
+// #17 PR 1b in the shipped service worker (js/background.js): its coordinator's kernel (#35)
+// upgrades a version-8 profile to 9 on the worker's first event that needs storage, a page's
+// storage.migrate included, answers that page once the run has finished (Q12), and while an
 // older build's open page blocks the upgrade, a capture says "Not captured" with why, at once,
 // rather than wait or claim it saved. storage.migrate is accepted only from the extension's own
-// senders (#21's isOwnSender), as API_REQUEST is.
+// senders (#21's isOwnSender), as API_REQUEST is: js/kernel/composition/worker-network.js runs
+// the worker's handler for them alone, and answers any other sender request-refused.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -60,7 +62,7 @@ function message(env, request, sender = NEW_TAB) {
 }
 
 describe('the worker upgrades the database and answers the pages that wait on it', () => {
-  it('upgrades a version-8 profile to 9 at start, every record kept, and answers storage.migrate with the outcome', async () => {
+  it("upgrades a version-8 profile to 9 on a page's storage.migrate, every record kept, and answers it with the outcome", async () => {
     const env = workerEnv();
     await createDatabase(env.indexedDB, { records: { canvases: [note('n1', { name: 'Kept' })] } });
     await startWorker(env);
@@ -125,6 +127,8 @@ describe("storage.migrate is accepted only from the extension's own senders", ()
     });
     await createDatabase(env.indexedDB, { records: { canvases: [note('n1', { name: 'Kept' })] } });
     await startWorker(env);
+    // A browser start starts the coordinator, whose kernel runs the run
+    env.chrome.api.runtime.onStartup.listeners[0]();
     await waitFor(() => env.chrome.local.setting_storageUpgrade?.status === 'failed', { withinMs: 10000, message: 'the failed run' });
     return env;
   }
@@ -132,7 +136,7 @@ describe("storage.migrate is accepted only from the extension's own senders", ()
   it("refuses a web page's, another extension's, a content script's, and an unnamed sender's, and starts no run", async () => {
     const env = await afterAFailedRun();
     for (const sender of FOREIGN) {
-      assert.deepEqual(await message(env, { type: 'storage.migrate' }, sender), { status: 'refused' }, JSON.stringify(sender));
+      assert.deepEqual(await message(env, { type: 'storage.migrate' }, sender), { error: 'request-refused' }, JSON.stringify(sender));
     }
     assert.equal((await dumpDatabase(env.indexedDB)).version, 8, 'no run started');
     assert.equal(env.chrome.local.setting_storageUpgrade.status, 'failed');
