@@ -113,6 +113,9 @@ export const ERROR_CODES = Object.freeze([
   'locks-unavailable',
   // A database whose shape no step knows, which the run refuses (migrate.js)
   'unknown-shape',
+  // #17 PR 3a's data transforms: a meta.schema with no logical version, which they stop at
+  // (transforms.js)
+  'meta-unreadable',
   // #13's answers that didn't come (contracts/transport-codes.js)
   'unavailable',
   'deadline-exceeded',
