@@ -9,12 +9,17 @@
  *   was written after a time, which is how local inference tells the embedding model has
  *   loaded since a failure (nothing journals a load that worked).
  *
+ * - the migration reader: CanvasTabDB's version against the one this build upgrades to, and
+ *   what the worker recorded of its last run (`setting_storageUpgrade`), for storage's check
+ *   below 9.
+ *
  * A composition root makes them with the context's IndexedDB, and Web Crypto and IDBKeyRange
  * for verification. No shipped root does yet.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { DEFAULT_LIMITS, listPoints, openRecovery, verifyPoint } from './recovery-points.js';
+import { LATEST_STRUCTURAL } from './registry.js';
 import { DB_NAME } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 
@@ -141,5 +146,65 @@ export function createVectorsReader({ indexedDB }) {
           request.onerror = () => reject(request.error);
         }),
       ),
+  });
+}
+
+/** chrome.storage.local key of the worker's last migration run (composition/background.js) */
+const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
+
+/**
+ * chrome.storage.local key of the marker the worker's run sets while its upgrade waits on
+ * another connection (composition/background.js). It's outside `setting_*`, so no page's
+ * settings listener hears of it, and no copy of the settings takes it.
+ */
+export const UPGRADE_BLOCKED_KEY = 'storageUpgradeBlocked';
+
+/**
+ * Where CanvasTabDB is against the version this build upgrades to, and whether a run's upgrade
+ * is waiting on another connection now
+ * @typedef {{version: number, latest: number, status: string | null, code: string | null, blocked: boolean}} MigrationState
+ */
+
+/**
+ * @param {{indexedDB: IDBFactory, settings: import('./adapter.js').SettingsStore}} options
+ */
+export function createMigrationReader({ indexedDB, settings }) {
+  return Object.freeze({
+    /**
+     * CanvasTabDB's version (0 when there's none), the latest, the recorded run's status and
+     * code, null when there's no record, and whether the worker's blocked marker stands. It
+     * reads the version from indexedDB.databases(), which opens no connection, so it never
+     * waits behind an upgrade; a factory without databases() leaves it unknown, and it throws.
+     * It writes nothing.
+     * @returns {Promise<MigrationState>}
+     */
+    async current() {
+      if (typeof indexedDB.databases !== 'function') throw new UnavailableError('storage', 'unreadable', true);
+      let version = 0;
+      try {
+        const listed = await indexedDB.databases();
+        const found = listed.find(database => database && database.name === DB_NAME);
+        if (found && Number.isSafeInteger(found.version)) version = /** @type {number} */ (found.version);
+      } catch {
+        throw new UnavailableError('storage', 'unreadable', true);
+      }
+      /** @type {unknown} */
+      let stored;
+      try {
+        stored = await settings.get([UPGRADE_RECORD_KEY, UPGRADE_BLOCKED_KEY]);
+      } catch {
+        throw new UnavailableError('storage', 'settings-read-failed', true);
+      }
+      if (stored === null || typeof stored !== 'object') throw new UnavailableError('storage', 'settings-read-failed', true);
+      const record = /** @type {Record<string, unknown>} */ (stored)[UPGRADE_RECORD_KEY];
+      const fields = record !== null && typeof record === 'object' ? /** @type {Record<string, unknown>} */ (record) : {};
+      return {
+        version,
+        latest: LATEST_STRUCTURAL,
+        status: typeof fields.status === 'string' ? fields.status : null,
+        code: typeof fields.code === 'string' ? fields.code : null,
+        blocked: Boolean(/** @type {Record<string, unknown>} */ (stored)[UPGRADE_BLOCKED_KEY]),
+      };
+    },
   });
 }

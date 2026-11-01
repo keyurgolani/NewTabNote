@@ -11,7 +11,9 @@ import { webcrypto } from 'node:crypto';
 
 import { createLegacySecretReader } from '../../js/kernel/adapters/indexeddb/legacy-secrets.js';
 import { coordinatorHandlers, createCoordinator } from '../../js/kernel/composition/coordinator.js';
-import { createRecoveryReader, createVectorsReader } from '../../js/kernel/adapters/indexeddb/health.js';
+import { createMigrationReader, createRecoveryReader, createVectorsReader } from '../../js/kernel/adapters/indexeddb/health.js';
+import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
 import { createInProcessTransport } from '../../js/kernel/core/messaging/in-process.js';
 import { createLookup } from '../../js/kernel/core/messaging/operations.js';
@@ -115,7 +117,10 @@ export function settingsOf(of) {
  * @param {{events?: () => Promise<any[]>}} [options]
  */
 export async function providerContext(of = freshProfile(), { events = async () => [] } = {}) {
-  const adapter = adapterOn(of);
+  // The adapter on the path capture uses, as the worker opens it since #17 PR 1b: existing
+  // below the latest version, versioned at it (or on a profile with no database yet)
+  const { version } = await inspect(of.real);
+  const adapter = adapterOn(of, { mode: version > 0 && version < LATEST_STRUCTURAL ? 'existing' : 'versioned' });
   // A profile the adapter refuses (a newer schema, say) still gets a context, whose probes say so
   await adapter.open().catch(() => {});
   const root = createRegistryRoot({ host: 'workspace' });
@@ -124,6 +129,7 @@ export async function providerContext(of = freshProfile(), { events = async () =
   /** @type {ProviderContext} */
   const context = {
     storage: adapter,
+    migration: createMigrationReader({ indexedDB: of.faults.factory, settings: of.chrome.api.storage.local }),
     settings: settingsOf(of),
     secrets: createLegacySecretReader({ indexedDB: of.faults.factory, settings: of.chrome.api.storage.local }),
     recovery: createRecoveryReader({ indexedDB: of.faults.factory, keyRange: KeyRange, crypto: /** @type {any} */ (webcrypto) }),

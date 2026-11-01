@@ -20,7 +20,9 @@
 
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { failureOf } from '../adapters/indexeddb/failures.js';
+import { UPGRADE_BLOCKED_KEY } from '../adapters/indexeddb/health.js';
 import { startMigrations } from '../adapters/indexeddb/migrate.js';
+import { LATEST_STRUCTURAL } from '../adapters/indexeddb/registry.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { createRouter } from '../core/messaging/router.js';
@@ -65,7 +67,34 @@ import { hostTimers, randomIds } from './messaging.js';
  *   Chrome stops an extension worker that goes 30 seconds without an event or an extension
  *   API call, and IndexedDB work counts as neither
  * @property {KeepaliveTimers} [timers]
+ * @property {(report: MigrationReport) => void} [report]
+ *   Told of each run the worker makes (#20, the diagnostic journal): when its upgrade turns out
+ *   blocked, and when it ends, never for a record it keeps without running. Best effort: a
+ *   report that throws changes nothing the run does.
  */
+
+/**
+ * What the worker reports of a run
+ * `standing` says a blocked marker stood when the attempt started, so a worker before this one
+ * saw the same blocked upgrade; `previous` is the status and code of the record the run
+ * replaced, null when there was none.
+ * @typedef {{kind: 'blocked', standing?: boolean} | {kind: 'ended', outcome: MigrationOutcome, previous?: RecordedRun | null}} MigrationReport
+ */
+
+/**
+ * A recorded run's status and code, which a report carries, codes only
+ * @typedef {{status: string | null, code: string | null}} RecordedRun
+ */
+
+/**
+ * @param {unknown} stored - a stored upgrade record
+ * @returns {RecordedRun | null}
+ */
+function recordedOf(stored) {
+  if (stored === null || typeof stored !== 'object') return null;
+  const { status, code } = /** @type {Record<string, unknown>} */ (stored);
+  return { status: typeof status === 'string' ? status : null, code: typeof code === 'string' ? code : null };
+}
 
 /**
  * The run's outcome as the worker records it, under chrome.storage.local
@@ -76,6 +105,9 @@ import { hostTimers, randomIds } from './messaging.js';
 
 /** chrome.storage.local key of the recorded outcome, which Storage.readSetting reads as `storageUpgrade` */
 export const UPGRADE_RECORD_KEY = 'setting_storageUpgrade';
+
+// The marker a run sets while its upgrade waits on another connection (adapters/indexeddb/health.js)
+export { UPGRADE_BLOCKED_KEY };
 
 /** What a page sends to wake the worker and hear its run's status (#17, Q12), from host.js */
 export { MIGRATE_MESSAGE };
@@ -247,6 +279,30 @@ export function createWorkerClient(host = workerHost()) {
   const onBlock = new Set();
 
   /**
+   * Tells the host's report of a run, never letting it in the run's way
+   * @param {MigrationReport} report
+   */
+  const tell = report => {
+    // A report that fails, now or later, has nowhere to go, and the run goes on
+    Promise.resolve()
+      .then(() => {
+        if (typeof host.report === 'function') return host.report(report);
+        return undefined;
+      })
+      .catch(() => {});
+  };
+
+  /**
+   * Sets or clears the blocked marker. A write that fails leaves it as it was: the next attempt
+   * clears it as it starts.
+   * @param {{at: number} | null} value
+   */
+  const mark = value =>
+    Promise.resolve()
+      .then(() => host.settings.set({ [UPGRADE_BLOCKED_KEY]: value }))
+      .catch(() => {});
+
+  /**
    * Calls an extension API every KEEPALIVE_MS until `ending` settles
    * @param {Promise<unknown>} ending
    */
@@ -275,10 +331,20 @@ export function createWorkerClient(host = workerHost()) {
   const attempt = () => {
     attempts += 1;
     let readStores = false;
+    /** Whether a blocked marker stood when this attempt started, which it clears */
+    let markerStood = false;
     /** @type {Promise<MigrationOutcome>} */
     const outcome = Promise.resolve()
-      .then(() => host.settings.get([UPGRADE_RECORD_KEY]))
+      .then(() => host.settings.get([UPGRADE_RECORD_KEY, UPGRADE_BLOCKED_KEY]))
       .catch(() => ({}))
+      .then(async stored => {
+        const found = /** @type {Record<string, unknown>} */ (stored || {});
+        // Every attempt clears the marker as it starts, and only a blocked upgrade sets it again,
+        // so a worker that stopped while blocked leaves none behind past the next start
+        markerStood = Boolean(found[UPGRADE_BLOCKED_KEY]);
+        if (markerStood) await mark(null);
+        return found;
+      })
       .then(stored => {
         const previous = /** @type {Record<string, unknown>} */ (stored || {})[UPGRADE_RECORD_KEY];
         if (standing(previous, systemClock.now(), version)) {
@@ -294,6 +360,8 @@ export function createWorkerClient(host = workerHost()) {
           kept.add(standingOutcome);
           return standingOutcome;
         }
+        /** Whether this run's upgrade turned out blocked, so it set the marker */
+        let blockedNow = false;
         run = startMigrations({
           indexedDB: host.indexedDB,
           keyRange: host.keyRange,
@@ -311,6 +379,9 @@ export function createWorkerClient(host = workerHost()) {
             // migrate.js marks the run blocked before it calls this
             for (const stop of [...onBlock]) stop();
             onBlock.clear();
+            blockedNow = true;
+            mark({ at: systemClock.now() });
+            tell({ kind: 'blocked', standing: markerStood });
           },
         });
         return run.done.then(async ended => {
@@ -322,6 +393,8 @@ export function createWorkerClient(host = workerHost()) {
             version,
             (readStores || ended.recoveryPointId !== null) && ended.shape !== 'none',
           );
+          if (blockedNow) await mark(null);
+          tell({ kind: 'ended', outcome: ended, previous: recordedOf(previous) });
           return ended;
         });
       })
@@ -331,7 +404,12 @@ export function createWorkerClient(host = workerHost()) {
         /** @type {MigrationOutcome} */
         const failed = { status: 'failed', shape: null, to: null, steps: [], recoveryPointId: null, failure: { code } };
         // It read nothing, so the next request runs again at once
+        const stored = await Promise.resolve()
+          .then(() => host.settings.get([UPGRADE_RECORD_KEY]))
+          .catch(() => ({}));
+        const previous = recordedOf(/** @type {Record<string, unknown>} */ (stored || {})[UPGRADE_RECORD_KEY]);
         await record(host.settings, failed, null, systemClock.now(), version, false);
+        tell({ kind: 'ended', outcome: failed, previous });
         return failed;
       });
     keepAliveUntil(outcome);
@@ -490,6 +568,66 @@ export function createWorkerClient(host = workerHost()) {
       running: () => settled < attempts,
     }),
   });
+}
+
+/**
+ * The refusals the worker's open journals itself, as storage.open-failed (#35's coordinator,
+ * ./coordinator.js, on its kernel's first answer), so the run doesn't journal them again
+ */
+const OPEN_JOURNALS = Object.freeze(['missing-core-stores', 'version-too-new']);
+
+/**
+ * The worker's migration reports as diagnostic journal events (#20, slice 4 prerequisites):
+ * a blocked upgrade or a run short of space is `storage.migration-blocked` with why, a run
+ * that failed is `storage.migration-failed` with its code, and a run that upgraded a 1.4.x
+ * database (not a fresh profile's, which only makes it) is `storage.migration-completed`.
+ * A refused run is `storage.migration-failed` with its code, unless the open journals it.
+ * Each holds the version the run upgrades to and codes only. The same event is journaled
+ * once until a run completes, however often a page's request runs it again, and a later
+ * worker start skips it while the record, or the blocked marker, says the same.
+ * @param {(code: string, fields?: Record<string, unknown>, failure?: unknown) => void} event
+ *   the context's failure events (composition/trust.js), which never throw
+ * @returns {(report: MigrationReport) => void}
+ */
+export function migrationEvents(event) {
+  /** @type {Set<string>} */
+  const journaled = new Set();
+  /**
+   * @param {string} code
+   * @param {Record<string, unknown>} fields
+   * @param {unknown} [failure]
+   */
+  const once = (code, fields, failure) => {
+    const key = `${code}/${String(fields.errorCode ?? (failure && /** @type {any} */ (failure).code) ?? '')}`;
+    if (journaled.has(key)) return;
+    journaled.add(key);
+    event(code, { schemaVersion: LATEST_STRUCTURAL, ...fields }, failure);
+  };
+  return report => {
+    if (report.kind === 'blocked') {
+      // A marker that stood: a worker before this one journaled the same blocked upgrade
+      if (report.standing) return;
+      once('storage.migration-blocked', { errorCode: 'blocked-upgrade' });
+      return;
+    }
+    const { outcome, previous = null } = report;
+    // The record it replaced said the same, so a worker before this one journaled it: Chrome
+    // stops an idle worker, and the next start runs again
+    const repeated =
+      previous !== null && previous.status === outcome.status && previous.code === (outcome.failure ? outcome.failure.code : null);
+    if (outcome.status === 'migrated' && outcome.shape !== 'none' && outcome.shape !== null) {
+      journaled.clear();
+      event('storage.migration-completed', { schemaVersion: outcome.to ?? LATEST_STRUCTURAL });
+    } else if (repeated) {
+      return;
+    } else if (outcome.status === 'space-blocked') {
+      once('storage.migration-blocked', outcome.failure ? { errorCode: outcome.failure.code } : {});
+    } else if (outcome.status === 'failed') {
+      once('storage.migration-failed', {}, outcome.failure);
+    } else if (outcome.status === 'refused' && outcome.failure && !OPEN_JOURNALS.includes(outcome.failure.code)) {
+      once('storage.migration-failed', {}, outcome.failure);
+    }
+  };
 }
 
 /**

@@ -30,6 +30,9 @@ import { hexIds, lockManager, manualClock, realTimers } from './trust-support.mj
 
 /** @typedef {import('../../js/trust/core/checks.js').CheckRun} CheckRun */
 
+/** A migration reader at the latest version, for the probes these tests drive (#20 slice 4 prerequisites, part 2) */
+const AT_LATEST = Object.freeze({ current: async () => ({ version: 9, latest: 9, status: 'migrated', code: null }) });
+
 /**
  * One provider's check, as its descriptor declares it, against `context`
  * @param {string} id
@@ -41,7 +44,7 @@ async function checkOf(id, context) {
   const implementation = /** @type {any} */ (await descriptor.load());
   const run = await runCheck(
     { ...descriptor, timeoutMs: 1000, check: (/** @type {Readonly<Record<string, unknown>>} */ given) => implementation.check(given) },
-    { context, clock: manualClock(), timers: realTimers },
+    { context: { migration: AT_LATEST, ...context }, clock: manualClock(), timers: realTimers },
   );
   // Every fault a check reports is one it observes, or its incident could never resolve
   for (const fault of run.faults) assert.ok((descriptor.observes || []).includes(fault.faultCode), `${id} reported ${fault.faultCode}`);
@@ -146,7 +149,7 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
     const observed = Object.fromEntries(PROVIDERS.map(descriptor => [descriptor.id, descriptor.observes]));
     assert.deepEqual(observed, {
       capture: ['quota', 'version-too-new', 'probe-failed'],
-      storage: ['quota', 'version-too-new', 'probe-failed', 'open-failed'],
+      storage: ['quota', 'version-too-new', 'probe-failed', 'open-failed', 'migration-pending', 'migration-failed', 'migration-blocked'],
       'recovery-readiness': ['point-unverified'],
       backup: [],
       sync: [],
@@ -240,6 +243,9 @@ describe('each provider declares what it observes (#78 should-fix 3)', () => {
       { faultCode: 'version-too-new', subjectId: 'CanvasTabDB' },
       { faultCode: 'probe-failed', subjectId: 'CanvasTabDB' },
       { faultCode: 'open-failed', subjectId: 'CanvasTabDB' },
+      { faultCode: 'migration-pending', subjectId: 'CanvasTabDB' },
+      { faultCode: 'migration-failed', subjectId: 'CanvasTabDB' },
+      { faultCode: 'migration-blocked', subjectId: 'CanvasTabDB' },
     ]);
     // A probe the disk refused looked only at what it reports
     of.faults.abortAfterNextWrite('canvases', 'QuotaExceededError');
