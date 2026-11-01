@@ -203,15 +203,27 @@ describe('each composition root', () => {
     assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
     assert.equal(reported(tab), 1);
 
-    // The worker's start writes first-run settings only
+    // The worker's start writes first-run settings only. Its kernel is on #17's adapter (#17 PR
+    // 1b), whose check reports to the worker's console, as Storage's did
+    /** @type {unknown[][]} */
+    const said = [];
+    const info = console.info;
+    console.info = (/** @type {unknown[]} */ ...args) => {
+      said.push(args);
+    };
     const profile = await withOrphan();
-    const worker = createWorkerClient(workerHostOf(profile));
-    assert.equal(await worker.whenReady(), null);
-    assert.equal(profile.env.chrome.local.setting_storageInitialized, true);
-    assert.equal(reported(profile), 0);
-    const checked = await worker.execute({ type: 'runIntegrityCheck', commandId: worker.ids.next() });
-    assert.deepEqual(checked.kind === 'committed' && [checked.code, checked.changedIds], ['integrity-checked', []]);
-    assert.equal(reported(profile), 1);
+    try {
+      const worker = createWorkerClient(workerHostOf(profile));
+      assert.equal(await worker.whenReady(), null);
+      assert.equal(profile.env.chrome.local.setting_storageInitialized, true);
+      assert.deepEqual(said, []);
+      const checked = await worker.execute({ type: 'runIntegrityCheck', commandId: worker.ids.next() });
+      assert.deepEqual(checked.kind === 'committed' && [checked.code, checked.changedIds], ['integrity-checked', []]);
+    } finally {
+      console.info = info;
+    }
+    assert.deepEqual(said, [['Integrity check (read-only) found orphaned records:', { orphanedElements: 1 }]]);
+    assert.equal(reported(profile), 0, "and nothing on the profile's pages");
     const elements = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(profile.env.indexedDB), 'elements');
     assert.ok(elements.orphan, 'the orphaned block is still there');
     closeAll([tab, profile]);
