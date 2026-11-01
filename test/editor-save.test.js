@@ -780,10 +780,11 @@ describe('BlockEditor failed save before a note switch', () => {
 
 describe('BlockEditor flushSave answers whether what it holds is stored (#27 slice 3b)', () => {
   let env;
+  let release;
   let editor;
 
   beforeEach(async () => {
-    ({ env } = await setup());
+    ({ env, release } = await setup());
     editor = allowDeletes(makeEditor(env));
     await editor.loadNote('A');
   });
@@ -835,7 +836,7 @@ describe('BlockEditor flushSave answers whether what it holds is stored (#27 sli
 
   it('answers false while a deleted note keeps its unsaved text on screen', async () => {
     type(editor, 'typed before the delete');
-    await env.get('Storage').permanentlyDeleteNote('A');
+    await release.permanentlyDeleteNote('A');
     assert.equal(await runUntil(env, editor.flushSave()), false);
     assert.equal(editor.noteGone, true);
   });
