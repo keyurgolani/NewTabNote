@@ -64,11 +64,13 @@ function shown(page, container) {
 test('a reply stored in either chat shows its markup as text, and the page loads nothing for it', async ({ extension }) => {
   const fetched = await observe(extension);
   await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  // Stored once the first run has written its own settings, and read by a new start
   await extension.worker.evaluate(([note, global]) => chrome.storage.local.set({
     setting_noteChatMessages: [{ content: 'Hello', type: 'user' }, { content: note, type: 'assistant' }],
     setting_globalChatMessages: [{ content: 'Hello', type: 'user' }, { content: global, type: 'assistant' }],
   }), [markupReply('note'), markupReply('global')]);
-  const page = await driver.openNewTab(extension);
+  await driver.reload(page);
   const pageURL = page.url();
   await expect.poll(async () => (await shown(page, 'ai-chat-messages')).replies).toBe(1);
   await expect.poll(async () => (await shown(page, 'global-chat-messages')).replies).toBe(1);
@@ -123,10 +125,11 @@ test('a streamed reply shows its markup as text while it streams and once it end
 
 test('a plain Markdown reply renders as 1.4.1 rendered it', async ({ extension }) => {
   await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
   await extension.worker.evaluate(reply => chrome.storage.local.set({
     setting_globalChatMessages: [{ content: 'Hello', type: 'user' }, { content: reply, type: 'assistant' }],
   }), PLAIN);
-  const page = await driver.openNewTab(extension);
+  await driver.reload(page);
   await expect.poll(async () => (await shown(page, 'global-chat-messages')).replies).toBe(1);
   const [rendered, as141] = await page.evaluate(old => {
     const reply = document.querySelector('#global-chat-messages .ai-chat-message.assistant .ai-message-content');
