@@ -1,0 +1,12 @@
+{
+  "about": "js/utils.js exactly as the v1.4.1 tag has it: a release artifact kept as a test fixture for test/linear-text-paths.test.js, never production code. Outside the type ratchet (jsconfig.json covers js/ only).",
+  "tag": "v1.4.1",
+  "commit": "65822ffe1de0311579fe6f163d8584d94bb0fc62",
+  "files": [
+    {
+      "path": "js/utils.js",
+      "gitBlob": "cbac1741f0ad15c6f218172d89145f4dd1e26aba",
+      "sha256": "5adf574b034827300cbd5683ad21d0429372b03e520dea3db9e2440325c7bcf2"
+    }
+  ]
+}

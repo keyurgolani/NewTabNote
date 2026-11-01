@@ -3,14 +3,41 @@
   const MAX_TAGS = 3;
 
   /**
-   * Strip HTML tags from a string.
+   * `<[^>]*>` (or `<[^>]+>`, with `nonEmpty`) replaced by `by`: each `<` through the first `>`
+   * after it, when there's one, in one pass
+   * @param {string} text
+   * @param {string} by
+   * @param {boolean} nonEmpty
+   */
+  function replaceTags(text, by, nonEmpty) {
+    let out = '';
+    let from = 0;
+    let lt = text.indexOf('<');
+    while (lt !== -1) {
+      const gt = text.indexOf('>', lt + 1);
+      if (gt === -1) break;
+      if (nonEmpty && gt === lt + 1) {
+        // `<>` isn't a tag; the next `<` may start one
+        lt = text.indexOf('<', lt + 1);
+        continue;
+      }
+      out += text.slice(from, lt) + by;
+      from = gt + 1;
+      lt = text.indexOf('<', from);
+    }
+    return out + text.slice(from);
+  }
+
+
+  /**
+   * Strip HTML tags from a string. Tags are dropped in one pass (replaceTags); the other steps
+   * are 1.4.1's expressions.
    * @param {string} [value=''] - HTML string
    * @returns {string} Plain text
    */
   function stripHtml(value = '') {
-    return String(value)
-      .replace(/<br\s*\/?>/gi, ' ')
-      .replace(/<[^>]*>/g, ' ')
+    const text = String(value).replace(/<br\s*\/?>/gi, ' ');
+    return replaceTags(text, ' ', false)
       .replace(/&nbsp;/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
