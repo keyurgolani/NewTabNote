@@ -22,11 +22,11 @@
   },
   "heap": {
     "entry": "newtab",
-    "limitMiB": 2.81,
+    "limitMiB": 3.10,
     "tolerancePct": 3,
     "profiles": ["typical", "maximal"],
     "mode": "gate",
-    "modeAbout": "gate since 2026-11-01, at today's heap plus about 5%, the rule the owner approved for the byte rows; the coordinator decided it for the owner, who can reverse it. CI's 1.4.0 heap (3.94 to 3.98 MiB over 14 runs on next) matches the Mac's (3.94 to 4.01) within about 1%, so a MiB number means the same on both. The candidate measured 2.68 MiB on typical and 2.56 on maximal on 7489d7b3 (perf run 41280346766): 2.68 x 1.05 is 2.81, failing above 2.89 with the 3%. One number gates both profiles, so maximal has more room. The 4.45 MiB row it replaces was next's heap on the Mac before slice 3, 66% above today. A heap fail, or an invalid run, fails CI's perf job, which isn't in pr-gate's needs or any ruleset, so it blocks no merge."
+    "modeAbout": "gate since 2026-11-01, at today's heap plus about 5%, the rule the owner approved for the byte rows; the coordinator decided it for the owner, who can reverse it. CI's 1.4.0 heap (3.94 to 3.98 MiB over 14 runs on next) matches the Mac's (3.94 to 4.01) within about 1%, so a MiB number means the same on both. Set again on 2026-11-01, when the probe began reading the heap once the writes its own key sets off have committed (#152): the 2.81 it replaces was CI's 2.68 MiB on 7489d7b3, read at the echo, while the key's save was still in flight. On the same tree, next at 2ae3f528, CI's old probe read 2.685 MiB on typical (perf run 41354479082) and the fixed one 2.96 and 2.95, so the row moved for the probe, not for code. With the fixed probe, CI read next three times on typical, 2.96 and 2.95 MiB at 2ae3f528 and 2.94 at ecc401a7 (perf runs 41355105542, 41357548903 and 41359820583), and 2.68, 2.68 and 2.66 on maximal: their median, 2.95, x 1.05 is 3.0975, so 3.10, failing above 3.19 with the 3%. One number gates both profiles, so maximal has more room. A heap fail, or an invalid run, fails CI's perf job, which isn't in pr-gate's needs or any ruleset, so it blocks no merge."
   },
   "forbidden": {
     "chart-library": { "about": "Chart.js", "paths": ["js/lib/chart.js"] },
