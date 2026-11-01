@@ -123,6 +123,38 @@ test('a streamed reply shows its markup as text while it streams and once it end
   await expectNoUncaught(extension, page);
 });
 
+test('a link in a reply goes only where the link rule lets it, one with fenced code in its address among them', async ({ extension }) => {
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  const reply = ['[a](ftp://a.test/```js\nx\n```)', '', '[b](https://a.test/ok) [c](mailto:a@b.test) [d](x:y) [[Note]]'].join('\n');
+  await extension.worker.evaluate(content => chrome.storage.local.set({
+    setting_globalChatMessages: [{ content: 'Hello', type: 'user' }, { content, type: 'assistant' }],
+  }), reply);
+  await driver.reload(page);
+  await expect.poll(async () => (await shown(page, 'global-chat-messages')).replies).toBe(1);
+  const hrefs = await page.evaluate(() => [...document.querySelectorAll('#global-chat-messages .ai-chat-message.assistant .ai-message-content a[href]')]
+    .map(link => link.getAttribute('href')));
+  expect(hrefs).toEqual(['https://a.test/ok', 'mailto:a@b.test', '#']);
+  await expectNoUncaught(extension, page);
+});
+
+test("the reply renderer applies the link rule to the HTML it makes, after it's sanitized", async ({ extension }) => {
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  const html = await page.evaluate(() => {
+    const parse = Utils.parseMarkdown;
+    // Markup no Markdown makes now, as if a rule upstream had missed it
+    Utils.parseMarkdown = () => '<a href="ftp://a.test/x">f</a> <a href=" https://a.test/y">h</a> <a href="#">w</a> <a href="x:y">s</a>';
+    try {
+      return AIChatController.replyHtml('x');
+    } finally {
+      Utils.parseMarkdown = parse;
+    }
+  });
+  expect(html).toBe('<a>f</a> <a href=" https://a.test/y">h</a> <a href="#">w</a> <a>s</a>');
+  await expectNoUncaught(extension, page);
+});
+
 test('a plain Markdown reply renders as 1.4.1 rendered it', async ({ extension }) => {
   await extension.seedOnboarded();
   const page = await driver.openNewTab(extension);

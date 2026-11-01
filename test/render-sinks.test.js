@@ -38,6 +38,7 @@ describe('the render-sink ledger (security/render-sinks.json)', () => {
       'js/controllers/ai-chat-controller.js#addGlobalChatMessage',
       'js/controllers/ai-chat-controller.js#copyAIResponse',
       'js/controllers/ai-chat-controller.js#renderSmartInsights',
+      'js/controllers/ai-chat-controller.js#replyHtml',
       'js/editor.js#_pickerItem',
       'js/kernel/adapters/rendering/legacy.js#render',
       'js/stream-renderer.js#_commitBlock',
@@ -50,7 +51,8 @@ describe('the render-sink ledger (security/render-sinks.json)', () => {
     for (const name of ['_finalizeStreamedMessage', 'addChatMessage', 'addGlobalChatMessage']) assert.ok(rendered.includes(name), name);
     // Markdown becomes HTML in the chat only in replyHtml, and every streamed block goes through it
     assert.deepEqual(chat.match(/Utils\.parseMarkdown\(/g), ['Utils.parseMarkdown(']);
-    assert.match(chat, /static replyHtml\(markdown\) \{\n {4}return sanitizeHtml\(Utils\.parseMarkdown\(markdown\)\);/);
+    assert.match(chat, /static replyHtml\(markdown\) \{\n {4}const parsed = new DOMParser\(\)\.parseFromString\(sanitizeHtml\(Utils\.parseMarkdown\(markdown\)\), 'text\/html'\);/);
+    assert.match(chat, /if \(!isLinkHref\(link\.getAttribute\('href'\)\)\) link\.removeAttribute\('href'\);/);
     assert.match(chat, /const parseBlock = \(markdown\) => AIChatController\.replyHtml\(markdown\);/);
     assert.equal((chat.match(/AIChatController\.replyHtml\(/g) || []).length, 4);
   });
