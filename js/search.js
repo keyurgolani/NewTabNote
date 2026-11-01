@@ -38,16 +38,20 @@ class SearchEngine {
     /**
      * Perform hybrid search combining keyword and semantic results.
      * @param {string} query - Search query
+     * @param {{keywords?: string}} [options] - `keywords`: the keyword half's pattern in place of
+     *   `query`, which the semantic half still compares
      * @returns {Promise<Array<{id: string, score: number, isSemantic?: boolean}>>} Ranked search results
      */
-    async search(query) {
+    async search(query, { keywords = query } = {}) {
         if (!query) return [];
 
         // 1. Keyword Search (Fuse.js)
         let keywordResults = [];
         if (this.fuse) {
-            keywordResults = this.fuse.search(query).map(result => ({
+            keywordResults = this.fuse.search(keywords).map(result => ({
                 ...result.item,
+                // Search entries name their note as noteId, as the indexer writes them
+                id: result.item.noteId ?? result.item.id,
                 keywordScore: 1 - result.score, // Convert 0 (perfect) to 1 (perfect)
                 matches: result.matches
             }));
@@ -110,8 +114,9 @@ class SearchEngine {
      */
     getItemDataById(id) {
         if (!this.fuse) return { id };
-        const item = this.fuse._docs.find(doc => doc.id === id);
-        return item || { id };
+        // Its entry, which names the note as noteId, as a keyword match does
+        const item = this.fuse._docs.find(doc => (doc.noteId ?? doc.id) === id);
+        return item ? { ...item, id } : { id };
     }
 
     /**
