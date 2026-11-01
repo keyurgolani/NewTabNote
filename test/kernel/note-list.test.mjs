@@ -7,7 +7,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
 import { newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { NOTE_VIEWS } from '../../js/kernel/core/domain/note.js';
@@ -227,6 +227,33 @@ describe('the note-list projection', () => {
     await list.settled();
     assert.deepEqual(reads, ['getNotesByIds n1', 'getNotesByIds n1']);
     assert.equal(list.note('n1')?.name, 'Restored');
+  });
+
+  it("reads nothing and tells no listener for #22's index writes, and reads the entries again when the indexer says it wrote them (#17 PR 4b)", async () => {
+    const { list, reads, run } = start();
+    await run('createNote', { noteId: 'n1', name: 'Plan' });
+    await list.settled();
+    reads.length = 0;
+    /** @type {NoteListChange[]} */
+    const changes = [];
+    list.subscribe(change => {
+      changes.push(change);
+    });
+    await run('updateSearchIndex', {
+      entries: [{ noteId: 'n1', name: 'Plan', content: 'Line', tags: [], updatedAt: NOW }],
+    });
+    await run('saveVector', { noteId: 'n1', vector: [0.5] });
+    await list.settled();
+    assert.deepEqual([reads, changes], [[], []]);
+    // As NotesManager.searchEntriesWritten tells it, after each of the indexer's writes
+    await list.searchEntriesChanged(['n1']);
+    await list.settled();
+    assert.deepEqual(reads, ['getNotesByIds n1']);
+    assert.deepEqual(
+      changes.map(change => change.reason),
+      ['search'],
+    );
+    assert.equal(list.searchEntry('n1')?.content, 'Line');
   });
 
   it('a note a commit names that is gone leaves the lists, with its search entry', async () => {

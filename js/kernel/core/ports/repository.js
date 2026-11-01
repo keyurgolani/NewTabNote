@@ -63,7 +63,7 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
  * @property {FolderRecord} folders
  * @property {SearchEntry} searchIndex
  * @property {{id: string, canvasId?: unknown} & Record<string, unknown>} media
- * @property {{id: string} & Record<string, unknown>} vectors
+ * @property {import('../domain/note.js').VectorRecord} vectors
  * @property {{id: string, noteId?: unknown} & Record<string, unknown>} snapshots
  * @property {import('../domain/note.js').LinkRecord} links
  * @property {import('../domain/theme.js').ThemeRecord} themes
@@ -77,6 +77,9 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
  * @typedef {object} ReadTx
  * @property {<S extends StoreName>(store: S, key: string) => Promise<StoreRecords[S] | undefined>} get
  * @property {<S extends StoreName>(store: S) => Promise<StoreRecords[S][]>} getAll
+ * @property {(store: StoreName) => Promise<string[]>} getAllKeys
+ *   Every record's key, in key order, without reading the records, of a store keyed by an id
+ *   (R131: the whole-index rebuild reads its notes and entries so)
  * @property {<S extends StoreName>(store: S, index: string, value: string) => Promise<StoreRecords[S][]>} getAllByIndex
  *   The records whose `index` field (each index is named after its field) holds `value`, an
  *   id. Every adapter refuses any other value, `adapter` `invalid-key`, since IndexedDB reads
@@ -289,7 +292,19 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   with an UnavailableError, code `setting-not-served`.
  * @property {(extra: Record<string, unknown>) => Promise<Blob>} exportBackup
  *   1.4.x's export file (Storage.exportAllAsBlob), with `extra` as more top-level fields: every
- *   note outside trash with its blocks and media, and every folder. Only an adapter with the
- *   `backups` flag makes one. One without rejects with an UnavailableError, `adapter`,
+ *   note outside trash with its blocks and media, and every folder, and on #17's adapter the
+ *   conflict records of those notes (#17 PR 4b). Only an adapter with the `backups` flag makes
+ *   one. One without rejects with an UnavailableError, `adapter`,
  *   `backups-need-legacy-storage`, as its backup tasks answer.
+ * @property {() => Promise<ExportData>} exportData
+ *   The same export as one object, as Storage.exportAll gave it, each media Blob a data URL:
+ *   what sync uploads (#17 PR 4b). Only an adapter with the `backups` flag makes it, and one
+ *   without rejects as for exportBackup.
+ */
+
+/**
+ * 1.4.x's export as one object: every note outside trash, then the templates, without #17 PR
+ * 3's fields beside their flags; their blocks; their media, each Blob a data URL; and every folder
+ * @typedef {{version: 1, exportedAt: number, canvases: NoteRecord[], elements: BlockRecord[],
+ *   media: StoreRecords['media'][], folders: FolderRecord[]}} ExportData
  */

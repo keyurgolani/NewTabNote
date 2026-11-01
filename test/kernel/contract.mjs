@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
@@ -14,6 +14,7 @@ import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { placementOf } from '../../js/product/placement.js';
 import { CALLERS, NOW } from './support.mjs';
+import { WRITE_GUARDS } from './write-guards.mjs';
 
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
 /** @typedef {import('./support.mjs').ContractContext} ContractContext */
@@ -240,8 +241,8 @@ export function runContractSuite(fixture) {
      * Puts records no command writes (media, vectors, snapshots, links no note's text made, and
      * notes in states no command reaches yet, such as a template), through the adapter's own
      * commit, so any adapter can run the cases that need them.
-     * @param {'media' | 'vectors' | 'snapshots' | 'links' | 'notes'} store
-     * @param {Array<{id: string} & Record<string, unknown>>} records
+     * @param {'media' | 'vectors' | 'snapshots' | 'links' | 'notes' | 'blocks' | 'searchIndex' | 'tombstones'} store
+     * @param {Array<Record<string, unknown>>} records
      */
     const seed = async (store, records) => {
       const seeding = /** @type {Command} */ ({ type: 'runStartupMaintenance', commandId: ctx.ids.next() });
@@ -249,7 +250,7 @@ export function runContractSuite(fixture) {
         stores: [store],
         /** @param {import('../../js/kernel/core/ports/repository.js').Tx} tx */
         async run(tx) {
-          for (const record of records) tx.put(store, record);
+          for (const record of records) tx.put(store, /** @type {any} */ (record));
         },
       };
       const { outcome } = await ctx.adapter.commit(unitsWork(seeding, [unit], () => committed('seeded', [])));
@@ -3089,6 +3090,36 @@ export function runContractSuite(fixture) {
         },
       );
 
+      it(
+        flags.backups
+          ? "getSyncData answers the export as one object, Storage.exportAll's, which sync uploads (#17 PR 4b)"
+          : 'no backups: getSyncData is failed',
+        async () => {
+          const noteId = await createNote({ name: 'Plan', blocks: [{ id: 'b1', type: 'text', content: 'Line' }] });
+          const state = await kernel.query({ type: 'getSyncData' });
+          if (!flags.backups) {
+            assert.deepEqual(state, { kind: 'failed', cause: 'adapter', code: 'backups-need-legacy-storage' });
+            return;
+          }
+          assert.equal(state.kind, 'ready', JSON.stringify(state));
+          // As JSON, the form sync uploads it in, so the legacy adapter's records compare too
+          /** @type {import('../../js/kernel/core/ports/repository.js').ExportData | null} */
+          const data = state.kind === 'ready' ? JSON.parse(JSON.stringify(state.data)) : null;
+          assert.deepEqual(Object.keys(data || {}), [
+            'version',
+            'exportedAt',
+            'canvases',
+            'elements',
+            'media',
+            'folders',
+          ]);
+          assert.deepEqual(
+            [data?.version, data?.canvases.map(note => note.id), data?.elements.map(block => block.content)],
+            [1, [noteId], ['Line']],
+          );
+        },
+      );
+
       it('profileHoldsContent is false until a note outside trash has a title or a block that holds something', async () => {
         const holds = async () => {
           const state = await kernel.query({ type: 'profileHoldsContent' });
@@ -3118,6 +3149,7 @@ export function runContractSuite(fixture) {
             { type: 'listThemes' },
             { type: 'exportBackup', backup: false },
             { type: 'profileHoldsContent' },
+            { type: 'getSyncData' },
           ])) {
             assert.deepEqual(
               await reader.query(query),
@@ -3529,6 +3561,9 @@ export function runContractSuite(fixture) {
       it('every catalog command is one this suite runs', () => {
         assert.deepEqual([...COMMAND_TYPES].sort(), [
           'applyDerivedTitle',
+          'applyRemoteChanges',
+          'applyRemoteContent',
+          'applyRemotePlacement',
           'archiveNote',
           'attachInsights',
           'captureToDailyNote',
@@ -3563,6 +3598,7 @@ export function runContractSuite(fixture) {
           'savePromptTemplates',
           'saveSnapshot',
           'saveTheme',
+          'saveVector',
           'saveWorkspaceSession',
           'setFolderCollapsed',
           'setInsightsPending',
@@ -3571,6 +3607,7 @@ export function runContractSuite(fixture) {
           'snoozeSpaceNotice',
           'trashNote',
           'unarchiveNote',
+          'updateSearchIndex',
         ]);
       });
     });
@@ -3747,6 +3784,1014 @@ export function runContractSuite(fixture) {
       });
     });
 
+    describe("#22's search index and embeddings, as derived writes (#17 PR 4b)", () => {
+      /**
+       * An entry as js/workers/indexer.js makes one
+       * @param {string} noteId
+       * @param {string} content
+       * @param {Record<string, unknown>} [extra]
+       */
+      const entry = (noteId, content, extra = {}) => ({
+        noteId,
+        name: 'Plan',
+        content,
+        tags: [],
+        updatedAt: NOW,
+        ...extra,
+      });
+
+      /** @param {string} noteId */
+      const vectorOf = noteId => ctx.adapter.read(['vectors'], tx => tx.get('vectors', noteId));
+
+      it('updateSearchIndex stores the entries the indexer made, as they come, removes the ones it names, and touches no note', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await createNote({ noteId: 'n2', name: 'Other' });
+        const notes = [await noteOf('n1'), await noteOf('n2')];
+        const updated = await run(
+          cmd('updateSearchIndex', { entries: [entry('n1', 'Line'), entry('n2', 'More', { sourceRevision: 1 })] }),
+        );
+        assert.deepEqual([updated.code, updated.changedIds], ['search-index-updated', ['n1', 'n2']]);
+        assert.deepEqual(await searchEntryOf('n1'), entry('n1', 'Line'));
+        assert.deepEqual(await searchEntryOf('n2'), entry('n2', 'More', { sourceRevision: 1 }));
+        const removed = await run(cmd('updateSearchIndex', { entries: [], removed: ['n2', 'never-indexed'] }));
+        assert.deepEqual([removed.code, removed.changedIds], ['search-index-updated', ['n2']]);
+        assert.equal(await searchEntryOf('n2'), undefined);
+        const again = await run(cmd('updateSearchIndex', { entries: [], removed: ['n2'] }));
+        assert.deepEqual([again.code, again.changedIds, again.severity], ['search-index-unchanged', [], 'info']);
+        assert.deepEqual([await noteOf('n1'), await noteOf('n2')], notes);
+      });
+
+      it('updateSearchIndex drops an entry made from an older revision than the stored one, and writes none for a note that is gone', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'New', { sourceRevision: 3 })] }));
+        const old = await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Old', { sourceRevision: 2 })] }));
+        assert.deepEqual([old.code, old.changedIds, old.severity], ['search-index-unchanged', [], 'info']);
+        assert.equal((await searchEntryOf('n1'))?.content, 'New');
+        // One made from the same revision lands, and so does one that says none
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Again', { sourceRevision: 3 })] }));
+        assert.equal((await searchEntryOf('n1'))?.content, 'Again');
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Any')] }));
+        assert.equal((await searchEntryOf('n1'))?.content, 'Any');
+        // The indexer read a note that was deleted for good since: its entry went with it
+        const gone = await run(cmd('updateSearchIndex', { entries: [entry('gone', 'Text', { sourceRevision: 1 })] }));
+        assert.deepEqual([gone.code, gone.changedIds], ['search-index-unchanged', []]);
+        assert.equal(await searchEntryOf('gone'), undefined);
+      });
+
+      it("updateSearchIndex's replaceAll keeps a stored entry newer than the batch's, and drops every other entry the batch doesn't name or whose note is gone", async () => {
+        for (const noteId of ['n1', 'n2', 'n3']) await createNote({ noteId, name: noteId });
+        await seed('searchIndex', [entry('ghost', 'Orphan')]);
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Newer', { sourceRevision: 5 })] }));
+        const replaced = await run(
+          cmd('updateSearchIndex', {
+            entries: [entry('n1', 'Older', { sourceRevision: 4 }), entry('n2', 'Two'), entry('ghost', 'Again')],
+            replaceAll: true,
+          }),
+        );
+        assert.deepEqual(replaced.changedIds, ['n2', 'ghost', 'n3']);
+        assert.equal((await searchEntryOf('n1'))?.content, 'Newer');
+        assert.equal((await searchEntryOf('n2'))?.content, 'Two');
+        assert.deepEqual([await searchEntryOf('n3'), await searchEntryOf('ghost')], [undefined, undefined]);
+      });
+
+      it('updateSearchIndex is refused, and writes nothing, for an entry without its note, two entries of one note, or a note it also removes', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        const before = await searchEntryOf('n1');
+        for (const [fields, code] of /** @type {Array<[Record<string, unknown>, string]>} */ ([
+          [{ entries: [{ name: 'No note' }] }, 'invalid-command'],
+          [{ entries: [entry('n1', 'A', { sourceRevision: -1 })] }, 'invalid-command'],
+          [{ entries: [entry('n1', 'A'), entry('n1', 'B')] }, 'duplicate-entry'],
+          [{ entries: [entry('n1', 'A')], removed: ['n1'] }, 'invalid-command'],
+          [{ entries: [], replaceAll: 'yes' }, 'invalid-command'],
+        ])) {
+          assertRejected(
+            await kernel.execute(cmd('updateSearchIndex', /** @type {any} */ (fields))),
+            'validation',
+            code,
+          );
+        }
+        assert.deepEqual(await searchEntryOf('n1'), before);
+      });
+
+      it('saveVector stores the embedding as Storage.saveVector did, drops one from an older revision, and is refused for a note that is gone', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        const before = await noteOf('n1');
+        const saved = await run(cmd('saveVector', { noteId: 'n1', vector: [0.25, 0.5], sourceRevision: 2 }));
+        assert.deepEqual([saved.code, saved.changedIds], ['vector-saved', ['n1']]);
+        assert.deepEqual(await vectorOf('n1'), {
+          id: 'n1',
+          noteId: 'n1',
+          vector: [0.25, 0.5],
+          updatedAt: NOW,
+          sourceRevision: 2,
+        });
+        const old = await run(cmd('saveVector', { noteId: 'n1', vector: [9], sourceRevision: 1 }));
+        assert.deepEqual([old.code, old.changedIds, old.severity], ['vector-unchanged', [], 'info']);
+        assert.deepEqual((await vectorOf('n1'))?.vector, [0.25, 0.5]);
+        // One that says no revision lands, as every embedding did before, and keeps no revision
+        await run(cmd('saveVector', { noteId: 'n1', vector: [1] }));
+        assert.deepEqual(await vectorOf('n1'), { id: 'n1', noteId: 'n1', vector: [1], updatedAt: NOW });
+        assert.deepEqual(await noteOf('n1'), before);
+        assertRejected(
+          await kernel.execute(cmd('saveVector', { noteId: 'gone', vector: [1] })),
+          'not-found',
+          'note-not-found',
+        );
+        assert.equal(await vectorOf('gone'), undefined);
+        // NaN never gets this far: the kernel refuses what JSON can't carry as not-cloneable
+        for (const vector of [[], ['0.5'], null]) {
+          assertRejected(
+            await kernel.execute(cmd('saveVector', /** @type {any} */ ({ noteId: 'n1', vector }))),
+            'validation',
+            'invalid-command',
+          );
+        }
+      });
+
+      it('both commit under the index aggregate, which names the notes whose entries or embedding changed', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        /** @type {CommitEvent[]} */
+        const seen = [];
+        kernel.subscribe(event => {
+          seen.push(event);
+        });
+        await run(cmd('updateSearchIndex', { entries: [entry('n1', 'Line')] }));
+        await run(cmd('saveVector', { noteId: 'n1', vector: [1] }));
+        // A write that changes nothing publishes nothing
+        await run(cmd('updateSearchIndex', { entries: [], removed: ['never-indexed'] }));
+        assert.deepEqual(
+          seen.map(event => ({ ...event, ids: [...event.ids] })),
+          [
+            { aggregate: 'index', ids: ['n1'] },
+            { aggregate: 'index', ids: ['n1'] },
+          ],
+        );
+      });
+
+      it('listLinks reads every link, and listVectors every embedding, as the graph and semantic search read them', async () => {
+        assert.equal((await kernel.query({ type: 'listLinks' })).kind, 'empty');
+        assert.equal((await kernel.query({ type: 'listVectors' })).kind, 'empty');
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await createNote({ noteId: 'n2', name: 'Other' });
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), linkedNames: ['Other'] }));
+        await run(cmd('saveVector', { noteId: 'n2', vector: [0.5] }));
+        const links = await kernel.query({ type: 'listLinks' });
+        assert.deepEqual(
+          links.kind === 'ready' && links.data.map(link => [link.fromNoteId, link.toNoteId, link.createdAt]),
+          [['n1', 'n2', NOW]],
+        );
+        const vectors = await kernel.query({ type: 'listVectors' });
+        assert.deepEqual(vectors.kind === 'ready' && vectors.data, [
+          { id: 'n2', noteId: 'n2', vector: [0.5], updatedAt: NOW },
+        ]);
+      });
+    });
+
+    describe("applyRemoteChanges, another profile's notes for #19's sync (#17 PR 4b)", () => {
+      /**
+       * A note as another profile stores it
+       * @param {string} id
+       * @param {Record<string, unknown>} [fields]
+       */
+      const remoteNote = (id, fields = {}) => ({ ...storageNote(id, 'Remote', NOW - 1000), ...fields });
+
+      /**
+       * @param {string} noteId
+       * @param {string} content
+       */
+      const textBlock = (noteId, content) => ({ id: `${noteId}-block-0`, type: 'text', content, order: 0 });
+
+      /** @param {Array<Record<string, unknown>>} changes */
+      const apply = async changes =>
+        bulkOf(await kernel.execute(cmd('applyRemoteChanges', /** @type {any} */ ({ changes }))));
+
+      /** @param {BulkOutcome} outcome */
+      const itemsOf = outcome => outcome.items.map(({ id, outcome: item }) => [id, item.kind, item.code]);
+
+      /** The commands the adapter kept when they conflicted, as its `conflicts` store holds them */
+      const keptConflicts = () => ctx.adapter.read(['conflicts'], tx => tx.getAll('conflicts'));
+
+      /**
+       * The versions a note has now, as a remote change made from it says them: none on an
+       * adapter without revisions
+       * @param {string} noteId
+       * @returns {Promise<{expectedRevision?: number, expectedPlacementVersion?: number}>}
+       */
+      const madeFrom = async noteId => {
+        const state = await kernel.query({ type: 'getNote', noteId });
+        if (state.kind !== 'ready' || state.data.revision === undefined) return {};
+        return { expectedRevision: state.data.revision, expectedPlacementVersion: state.data.placementVersion };
+      };
+
+      it("makes a note this profile lacks as the remote has it, with its blocks, search entry, links, and group, filed at the root when its folder isn't here", async () => {
+        await createNote({ noteId: 'n2', name: 'Other' });
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        const linking = { id: 'rb1', canvasId: 'r1', type: 'text', content: 'See [[Other]]', order: 0 };
+        const outcome = await apply([
+          { note: remoteNote('r1', { name: 'From afar', pinned: true, folderId: 'not-here' }), blocks: [linking] },
+          { note: remoteNote('r2', { name: 'Filed', folderId: 'f1', revision: 9, placementVersion: 4 }), blocks: [] },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [
+          ['r1', 'committed', 'remote-note-created'],
+          ['r2', 'committed', 'remote-note-created'],
+        ]);
+        assert.deepEqual(outcome.committedIds, ['r1', 'r2']);
+        assert.deepEqual(await noteOf('r1'), {
+          ...remoteNote('r1', { name: 'From afar', pinned: true }),
+          ...group(UNFILED),
+        });
+        assert.deepEqual(await noteOf('r2'), {
+          ...remoteNote('r2', { name: 'Filed', folderId: 'f1' }),
+          ...group({ kind: 'collection', folderId: 'f1' }),
+        });
+        // Its versions are this profile's, whatever the remote's record said
+        const stored = await storedNoteOf('r2');
+        assert.deepEqual([stored?.revision === 9, stored?.placementVersion === 4], [false, false]);
+        const made = await madeFrom('r2');
+        assert.deepEqual(made, flags.revisions ? { expectedRevision: 1, expectedPlacementVersion: 0 } : {});
+        assert.deepEqual(await blocksOf('r1'), [linking]);
+        assert.deepEqual(await searchEntryOf('r1'), { noteId: 'r1', name: 'From afar', content: '', updatedAt: NOW });
+        const links = await kernel.query({ type: 'listLinks' });
+        assert.deepEqual(links.kind === 'ready' && links.data.map(link => [link.fromNoteId, link.toNoteId]), [
+          ['r1', 'n2'],
+        ]);
+      });
+
+      it(
+        flags.revisions
+          ? 'revisions: a remote text over a newer local edit keeps the local note, and the remote title and blocks in conflicts'
+          : 'no revisions: a remote text lands over a newer local edit (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          const base = await madeFrom('n1');
+          // An edit here, after the remote's copy was made
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Mine')] }));
+          const local = [await noteOf('n1'), await blocksOf('n1')];
+          const command = cmd('applyRemoteChanges', {
+            changes: [
+              { note: remoteNote('n1', { name: 'Their title' }), blocks: [textBlock('n1', 'Theirs')], ...base },
+            ],
+          });
+          const outcome = bulkOf(await kernel.execute(command));
+          if (!flags.revisions) {
+            assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
+            assert.deepEqual(
+              [(await noteOf('n1'))?.name, (await blocksOf('n1'))[0].content],
+              ['Their title', 'Theirs'],
+            );
+            return;
+          }
+          const [{ outcome: item }] = outcome.items;
+          assert.deepEqual(item.kind === 'conflict' && [item.code, item.currentRevision], ['revision-conflict', 2]);
+          assert.deepEqual([await noteOf('n1'), await blocksOf('n1')], local);
+          const kept = await keptConflicts();
+          assert.deepEqual(
+            kept.map(record => [record.id, record.noteId, record.scope, record.expected, record.current]),
+            [[`${command.commandId}:n1:content`, 'n1', 'content', 1, 2]],
+          );
+          const theirs = /** @type {any} */ (kept[0].command);
+          assert.deepEqual(
+            [theirs.type, theirs.note.name, theirs.blocks[0].content],
+            ['applyRemoteContent', 'Their title', 'Theirs'],
+          );
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a remote text that lands first makes the stale local save the conflict, its text kept'
+          : 'no revisions: a local save after a remote text lands over it (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          // The editor and the remote both have the note as it is now
+          const base = await madeFrom('n1');
+          const outcome = await apply([
+            { note: remoteNote('n1', { name: 'Their title' }), blocks: [textBlock('n1', 'Theirs')], ...base },
+          ]);
+          assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
+          assert.deepEqual([(await noteOf('n1'))?.name, (await blocksOf('n1'))[0].content], ['Their title', 'Theirs']);
+          const save = cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: [textBlock('n1', 'Mine')],
+            ...(base.expectedRevision === undefined ? {} : { expectedRevision: base.expectedRevision }),
+          });
+          const saved = await kernel.execute(save);
+          if (!flags.revisions) {
+            committedOf(saved);
+            assert.equal((await blocksOf('n1'))[0].content, 'Mine');
+            return;
+          }
+          assert.deepEqual(saved.kind === 'conflict' && [saved.code, saved.currentRevision], ['revision-conflict', 2]);
+          assert.equal((await blocksOf('n1'))[0].content, 'Theirs');
+          const kept = await keptConflicts();
+          assert.deepEqual(
+            kept.map(record => record.id),
+            [save.commandId],
+          );
+          assert.equal(/** @type {any} */ (kept[0].command).blocks[0].content, 'Mine');
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a remote placement over a newer local one keeps the note where it is, and the remote placement in conflicts'
+          : 'no revisions: a remote placement lands over a newer local one (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          const base = await madeFrom('n1');
+          await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+          const local = await noteOf('n1');
+          const remote = remoteNote('n1', { name: 'Plan', archived: true, archivedAt: NOW - 500 });
+          const outcome = await apply([{ note: remote, blocks: someBlocks('n1', 1), ...base }]);
+          if (!flags.revisions) {
+            assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-placement-applied']]);
+            assert.deepEqual([(await noteOf('n1'))?.pinned, (await noteOf('n1'))?.archived], [false, true]);
+            return;
+          }
+          const [{ outcome: item }] = outcome.items;
+          assert.deepEqual(item.kind === 'conflict' && [item.code, item.currentRevision], ['placement-conflict', 1]);
+          assert.deepEqual(await noteOf('n1'), local);
+          const kept = await keptConflicts();
+          assert.deepEqual(
+            kept.map(record => [record.noteId, record.scope, record.expected, record.current]),
+            [['n1', 'placement', 0, 1]],
+          );
+          const theirs = /** @type {any} */ (kept[0].command);
+          assert.deepEqual(
+            [theirs.type, theirs.placement.pinned, theirs.placement.archived],
+            ['applyRemotePlacement', false, true],
+          );
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a remote placement that lands first makes the stale local placement command the conflict, and files the note at the root when its folder is gone'
+          : 'no revisions: a local placement command after a remote placement lands over it (the last write wins)',
+        async () => {
+          await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+          await createNote({ noteId: 'n1', name: 'Plan', folderId: 'f1' });
+          const base = await madeFrom('n1');
+          const outcome = await apply([
+            { note: remoteNote('n1', { name: 'Plan', archived: true, folderId: 'gone' }), blocks: [], ...base },
+          ]);
+          assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-placement-applied']]);
+          const placed = await noteOf('n1');
+          assert.deepEqual(
+            [placed?.archived, placed?.folderId, placed?.placement, placed?.lifecycle],
+            [true, null, UNFILED, 'archived'],
+          );
+          const pin = cmd('setPinned', {
+            noteId: 'n1',
+            pinned: true,
+            ...(base.expectedPlacementVersion === undefined
+              ? {}
+              : { expectedPlacementVersion: base.expectedPlacementVersion }),
+          });
+          const pinned = await kernel.execute(pin);
+          if (!flags.revisions) {
+            committedOf(pinned);
+            return;
+          }
+          assert.deepEqual(pinned.kind === 'conflict' && [pinned.code, pinned.currentRevision], [
+            'placement-conflict',
+            1,
+          ]);
+          assert.equal((await noteOf('n1'))?.pinned, false);
+          assert.deepEqual(
+            (await keptConflicts()).map(record => record.id),
+            [pin.commandId],
+          );
+        },
+      );
+
+      it(
+        flags.revisions
+          ? "revisions: a remote trash made before a newer local edit is a conflict, since trash leads to deletion (the lead's Q2, condition 1), and the note stays as it is, versions and all (R131)"
+          : 'no revisions: a remote trash lands over a newer local edit (the last write wins)',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          const base = await madeFrom('n1');
+          // The newest text here, typed after the remote's copy was made
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Newest')] }));
+          const before = await storedNoteOf('n1');
+          const trashed = remoteNote('n1', { name: 'Plan', trashed: true, trashedAt: NOW - 500 });
+          const command = cmd('applyRemoteChanges', {
+            changes: [{ note: trashed, blocks: [textBlock('n1', 'Line')], ...base }],
+          });
+          const outcome = bulkOf(await kernel.execute(command));
+          if (!flags.revisions) {
+            assert.equal((await noteOf('n1'))?.trashed, true);
+            return;
+          }
+          // Both parts conflicted, and the outcome names both
+          assert.deepEqual(itemsOf(outcome), [['n1', 'conflict', 'remote-content-conflict-placement-conflict']]);
+          const [{ outcome: item }] = outcome.items;
+          assert.deepEqual(item.kind === 'conflict' && item.currentRevision, 2);
+          assert.deepEqual(outcome.committedIds, []);
+          assert.deepEqual(await storedNoteOf('n1'), before);
+          assert.equal((await blocksOf('n1'))[0].content, 'Newest');
+          // Both parts are kept, the trash at the text revision it needed
+          assert.deepEqual(
+            (await keptConflicts()).map(record => [record.id, record.scope, record.expected, record.current]),
+            [
+              [`${command.commandId}:n1:content`, 'content', 1, 2],
+              [`${command.commandId}:n1:placement`, 'placement', 1, 2],
+            ],
+          );
+        },
+      );
+
+      it("a remote trash made from the note's text as it is lands, with new text or without, and the editor's save after it lands inside the trash, as a save from another tab does in a note trashed here (#6's to decide)", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+        await createNote({ noteId: 'n2', name: 'Other', blocks: [textBlock('n2', 'Line')] });
+        const bases = { n1: await madeFrom('n1'), n2: await madeFrom('n2') };
+        const outcome = await apply([
+          {
+            note: remoteNote('n1', { name: 'Plan', trashed: true, trashedAt: NOW - 500 }),
+            blocks: [textBlock('n1', 'Line')],
+            ...bases.n1,
+          },
+          // Its text lands first, and moves its revision, which the trash then lands on
+          {
+            note: remoteNote('n2', { name: 'Other', trashed: true, trashedAt: NOW - 500 }),
+            blocks: [textBlock('n2', 'Their last words')],
+            ...bases.n2,
+          },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [
+          ['n1', 'committed', 'remote-placement-applied'],
+          ['n2', 'committed', 'remote-content-applied-placement-applied'],
+        ]);
+        assert.deepEqual(
+          [(await noteOf('n1'))?.trashed, (await noteOf('n2'))?.trashed, (await blocksOf('n2'))[0].content],
+          [true, true, 'Their last words'],
+        );
+        // The other order: the editor's save carries no revision, and a trash moves none
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Typed after')] }));
+        assert.deepEqual([(await noteOf('n1'))?.trashed, (await blocksOf('n1'))[0].content], [true, 'Typed after']);
+      });
+
+      it(
+        flags.revisions
+          ? 'revisions: a change made from a version that is still the text one but not the placement one lands its text and says its placement is a conflict (R131)'
+          : 'no revisions: a change with a stale placement lands whole',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          const base = await madeFrom('n1');
+          await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+          const outcome = await apply([
+            {
+              note: remoteNote('n1', { name: 'Plan', archived: true, archivedAt: NOW - 500 }),
+              blocks: [textBlock('n1', 'Theirs')],
+              ...base,
+            },
+          ]);
+          if (!flags.revisions) {
+            assert.deepEqual(outcome.committedIds, ['n1']);
+            return;
+          }
+          assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied-placement-conflict']]);
+          assert.deepEqual(outcome.items[0].outcome.severity, 'warning');
+          assert.deepEqual(outcome.committedIds, ['n1']);
+          assert.deepEqual(
+            [(await blocksOf('n1'))[0].content, (await noteOf('n1'))?.pinned, (await noteOf('n1'))?.archived],
+            ['Theirs', true, false],
+          );
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: the same stale change sent again under new commandIds keeps one conflict record, and a different one another (R131)'
+          : 'no revisions: a stale change lands each time it is sent',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          const base = await madeFrom('n1');
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Mine')] }));
+          const stale = { note: remoteNote('n1', { name: 'Plan' }), blocks: [textBlock('n1', 'Theirs')], ...base };
+          for (let sent = 0; sent < 3; sent += 1) await apply([stale]);
+          if (!flags.revisions) return;
+          assert.equal((await keptConflicts()).length, 1);
+          await apply([{ ...stale, blocks: [textBlock('n1', 'Theirs, edited')] }]);
+          assert.deepEqual(
+            (await keptConflicts()).map(record => /** @type {any} */ (record.command).blocks[0].content).sort(),
+            ['Theirs', 'Theirs, edited'],
+          );
+          assert.equal((await blocksOf('n1'))[0].content, 'Mine');
+        },
+      );
+
+      it(
+        flags.revisions
+          ? 'revisions: a change that says nothing it was made from counts as made from version 0, so it never lands over an edit made here'
+          : 'no revisions: a change that says nothing it was made from lands',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan' });
+          const outcome = await apply([{ note: remoteNote('n1', { name: 'Theirs' }), blocks: [] }]);
+          if (flags.revisions) {
+            const [{ outcome: item }] = outcome.items;
+            assert.deepEqual(item.kind === 'conflict' && [item.code, item.currentRevision], ['revision-conflict', 1]);
+            assert.equal((await noteOf('n1'))?.name, 'Plan');
+          } else {
+            assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
+          }
+        },
+      );
+
+      it('a change that says nothing it was made from lands on a note as 1.4.x stored it, at version 0 since nothing here moved it, keeps the title and blocks it replaced as a conflict record, and says so (R131)', async () => {
+        await seed('notes', [storageNote('old', 'Old', NOW)]);
+        await seed('blocks', [{ id: 'old-block-0', canvasId: 'old', type: 'text', content: 'Old line', order: 0 }]);
+        const command = cmd('applyRemoteChanges', {
+          changes: [{ note: remoteNote('old', { name: 'Theirs' }), blocks: [textBlock('old', 'Their line')] }],
+        });
+        const landed = bulkOf(await kernel.execute(command));
+        assert.deepEqual(itemsOf(landed), [['old', 'committed', 'remote-content-replaced-legacy']]);
+        assert.deepEqual(landed.committedIds, ['old']);
+        assert.deepEqual(
+          [(await noteOf('old'))?.name, (await blocksOf('old')).map(block => block.content)],
+          ['Theirs', ['Their line']],
+        );
+        // The local title and blocks, as a stale save's are kept, under the part's commandId
+        const kept = await keptConflicts();
+        assert.deepEqual(
+          kept.map(record => [record.id, record.noteId, record.scope, record.expected, record.current]),
+          [[`${command.commandId}:old:content`, 'old', 'content', 0, 0]],
+        );
+        const mine = /** @type {any} */ (kept[0].command);
+        assert.deepEqual(
+          [mine.type, mine.noteId, mine.name, mine.blocks.map((/** @type {BlockRecord} */ block) => block.content)],
+          ['saveNoteContent', 'old', 'Old', ['Old line']],
+        );
+        // Sent again under a new commandId, it finds the remote's text there, and keeps no more
+        const again = await apply([
+          { note: remoteNote('old', { name: 'Theirs' }), blocks: [textBlock('old', 'Their line')] },
+        ]);
+        assert.deepEqual(itemsOf(again), [['old', 'committed', 'remote-content-unchanged']]);
+        assert.equal((await keptConflicts()).length, 1);
+      });
+
+      it("a trash in a change that replaces a 1.4.x note's text is a conflict, said or not that it was made from version 0, so trash cleanup takes neither text (R131)", async () => {
+        const DAY = 24 * 60 * 60 * 1000;
+        for (const [noteId, base] of /** @type {Array<[string, Record<string, number>]>} */ ([
+          ['old', {}],
+          ['zero', { expectedRevision: 0, expectedPlacementVersion: 0 }],
+        ])) {
+          await seed('notes', [storageNote(noteId, 'Old', NOW)]);
+          await seed('blocks', [
+            { id: `${noteId}-block-0`, canvasId: noteId, type: 'text', content: 'Only copy', order: 0 },
+          ]);
+          const command = cmd('applyRemoteChanges', {
+            changes: [
+              {
+                note: remoteNote(noteId, { name: 'Old', trashed: true, trashedAt: NOW - 500 }),
+                blocks: [textBlock(noteId, 'Their text')],
+                ...base,
+              },
+            ],
+          });
+          const outcome = bulkOf(await kernel.execute(command));
+          assert.deepEqual(itemsOf(outcome), [
+            [noteId, 'committed', 'remote-content-replaced-legacy-placement-conflict'],
+          ]);
+          assert.deepEqual(
+            [Boolean((await noteOf(noteId))?.trashed), (await blocksOf(noteId)).map(block => block.content)],
+            [false, ['Their text']],
+          );
+          // Both texts are kept: the 1.4.x one in the content part's record, and the trash in the placement's
+          const kept = (await keptConflicts()).filter(record => record.noteId === noteId);
+          assert.deepEqual(
+            kept.map(record => [record.id, record.scope, record.expected, record.current]),
+            [
+              [`${command.commandId}:${noteId}:content`, 'content', 0, 0],
+              [`${command.commandId}:${noteId}:placement`, 'placement', 0, 1],
+            ],
+          );
+          assert.equal(/** @type {any} */ (kept[0].command).blocks[0].content, 'Only copy');
+        }
+        // Past the trash's days, cleanup finds nothing to delete, and the 1.4.x text stays
+        ctx.clock.advance(31 * DAY);
+        const cleaned = await run(cmd('runTrashCleanup', {}));
+        assert.deepEqual(cleaned.changedIds, []);
+        assert.equal(JSON.stringify(await keptConflicts()).includes('Only copy'), true);
+      });
+
+      it('a note that already has the remote title, blocks, and placement changes in nothing, whatever versions the change says, and keeps no conflict', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 2) });
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 2) }));
+        await run(cmd('setPinned', { noteId: 'n1', pinned: true }));
+        const before = await storedNoteOf('n1');
+        const outcome = await apply([
+          {
+            note: { ...(await noteOf('n1')) },
+            blocks: someBlocks('n1', 2),
+            expectedRevision: 0,
+            expectedPlacementVersion: 0,
+          },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-unchanged']]);
+        assert.deepEqual(outcome.items[0].outcome.kind === 'committed' && outcome.items[0].outcome.changedIds, []);
+        assert.deepEqual(await storedNoteOf('n1'), before);
+        assert.deepEqual(await keptConflicts(), []);
+      });
+
+      it(
+        'never brings back a note deleted here for good, and keeps nothing of it, conflict included',
+        { skip: flags.revisions ? false : 'only an adapter with revisions keeps tombstones' },
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+          await run(cmd('trashNote', { noteId: 'n1' }));
+          await run(cmd('deleteNotePermanently', { noteId: 'n1' }));
+          const outcome = await apply([
+            { note: remoteNote('n1', { name: 'Plan' }), blocks: someBlocks('n1', 1), expectedRevision: 1 },
+          ]);
+          assert.deepEqual(itemsOf(outcome), [['n1', 'rejected', 'note-deleted']]);
+          assert.deepEqual(
+            [await noteOf('n1'), await blocksOf('n1'), await searchEntryOf('n1')],
+            [undefined, [], undefined],
+          );
+          assert.deepEqual(await keptConflicts(), []);
+        },
+      );
+
+      it('deletes no note: one the changes leave out stays as it is, and only the blocks a replaced note no longer has go', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 3) });
+        await createNote({ noteId: 'n2', name: 'Other', blocks: someBlocks('n2', 1) });
+        const other = [await noteOf('n2'), await blocksOf('n2')];
+        const base = await madeFrom('n1');
+        const outcome = await apply([
+          { note: remoteNote('n1', { name: 'Plan' }), blocks: someBlocks('n1', 3).slice(1), ...base },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [['n1', 'committed', 'remote-content-applied']]);
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => block.id),
+          ['n1-block-1', 'n1-block-2'],
+        );
+        assert.deepEqual((await noteOf('n1'))?.preview, 'Line 1');
+        assert.deepEqual([await noteOf('n2'), await blocksOf('n2')], other);
+      });
+
+      it(
+        flags.revisions
+          ? "revisions: each note and each part is guarded on its own: one note's conflict leaves the others to land, and a text conflict leaves the remote's pin to land"
+          : 'no revisions: every note and part lands',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan', blocks: [textBlock('n1', 'Line')] });
+          await createNote({ noteId: 'n2', name: 'Other', blocks: [textBlock('n2', 'Line')] });
+          const bases = { n1: await madeFrom('n1'), n2: await madeFrom('n2') };
+          await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [textBlock('n1', 'Mine')] }));
+          const outcome = await apply([
+            {
+              note: remoteNote('n1', { name: 'Plan', pinned: true }),
+              blocks: [textBlock('n1', 'Theirs')],
+              ...bases.n1,
+            },
+            { note: remoteNote('n2', { name: 'Other' }), blocks: [textBlock('n2', 'Theirs')], ...bases.n2 },
+          ]);
+          if (!flags.revisions) {
+            assert.deepEqual(outcome.committedIds, ['n1', 'n2']);
+            return;
+          }
+          // n1's says its pin landed and its text didn't, so the list counts it (R131)
+          assert.deepEqual(itemsOf(outcome), [
+            ['n1', 'committed', 'remote-content-conflict-placement-applied'],
+            ['n2', 'committed', 'remote-content-applied'],
+          ]);
+          assert.deepEqual(outcome.items[0].outcome.severity, 'warning');
+          assert.deepEqual(outcome.committedIds, ['n1', 'n2']);
+          assert.deepEqual([(await noteOf('n1'))?.pinned, (await blocksOf('n1'))[0].content], [true, 'Mine']);
+          assert.equal((await blocksOf('n2'))[0].content, 'Theirs');
+        },
+      );
+
+      it('is refused before anything runs, leaving no record, for changes that are no list of notes or name a note twice', async () => {
+        const commandId = ctx.ids.next();
+        for (const [changes, code] of /** @type {Array<[unknown, string]>} */ ([
+          [[], 'invalid-command'],
+          [[{ blocks: [] }], 'invalid-command'],
+          [
+            [
+              { note: remoteNote('r1'), blocks: [] },
+              { note: remoteNote('r1'), blocks: [] },
+            ],
+            'duplicate-note',
+          ],
+        ])) {
+          assertRejected(
+            await kernel.execute(/** @type {any} */ ({ type: 'applyRemoteChanges', commandId, changes })),
+            'validation',
+            code,
+          );
+        }
+        // Nothing reserved its commandId, so the corrected command runs under it
+        const outcome = bulkOf(
+          await kernel.execute(
+            /** @type {any} */ ({
+              type: 'applyRemoteChanges',
+              commandId,
+              changes: [{ note: remoteNote('r1'), blocks: [] }],
+            }),
+          ),
+        );
+        assert.deepEqual(itemsOf(outcome), [['r1', 'committed', 'remote-note-created']]);
+      });
+
+      it("refuses a note whose placement or blocks aren't ones, writing nothing of it, and applies the others", async () => {
+        const outcome = await apply([
+          { note: remoteNote('r1', { pinned: 'yes' }), blocks: [] },
+          { note: remoteNote('r2'), blocks: [{ id: 'b1', canvasId: 'elsewhere' }] },
+          { note: remoteNote('r3'), blocks: [] },
+        ]);
+        assert.deepEqual(itemsOf(outcome), [
+          ['r1', 'rejected', 'invalid-command'],
+          ['r2', 'rejected', 'block-of-another-note'],
+          ['r3', 'committed', 'remote-note-created'],
+        ]);
+        assert.deepEqual([await noteOf('r1'), await noteOf('r2')], [undefined, undefined]);
+        // A block of a note here keeps its note
+        await createNote({ noteId: 'n1', name: 'Plan', blocks: someBlocks('n1', 1) });
+        const taken = await apply([
+          { note: remoteNote('r4'), blocks: [{ ...someBlocks('n1', 1)[0], canvasId: 'r4' }] },
+        ]);
+        assert.deepEqual(itemsOf(taken), [['r4', 'rejected', 'block-of-another-note']]);
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => block.canvasId),
+          ['n1'],
+        );
+      });
+
+      it('each part takes the version it was made from, and a part without one, or of another note, is refused', async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        for (const command of /** @type {any[]} */ ([
+          cmd('applyRemoteContent', /** @type {any} */ ({ noteId: 'n1', note: remoteNote('n1'), blocks: [] })),
+          cmd('applyRemoteContent', { noteId: 'n1', note: remoteNote('n2'), blocks: [], expectedRevision: 0 }),
+          cmd('applyRemotePlacement', /** @type {any} */ ({ noteId: 'n1', placement: { pinned: true } })),
+          cmd(
+            'applyRemotePlacement',
+            /** @type {any} */ ({ noteId: 'n1', placement: { name: 'x' }, expectedPlacementVersion: 0 }),
+          ),
+          // The text revision a trash needs, when it says one, is a version
+          cmd(
+            'applyRemotePlacement',
+            /** @type {any} */ ({
+              noteId: 'n1',
+              placement: { trashed: true },
+              expectedPlacementVersion: 0,
+              expectedRevision: -1,
+            }),
+          ),
+        ])) {
+          assertRejected(await kernel.execute(command), 'validation', 'invalid-command');
+        }
+        assertRejected(
+          await kernel.execute(
+            cmd('applyRemotePlacement', { noteId: 'gone', placement: { pinned: true }, expectedPlacementVersion: 0 }),
+          ),
+          'not-found',
+          'note-not-found',
+        );
+      });
+
+      it(
+        flags.idempotency
+          ? 'idempotency: sent again, each note answers from its own records, and nothing moves again'
+          : 'no idempotency: sent again, each note runs again and finds it has the remote change',
+        async () => {
+          await createNote({ noteId: 'n1', name: 'Plan' });
+          const base = await madeFrom('n1');
+          const command = cmd('applyRemoteChanges', {
+            changes: [{ note: remoteNote('n1', { name: 'Theirs', pinned: true }), blocks: [], ...base }],
+          });
+          const first = bulkOf(await kernel.execute(command));
+          assert.deepEqual(itemsOf(first), [['n1', 'committed', 'remote-content-applied-placement-applied']]);
+          const after = await storedNoteOf('n1');
+          const second = bulkOf(await kernel.execute(command));
+          if (flags.idempotency) assert.deepEqual(second.items, first.items);
+          else assert.deepEqual(itemsOf(second), [['n1', 'committed', 'remote-content-unchanged']]);
+          assert.deepEqual(await storedNoteOf('n1'), after);
+        },
+      );
+    });
+
+    describe("#17's AC1: every guarded command, sent twice from one version, writes once (#17 PR 4b)", () => {
+      /** @param {string} noteId */
+      const vectorOf = noteId => ctx.adapter.read(['vectors'], tx => tx.get('vectors', noteId));
+
+      /** @param {string} noteId */
+      const versionsOf = async noteId => {
+        const state = await kernel.query({ type: 'getNote', noteId });
+        return state.kind === 'ready' ? [state.data.revision, state.data.placementVersion] : null;
+      };
+
+      /** What a write could change of the note: its record and versions, blocks, entry, and embedding */
+      /** @param {string} noteId */
+      const stateOf = async noteId => [
+        await storedNoteOf(noteId),
+        await versionsOf(noteId),
+        await blocksOf(noteId),
+        await searchEntryOf(noteId),
+        await vectorOf(noteId),
+      ];
+
+      const conflictCount = async () => (await ctx.adapter.read(['conflicts'], tx => tx.getAll('conflicts'))).length;
+
+      /**
+       * A titled note with one block, which trashing keeps, at revision 1 and placement version 0
+       * @param {string} noteId
+       * @param {Partial<CommandOf<'createNote'>>} [fields]
+       */
+      const titled = (noteId, fields = {}) =>
+        createNote({ noteId, name: 'Plan', blocks: someBlocks(noteId, 1), ...fields });
+
+      /**
+       * For each guarded command (write-guards.mjs): `setup` puts note `id` where the command
+       * applies and answers the version both sends are made from, and `send` makes each send. A
+       * derived write's second send says the revision before, since one made from the same
+       * revision lands again.
+       * @type {Record<string, {setup: (id: string) => Promise<number>, send: (id: string, version: number, second: boolean) => Command}>}
+       */
+      const TWICE = {
+        renameNote: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('renameNote', { noteId: id, name: second ? 'Second' : 'First', expectedRevision: version }),
+        },
+        saveNoteContent: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('saveNoteContent', {
+              noteId: id,
+              blocks: [{ ...someBlocks(id, 1)[0], content: second ? 'Second' : 'First' }],
+              expectedRevision: version,
+            }),
+        },
+        deleteBlocks: {
+          setup: async id => (await createNote({ noteId: id, name: 'Plan', blocks: someBlocks(id, 2) }), 1),
+          send: (id, version, second) =>
+            cmd('deleteBlocks', { noteId: id, blockIds: [`${id}-block-${second ? 1 : 0}`], expectedRevision: version }),
+        },
+        insertBlocks: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('insertBlocks', {
+              noteId: id,
+              blocks: [{ id: `${id}-${second ? 'second' : 'first'}`, type: 'text', content: 'More' }],
+              expectedRevision: version,
+            }),
+        },
+        applyDerivedTitle: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('applyDerivedTitle', { noteId: id, name: second ? 'Second' : 'First', expectedRevision: version }),
+        },
+        applyRemoteContent: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('applyRemoteContent', {
+              noteId: id,
+              note: { id, name: second ? 'Second' : 'First' },
+              blocks: [],
+              expectedRevision: version,
+            }),
+        },
+        setPinned: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version, second) =>
+            cmd('setPinned', { noteId: id, pinned: !second, expectedPlacementVersion: version }),
+        },
+        archiveNote: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version) => cmd('archiveNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        unarchiveNote: {
+          setup: async id => (await titled(id), await run(cmd('archiveNote', { noteId: id })), 1),
+          send: (id, version) => cmd('unarchiveNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        trashNote: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version) => cmd('trashNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        restoreNote: {
+          setup: async id => (await titled(id), await run(cmd('trashNote', { noteId: id })), 1),
+          send: (id, version) => cmd('restoreNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        moveNoteToFolder: {
+          setup: async id => {
+            await run(cmd('createFolder', { folderId: `${id}-folder`, name: 'Work', parentId: null }));
+            await titled(id);
+            return 0;
+          },
+          send: (id, version, second) =>
+            cmd('moveNoteToFolder', {
+              noteId: id,
+              folderId: second ? null : `${id}-folder`,
+              expectedPlacementVersion: version,
+            }),
+        },
+        convertNoteToTemplate: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version) => cmd('convertNoteToTemplate', { noteId: id, expectedPlacementVersion: version }),
+        },
+        convertTemplateToNote: {
+          setup: async id => (await titled(id), await run(cmd('convertNoteToTemplate', { noteId: id })), 1),
+          send: (id, version) => cmd('convertTemplateToNote', { noteId: id, expectedPlacementVersion: version }),
+        },
+        deleteNotePermanently: {
+          setup: async id => (await titled(id), await run(cmd('trashNote', { noteId: id })), 1),
+          send: (id, version) => cmd('deleteNotePermanently', { noteId: id, expectedPlacementVersion: version }),
+        },
+        applyRemotePlacement: {
+          setup: async id => (await titled(id), 0),
+          send: (id, version, second) =>
+            cmd('applyRemotePlacement', {
+              noteId: id,
+              placement: { pinned: !second },
+              expectedPlacementVersion: version,
+            }),
+        },
+        attachInsights: {
+          setup: async id => (await titled(id), await run(cmd('saveNoteContent', { noteId: id, blocks: [] })), 2),
+          send: (id, version, second) =>
+            cmd('attachInsights', {
+              noteId: id,
+              insights: { todos: [second ? 'Second' : 'First'] },
+              sourceRevision: second ? version - 1 : version,
+            }),
+        },
+        updateSearchIndex: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('updateSearchIndex', {
+              entries: [
+                {
+                  noteId: id,
+                  name: 'Plan',
+                  content: second ? 'Second' : 'First',
+                  sourceRevision: second ? version - 1 : version,
+                },
+              ],
+            }),
+        },
+        saveVector: {
+          setup: async id => (await titled(id), 1),
+          send: (id, version, second) =>
+            cmd('saveVector', { noteId: id, vector: [second ? 2 : 1], sourceRevision: second ? version - 1 : version }),
+        },
+      };
+
+      it('sends each guarded command in the table', () => {
+        const guarded = Object.entries(WRITE_GUARDS)
+          .filter(([, guard]) => guard.kind === 'guarded')
+          .map(([type]) => type);
+        assert.deepEqual(Object.keys(TWICE).sort(), guarded.sort());
+      });
+
+      it(
+        'the first send commits and moves its version, and the second is a conflict that keeps only its record, or a derived write that writes nothing',
+        { skip: flags.revisions ? false : 'only an adapter with revisions checks a version' },
+        async () => {
+          for (const [type, { setup, send }] of Object.entries(TWICE)) {
+            const id = `ac1-${type}`;
+            const guard = WRITE_GUARDS[/** @type {CommandType} */ (type)];
+            const scope = guard.kind === 'guarded' ? guard.scope : null;
+            const version = await setup(id);
+            const before = await versionsOf(id);
+            const first = await kernel.execute(send(id, version, false));
+            assert.equal(first.kind, 'committed', `${type}: ${JSON.stringify(first)}`);
+            assert.ok(first.kind === 'committed' && first.changedIds.length > 0, `${type} changed nothing`);
+            // The first moved the version it was made from, unless it deleted the note
+            if (scope !== 'derived' && type !== 'deleteNotePermanently') {
+              assert.notDeepEqual(await versionsOf(id), before, type);
+            }
+            const after = await stateOf(id);
+            const kept = await conflictCount();
+            const second = await kernel.execute(send(id, version, true));
+            if (scope === 'derived') {
+              assert.deepEqual(
+                second.kind === 'committed' && [second.changedIds, second.severity],
+                [[], 'info'],
+                `${type}: ${JSON.stringify(second)}`,
+              );
+              assert.equal(await conflictCount(), kept, type);
+            } else if (type === 'deleteNotePermanently') {
+              // The first deleted it, so the second finds nothing to delete again
+              assertRejected(second, 'not-found', 'note-not-found');
+              assert.equal(await conflictCount(), kept, type);
+            } else {
+              const code = scope === 'content' ? 'revision-conflict' : 'placement-conflict';
+              assert.deepEqual(
+                second.kind === 'conflict' && [second.code, second.currentRevision],
+                [code, version + 1],
+                `${type}: ${JSON.stringify(second)}`,
+              );
+              assert.equal(await conflictCount(), kept + 1, type);
+            }
+            assert.deepEqual(await stateOf(id), after, type);
+          }
+        },
+      );
+    });
+
     describe(`adapter flags: ${JSON.stringify(flags)}`, () => {
       it('the adapter reports the flags its fixture documents', () => {
         assert.deepEqual({ ...kernel.flags }, { ...flags });
@@ -3875,6 +4920,13 @@ export function runContractSuite(fixture) {
             cmd('renameNote', { noteId: 'n1', name: 'Mine', expectedRevision: 1 }),
             cmd('deleteBlocks', { noteId: 'n1', blockIds: ['n1-block-0'], expectedRevision: 1 }),
             cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 1), expectedRevision: 1 }),
+            // AI chat's insert and the auto-title job may send the revision they read (#17 PR 4b, Q3)
+            cmd('insertBlocks', {
+              noteId: 'n1',
+              blocks: [{ id: 'n1-inserted', type: 'text', content: 'Mine' }],
+              expectedRevision: 1,
+            }),
+            cmd('applyDerivedTitle', { noteId: 'n1', name: 'Derived', expectedRevision: 1 }),
             cmd('setPinned', { noteId: 'n1', pinned: false, expectedPlacementVersion: 0 }),
             cmd('archiveNote', { noteId: 'n1', expectedPlacementVersion: 0 }),
             cmd('trashNote', { noteId: 'n1', expectedPlacementVersion: 0 }),

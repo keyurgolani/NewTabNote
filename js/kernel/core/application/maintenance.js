@@ -1,9 +1,9 @@
 /**
- * Startup maintenance: default settings where none are stored, and the read-only integrity
- * check that reports orphaned records (#33 made it report-only). The new-tab page and the
- * service worker run it as they start, as before, and the policy refuses it from Popup and
- * Side Panel, which open the database without repair or upgrade. The service worker's start
- * skips the check (#35 slice 1), and runs it as runIntegrityCheck after an install or an update.
+ * Startup maintenance: default settings where none are stored. The new-tab page and the service
+ * worker run it as they start, as before, and the policy refuses it from Popup and Side Panel,
+ * which open the database without repair or upgrade. The read-only integrity check it ran is
+ * runIntegrityCheck now, which the service worker runs after an install or an update (#35
+ * slice 1), and js/storage.js's own went with #17 PR 4b.
  */
 
 import { committed } from '../contracts/outcomes.js';

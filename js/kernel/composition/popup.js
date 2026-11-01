@@ -4,6 +4,7 @@
  */
 
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
+import { POPUP_HANDLERS } from '../core/application/handlers-popup.js';
 import { kernelClient, pageHost } from './host.js';
 
 /** @typedef {import('./host.js').Client} Client */
@@ -15,11 +16,11 @@ import { kernelClient, pageHost } from './host.js';
  * without one. When it finds no database, or one below this build's version, it first wakes
  * the worker and waits up to 5 seconds for its migration run (Q12). A database a newer build
  * upgraded is refused as `newer-schema`, and once the worker upgrades the database under it,
- * every call answers `reload-required`.
+ * every call answers `reload-required`. It runs only what js/popup.js sends (POPUP_HANDLERS).
  * @param {PageHost} [host]
  * @returns {Client}
  */
 export function createPopupClient(host = pageHost()) {
   const adapter = createIndexedDbAdapter({ ...host, mode: 'existing' });
-  return kernelClient({ adapter, surface: 'popup' });
+  return kernelClient({ adapter, surface: 'popup', handlers: POPUP_HANDLERS });
 }

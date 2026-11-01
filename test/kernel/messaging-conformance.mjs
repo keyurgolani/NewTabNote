@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import {

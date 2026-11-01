@@ -11,7 +11,12 @@
  *   it. The file is written record by record, so no string ever holds the whole export, however
  *   many images its blocks carry. Each note goes without #17 PR 3's fields beside its flags
  *   (domain/placement.js's NEW_NOTE_FIELDS), as every export has since #17 PR 3b. It reads in
- *   one readonly transaction, where Storage read in several.
+ *   one readonly transaction, where Storage read in several. Since #17 PR 4b Export JSON and
+ *   Create Backup's file also hold, after the folders, the conflict records of the notes they
+ *   export, so the text a conflict kept stays with the file (the lead's Q2, condition 2). A
+ *   profile with none writes the file 1.4.x wrote, and 1.4.x's import reads only the four lists
+ *   before them. The export as one object, which the automatic backup, Replace all's copy, and
+ *   sync's upload hold, keeps 1.4.x's form.
  * - The automatic backup (Storage.createAutoBackup): the export, marked as one, under
  *   `auto_backup_<time>` in chrome.storage.local, the newest three kept, then
  *   `setting_lastBackupAt`.
@@ -31,6 +36,7 @@ import { withoutPlacement } from '../../core/domain/placement.js';
 import { blobOf, dataUrlOf } from './data-urls.js';
 import { settingsFailureOf } from './failures.js';
 import { writeRecoveryCopy } from './recovery-copies.js';
+import { CONFLICTS_STORE } from './registry.js';
 import { result } from './requests.js';
 
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */
@@ -63,6 +69,7 @@ export const LAST_BACKUP_KEY = 'setting_lastBackupAt';
  * @property {Row[]} elements
  * @property {Row[]} media
  * @property {Row[]} folders
+ * @property {Row[]} [conflicts] - the conflict records of those notes, for the file, when asked for
  */
 
 /**
@@ -96,11 +103,16 @@ export const legacyId = () => `${Date.now()}-${Math.random().toString(36).slice(
  * lists them with the archived ones, then the templates as Storage.getTemplates lists them,
  * each without #17 PR 3's fields; their blocks, note by note; the media of those notes, which
  * 1.4.0 exported whole; and every folder. A database without `media` or `folders` has none.
+ * With `conflicts`, the conflict records of those notes too (#17 PR 4b), which a database below
+ * version 10 has none of.
  * @param {IDBDatabase} db
+ * @param {{conflicts?: boolean}} [options]
  * @returns {Promise<ExportRows>}
  */
-export async function readExport(db) {
-  const aux = ['media', 'folders'].filter(name => db.objectStoreNames.contains(name));
+export async function readExport(db, { conflicts = false } = {}) {
+  const aux = ['media', 'folders', ...(conflicts ? [CONFLICTS_STORE] : [])].filter(name =>
+    db.objectStoreNames.contains(name),
+  );
   const tx = db.transaction(['canvases', 'elements', ...aux], 'readonly');
   const byUpdate = /** @type {Row[]} */ (await result(tx.objectStore('canvases').index('updatedAt').getAll()));
   const listed = [...byUpdate].reverse().filter(note => !note.trashed && !note.isTemplate);
@@ -119,7 +131,13 @@ export async function readExport(db) {
   const folders = aux.includes('folders')
     ? /** @type {Row[]} */ (await result(tx.objectStore('folders').getAll()))
     : [];
-  return { notes, elements, media, folders };
+  if (!conflicts) return { notes, elements, media, folders };
+  const kept = aux.includes(CONFLICTS_STORE)
+    ? /** @type {Row[]} */ (await result(tx.objectStore(CONFLICTS_STORE).getAll())).filter(row =>
+        exported.has(row.noteId),
+      )
+    : [];
+  return { notes, elements, media, folders, conflicts: kept };
 }
 
 /**
@@ -153,13 +171,14 @@ export async function exportObject({ notes, elements, media, folders }, now) {
 /**
  * The export file Export JSON downloads, and with `extra` Create Backup's, as
  * Storage.exportAllAsBlob writes it: the same JSON as exportObject, without indentation, each
- * record through its own JSON.stringify, and `extra`'s fields after the folders
+ * record through its own JSON.stringify, then the conflict records when there are any (#17 PR
+ * 4b), and `extra`'s fields last
  * @param {ExportRows} rows
  * @param {number} now
  * @param {Record<string, unknown>} [extra]
  * @returns {Promise<Blob>}
  */
-export async function exportFile({ notes, elements, media, folders }, now, extra = {}) {
+export async function exportFile({ notes, elements, media, folders, conflicts = [] }, now, extra = {}) {
   /** @type {string[]} */
   const parts = [`{"version":1,"exportedAt":${now}`];
   /**
@@ -183,6 +202,8 @@ export async function exportFile({ notes, elements, media, folders }, now, extra
   }
   parts.push(']');
   list('folders', folders);
+  // What a conflict kept, the user's text included, which 1.4.x's import reads none of
+  if (conflicts.length > 0) list('conflicts', conflicts);
   for (const [key, value] of Object.entries(extra)) parts.push(`,${JSON.stringify(key)}:${JSON.stringify(value)}`);
   parts.push('}');
   return new Blob(parts, { type: 'application/json' });

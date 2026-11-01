@@ -10,6 +10,7 @@
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 
 import {
   AUTO_BACKUP_PREFIX,
@@ -23,12 +24,21 @@ import {
   readExport,
   validateBackup,
 } from '../../js/kernel/adapters/indexeddb/backups.js';
+import {
+  DEFAULT_LIMITS,
+  copyPoint,
+  openRecovery,
+  readPointStore,
+  startPoint,
+  storesToCopy,
+} from '../../js/kernel/adapters/indexeddb/recovery-points.js';
+import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { VERSION_FIELDS } from '../../js/kernel/adapters/indexeddb/versions.js';
 import { newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { UnavailableError, committed, rejected, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { NEW_NOTE_FIELDS } from '../../js/kernel/core/domain/placement.js';
-import { adapterOn, closeAll, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
-import { testIds } from './support.mjs';
+import { KeyRange, adapterOn, closeAll, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
+import { NOW, testIds } from './support.mjs';
 
 /** @typedef {import('./storage-fixture.mjs').Profile} Profile */
 /** @typedef {Record<string, any>} Row */
@@ -720,5 +730,209 @@ describe("the backup commands on #17's adapter (#17 PR 4a)", () => {
     adapter.close();
     assert.deepEqual(backupKeys(of), []);
     assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before);
+  });
+});
+
+describe("what sync uploads, and the conflicts Export JSON keeps, on #17's adapter (#17 PR 4b)", () => {
+  /** The text a save that lost to a newer revision carried, which only its conflict record holds */
+  const LOST = 'The lost text';
+
+  /**
+   * A new tab's kernel on #17's adapter over `of`, with the backup tasks unless `backups` is false
+   * @param {Profile} of
+   * @param {{backups?: boolean}} [options]
+   */
+  async function newTabOn(of, { backups = true } = {}) {
+    const clock = ticking();
+    const adapter = adapterOn(of, { mode: 'existing', requireCore: true, backups, clock });
+    await adapter.open();
+    return { adapter, kernel: kernelOn(adapter, { ids: testIds('cmd'), clock }) };
+  }
+
+  /**
+   * A profile at this build's version whose note L1 kept a save that lost to its newer revision,
+   * and whose note TR, in the trash, kept a rename that lost the same way
+   */
+  async function withConflicts() {
+    const of = await latest();
+    const { adapter, kernel } = await newTabOn(of);
+    const lost = await kernel.execute({
+      type: 'saveNoteContent',
+      commandId: 'lost-save',
+      noteId: 'L1',
+      blocks: [block('l1', 'L1', 0, LOST)],
+      expectedRevision: 1,
+    });
+    assert.equal(lost.kind, 'conflict', JSON.stringify(lost));
+    await kernel.execute({ type: 'createNote', commandId: 'c-tr', noteId: 'TR', name: 'Thrown away' });
+    await kernel.execute({ type: 'trashNote', commandId: 'c-trash', noteId: 'TR' });
+    const hidden = await kernel.execute({
+      type: 'renameNote',
+      commandId: 'lost-rename',
+      noteId: 'TR',
+      name: 'Hidden title',
+      expectedRevision: 0,
+    });
+    assert.equal(hidden.kind, 'conflict', JSON.stringify(hidden));
+    return { of, adapter, kernel };
+  }
+
+  /**
+   * Export JSON's file, parsed
+   * @param {import('../../js/kernel/core/application/kernel.js').Kernel} kernel
+   * @param {boolean} [backup] - Create Backup's file
+   */
+  async function exportedFile(kernel, backup = false) {
+    const state = await kernel.query({ type: 'exportBackup', backup });
+    assert.equal(state.kind, 'ready', JSON.stringify(state));
+    return JSON.parse(await /** @type {Blob} */ (state.kind === 'ready' && state.data).text());
+  }
+
+  it("getSyncData answers what the frozen 1.4.1's Storage.exportAll answers for the same profile, without the six fields, and one without the backup tasks answers failed", async () => {
+    const of = await made();
+    const { adapter, kernel } = await newTabOn(of);
+    const state = await kernel.query({ type: 'getSyncData' });
+    adapter.close();
+    assert.equal(state.kind, 'ready', JSON.stringify(state));
+    const frozen = await release141(of);
+    assert.deepEqual(
+      { ...legacyEnv.plain(state.kind === 'ready' && state.data), exportedAt: 0 },
+      { ...legacyEnv.plain(await frozen.exportAll()), exportedAt: 0 },
+    );
+    frozen.db.close();
+
+    const records = RECORDS();
+    records.canvases = records.canvases.map(n => ({ ...n, ...PLACEMENT_FIELDS }));
+    const placed = await made({ records });
+    const opened = await newTabOn(placed);
+    const data = await opened.kernel.query({ type: 'getSyncData' });
+    opened.adapter.close();
+    for (const exported of data.kind === 'ready' ? data.data.canvases : []) {
+      for (const field of NEW_NOTE_FIELDS) assert.equal(field in exported, false, `${exported.id}: ${field}`);
+    }
+
+    const popup = await newTabOn(of, { backups: false });
+    assert.deepEqual(await popup.kernel.query({ type: 'getSyncData' }), {
+      kind: 'failed',
+      cause: 'adapter',
+      code: 'backups-need-legacy-storage',
+    });
+    popup.adapter.close();
+  });
+
+  it("Export JSON holds, after the folders, the conflict records of the notes it exports, each one's text included, and getSyncData holds none", async () => {
+    // With no conflict, the file is the one 1.4.x writes
+    const plain = await latest();
+    const before = await newTabOn(plain);
+    assert.deepEqual(Object.keys(await exportedFile(before.kernel)), [
+      'version',
+      'exportedAt',
+      'canvases',
+      'elements',
+      'media',
+      'folders',
+    ]);
+    before.adapter.close();
+
+    const { adapter, kernel } = await withConflicts();
+    const file = await exportedFile(kernel);
+    assert.deepEqual(Object.keys(file), [
+      'version',
+      'exportedAt',
+      'canvases',
+      'elements',
+      'media',
+      'folders',
+      'conflicts',
+    ]);
+    // L1's lost save, and not TR's lost rename, since TR is in the trash and so not in the file
+    assert.deepEqual(
+      file.conflicts.map((/** @type {Row} */ record) => [
+        record.id,
+        record.noteId,
+        record.scope,
+        record.expected,
+        record.current,
+      ]),
+      [['lost-save', 'L1', 'content', 1, 4]],
+    );
+    assert.equal(file.conflicts[0].command.blocks[0].content, LOST);
+    assert.equal(JSON.stringify(file).includes('Hidden title'), false);
+    // Create Backup's fields still come last
+    const backupFile = await exportedFile(kernel, true);
+    assert.deepEqual(Object.keys(backupFile).slice(-4), [
+      'conflicts',
+      'backupType',
+      'backupCreatedAt',
+      'backupVersion',
+    ]);
+    // What sync uploads keeps 1.4.x's form
+    const sync = await kernel.query({ type: 'getSyncData' });
+    assert.deepEqual(Object.keys(sync.kind === 'ready' ? sync.data : {}), [
+      'version',
+      'exportedAt',
+      'canvases',
+      'elements',
+      'media',
+      'folders',
+    ]);
+    adapter.close();
+  });
+
+  it("the frozen 1.4.1's importData imports a file with conflict records as it imports one without, and keeps none of them", async () => {
+    const { adapter, kernel } = await withConflicts();
+    const file = await exportedFile(kernel);
+    adapter.close();
+    assert.equal(file.conflicts.length, 1);
+    const there = profile();
+    profiles.push(there);
+    const frozen = await release141(there);
+    const result = await frozen.importData(structuredClone(file), 'merge');
+    frozen.db.close();
+    assert.deepEqual(
+      [result.notes, result.blocks, result.media, result.skippedMedia],
+      [file.canvases.length, file.elements.length, file.media.length, 0],
+    );
+    const stored = await legacyEnv.dumpDatabase(there.real);
+    assert.deepEqual(
+      Object.values(legacyEnv.recordsOf(stored, 'canvases'))
+        .map(n => n.name)
+        .sort(),
+      file.canvases.map((/** @type {Row} */ n) => n.name).sort(),
+    );
+    // 1.4.1 has no store for them, and wrote the lost text nowhere
+    assert.equal(Object.hasOwn(stored.stores, 'conflicts'), false);
+    assert.equal(JSON.stringify(stored).includes(LOST), false);
+  });
+
+  it('a recovery point copies the conflicts store, so the text a conflict kept is in each point made after step 10', async () => {
+    const { of, adapter } = await withConflicts();
+    adapter.close();
+    const io = { keyRange: KeyRange, crypto: /** @type {any} */ (webcrypto), limits: DEFAULT_LIMITS };
+    const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(of.faults.factory, 'CanvasTabDB'));
+    const recovery = /** @type {IDBDatabase} */ (await openRecovery(of.faults.factory, { create: true }));
+    try {
+      const stores = storesToCopy(source);
+      assert.ok(stores.includes('conflicts'), stores.join(', '));
+      const { point, progress } = await startPoint(recovery, {
+        id: 'p-conflicts',
+        kind: 'pre-repair',
+        sourceShape: 'current',
+        sourceVersion: source.version,
+        structuralVersion: null,
+        logicalVersion: null,
+        target: null,
+        stores,
+        createdAt: NOW,
+      });
+      await copyPoint({ source, recovery, point, progress, io });
+      const rows = await readPointStore(recovery, point, 'conflicts', io);
+      assert.deepEqual(rows.map(row => row.key).sort(), ['lost-rename', 'lost-save']);
+      const save = rows.find(row => row.key === 'lost-save');
+      assert.equal(save?.value.command.blocks[0].content, LOST);
+    } finally {
+      source.close();
+      recovery.close();
+    }
   });
 });

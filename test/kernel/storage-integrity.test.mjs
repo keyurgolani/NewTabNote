@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
 import { kernelClient } from '../../js/kernel/composition/host.js';
 import { legacyEnv, newProfile, run } from './migration-support.mjs';
 
@@ -121,7 +122,7 @@ async function adapterSays(of) {
       warn: (message, error) => said.push({ level: 'warn', message, detail: nameOf(error) }),
     },
   });
-  const client = kernelClient({ adapter, surface: 'worker-internal' });
+  const client = kernelClient({ adapter, surface: 'worker-internal', handlers: WORKER_HANDLERS });
   const checked = await client.execute({ type: 'runIntegrityCheck', commandId: client.ids.next() });
   assert.deepEqual(checked.kind === 'committed' && [checked.code, checked.changedIds], ['integrity-checked', []]);
   adapter.close();
@@ -218,7 +219,7 @@ describe("#17's integrity check reports what frozen 1.4.1's reports (#17 PR 1b, 
         warn: message => said.push(['warn', message]),
       },
     });
-    const client = kernelClient({ adapter, surface: 'worker-internal' });
+    const client = kernelClient({ adapter, surface: 'worker-internal', handlers: WORKER_HANDLERS });
     assert.equal(await client.whenReady(), null);
     await deleted();
     const checked = await client.execute({ type: 'runIntegrityCheck', commandId: client.ids.next() });

@@ -9,6 +9,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, settle, waitFor, plain, note, block, makeEditor, startEditorClient, quietNavigation,
+  releaseStorage,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -75,12 +76,10 @@ async function setup({ notes = [note('A'), note('B')], elements } = {}) {
     },
   });
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   await startEditorClient(env);
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
-  return { env, Storage, toasts };
+  return { env, release: await releaseStorage(env), toasts };
 }
 
 /**
@@ -119,10 +118,10 @@ function tabBar(env, tabs) {
  * NotesManager as App wires it, with the editor as the one getEditor answers, and the open
  * tabs as `tabs`, on `bar`
  */
-function notesManager(env, Storage, { ai, editor, tabs = [], bar = tabBar(env, tabs) }) {
+function notesManager(env, { ai, editor, tabs = [], bar = tabBar(env, tabs) }) {
   const NotesManager = env.get('NotesManager');
   const manager = new NotesManager({
-    storage: Storage,
+    storage: env.stores.searchIndex,
     domRefs: null,
     logger: quietLogger,
     llm: ai,
@@ -180,12 +179,12 @@ function editorView(editor) {
 
 describe('T5: switching notes while the provider answers (found by reading 1.4.x)', () => {
   let env;
-  let Storage;
+  let release;
   let ai;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup({ notes: [note('A', { name: 'Untitled' }), note('B')] }));
+    ({ env, release } = await setup({ notes: [note('A', { name: 'Untitled' }), note('B')] }));
     ai = heldAI();
     editor = editorWith(env, ai.port);
     await drive(env, editor.loadNote('A'));
@@ -204,36 +203,36 @@ describe('T5: switching notes while the provider answers (found by reading 1.4.x
     assert.deepEqual(editorView(editor), {
       noteId: 'B', recordId: 'B', name: 'Note B', insights: null, title: 'Note B',
     });
-    const stored = await Storage.getNote('B');
+    const stored = await release.getNote('B');
     assert.deepEqual([stored.name, stored.insights ?? null, stored.titleManuallySet], ['Note B', null, false]);
   }
 
   it("NotesManager's Generate title puts the title on the note it was asked for", async () => {
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const manager = notesManager(env, { ai: ai.port, editor });
     const job = manager.generateTitleForNote('A');
     await switchThenAnswer('generateTitle', 'Groceries');
     await drive(env, job);
     await assertBUntouched();
-    assert.equal((await Storage.getNote('A')).name, 'Groceries');
+    assert.equal((await release.getNote('A')).name, 'Groceries');
   });
 
   it("NotesManager's Extract insights puts them on the note it was asked for", async () => {
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const manager = notesManager(env, { ai: ai.port, editor });
     const job = manager.extractInsightsForNote('A');
     await switchThenAnswer('extractInsights', { todos: ['Buy milk'] });
     await drive(env, job);
     await assertBUntouched();
-    assert.deepEqual(plain((await Storage.getNote('A')).insights), { todos: ['Buy milk'] });
+    assert.deepEqual(plain((await release.getNote('A')).insights), { todos: ['Buy milk'] });
   });
 
   it('the auto-title job puts the title on the note it read', async () => {
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const manager = notesManager(env, { ai: ai.port, editor });
     await jobsOn(env);
     const job = manager.runAutoTitle();
     await switchThenAnswer('generateTitle', 'Groceries');
     await drive(env, job);
     await assertBUntouched();
-    assert.equal((await Storage.getNote('A')).name, 'Groceries');
+    assert.equal((await release.getNote('A')).name, 'Groceries');
   });
 
   it("the editor's Refresh insights puts them on the note it was showing", async () => {
@@ -241,7 +240,7 @@ describe('T5: switching notes while the provider answers (found by reading 1.4.x
     await switchThenAnswer('extractInsights', { todos: ['Buy milk'] });
     await drive(env, refresh);
     await assertBUntouched();
-    assert.deepEqual(plain((await Storage.getNote('A')).insights), { todos: ['Buy milk'] });
+    assert.deepEqual(plain((await release.getNote('A')).insights), { todos: ['Buy milk'] });
   });
 
   it("the editor's first-content title goes to the note that got the content", async () => {
@@ -252,7 +251,7 @@ describe('T5: switching notes while the provider answers (found by reading 1.4.x
     await switchThenAnswer('generateTitle', 'Groceries');
     await drive(env, check);
     await assertBUntouched();
-    assert.equal((await Storage.getNote('A')).name, 'Groceries');
+    assert.equal((await release.getNote('A')).name, 'Groceries');
   });
 
   it("AI chat's Extract insights puts them on the note the chat read", async () => {
@@ -262,7 +261,7 @@ describe('T5: switching notes while the provider answers (found by reading 1.4.x
     await switchThenAnswer('extractInsights', { todos: ['Buy milk'] });
     await drive(env, job);
     await assertBUntouched();
-    assert.deepEqual(plain((await Storage.getNote('A')).insights), { todos: ['Buy milk'] });
+    assert.deepEqual(plain((await release.getNote('A')).insights), { todos: ['Buy milk'] });
   });
 
   it("AI chat's generated title goes to the note the chat was about, after its confirm", async () => {
@@ -277,7 +276,7 @@ describe('T5: switching notes while the provider answers (found by reading 1.4.x
     // 1.4.x applied it without waiting
     await drive(env, settle(40));
     await assertBUntouched();
-    await waitFor(async () => (await Storage.getNote('A')).name === 'Groceries', { message: 'the title on A' });
+    await waitFor(async () => (await release.getNote('A')).name === 'Groceries', { message: 'the title on A' });
   });
 });
 
@@ -323,14 +322,14 @@ function changedFields(before, after) {
 
 describe('T1: auto-title while the note is edited', () => {
   it('lands the derived title and keeps the typing, the pin, and the folder, and shows it without a save', async () => {
-    const { env, Storage } = await setup({
+    const { env, release } = await setup({
       notes: [note('A', { name: 'Untitled', updatedAt: 1700000000500 }), note('B')],
     });
     const ai = heldAI();
     const editor = editorWith(env, ai.port);
     await drive(env, editor.loadNote('A'));
     const tabs = [{ noteId: 'A', name: 'Untitled' }];
-    const manager = notesManager(env, Storage, { ai: ai.port, editor, tabs });
+    const manager = notesManager(env, { ai: ai.port, editor, tabs });
     await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
@@ -339,7 +338,7 @@ describe('T1: auto-title while the note is edited', () => {
     type(editor, 'Milk, eggs, and bread, and now butter too');
     await drive(env, editor.flushSave());
     await execute(env, 'setPinned', { noteId: 'A', pinned: true });
-    const folder = await Storage.createFolder('Errands');
+    const folder = await release.createFolder('Errands');
     // The sidebar's move, which goes through the kernel
     await execute(env, 'moveNoteToFolder', { noteId: 'A', folderId: folder.id });
 
@@ -348,12 +347,12 @@ describe('T1: auto-title while the note is edited', () => {
     await drive(env, job);
     await drive(env, editor.flushSave());
 
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual(
       [stored.name, stored.titleManuallySet, stored.pinned, stored.folderId, stored.preview],
       ['Groceries', false, true, folder.id, 'Milk, eggs, and bread, and now butter too'],
     );
-    assert.equal((await Storage.getElementsByNote('A'))[0].content, 'Milk, eggs, and bread, and now butter too');
+    assert.equal((await release.getElementsByNote('A'))[0].content, 'Milk, eggs, and bread, and now butter too');
     assert.equal(typeof stored.lastTitleContentHash, 'string');
     // The editor and the tab show it, and nothing saved the note again for it
     assert.deepEqual([editor.titleEl.textContent, editor.noteData.name, tabs[0].name], ['Groceries', 'Groceries', 'Groceries']);
@@ -363,11 +362,11 @@ describe('T1: auto-title while the note is edited', () => {
 
 describe('T2: insights while the note is edited', () => {
   it('write the insight fields and nothing else: the title, its flag, the trash, the preview, and updatedAt stay', async () => {
-    const { env, Storage } = await setup({ notes: [note('A', { updatedAt: 1700000000500 }), note('B')] });
+    const { env, release } = await setup({ notes: [note('A', { updatedAt: 1700000000500 }), note('B')] });
     const ai = heldAI();
     const editor = editorWith(env, ai.port);
     await drive(env, editor.loadNote('A'));
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const manager = notesManager(env, { ai: ai.port, editor });
     await jobsOn(env);
     const job = manager.runInsightsExtraction();
     await ai.waitFor('extractInsights');
@@ -377,7 +376,7 @@ describe('T2: insights while the note is edited', () => {
     type(editor, 'Milk, eggs, and bread for the week, and a cake for Sunday');
     await drive(env, editor.flushSave());
     await execute(env, 'trashNote', { noteId: 'A' });
-    const before = plain(await Storage.getNote('A'));
+    const before = plain(await release.getNote('A'));
     assert.equal(before.trashed, true);
 
     await ai.answer('extractInsights', { todos: ['Buy milk'] });
@@ -385,7 +384,7 @@ describe('T2: insights while the note is edited', () => {
     await drive(env, ai.answer('extractInsights', null));
     await drive(env, job);
 
-    const after = plain(await Storage.getNote('A'));
+    const after = plain(await release.getNote('A'));
     assert.deepEqual(changedFields(before, after), ['insights', 'lastInsightsContentHash', 'lastInsightsExtractedAt']);
     assert.deepEqual(
       [after.name, after.titleManuallySet, after.trashed, after.preview, after.updatedAt],
@@ -400,7 +399,7 @@ describe('T2: insights while the note is edited', () => {
 
 describe('T3: a title set by hand stays', () => {
   it('(i) a derived title over one set by hand meanwhile is kept out: the note, the editor, the tab, and the list stay', async () => {
-    const { env, Storage } = await setup({
+    const { env, release } = await setup({
       notes: [note('A', { name: 'Untitled', updatedAt: 1700000000500 }), note('B')],
     });
     const ai = heldAI();
@@ -408,7 +407,7 @@ describe('T3: a title set by hand stays', () => {
     await drive(env, editor.loadNote('A'));
     const tabs = [{ noteId: 'A', name: 'Untitled' }];
     const bar = tabBar(env, tabs);
-    const manager = notesManager(env, Storage, { ai: ai.port, editor, tabs, bar });
+    const manager = notesManager(env, { ai: ai.port, editor, tabs, bar });
     await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
@@ -418,7 +417,7 @@ describe('T3: a title set by hand stays', () => {
     await ai.answer('generateTitle', 'Groceries');
     await drive(env, job);
 
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet], ['Mine', true]);
     assert.deepEqual([editor.titleEl.textContent, tabs[0].name, bar.drawn, bar.saved], ['Untitled', 'Untitled', 0, 0]);
     await drive(env, env.noteList.settled());
@@ -426,14 +425,14 @@ describe('T3: a title set by hand stays', () => {
   });
 
   it('(ii) a title typed and not yet saved when the derived one commits wins: it stays on screen and lands after', async () => {
-    const { env, Storage } = await setup({
+    const { env, release } = await setup({
       notes: [note('A', { name: 'Untitled', updatedAt: 1700000000500 }), note('B')],
     });
     const ai = heldAI();
     const editor = editorWith(env, ai.port);
     await drive(env, editor.loadNote('A'));
     const tabs = [{ noteId: 'A', name: 'Untitled' }];
-    const manager = notesManager(env, Storage, { ai: ai.port, editor, tabs });
+    const manager = notesManager(env, { ai: ai.port, editor, tabs });
     await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
@@ -442,18 +441,18 @@ describe('T3: a title set by hand stays', () => {
 
     // The derived title commits while the typed one waits for its debounce
     await ai.answer('generateTitle', 'Groceries');
-    await waitFor(async () => (await Storage.getNote('A')).name === 'Groceries', { message: 'the derived title' });
+    await waitFor(async () => (await release.getNote('A')).name === 'Groceries', { message: 'the derived title' });
     await settle(10);
     assert.deepEqual([editor.titleEl.textContent, editor.noteData.name, tabs[0].name], ['Typed', 'Typed', 'Typed']);
 
     await drive(env, job);
     await drive(env, editor.flushSave());
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet], ['Typed', true]);
   });
 
   it("(iii) the editor's first-content title, when another tab named the note meanwhile, is kept out and the editor shows the name", async () => {
-    const { env, Storage } = await setup({ notes: [note('A', { name: 'Untitled' }), note('B')] });
+    const { env, release } = await setup({ notes: [note('A', { name: 'Untitled' }), note('B')] });
     await env.chrome.api.storage.local.set({ setting_autoTitleEnabled: true });
     const ai = heldAI();
     const editor = editorWith(env, ai.port);
@@ -469,16 +468,16 @@ describe('T3: a title set by hand stays', () => {
     await drive(env, editor.flushSave());
     await settle(10);
 
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet], ['From the other tab', true]);
-    assert.equal((await Storage.getElementsByNote('A'))[0].content, 'Milk, eggs, and bread, and butter');
+    assert.equal((await release.getElementsByNote('A'))[0].content, 'Milk, eggs, and bread, and butter');
     assert.deepEqual([editor.titleEl.textContent, editor.noteData.name], ['From the other tab', 'From the other tab']);
     const named = editor.navigation.calls.filter(([method]) => method === 'titleChanged').map(([, name]) => name);
     assert.equal(named[named.length - 1], 'From the other tab', 'the tab shows the stored name again');
   });
 
   it('(iv) a title typed while the first-content title is generated wins, in the one transaction with the blocks', async () => {
-    const { env, Storage } = await setup({ notes: [note('A', { name: 'Untitled' }), note('B')] });
+    const { env, release } = await setup({ notes: [note('A', { name: 'Untitled' }), note('B')] });
     await env.chrome.api.storage.local.set({ setting_autoTitleEnabled: true });
     const ai = heldAI();
     const editor = editorWith(env, ai.port);
@@ -499,7 +498,7 @@ describe('T3: a title set by hand stays', () => {
     await drive(env, editor.flushSave());
 
     assert.deepEqual(saves, [{ name: 'Typed', titleOrigin: 'typed', blocks: 1 }]);
-    const stored = await Storage.getNote('A');
+    const stored = await release.getNote('A');
     assert.deepEqual([stored.name, stored.titleManuallySet], ['Typed', true]);
     assert.equal(editor.titleEl.textContent, 'Typed');
   });
@@ -507,14 +506,14 @@ describe('T3: a title set by hand stays', () => {
 
 describe('T4: insights write the insight fields only', () => {
   let env;
-  let Storage;
+  let release;
   let ai;
   let editor;
   let writes;
   let updates;
 
   beforeEach(async () => {
-    ({ env, Storage } = await setup());
+    ({ env, release } = await setup());
     ai = heldAI();
     editor = editorWith(env, ai.port);
     await drive(env, editor.loadNote('A'));
@@ -522,17 +521,29 @@ describe('T4: insights write the insight fields only', () => {
     await execute(env, 'setPinned', { noteId: 'A', pinned: true });
     writes = spyWrites(env);
     updates = [];
-    // Storage's writes a job could still make (saveNoteWithBlocks went with #17 PR 4a)
-    for (const method of ['updateNote', 'setSetting']) {
-      const real = Storage[method].bind(Storage);
-      Storage[method] = (...args) => { updates.push(method); return real(...args); };
+    // The writes a job could still make through the Storage global, its shell's since #17 PR 4b,
+    // which has no updateNote (saveNoteWithBlocks went with #17 PR 4a)
+    const page = env.get('Storage');
+    for (const method of ['setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'saveVector', 'setSetting']) {
+      const real = page[method].bind(page);
+      page[method] = (...args) => { updates.push(method); return real(...args); };
     }
+    // And through the search index handle NotesManager holds, which writes past the global (R131)
+    const handle = env.stores.searchIndex;
+    const writing = new Set(['setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'saveVector']);
+    env.stores = {
+      ...env.stores,
+      searchIndex: Object.fromEntries(Object.entries(handle).map(([method, call]) => [method, (...args) => {
+        if (writing.has(method)) updates.push(`searchIndex.${method}`);
+        return call(...args);
+      }])),
+    };
   });
 
   /** The note as stored, and what the run asked for */
   async function result() {
     await drive(env, editor.flushSave());
-    return { stored: await Storage.getNote('A'), writes, updates };
+    return { stored: await release.getNote('A'), writes, updates };
   }
 
   it("the editor's Refresh insights keeps a pin made in the sidebar, and writes only attachInsights", async () => {
@@ -556,7 +567,7 @@ describe('T4: insights write the insight fields only', () => {
   });
 
   it("NotesManager's Extract insights marks, writes, and clears through the kernel, and nothing else", async () => {
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const manager = notesManager(env, { ai: ai.port, editor });
     const job = manager.extractInsightsForNote('A');
     await ai.answer('extractInsights', { todos: ['Call'] });
     await drive(env, job);
@@ -564,11 +575,11 @@ describe('T4: insights write the insight fields only', () => {
     assert.deepEqual([stored.pinned, plain(stored.insights)], [true, { todos: ['Call'] }]);
     assert.deepEqual([writes, updates], [['setInsightsPending', 'attachInsights', 'setInsightsPending'], []]);
     // The mark is cleared under 1.4.x's key, so the editor's poller sees it
-    assert.equal(await Storage.getSetting('insightsExtracting_A', 'unset'), null);
+    assert.equal(await release.getSetting('insightsExtracting_A', 'unset'), null);
   });
 
   it('the insights job writes only attachInsights per note, after its run is recorded', async () => {
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const manager = notesManager(env, { ai: ai.port, editor });
     await jobsOn(env);
     const job = manager.runInsightsExtraction();
     await ai.answer('extractInsights', { todos: ['Call'] });
@@ -577,7 +588,7 @@ describe('T4: insights write the insight fields only', () => {
     const { stored } = await result();
     assert.equal(stored.pinned, true);
     assert.deepEqual([writes, updates], [['recordJobRun', 'attachInsights', 'attachInsights'], []]);
-    assert.equal(typeof (await Storage.getSetting('lastInsightsRun', 0)), 'number');
+    assert.equal(typeof (await release.getSetting('lastInsightsRun', 0)), 'number');
   });
 });
 
@@ -619,7 +630,7 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
    * listener renders once per change
    */
   async function appWithSidebar() {
-    const { env, Storage } = await setup({
+    const { env, release } = await setup({
       notes: [note('A', { name: 'Untitled', updatedAt: 1700000000500 }), note('B')],
     });
     const list = env.noteList;
@@ -634,7 +645,7 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
     editor.ai = ai.port;
     await drive(env, editor.loadNote('A'));
     await list.settled();
-    return { env, Storage, ai, editor, page, sidebar, list };
+    return { env, release, ai, editor, page, sidebar, list };
   }
 
   /** What the sidebar's list says of A, and whether A sorts first by updatedAt */
@@ -645,8 +656,8 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
   }
 
   it('after the auto-title job names the open note', async () => {
-    const { env, Storage, ai, editor, page, sidebar, list } = await appWithSidebar();
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const { env, release, ai, editor, page, sidebar, list } = await appWithSidebar();
+    const manager = notesManager(env, { ai: ai.port, editor });
     await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.answer('generateTitle', 'Groceries');
@@ -658,8 +669,8 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
   });
 
   it("after Generate title and AI chat's confirmed title", async () => {
-    const { env, Storage, ai, editor, sidebar, list } = await appWithSidebar();
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const { env, release, ai, editor, sidebar, list } = await appWithSidebar();
+    const manager = notesManager(env, { ai: ai.port, editor });
     const job = manager.generateTitleForNote('A');
     await ai.answer('generateTitle', 'Groceries');
     await drive(env, job);
@@ -673,8 +684,8 @@ describe("the sidebar lists a committed title (review F1, as 4b1's save showed i
   });
 
   it('not after a title kept out by a hand-set one, which changed nothing', async () => {
-    const { env, Storage, ai, editor, sidebar, list } = await appWithSidebar();
-    const manager = notesManager(env, Storage, { ai: ai.port, editor });
+    const { env, release, ai, editor, sidebar, list } = await appWithSidebar();
+    const manager = notesManager(env, { ai: ai.port, editor });
     await jobsOn(env);
     const job = manager.runAutoTitle();
     await ai.waitFor('generateTitle');
@@ -697,7 +708,7 @@ describe('the editor draws insights, with its real render and poller (review F2)
 
   /** An editor that renders insights with BlockEditor's own methods, not makeEditor's stubs */
   async function realInsightsEditor({ mark, stored = null } = {}) {
-    const { env, Storage } = await setup({ notes: [note('A', { insights: stored }), note('B')] });
+    const { env, release } = await setup({ notes: [note('A', { insights: stored }), note('B')] });
     if (mark !== undefined) await env.chrome.api.storage.local.set({ setting_insightsExtracting_A: mark });
     const BlockEditor = env.get('BlockEditor');
     const editor = editorWith(env, heldAI().port);
@@ -706,7 +717,7 @@ describe('the editor draws insights, with its real render and poller (review F2)
     editor.loading = 0;
     editor.showInsightsLoadingInEditor = () => { editor.loading += 1; };
     await drive(env, editor.loadNote('A'));
-    return { env, Storage, editor };
+    return { env, release, editor };
   }
 
   /** The insights section the editor drew, as text, or null */
@@ -724,23 +735,23 @@ describe('the editor draws insights, with its real render and poller (review F2)
 
   it('clears a mark older than 5 minutes and draws the insights; a fresh one shows "Extracting..." and stays', async () => {
     const stale = await realInsightsEditor({ mark: Date.now() - 6 * MINUTE, stored: INSIGHTS });
-    assert.equal(await stale.Storage.getSetting('insightsExtracting_A', 'unset'), null, 'cleared under its 1.4.x key');
+    assert.equal(await stale.release.getSetting('insightsExtracting_A', 'unset'), null, 'cleared under its 1.4.x key');
     assert.match(drawn(stale.editor), /Call the bakery/);
     assert.equal(stale.editor.loading, 0);
 
     const fresh = await realInsightsEditor({ mark: Date.now() - MINUTE, stored: INSIGHTS });
     assert.equal(fresh.editor.loading, 1);
     assert.equal(drawn(fresh.editor), null);
-    assert.equal(typeof (await fresh.Storage.getSetting('insightsExtracting_A', null)), 'number', 'still set');
+    assert.equal(typeof (await fresh.release.getSetting('insightsExtracting_A', null)), 'number', 'still set');
     assert.ok(fresh.editor.insightsPollingId, 'and it polls');
   });
 
   it('polls until another tab clears the mark, then draws only the insight fields of what that tab stored', async () => {
-    const { env, Storage, editor } = await realInsightsEditor({ mark: Date.now() });
+    const { env, release, editor } = await realInsightsEditor({ mark: Date.now() });
     // Another tab, 1.4.x's or this build's, stores insights and a new name, then clears the mark
     await execute(env, 'attachInsights', { noteId: 'A', insights: INSIGHTS });
     await execute(env, 'renameNote', { noteId: 'A', name: 'Renamed elsewhere' });
-    await Storage.setSetting('insightsExtracting_A', null);
+    await release.setSetting('insightsExtracting_A', null);
     env.clock.tick(2000);
     await waitFor(() => drawn(editor), { message: 'the insights drawn' });
     assert.match(drawn(editor), /Call the bakery/);

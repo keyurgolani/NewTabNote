@@ -312,16 +312,8 @@ export const UNSHARED = Object.freeze({
  * Implementations that run no suite, each with the issue that removes it and why it can wait.
  * `within` scopes the exemption to the top-level statement of the file that holds that text,
  * so a second implementation elsewhere in the file is still caught. The check fails once the
- * exempt one is gone, so the entry goes with it.
+ * exempt one is gone, so the entry goes with it. js/storage.js's localStorage stand-in for
+ * chrome.storage, for a page run from file://, was the last, and went with #17 PR 4b.
  * @type {Readonly<Record<string, {port: string, within: string, owner: string, reason: string}>>}
  */
-export const EXEMPT = Object.freeze({
-  'js/storage.js': {
-    port: 'chrome-storage-local',
-    within: 'chrome_mock_',
-    owner: '#17',
-    reason:
-      'the localStorage stand-in for chrome.storage when a page runs from file://, which a packaged ' +
-      "extension never reaches. #17 removes it, and #28's build-to scope defers deleting it here.",
-  },
-});
+export const EXEMPT = Object.freeze({});

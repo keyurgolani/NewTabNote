@@ -7,7 +7,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, FakeDocument, settle, plain, note, startEditorClient,
+  createLegacyEnv, createDatabase, FakeDocument, settle, plain, note, releaseStorage, startEditorClient,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -26,8 +26,6 @@ async function openTab(shared) {
   );
   if (!shared) await createDatabase(env.indexedDB, { records: { canvases: [note('A', { name: 'Alpha' })] } });
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   await startEditorClient(env);
   env.get('Utils').showToast = () => {};
   const settings = new (env.get('SettingsController'))({
@@ -37,7 +35,7 @@ async function openTab(shared) {
     domRefs: null,
     logger: { debug() {}, info() {}, warn() {}, error() {} },
   });
-  return { env, Storage, settings };
+  return { env, settings };
 }
 
 /** Let chrome.storage's notices and the reads they start run */
@@ -102,7 +100,8 @@ describe('the settings port (#12 slice 6)', () => {
     els['theme-builder-save'].click();
     await quiet();
 
-    const [theme] = plain(await tab.Storage.getCustomThemes());
+    // Read as 1.4.x's Storage read them: the frozen 1.4.1 release's, on the tab's profile (#17 PR 4b)
+    const [theme] = plain(await (await releaseStorage(env)).getCustomThemes());
     assert.deepEqual(
       { name: theme.name, properties: theme.properties, updatedAt: typeof theme.updatedAt },
       { name: 'Dusk', properties: { '--bg-primary': '#101010', '--text-primary': '#fafafa' }, updatedAt: 'number' },
@@ -111,8 +110,9 @@ describe('the settings port (#12 slice 6)', () => {
     assert.equal(applies, 1);
 
     const reloaded = await openTab(env);
-    assert.equal(await reloaded.Storage.getSetting('theme'), theme.id);
-    assert.equal(plain(await reloaded.Storage.getCustomThemes())[0].name, 'Dusk');
+    const release = await releaseStorage(reloaded.env);
+    assert.equal(await release.getSetting('theme'), theme.id);
+    assert.equal(plain(await release.getCustomThemes())[0].name, 'Dusk');
   });
 
   it("onboarding's first run switches its three features on in one write, and its end is recorded", async () => {
@@ -316,7 +316,6 @@ describe("the controllers' reads through the settings port (#12 slice 7)", () =>
       records: { canvases: [note('A', { name: 'Alpha' }), note('T', { name: 'Morning', isTemplate: true })] },
     });
     env.load(...READ_FILES);
-    await env.get('Storage').init();
     await startEditorClient(env);
     await env.noteList.settled();
     for (const key of READ_KEYS) delete env.chrome.local[`setting_${key}`];

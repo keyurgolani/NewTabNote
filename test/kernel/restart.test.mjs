@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 
 import { openHintChannel } from '../../js/kernel/adapters/messaging/hint-channel.js';
 import { createRuntimePortTransport, installRuntimePort } from '../../js/kernel/adapters/messaging/runtime-port.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import { rejected, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';

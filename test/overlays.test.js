@@ -201,7 +201,6 @@ describe('a note that loads focuses its first block, unless focus is in an open 
     const env = createLegacyEnv({ document: new FakeDocument() });
     await createDatabase(env.indexedDB, { records: { canvases: [note('N', { name: 'Welcome' })], elements: [block('n1', 'N', 0, 'Welcome')] } });
     env.load(...FILES);
-    await env.get('Storage').init();
     const documentClient = await startEditorClient(env);
     const doc = env.document;
     const pane = add(doc.body, 'div', { id: 'editor-container', class: 'editor-pane active' });

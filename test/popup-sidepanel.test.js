@@ -12,7 +12,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, waitFor, note,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, releaseStorage, waitFor, note,
 } = require('./helpers/legacy-env');
 const { loadPageModule } = require('./helpers/page-module');
 
@@ -127,7 +127,7 @@ describe('what Popup shows', () => {
 describe("Popup's quick note", () => {
   // #12: Popup's notes take createNote's record and search entry, the one record-shape change it
   // allows, and since #17 PR 2a the three versions #17's adapter keeps on every note it writes
-  it("saves the record and search entry the new tab's Storage.createNote saves, and lists the note first", async () => {
+  it("saves the record and search entry 1.4.x's Storage.createNote saves, and lists the note first", async () => {
     const { env, els, recent } = await popup({ canvases: notes() });
     const input = els['quick-note-input'];
     input.value = '  Call the plumber  ';
@@ -135,13 +135,11 @@ describe("Popup's quick note", () => {
     await waitFor(() => recent()[0] === 'Call the plumber', { message: 'the quick note listed first' });
     assert.equal(input.value, '');
 
-    // The new tab's own createNote, on the same profile
-    const page = createLegacyEnv({ indexedDB: env.indexedDB, chrome: env.chrome });
-    page.load('js/utils.js', 'js/storage.js');
-    const Storage = page.get('Storage');
-    await Storage.open();
-    const { id: referenceId } = await Storage.createNote('Reference');
-    Storage.db.close();
+    // 1.4.x's own createNote, on the same profile: the frozen 1.4.1 release's, as the new tab's
+    // Storage.createNote was until #17 PR 4b
+    const release = await releaseStorage(env);
+    const { id: referenceId } = await release.createNote('Reference');
+    release.db.close();
 
     const dump = await dumpDatabase(env.indexedDB);
     const saved = Object.values(recordsOf(dump, 'canvases')).find((record) => record.name === 'Call the plumber');

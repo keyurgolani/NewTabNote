@@ -166,3 +166,25 @@ export const textDigest = text => sha256(utf8(text));
  * @returns {string}
  */
 export const digestOf = value => textDigest(JSON.stringify(sortedKeys(value)));
+
+/**
+ * A kept conflict, as both adapters keep one
+ * @typedef {{noteId?: unknown, scope?: unknown, expected?: unknown, command?: unknown}} KeptConflictLike
+ */
+
+/**
+ * Whether two kept conflicts hold one change: the same note, scope, and version expected, and
+ * the same command but its commandId, as a stale change sent again under a new commandId is
+ * (R131). A resend under the same commandId answers from the ledger, so it never gets this far.
+ * @param {KeptConflictLike} a
+ * @param {KeptConflictLike} b
+ * @returns {boolean}
+ */
+export function sameConflict(a, b) {
+  /** @param {KeptConflictLike} record */
+  const key = ({ noteId, scope, expected, command }) => {
+    const { commandId: _, ...rest } = /** @type {Record<string, unknown>} */ (command ?? {});
+    return digestOf([noteId ?? null, scope ?? null, expected ?? null, rest]);
+  };
+  return key(a) === key(b);
+}

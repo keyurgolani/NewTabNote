@@ -3,7 +3,8 @@
 // NTN-12 slice 5: every path that takes notes out of a new tab's active set goes through one
 // removeNotes (js/kernel/composition/removal.js), with #46's order: this tab's panes leave
 // first, the kernel writes, then the lists and the other new tabs follow. These run it as App
-// wires it, on the page's real Storage, kernel, editors, and tabs: a write that fails leaves
+// wires it, on the page's real kernel, editors, and tabs, with another tab's writes made by the
+// frozen 1.4.1 Storage (legacy-env's releaseStorage): a write that fails leaves
 // the panes, tabs, and split view as they were and makes no Untitled note; trash retention
 // writes first so a pane's unsaved text survives; a bulk action counts only what committed;
 // and filing and template conversion with the note open survive the editor's next save.
@@ -46,7 +47,7 @@ async function openPage(env, { open = ['A'], split = false } = {}) {
   page.toasts = [];
   env.get('Utils').showToast = (message, kind) => { page.toasts.push({ message, kind }); };
   if (!env.document.getElementById('sidebar-tab-notes')) env.document.stub(['sidebar-tab-notes', 'sidebar-notes-list']);
-  page.notes = page.wire(new (env.get('NotesManager'))({ storage: page.Storage, domRefs: null, logger: null, llm: null }));
+  page.notes = page.wire(new (env.get('NotesManager'))({ storage: page.stores.searchIndex, domRefs: null, logger: null, llm: null }));
   page.sidebar = page.wire(new (env.get('SidebarController'))({
     settings: env.settingsClient,
     storageState: env.storageState,
@@ -135,17 +136,17 @@ const view = (tabs) => plain({
  * What another tab's sidebar wrote for a folder it changed, as Storage.updateFolder wrote it,
  * which had no caller once the new tab wrote through #17's adapter, and went with #17 PR 4a
  */
-function otherTabPutsFolder(Storage, folder) {
+function otherTabPutsFolder(release, folder) {
   return new Promise((resolve, reject) => {
-    const request = Storage.getStore('folders', 'readwrite').put({ ...folder, updatedAt: Date.now() });
+    const request = release.getStore('folders', 'readwrite').put({ ...folder, updatedAt: Date.now() });
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
 }
 
 /** What another tab wrote restoring a note from the trash, as Storage.restoreNote wrote it */
-async function otherTabRestores(Storage, noteId) {
-  await Storage.updateNote({ ...(await Storage.getNote(noteId)), trashed: false, trashedAt: null });
+async function otherTabRestores(release, noteId) {
+  await release.updateNote({ ...(await release.getNote(noteId)), trashed: false, trashedAt: null });
 }
 
 describe('removeNotes, when the write fails', () => {
@@ -305,7 +306,7 @@ describe('removeNotes, when the write commits', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A', 'TR'] });
-    await page.Storage.trashNote('C');
+    await page.release.trashNote('C');
     page.sidebar.logger = { info() {}, warn() {} };
 
     await runUntil(env, page.sidebar.runTrashCleanup());
@@ -343,7 +344,7 @@ describe('filing and templates with the note open', () => {
     assert.deepEqual(page.toasts, []);
 
     // A folder another tab deleted, which this tab still lists
-    await page.Storage.deleteFolder('F');
+    await page.release.deleteFolder('F');
     await runUntil(env, page.sidebar.moveNoteToFolder('B', 'F'));
     ({ notes } = await stored(env));
     assert.equal(notes.B.folderId, null, 'not filed out of sight');
@@ -380,10 +381,10 @@ describe('filing and templates with the note open', () => {
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
     // Another tab moved F under a new folder H, and H under G; this tab still lists F at the root
-    await page.Storage.createFolder('elsewhere');
-    const folders = await page.Storage.getAllFolders();
+    await page.release.createFolder('elsewhere');
+    const folders = await page.release.getAllFolders();
     const h = folders.find((f) => f.name === 'elsewhere');
-    await otherTabPutsFolder(page.Storage, { ...h, parentId: 'G' });
+    await otherTabPutsFolder(page.release, { ...h, parentId: 'G' });
     assert.equal(page.sidebar.isChildFolder(h.id, 'F'), false, 'the stale view allows it');
 
     await runUntil(env, page.sidebar.moveFolder('F', h.id));
@@ -456,8 +457,8 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
-    await page.Storage.permanentlyDeleteNote('B');
-    await page.Storage.permanentlyDeleteNote('TR');
+    await page.release.permanentlyDeleteNote('B');
+    await page.release.permanentlyDeleteNote('TR');
 
     await runUntil(env, page.notes.trashNoteById('B'));
     const deleted = page.notes.permanentlyDeleteNoteById('TR');
@@ -494,7 +495,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
-    await page.Storage.permanentlyDeleteNote('C');
+    await page.release.permanentlyDeleteNote('C');
     page.sidebar.selectionMode = true;
     page.sidebar.selectedNoteIds = new Set(['B', 'C']);
 
@@ -513,7 +514,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
-    await page.Storage.permanentlyDeleteNote('C');
+    await page.release.permanentlyDeleteNote('C');
     page.sidebar.selectionMode = true;
     page.sidebar.selectedNoteIds = new Set(['A', 'B', 'C']);
 
@@ -532,7 +533,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
-    await page.Storage.permanentlyDeleteNote('C');
+    await page.release.permanentlyDeleteNote('C');
     page.sidebar.selectionMode = true;
     page.sidebar.selectedNoteIds = new Set(['A', 'B', 'C', 'D']);
     failNextWrite('canvases', (record) => record && record.id === 'B' && record.archived === true);
@@ -561,7 +562,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
         const env = createLegacyEnv();
         await createProfile(env.indexedDB);
         const page = await openPage(env, { open: ['A'] });
-        for (const id of ids) await page.Storage.permanentlyDeleteNote(id);
+        for (const id of ids) await page.release.permanentlyDeleteNote(id);
         page.sidebar.selectionMode = true;
         page.sidebar.selectedNoteIds = new Set(ids);
 
@@ -611,10 +612,10 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A', 'C'] });
-    await page.Storage.trashNote('C');
+    await page.release.trashNote('C');
     await page.page.noteList.reload();
     // Another tab restores C after this tab listed it in the trash
-    await otherTabRestores(page.Storage, 'C');
+    await otherTabRestores(page.release, 'C');
     const before = view(page.tabs);
 
     const emptied = page.sidebar.emptyTrash();
@@ -630,7 +631,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
-    await otherTabRestores(page.Storage, 'TR');
+    await otherTabRestores(page.release, 'TR');
 
     const deleted = page.notes.permanentlyDeleteNoteById('TR');
     await confirmIn(env, 'Delete Permanently');
@@ -644,7 +645,7 @@ describe('removeNotes, when some notes stay or were already gone (R76)', () => {
     const env = createLegacyEnv();
     await createProfile(env.indexedDB);
     const page = await openPage(env, { open: ['A'] });
-    await page.Storage.deleteFolder('F');
+    await page.release.deleteFolder('F');
     assert.ok(page.page.noteList.folders().some((f) => f.id === 'F'), 'still listed');
 
     await runUntil(env, page.sidebar.moveNoteToFolder('A', 'F'));

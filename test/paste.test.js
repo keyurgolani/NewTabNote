@@ -55,7 +55,6 @@ async function page() {
   env.load(...FILES);
   // The editor's URL check, as a page has it
   env.global.URL = URL;
-  await env.get('Storage').init();
   const documentClient = await startEditorClient(env);
   const doc = env.document;
   const pane = add(doc.body, 'div', { id: 'editor-container', class: 'editor-pane active' });

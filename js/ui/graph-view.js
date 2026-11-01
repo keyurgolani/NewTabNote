@@ -107,16 +107,8 @@ class GraphView {
    */
   async _buildGraph() {
     const notes = await this.storage.getAllNotes(true);
-    const links = await new Promise((resolve, reject) => {
-      const store = this.storage.getStore('links');
-      const request = store.getAll();
-      request.onsuccess = () => resolve(request.result || []);
-      request.onerror = () => reject(request.error);
-    }).catch((error) => {
-      // Without a links store the graph shows notes with no edges.
-      if (error && error.code === 'STORE_UNAVAILABLE') return [];
-      throw error;
-    });
+    // Every link, none without a links store, so the graph shows notes with no edges (#17 PR 4b)
+    const links = await this.storage.listLinks();
 
     // Build node map
     const nodeMap = new Map();

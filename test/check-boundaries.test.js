@@ -806,7 +806,8 @@ describe('eslint.config.mjs boundary rules', () => {
       'js/probe-alias.js: 6 chrome.storage hits no ledger row covers',
       'js/probe-alias.js: 2 legacyBlindWrite hits no ledger row covers',
       'js/storage.js: 1 legacyBlindWrite hit no ledger row covers',
-      'js/storage.js: 13 chrome.storage.local hits, 12 allowed by the ledger',
+      // The shell has none of its own since #17 PR 4b, and no row
+      'js/storage.js: 1 chrome.storage.local hit no ledger row covers',
       'js/kernel/core/probe-store.js: 1 objectStore hit no ledger row covers',
     ]) {
       assert.ok(output.includes(expected), `"${expected}" missing from:\n${output}`);

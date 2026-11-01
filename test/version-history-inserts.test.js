@@ -7,7 +7,7 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, settle, waitFor, plain, note, block, makeEditor, startEditorClient, runUntil,
+  createLegacyEnv, createDatabase, settle, waitFor, plain, note, block, makeEditor, startEditorClient, runUntil, releaseStorage,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -20,17 +20,19 @@ const FILES = [
   'js/controllers/ai-chat-controller.js',
 ];
 
-/** A page over `indexedDB` (a new one unless given), with Storage started and its document client */
+/**
+ * A page over `indexedDB` (a new one unless given), with its kernel started, its document client,
+ * and `frozen`, the frozen 1.4.1 Storage on its database, for the test's reads (legacy-env's
+ * releaseStorage)
+ */
 async function page({ records, omit, shared } = {}) {
   const env = shared ? createLegacyEnv({ indexedDB: shared.indexedDB, chrome: shared.chrome }) : createLegacyEnv();
   if (!shared) await createDatabase(env.indexedDB, { records, omit });
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   await startEditorClient(env);
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
-  return { env, Storage, toasts };
+  return { env, frozen: await releaseStorage(env), toasts };
 }
 
 const RECORDS = {
@@ -46,8 +48,8 @@ function type(editor, text, index = 0) {
 }
 
 /** Each stored block of `noteId` in note order, as [id, content] */
-async function storedBlocks(Storage, noteId) {
-  const blocks = plain(await Storage.getElementsByNote(noteId));
+async function storedBlocks(frozen, noteId) {
+  const blocks = plain(await frozen.getElementsByNote(noteId));
   return blocks.sort((a, b) => (a.order || 0) - (b.order || 0) || (a.id < b.id ? -1 : 1)).map((b) => [b.id, b.content]);
 }
 
@@ -61,12 +63,12 @@ async function snapshotNow(env, editor) {
 
 describe('T6: a revert keeps what was done elsewhere and loses nothing typed', () => {
   let env;
-  let Storage;
+  let frozen;
   let toasts;
   let editor;
 
   beforeEach(async () => {
-    ({ env, Storage, toasts } = await page({ records: RECORDS }));
+    ({ env, frozen, toasts } = await page({ records: RECORDS }));
     editor = makeEditor(env);
     await editor.loadNote('A');
   });
@@ -81,18 +83,18 @@ describe('T6: a revert keeps what was done elsewhere and loses nothing typed', (
     await runUntil(env, editor.flushSave());
     // Pinned in the sidebar, and moved into a folder from another tab
     await runUntil(env, env.kernel.execute({ type: 'setPinned', commandId: 'pin', noteId: 'A', pinned: true }));
-    const moved = await Storage.getNote('A');
+    const moved = await frozen.getNote('A');
     moved.folderId = 'f1';
-    await Storage.updateNote(moved);
+    await frozen.updateNote(moved);
 
     await runUntil(env, editor._revertToSnapshot(summary));
 
-    const stored = plain(await Storage.getNote('A'));
+    const stored = plain(await frozen.getNote('A'));
     assert.deepEqual(
       [stored.name, stored.pinned, stored.folderId, stored.titleManuallySet],
       ['Groceries', true, 'f1', true],
     );
-    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
+    assert.deepEqual(await storedBlocks(frozen, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
     assert.deepEqual([editor.titleEl.textContent, editor.blocks.map((b) => b.content)], ['Groceries', ['Milk', 'Eggs']]);
     assert.deepEqual(toasts.at(-1), { message: 'Reverted to snapshot', kind: 'success' });
     // What the note was before the revert is the newest snapshot
@@ -111,7 +113,7 @@ describe('T6: a revert keeps what was done elsewhere and loses nothing typed', (
     env.clock.tick(2000);
     await runUntil(env, editor.flushSave());
 
-    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
+    assert.deepEqual(await storedBlocks(frozen, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
     const [pre] = await runUntil(env, env.documentClient.snapshots('A'));
     const kept = await runUntil(env, env.documentClient.snapshot(pre.id));
     assert.deepEqual(kept.blocks.map((b) => b.content), ['Typed just before the revert', 'Eggs']);
@@ -137,7 +139,7 @@ describe('T6: a revert keeps what was done elsewhere and loses nothing typed', (
     env.clock.tick(600);
     await runUntil(env, editor.flushSave());
 
-    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
+    assert.deepEqual(await storedBlocks(frozen, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
     const summaries = await runUntil(env, env.documentClient.snapshots('A'));
     const contents = [];
     for (const { id } of summaries) {
@@ -168,7 +170,7 @@ describe('T6: a revert keeps what was done elsewhere and loses nothing typed', (
     const summary = await snapshotNow(env, editor);
     await editor.loadNote('B');
     await runUntil(env, editor._revertToSnapshot(summary));
-    assert.deepEqual(await storedBlocks(Storage, 'B'), [['b1', 'Plan']]);
+    assert.deepEqual(await storedBlocks(frozen, 'B'), [['b1', 'Plan']]);
     assert.deepEqual(toasts.at(-1), { message: 'Failed to revert to snapshot', kind: 'error' });
     await runUntil(env, editor._revertToSnapshot({ id: 'gone', timestamp: 1 }));
     assert.deepEqual(toasts.at(-1), { message: 'Failed to load snapshot', kind: 'error' });
@@ -238,46 +240,46 @@ const REPLY = [
 
 describe('T7: AI chat inserts move blocks, update the note, and lose no save', () => {
   it('at the cursor: the blocks after it move down, and the preview and links follow', async () => {
-    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const { env, frozen, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     editor.activeBlock = 'a1';
     const chat = aiChat(env, editor);
     await runUntil(env, chat.appendAIResponseToNote(REPLY));
 
-    assert.deepEqual(await storedBlocks(Storage, 'A'), [
+    assert.deepEqual(await storedBlocks(frozen, 'A'), [
       ['a1', 'Milk'],
-      [(await Storage.getElementsByNote('A')).find((b) => b.content === 'See [[Work]]').id, 'See [[Work]]'],
-      [(await Storage.getElementsByNote('A')).find((b) => b.type === 'todo').id, 'Call the bakery'],
+      [(await frozen.getElementsByNote('A')).find((b) => b.content === 'See [[Work]]').id, 'See [[Work]]'],
+      [(await frozen.getElementsByNote('A')).find((b) => b.type === 'todo').id, 'Call the bakery'],
       ['a2', 'Eggs'],
     ]);
-    const stored = plain(await Storage.getNote('A'));
+    const stored = plain(await frozen.getNote('A'));
     assert.deepEqual([stored.preview, stored.todoProgress], ['Milk', { completed: 0, total: 1 }]);
-    assert.deepEqual(plain(await Storage.getBacklinks('B')).map((n) => n.id), ['A']);
+    assert.deepEqual(plain(await frozen.getBacklinks('B')).map((n) => n.id), ['A']);
     assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'See [[Work]]', 'Call the bakery', 'Eggs']);
     assert.deepEqual(chat.indexed, ['A']);
     assert.deepEqual(toasts.at(-1), { message: 'Added 2 AI blocks to note', kind: 'success' });
   });
 
   it('with no block focused, after the last block', async () => {
-    const { env, Storage } = await page({ records: RECORDS });
+    const { env, frozen } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     editor.activeBlock = null;
     await runUntil(env, aiChat(env, editor).appendAIResponseToNote(REPLY));
-    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), [
+    assert.deepEqual((await storedBlocks(frozen, 'A')).map(([, content]) => content), [
       'Milk', 'Eggs', 'See [[Work]]', 'Call the bakery',
     ]);
   });
 
   it('text typed in this tab and not yet saved is stored first, and stays', async () => {
-    const { env, Storage } = await page({ records: RECORDS });
+    const { env, frozen } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     editor.activeBlock = 'a1';
     type(editor, 'Oat milk');
     await runUntil(env, aiChat(env, editor).appendAIResponseToNote(REPLY));
-    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), [
+    assert.deepEqual((await storedBlocks(frozen, 'A')).map(([, content]) => content), [
       'Oat milk', 'See [[Work]]', 'Call the bakery', 'Eggs',
     ]);
     assert.deepEqual(editor.blocks.map((b) => b.content), ['Oat milk', 'See [[Work]]', 'Call the bakery', 'Eggs']);
@@ -308,15 +310,15 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
       await runUntil(tabA.env, chat.appendAIResponseToNote(REPLY));
       await saved;
 
-      const contents = (await storedBlocks(tabA.Storage, 'A')).map(([, content]) => content).sort();
+      const contents = (await storedBlocks(tabA.frozen, 'A')).map(([, content]) => content).sort();
       assert.deepEqual(contents, ['Brown eggs', 'Call the bakery', 'Milk', 'See [[Work]]'], first);
-      const stored = plain(await tabA.Storage.getNote('A'));
+      const stored = plain(await tabA.frozen.getNote('A'));
       assert.equal(stored.name, 'Groceries', first);
     }
   });
 
   it('"new note from response" makes the note with its id taken first, then inserts the blocks into it', async () => {
-    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const { env, frozen, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const chat = aiChat(env, editor);
@@ -332,22 +334,22 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     await runUntil(env, chat.createNoteFromAIResponse(REPLY, 'raw'));
     const [[, noteId], insert] = sent;
     assert.deepEqual(insert, ['insertBlocks', noteId, undefined]);
-    const made = plain(await Storage.getNote(noteId));
+    const made = plain(await frozen.getNote(noteId));
     assert.deepEqual([made.name, made.preview, made.todoProgress], ['AI Generated', 'See [[Work]]', { completed: 0, total: 1 }]);
-    assert.deepEqual((await storedBlocks(Storage, noteId)).map(([, content]) => content), ['See [[Work]]', 'Call the bakery']);
-    assert.deepEqual(plain(await Storage.getBacklinks('B')).map((n) => n.id), [noteId]);
+    assert.deepEqual((await storedBlocks(frozen, noteId)).map(([, content]) => content), ['See [[Work]]', 'Call the bakery']);
+    assert.deepEqual(plain(await frozen.getBacklinks('B')).map((n) => n.id), [noteId]);
     assert.deepEqual(toasts.at(-1), { message: 'New note created from AI response', kind: 'success' });
   });
 
   it('an insert into a note deleted meanwhile is refused and says so', async () => {
-    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const { env, frozen, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const chat = aiChat(env, editor);
-    editor.save = async () => { await Storage.permanentlyDeleteNote('A'); };
+    editor.save = async () => { await frozen.permanentlyDeleteNote('A'); };
     await runUntil(env, chat.appendAIResponseToNote(REPLY));
-    assert.equal(await Storage.getNote('A'), undefined);
-    assert.deepEqual(await storedBlocks(Storage, 'A'), []);
+    assert.equal(await frozen.getNote('A'), undefined);
+    assert.deepEqual(await storedBlocks(frozen, 'A'), []);
     assert.deepEqual(toasts.at(-1), { message: 'Failed to add content', kind: 'error' });
     await settle();
   });
@@ -401,7 +403,7 @@ describe('a flush while a revert commits keeps the screen and the note the same 
   for (const [route, make] of Object.entries(FLUSH_ROUTES)) {
     for (const when of ['before', 'after']) {
       it(`${route}, ${when} the restore's unit commits: no replaced block comes back, and the typing is a snapshot`, async () => {
-        const { env, Storage } = await page({ records: RECORDS });
+        const { env, frozen } = await page({ records: RECORDS });
         const { editor, flush } = make(env);
         await editor.loadNote('A');
         const summary = await snapshotNow(env, editor);
@@ -410,7 +412,7 @@ describe('a flush while a revert commits keeps the screen and the note the same 
         editor.scheduleSave();
         env.clock.tick(600);
         await runUntil(env, editor.flushSave());
-        assert.deepEqual((await storedBlocks(Storage, 'A')).map(([id]) => id), ['a1', 'a2', 'a3']);
+        assert.deepEqual((await storedBlocks(frozen, 'A')).map(([id]) => id), ['a1', 'a2', 'a3']);
 
         const client = editor.documentClient;
         const real = client.restoreSnapshot;
@@ -432,7 +434,7 @@ describe('a flush while a revert commits keeps the screen and the note the same 
         env.clock.tick(2000);
         await runUntil(env, editor.flushSave());
 
-        const stored = await storedBlocks(Storage, 'A');
+        const stored = await storedBlocks(frozen, 'A');
         assert.deepEqual(stored, [['a1', 'Milk'], ['a2', 'Eggs']]);
         assert.deepEqual(stored, editor.blocks.map((b) => [b.id, b.content]), 'the note is what the screen shows');
         const texts = [];
@@ -446,7 +448,7 @@ describe('a flush while a revert commits keeps the screen and the note the same 
   }
 
   it('a save() while a revert commits waits for it, then writes the restored blocks', async () => {
-    const { env, Storage } = await page({ records: RECORDS });
+    const { env, frozen } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const summary = await snapshotNow(env, editor);
@@ -473,11 +475,11 @@ describe('a flush while a revert commits keeps the screen and the note the same 
     await runUntil(env, saving);
     client.restoreSnapshot = real;
     await runUntil(env, editor.flushSave());
-    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
+    assert.deepEqual(await storedBlocks(frozen, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
   });
 
   it('a revert that fails saves what was typed meanwhile onto the note', async () => {
-    const { env, Storage } = await page({ records: RECORDS });
+    const { env, frozen } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const summary = await snapshotNow(env, editor);
@@ -495,7 +497,7 @@ describe('a flush while a revert commits keeps the screen and the note the same 
     client.restoreSnapshot = real;
     env.clock.tick(600);
     await runUntil(env, editor.flushSave());
-    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Typed while it failed'], ['a2', 'Eggs']]);
+    assert.deepEqual(await storedBlocks(frozen, 'A'), [['a1', 'Typed while it failed'], ['a2', 'Eggs']]);
   });
 });
 
@@ -505,7 +507,7 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
       canvases: [note('A', { name: 'Plan' })],
       elements: [block('0-a', 'A', 0, 'One'), block('0-b', 'A', 1, 'Two')],
     };
-    const { env, Storage, toasts } = await page({ records });
+    const { env, frozen, toasts } = await page({ records });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const summary = await snapshotNow(env, editor);
@@ -539,13 +541,13 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     env.clock.tick(2000);
     await runUntil(env, editor.flushSave());
 
-    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['One', 'Two', 'New1']);
+    assert.deepEqual((await storedBlocks(frozen, 'A')).map(([, content]) => content), ['One', 'Two', 'New1']);
     assert.deepEqual(editor.blocks.map((b) => b.content), ['One', 'Two', 'New1']);
     assert.deepEqual(toasts.at(-1), { message: 'Added 1 AI block to note', kind: 'success' });
   });
 
   it("flushSave while a revert commits waits for it, rather than going round and storing nothing", async () => {
-    const { env, Storage } = await page({ records: RECORDS });
+    const { env, frozen } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const summary = await snapshotNow(env, editor);
@@ -569,10 +571,10 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     await runUntil(env, flushing);
     client.restoreSnapshot = real;
     assert.equal(editor._hasPendingSave(), false, 'nothing is left pending');
-    assert.deepEqual(await storedBlocks(Storage, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
+    assert.deepEqual(await storedBlocks(frozen, 'A'), [['a1', 'Milk'], ['a2', 'Eggs']]);
   });
   it('a second revert while one commits is dropped without a word, and an append waiting on the first still settles (review R77, P6)', async () => {
-    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const { env, frozen, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const first = await snapshotNow(env, editor);
@@ -612,7 +614,7 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     await runUntil(env, editor.flushSave());
 
     assert.equal(appended, true);
-    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Milk', 'Eggs', 'New1']);
+    assert.deepEqual((await storedBlocks(frozen, 'A')).map(([, content]) => content), ['Milk', 'Eggs', 'New1']);
     assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs', 'New1']);
     // And a revert after the first one ends runs
     const after = await runUntil(env, env.documentClient.snapshots('A'));
@@ -621,7 +623,7 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
   });
 
   it('a revert whose render throws once shows the note as stored, and the saves waiting on it go on (review R77)', async () => {
-    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const { env, frozen, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const summary = await snapshotNow(env, editor);
@@ -653,7 +655,7 @@ describe('an AI insert confirmed while a revert commits (the #70 delta check)', 
     assert.deepEqual([editor._savesHeld, editor._revertingNoteId, editor._revertInFlight], [false, null, false]);
     await runUntil(env, editor.flushSave());
     assert.equal(editor._hasPendingSave(), false);
-    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Milk', 'Eggs']);
+    assert.deepEqual((await storedBlocks(frozen, 'A')).map(([, content]) => content), ['Milk', 'Eggs']);
     assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs']);
     assert.deepEqual(toasts.at(-1), { message: 'Reverted to snapshot', kind: 'success' });
     assert.ok((await snapshotTexts(env, 'A')).includes('Typed'), 'what was typed is in version history');
@@ -676,7 +678,7 @@ describe("a committed revert whose blocks don't reach the screen (review R77, P8
    * text typed and a save waiting while it commits. `failing` decides when Block.deserialize throws.
    */
   async function revertWhileTyping(failing) {
-    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const { env, frozen, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     const summary = await snapshotNow(env, editor);
@@ -706,12 +708,12 @@ describe("a committed revert whose blocks don't reach the screen (review R77, P8
       await runUntil(env, editor.flushSave());
       return result;
     };
-    return { env, Storage, toasts, editor, release, done };
+    return { env, frozen, toasts, editor, release, done };
   }
 
   it('a throw before the blocks are replaced shows the note as stored, and no save writes the replaced blocks back', async () => {
     let throwNext = false;
-    const { env, Storage, toasts, editor, release, done } = await revertWhileTyping(() => {
+    const { env, frozen, toasts, editor, release, done } = await revertWhileTyping(() => {
       const now = throwNext;
       throwNext = false;
       return now;
@@ -721,7 +723,7 @@ describe("a committed revert whose blocks don't reach the screen (review R77, P8
     assert.equal(await done(), 'resolved');
     assert.deepEqual([editor._savesHeld, editor._revertingNoteId, editor._revertInFlight], [false, null, false]);
     assert.equal(editor._hasPendingSave(), false);
-    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Milk', 'Eggs']);
+    assert.deepEqual((await storedBlocks(frozen, 'A')).map(([, content]) => content), ['Milk', 'Eggs']);
     assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs']);
     assert.deepEqual(toasts.at(-1), { message: 'Reverted to snapshot', kind: 'success' });
     assert.ok((await snapshotTexts(env, 'A')).includes('Typed'), 'what was typed is in version history');
@@ -729,14 +731,14 @@ describe("a committed revert whose blocks don't reach the screen (review R77, P8
 
   it("when the note as stored can't be shown either, the note goes back to what's on screen and the toast says so", async () => {
     let failing = false;
-    const { env, Storage, toasts, editor, release, done } = await revertWhileTyping(() => failing);
+    const { env, frozen, toasts, editor, release, done } = await revertWhileTyping(() => failing);
     failing = true;
     release();
     assert.equal(await done(), 'resolved');
     assert.deepEqual([editor._savesHeld, editor._revertingNoteId, editor._revertInFlight], [false, null, false]);
     assert.equal(editor._hasPendingSave(), false);
     assert.deepEqual(editor.blocks.map((b) => b.content), ['Typed', 'Eggs']);
-    assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['Typed', 'Eggs']);
+    assert.deepEqual((await storedBlocks(frozen, 'A')).map(([, content]) => content), ['Typed', 'Eggs']);
     assert.deepEqual(toasts.at(-1), { message: 'Failed to revert to snapshot', kind: 'error' });
     assert.ok((await snapshotTexts(env, 'A')).includes('Milk'), 'the snapshot is still in version history');
   });
@@ -749,7 +751,7 @@ describe('typing while an AI insert commits (review R70, 1.4.x misplaced the blo
         canvases: [note('A', { name: 'Plan' })],
         elements: [block('0-a', 'A', 0, 'One'), block('0-b', 'A', 1, 'Two'), block('0-c', 'A', 2, 'Three')],
       };
-      const { env, Storage } = await page({ records });
+      const { env, frozen } = await page({ records });
       const editor = makeEditor(env);
       await editor.loadNote('A');
       editor.activeBlock = '0-a';
@@ -774,13 +776,13 @@ describe('typing while an AI insert commits (review R70, 1.4.x misplaced the blo
       client.insertBlocks = real;
       env.clock.tick(2000);
       await runUntil(env, editor.flushSave());
-      assert.deepEqual((await storedBlocks(Storage, 'A')).map(([, content]) => content), ['One', 'New1', 'Two', 'Three typed']);
+      assert.deepEqual((await storedBlocks(frozen, 'A')).map(([, content]) => content), ['One', 'New1', 'Two', 'Three typed']);
       assert.deepEqual(editor.blocks.map((b) => b.content), ['One', 'New1', 'Two', 'Three typed']);
     });
   }
 
   it('an insert that is refused takes its blocks off the screen again', async () => {
-    const { env, Storage, toasts } = await page({ records: RECORDS });
+    const { env, frozen, toasts } = await page({ records: RECORDS });
     const editor = makeEditor(env);
     await editor.loadNote('A');
     editor.activeBlock = 'a1';

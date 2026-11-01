@@ -13,7 +13,7 @@ import { startMigrations } from '../../js/kernel/adapters/indexeddb/migrate.js';
 import { purgeRecoveryPoints } from '../../js/kernel/adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { runTransforms } from '../../js/kernel/adapters/indexeddb/transforms.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import { faultyFactory } from './storage-faults.mjs';

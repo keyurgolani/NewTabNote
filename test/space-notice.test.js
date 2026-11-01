@@ -8,7 +8,9 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, createDatabase, workerRun, settle, note, block, FakeDocument, startEditorClient } = require('./helpers/legacy-env');
+const {
+  createLegacyEnv, createDatabase, workerRun, settle, note, block, FakeDocument, startEditorClient, releaseStorage,
+} = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/ui/export-notice.js'];
 const UPGRADE = 'setting_storageUpgrade';
@@ -33,17 +35,15 @@ async function setup({ status = 'space-blocked', snoozedAt, upgraded = false } =
   if (status) env.chrome.local[UPGRADE] = { status, code: status === 'space-blocked' ? 'space-short' : null, at: Date.now() };
   if (snoozedAt !== undefined) env.chrome.local[SNOOZED] = snoozedAt;
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   // The page's settings port and what it knows of its database, as App gives the notices
   await startEditorClient(env);
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
-  return { env, Storage, toasts };
+  return { env, release: await releaseStorage(env), toasts };
 }
 
 /** A space notice as App makes it, on the page's settings port and its database's state */
-function spaceNotice(env, Storage, { exports = [true] } = {}) {
+function spaceNotice(env, { exports = [true] } = {}) {
   const calls = { exports: 0 };
   return new (env.get('SpaceNotice'))({
     settings: env.settingsClient,
@@ -75,24 +75,24 @@ const fire = (env, changes) => env.chrome.api.storage.onChanged.listeners.slice(
 describe('SpaceNotice.isDue', () => {
   it('is due while the upgrade waits for space, and not otherwise', async () => {
     for (const [status, due] of [['space-blocked', true], ['migrated', false], ['failed', false], [null, false]]) {
-      const { env, Storage } = await setup({ status });
-      assert.equal(await spaceNotice(env, Storage).isDue(), due, String(status));
+      const { env, release } = await setup({ status });
+      assert.equal(await spaceNotice(env).isDue(), due, String(status));
     }
   });
 
   it('Not now or Done puts it off for 7 days, and after that it shows again', async () => {
     const recent = await setup({ snoozedAt: Date.now() - 6 * DAY });
-    assert.equal(await spaceNotice(recent.env, recent.Storage).isDue(), false);
+    assert.equal(await spaceNotice(recent.env).isDue(), false);
     const old = await setup({ snoozedAt: Date.now() - 8 * DAY });
-    assert.equal(await spaceNotice(old.env, old.Storage).isDue(), true);
+    assert.equal(await spaceNotice(old.env).isDue(), true);
   });
 });
 
 describe('the space notice', () => {
   it("shows in #47's region and form, with Export JSON and Not now", async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     const card = noticeMarkup(env);
-    spaceNotice(env, Storage).show(card);
+    spaceNotice(env).show(card);
     assert.equal(shown(card), true);
     assert.equal(card.getAttribute('data-notice'), 'space-blocked');
     assert.equal(card.getAttribute('aria-labelledby'), 'export-notice-title');
@@ -101,9 +101,9 @@ describe('the space notice', () => {
   });
 
   it('Export JSON leads to the check step without the Export JSON sentence, and Done puts it off', async () => {
-    const { env, Storage } = await setup();
+    const { env, release } = await setup();
     const card = noticeMarkup(env);
-    spaceNotice(env, Storage).show(card);
+    spaceNotice(env).show(card);
     button(card, 'Export JSON').click();
     await settle();
     assert.deepEqual(texts(card), [TEXT.title, TEXT.confirm, TEXT.confirmContents]);
@@ -116,9 +116,9 @@ describe('the space notice', () => {
   });
 
   it('Not now puts it off, and a failed save of that keeps it and says so', async () => {
-    const { env, Storage, toasts } = await setup();
+    const { env, release, toasts } = await setup();
     const card = noticeMarkup(env);
-    spaceNotice(env, Storage).show(card);
+    spaceNotice(env).show(card);
     env.chrome.failNextSet();
     button(card, 'Not now').click();
     await settle();
@@ -133,7 +133,7 @@ describe('the space notice', () => {
   it('closes once the worker records another outcome, or another tab puts it off', async () => {
     const first = await setup();
     const card = noticeMarkup(first.env);
-    spaceNotice(first.env, first.Storage).show(card);
+    spaceNotice(first.env).show(card);
     first.env.chrome.local[UPGRADE] = { status: 'migrated', code: null, at: Date.now() };
     fire(first.env, { [UPGRADE]: { newValue: first.env.chrome.local[UPGRADE] } });
     await settle();
@@ -141,7 +141,7 @@ describe('the space notice', () => {
 
     const second = await setup();
     const other = noticeMarkup(second.env);
-    spaceNotice(second.env, second.Storage).show(other);
+    spaceNotice(second.env).show(other);
     fire(second.env, { [SNOOZED]: { newValue: Date.now() } });
     await settle();
     assert.equal(shown(other), false);
@@ -150,16 +150,16 @@ describe('the space notice', () => {
 
 describe('a space-blocked record the worker could not replace (review R79)', () => {
   it('says nothing once the database is at 9: the notice is not due', async () => {
-    const { env, Storage } = await setup({ status: 'space-blocked', upgraded: true });
+    const { env, release } = await setup({ status: 'space-blocked', upgraded: true });
     assert.equal(env.storageState.upgraded(), true);
-    assert.equal(await spaceNotice(env, Storage).isDue(), false);
+    assert.equal(await spaceNotice(env).isDue(), false);
   });
 });
 
 describe("#47's notice after the upgrade", () => {
   it('is never due on a database the worker has upgraded to 9, and records nothing', async () => {
-    const { env, Storage } = await setup({ status: 'migrated', upgraded: true });
-    await Storage.createNote('Holds something');
+    const { env, release } = await setup({ status: 'migrated', upgraded: true });
+    await release.createNote('Holds something');
     assert.equal(env.storageState.upgraded(), true);
     const notice = new (env.get('ExportNotice'))({
       settings: env.settingsClient,
