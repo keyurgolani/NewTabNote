@@ -415,6 +415,36 @@ function createLockManager() {
   };
 }
 
+// ─── localStorage stub ───
+
+/**
+ * Web Storage, as an extension page's localStorage: synchronous, string values, keys in
+ * insertion order. Share one between environments to model pages of the same origin. With
+ * `quota`, a setItem that would take the stored keys and values past that many characters
+ * throws QuotaExceededError and stores nothing, as Chrome's does.
+ * @param {{quota?: number}} [options]
+ */
+function createLocalStorage({ quota = Infinity } = {}) {
+  const items = new Map();
+  const size = () => [...items].reduce((total, [key, value]) => total + key.length + value.length, 0);
+  return {
+    get length() { return items.size; },
+    key(index) { return [...items.keys()][index] ?? null; },
+    getItem(key) { return items.has(String(key)) ? items.get(String(key)) : null; },
+    setItem(key, value) {
+      const name = String(key);
+      const text = String(value);
+      const before = items.has(name) ? name.length + items.get(name).length : 0;
+      if (size() - before + name.length + text.length > quota) {
+        throw new DOMException(`Setting the value of '${name}' exceeded the quota.`, 'QuotaExceededError');
+      }
+      items.set(name, text);
+    },
+    removeItem(key) { items.delete(String(key)); },
+    clear() { items.clear(); },
+  };
+}
+
 // ─── BroadcastChannel stub ───
 
 /**
@@ -573,6 +603,9 @@ function createChromeStub() {
  *   environment, or pass null for a context without it
  * @param {ReturnType<typeof createChannelBus>} [options.channels] - share BroadcastChannel with another
  *   environment, as two new tabs do
+ * @param {ReturnType<typeof createLocalStorage>|null} [options.localStorage] - share localStorage with
+ *   another page, as the extension's pages share it, or pass null for a page without it. A
+ *   worker never has one.
  */
 function createLegacyEnv(options = {}) {
   const kind = options.context || 'page';
@@ -582,6 +615,7 @@ function createLegacyEnv(options = {}) {
   const chrome = options.chrome || createChromeStub();
   const locks = options.locks === null ? undefined : (options.locks || createLockManager());
   const channels = options.channels || createChannelBus();
+  const localStorage = kind === 'page' && options.localStorage !== null ? (options.localStorage || createLocalStorage()) : undefined;
   const logs = [];
   const record = (level) => (...args) => { logs.push({ level, args }); };
   const quietConsole = {
@@ -610,7 +644,9 @@ function createLegacyEnv(options = {}) {
     BroadcastChannel: channels.BroadcastChannel,
     navigator: { maxTouchPoints: 0, userAgent: 'node-test', locks },
     location: { reload() { sandbox.__reloads = (sandbox.__reloads || 0) + 1; } },
+    DOMException,
   };
+  if (localStorage) sandbox.localStorage = localStorage;
 
   let document = null;
   let windowTarget = null;
@@ -1005,6 +1041,7 @@ module.exports = {
   createLegacyEnv,
   createChromeStub,
   createLockManager,
+  createLocalStorage,
   createChannelBus,
   makeEditor,
   runUntil,

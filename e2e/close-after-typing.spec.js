@@ -1,6 +1,6 @@
 /**
  * Text typed into a block, with the tab closed before the save's 500 ms debounce fires, is
- * there when the note opens again (#142). The editor's pagehide flush writes what's pending,
+ * there when the note opens again (#33). The editor's pagehide flush writes what's pending,
  * and a page that goes runs no more callbacks: Chrome aborts a transaction the page hasn't
  * committed, so the flush commits its block puts at once. Each round closes the tab with its
  * beforeunload and pagehide handlers run, as a user's close does. The test also fails on an

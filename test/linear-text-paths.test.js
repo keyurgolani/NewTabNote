@@ -86,27 +86,38 @@ const seeded = (pieces, count) => {
 const differences = (fn, old, values) => values.filter(value => outcome(fn, value) !== outcome(old, value)).slice(0, 5);
 
 /**
- * How long one call takes, the fastest of three
+ * The time of one call, in ms
  * @param {(value: string) => unknown} fn
  * @param {string} value
  */
-const timeOf = (fn, value) => {
-  let best = Number.POSITIVE_INFINITY;
-  for (let k = 0; k < 3; k++) {
-    const start = performance.now();
-    fn(value);
-    best = Math.min(best, performance.now() - start);
-  }
-  return best;
+const timeOnce = (fn, value) => {
+  const start = performance.now();
+  fn(value);
+  return performance.now() - start;
 };
 
 /**
  * Whether `fn` grows linearly on inputs `make` builds: four times the input takes well under
- * the sixteen times a quadratic read would
+ * the sixteen times a quadratic read would. The two sizes take turns, five calls each, and each
+ * keeps its best, so a busy machine slows both alike. The measure runs up to three times, so one
+ * stalled attempt doesn't decide it; a quadratic read misses every attempt.
  * @param {(value: string) => unknown} fn
  * @param {(n: number) => string} make
  */
-const linear = (fn, make) => timeOf(fn, make(80_000)) < Math.max(timeOf(fn, make(20_000)) * 8, 50);
+const linear = (fn, make) => {
+  const small = make(20_000);
+  const large = make(80_000);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let bestSmall = Number.POSITIVE_INFINITY;
+    let bestLarge = Number.POSITIVE_INFINITY;
+    for (let k = 0; k < 5; k++) {
+      bestSmall = Math.min(bestSmall, timeOnce(fn, small));
+      bestLarge = Math.min(bestLarge, timeOnce(fn, large));
+    }
+    if (bestLarge < Math.max(bestSmall * 8, 50)) return true;
+  }
+  return false;
+};
 
 const WIKI_PIECES = ['[', '[[', ']', ']]', '[[a]]', '[[ b ]]', 'x', ' ', '\n', '\t', ' ', '[[]]', ']]]', '[[[', 'a]b'];
 const MARKDOWN_PIECES = [

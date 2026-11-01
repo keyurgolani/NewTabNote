@@ -396,7 +396,7 @@ describe('a version-9 database (AC7)', () => {
     assert.equal(guard.querySelector('p').textContent, GUARD_BODY);
     const buttons = guard.querySelectorAll('button');
     assert.deepEqual(buttons.map((b) => [b.textContent, b.type]), [['Export', 'button'], ['Reload', 'button']]);
-    assert.equal(env.document.activeElement, buttons[0]);
+    assert.ok(env.document.activeElement === buttons[0], 'focus is on Export');
 
     buttons[0].click();
     await waitFor(() => downloads.length > 0, { message: 'raw export download' });

@@ -1247,6 +1247,9 @@
   <input type="file" id="image-input" accept="image/*" class="hidden">
   <input type="file" id="file-input" class="hidden">
 
+  <!-- The toasts' live region (Utils.showToast), empty from the start, so a screen reader reads the first toast too -->
+  <div class="toast-container" aria-live="polite" role="status"></div>
+
   <script src="js/lib/fuse.js"></script>
   <script src="js/lib/jszip.min.js"></script>
   <script src="js/lib/chart.js"></script>

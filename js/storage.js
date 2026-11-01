@@ -1232,6 +1232,25 @@ class DatabaseManager {
    * Permanently delete note (used for emptying trash)
    */
   async permanentlyDeleteNote(id) {
+    // Its close-time drafts go first (#33): the last edit of a note deleted for good isn't kept
+    // anywhere, no new tab tells about it as a recovered note, and a start applying drafts while
+    // this deletes finds them gone. A delete that fails puts them back, so the note keeps its edit.
+    const drafts = typeof CloseDrafts === 'undefined' ? undefined : CloseDrafts.pageStorage();
+    const cleared = drafts === undefined ? null : CloseDrafts.clearNotes(drafts, [id]);
+    try {
+      await this._deleteNoteForGood(id);
+    } catch (error) {
+      if (cleared) CloseDrafts.putBack(drafts, cleared);
+      throw error;
+    }
+  }
+
+  /**
+   * permanentlyDeleteNote's deletes: the note's blocks, media, vectors, snapshots and record
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  async _deleteNoteForGood(id) {
     // Delete all elements for this note
     await this.deleteElementsByNote(id);
     // Delete all media for this note
@@ -1384,7 +1403,7 @@ class DatabaseManager {
    *
    * A closing page (the editor's pagehide flush) runs no more callbacks, and Chrome aborts
    * a transaction the page hasn't committed as the page goes, so with `closing` the blocks
-   * are put and committed at once, in a transaction over the blocks alone (#142). The note's
+   * are put and committed at once, in a transaction over the blocks alone (#33). The note's
    * record, which the read has to come back for, keeps what it had until the note's next
    * save. A note deleted since the editor last saved gets the blocks with no note to show
    * them, so the editor writes nothing on close for a note it has found gone. The commit is
@@ -1421,7 +1440,7 @@ class DatabaseManager {
           elementStore.put(element);
         }
         if (closing) {
-          // The page is going: the blocks are all this writes, and they commit now (#142)
+          // The page is going: the blocks are all this writes, and they commit now (#33)
           if (typeof tx.commit === 'function') tx.commit();
           return;
         }

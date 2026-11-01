@@ -39,6 +39,8 @@ const NON_TEXT_INPUTS = ['button', 'checkbox', 'color', 'file', 'hidden', 'image
  * @property {Array<Object>|null} blocks - Serialized blocks with `canvasId` and `order` set, once taken
  * @property {boolean} written - True once this state's transaction has been opened
  * @property {boolean} isRetry - The retry after a failed save; failing again shows the error toast
+ * @property {number} [stamped] - The `updatedAt` its save stamped as it opened the transaction (#33)
+ * @property {string} [savedName] - The note's name then
  */
 
 /** The note icon the wiki-link and template pickers show, packaged markup */
@@ -63,6 +65,29 @@ let ownBlockDragToken = null;
 function newBlockDragToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Every editor this page built: the new tab's two panes and the pop-out's (#33). The page's own
+ * close writes a close-time draft for each one holding an edit it hasn't seen commit, before any
+ * of them issues its closing write (BlockEditor._writeCloseDraft).
+ * @type {Set<BlockEditor>}
+ */
+const pageEditors = new Set();
+
+/** Whether this page listens for its own close, to write its editors' close-time drafts */
+let closeDraftsBound = false;
+
+/** At the page's own close: each editor's close-time draft, the pop-out's included (#33) */
+function writeCloseDrafts() {
+  for (const editor of pageEditors) {
+    try {
+      editor._writeCloseDraft();
+    } catch (error) {
+      // Never out of pagehide: the editors' closing writes still run
+      console.warn('A close-time draft was skipped:', error);
+    }
+  }
 }
 
 class BlockEditor {
@@ -322,6 +347,7 @@ class BlockEditor {
     this.blocks = blocksData
       .sort((a, b) => (a.order || 0) - (b.order || 0))
       .map((data) => Block.deserialize(data));
+    this._rememberLoaded();
 
     // Clear undo/redo stacks for new note
     this.undoStack.length = 0;
@@ -3775,6 +3801,15 @@ class BlockEditor {
     this._savingAsNew = null;
     /** @type {Set<string>} Deleted notes whose text "Save as a new note" saved under a new ID */
     this._rescuedIds = new Set();
+    /**
+     * Each note's last save this editor saw commit, or its load: the name, the stored
+     * `updatedAt`, and a digest of each block, with every `updatedAt` this editor's saves of it
+     * stamped since. A close-time draft holds what changed since, and counts a stored note
+     * with one of those stamps as this editor's own write (#33). Kept for the loaded note and
+     * for each note with a save in flight or waiting to retry.
+     * @type {Map<string, {name: (string|undefined), updatedAt: (number|null), blocks: Map<string, string>, issued: Array<number>}>}
+     */
+    this._committed = new Map();
   }
 
   /**
@@ -3931,16 +3966,148 @@ class BlockEditor {
    */
   _takeBlockSnapshot(state) {
     if (this.noteId !== state.noteId || !this.noteData) return false;
-    const noteId = state.noteId;
     state.noteData = this.noteData;
-    state.blocks = this.blocks.map((block, index) => {
+    state.blocks = this._serializedBlocks(state.noteId);
+    return true;
+  }
+
+  /**
+   * The loaded note's blocks as a save writes them
+   * @param {string} noteId
+   * @returns {Array<any>}
+   */
+  _serializedBlocks(noteId) {
+    return this.blocks.map((block, index) => {
       const data = block.serialize();
       // Field name 'canvasId' kept for backward compatibility
       data.canvasId = noteId;
       data.order = index;
       return data;
     });
-    return true;
+  }
+
+  /**
+   * @param {Array<any>} blocks - serialized, as a save writes them
+   * @returns {Map<string, string>} each block's digest, by ID
+   */
+  _digests(blocks) {
+    return new Map(blocks.map((block) => [block.id, CloseDrafts.digest(block)]));
+  }
+
+  /**
+   * The loaded note is what's stored, as the editor read it: what a close-time draft holds is
+   * what changes from here (#33). Notes with nothing in flight or waiting to retry are
+   * forgotten.
+   * @returns {void}
+   */
+  _rememberLoaded() {
+    if (typeof CloseDrafts === 'undefined') return;
+    const holding = new Set([this.noteId, ...this._retryCopies.keys()]);
+    for (const { state } of this._inFlightSaves) holding.add(state.noteId);
+    for (const noteId of this._committed.keys()) {
+      if (!holding.has(noteId)) this._committed.delete(noteId);
+    }
+    this._committed.set(this.noteId, {
+      name: this.noteData.name,
+      updatedAt: typeof this.noteData.updatedAt === 'number' ? this.noteData.updatedAt : null,
+      blocks: this._digests(this._serializedBlocks(this.noteId)),
+      issued: [],
+    });
+  }
+
+  /**
+   * A save of `state` committed: it's what's stored now, as far as this editor knows. Only the
+   * stamps of saves issued after it stay its own writes still to come.
+   * @param {EditorSaveState} state
+   * @returns {void}
+   */
+  _sawCommit(state) {
+    const committed = this._committed.get(state.noteId);
+    if (!committed || typeof state.stamped !== 'number' || !state.blocks) return;
+    committed.updatedAt = state.stamped;
+    committed.name = state.savedName;
+    committed.blocks = this._digests(state.blocks);
+    committed.issued = committed.issued.filter((stamp) => stamp > state.stamped);
+  }
+
+  /**
+   * True when the loaded note has an edit this editor hasn't seen commit: one waiting on the
+   * debounce or held by an import, a save waiting for its frame or in flight, or a failed save
+   * waiting to retry
+   * @returns {boolean}
+   */
+  _holdsUncommittedEdit() {
+    if (!this.noteId || !this.noteData || this.noteGone) return false;
+    if (this._loadedDue || this._retryCopies.has(this.noteId)) return true;
+    return this._activeSaves().some(({ state }) => state.noteId === this.noteId);
+  }
+
+  /**
+   * At the page's own close, before anything issues its closing write: one close-time draft for
+   * each note this editor holds an edit of that it hasn't seen commit, written to localStorage
+   * at once, which a closing page always manages, whatever IndexedDB is doing. The next start
+   * applies it (js/close-drafts.js). A draft that doesn't fit is skipped, and the closing write
+   * still runs. Nothing for a note the editor found deleted.
+   * @returns {void}
+   */
+  _writeCloseDraft() {
+    if (typeof CloseDrafts === 'undefined') return;
+    const storage = CloseDrafts.pageStorage();
+    if (!storage) return;
+    /** @type {Map<string, EditorSaveState>} The newest copy in flight or waiting to retry of each note the editor left */
+    const left = new Map();
+    const take = (/** @type {EditorSaveState} */ state) => {
+      if (state.noteId === this.noteId || !state.blocks || this._isSuperseded(state)) return;
+      const kept = left.get(state.noteId);
+      if (!kept || kept.seq < state.seq) left.set(state.noteId, state);
+    };
+    for (const { state } of this._activeSaves()) take(state);
+    for (const copy of this._retryCopies.values()) take(copy);
+
+    const drafts = [];
+    if (this._holdsUncommittedEdit()) drafts.push(this._closeDraftOf(this.noteId, this.noteData, this._serializedBlocks(this.noteId)));
+    for (const state of left.values()) drafts.push(this._closeDraftOf(state.noteId, state.noteData, state.blocks));
+    for (const draft of drafts) {
+      if (draft) CloseDrafts.write(storage, draft);
+    }
+  }
+
+  /**
+   * The close-time draft of `noteId`'s edit: the blocks changed since the last save this editor
+   * saw commit, the ones deleted since, and the title when it changed since
+   * @param {string} noteId
+   * @param {any} noteData
+   * @param {Array<any>} blocks - serialized, as a save writes them
+   * @returns {Object|null} null when nothing changed
+   */
+  _closeDraftOf(noteId, noteData, blocks) {
+    const committed = this._committed.get(noteId) || null;
+    const changed = committed
+      ? blocks.filter((block) => committed.blocks.get(block.id) !== CloseDrafts.digest(block))
+      : blocks;
+    const present = new Set(blocks.map((block) => block.id));
+    const deleted = committed ? [...committed.blocks.keys()].filter((id) => !present.has(id)) : [];
+    const renamed = !committed || noteData.name !== committed.name;
+    if (committed && changed.length === 0 && deleted.length === 0 && !renamed) return null;
+    const meta = this._computeSaveData(blocks);
+    const draft = CloseDrafts.draftOf({
+      noteId,
+      base: {
+        revision: null,
+        updatedAt: committed ? committed.updatedAt : null,
+        issued: committed ? [...committed.issued] : [],
+      },
+      blocks: changed,
+      deletedBlockIds: deleted,
+      preview: meta.preview,
+      todoProgress: meta.todoProgress,
+      linkedNames: Utils.extractWikiLinks(meta.text),
+    });
+    if (renamed && typeof noteData.name === 'string') {
+      draft.name = noteData.name;
+      draft.titleOrigin = noteData.titleManuallySet ? 'typed' : 'generated';
+    }
+    return draft;
   }
 
   /**
@@ -3995,6 +4162,7 @@ class BlockEditor {
         this._onNoteGone(state);
         return;
       }
+      this._sawCommit(state);
       await this._afterSaveWrite(state, meta.text);
     } catch (error) {
       this._onSaveFailed(error, state);
@@ -4055,7 +4223,17 @@ class BlockEditor {
     if ((this._writtenSeq.get(state.noteId) || 0) < state.seq) {
       this._writtenSeq.set(state.noteId, state.seq);
     }
-    return editorStorage().saveNoteWithBlocks(state.noteData, state.blocks, { closing });
+    const saving = editorStorage().saveNoteWithBlocks(state.noteData, state.blocks, { closing });
+    if (!closing) {
+      // saveNoteWithBlocks stamps updatedAt as it opens the transaction: a stored note with
+      // this stamp is this editor's own write, for a close-time draft written later (#33)
+      const record = /** @type {any} */ (state.noteData);
+      state.stamped = record.updatedAt;
+      state.savedName = record.name;
+      const committed = this._committed.get(state.noteId);
+      if (committed && typeof state.stamped === 'number') committed.issued.push(state.stamped);
+    }
+    return saving;
   }
 
   /**
@@ -4133,17 +4311,27 @@ class BlockEditor {
    */
   _bindLifecycleFlush() {
     const doc = this.doc;
+    pageEditors.add(this);
     doc.addEventListener('visibilitychange', () => {
       if (doc.visibilityState === 'hidden') this._writePendingNow();
     });
     const win = doc.defaultView;
     if (win) {
-      // A page that goes runs no more callbacks, so what this writes commits at once (#142).
+      // A page that goes runs no more callbacks, so what this writes commits at once (#33).
       // Only this page's own close is one: the pop-out's (Document PiP) editor lives in the
       // pop-out's document, and when the pop-out closes, this page and its connection stay, so
       // its pending save is written whole, title included. In a page, doc === document exactly
       // when win === window.
       const ownPage = doc === document;
+      // The page's own close writes every editor's close-time draft, the pop-out's included,
+      // before any of them issues its closing write, which can't commit while another page's
+      // transaction holds the blocks (#33). Bound once, ahead of every editor's own listener.
+      if (ownPage && !closeDraftsBound) {
+        closeDraftsBound = true;
+        win.addEventListener('pagehide', (event) => {
+          if (!event.persisted) writeCloseDrafts();
+        });
+      }
       win.addEventListener('pagehide', (event) => this._writePendingNow({ closing: ownPage && !event.persisted }));
     }
   }
@@ -4171,7 +4359,7 @@ class BlockEditor {
     for (const copy of work.others) this._rewrite(copy, closing);
     if (!work.loaded && waiting.length === 0) return;
     // A closing write commits without the read that finds a deleted note gone, so a note this
-    // editor already found deleted stays deleted, its blocks included (#142)
+    // editor already found deleted stays deleted, its blocks included (#33)
     if (closing && this.noteGone) return;
 
     const isRetry = work.loaded ? work.loadedIsRetry : waiting.every((state) => state.isRetry);
@@ -4204,7 +4392,11 @@ class BlockEditor {
       const meta = this._computeSaveData(state.blocks);
       this._applySaveMeta(state, meta);
       work = this._writeSaveState(state, closing).then((saved) => {
-        if (saved) return this._afterSaveWrite(state, meta.text);
+        if (saved) {
+          // A closing write stores the blocks alone, so the note's record isn't what it wrote
+          if (!closing) this._sawCommit(state);
+          return this._afterSaveWrite(state, meta.text);
+        }
         this._onNoteGone(state);
         return undefined;
       });
@@ -4346,6 +4538,11 @@ class BlockEditor {
     this.noteId = note.id;
     this.noteData = note;
     for (const block of this.blocks) block.id = Utils.generateId();
+    // The new note is stored with no blocks, so a close-time draft holds all of them (#33)
+    this._committed.delete(goneId);
+    if (typeof CloseDrafts !== 'undefined') {
+      this._committed.set(note.id, { name: note.name, updatedAt: note.updatedAt, blocks: new Map(), issued: [] });
+    }
     // Undo history points at the old IDs, and the blocks render again under the new ones
     this.undoStack.length = 0;
     this.redoStack.length = 0;

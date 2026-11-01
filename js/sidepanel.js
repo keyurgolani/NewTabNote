@@ -191,6 +191,11 @@ async function init() {
   const storage = new SidePanelStorage();
   try {
     await storage.init();
+    // The edits a closed tab left as close-time drafts, before the summary reads the notes
+    // (#33). A recovered note this makes is the next new tab's to tell about.
+    if (typeof CloseDrafts !== 'undefined') {
+      await CloseDrafts.apply({ db: storage.db }).catch((error) => console.error('Close-time drafts were not applied:', error));
+    }
     const notes = await storage.getAllNotes();
     const summary = InsightsSummary.buildInsightsSummary(notes, { maxItems: 8 });
     renderSummary(summary);

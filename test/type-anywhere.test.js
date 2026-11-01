@@ -614,14 +614,14 @@ describe('BlockEditor.focusBlock', () => {
   it('puts the caret at the end of the block it focused', () => {
     const { instance, content, carets, doc } = blockEditor(true);
     instance.focusBlock('b1', true);
-    assert.equal(doc.activeElement, content);
-    assert.deepEqual(carets, [content]);
+    assert.ok(doc.activeElement === content, 'focus is on the block');
+    assert.ok(carets.length === 1 && carets[0] === content, 'one caret, at the end of the block');
   });
 
   it('leaves the caret alone when the block couldn\'t take focus, as in a hidden pane', () => {
     const { instance, content, carets, doc } = blockEditor(false);
     instance.focusBlock('b1', true);
-    assert.notEqual(doc.activeElement, content);
+    assert.ok(doc.activeElement !== content, 'focus is not on the block');
     assert.deepEqual(carets, []);
   });
 });
