@@ -102,43 +102,60 @@ function pageFiles() {
 }
 
 /**
- * Each call a page makes that sends a guarded command, as `Class.method` with the command it
+ * Each call `sources` make that sends a guarded command, as `Class.method` with the command it
  * sends: a document client method, removeNotes with the command's type, or one of the
- * facade's writes on a handle. A method is a class's method at two spaces in, as every page
- * class holds its methods.
+ * facade's writes on a handle, each matched across lines, so a call split over two lines counts
+ * (R131). A method is a class's method at two spaces in, as every page class holds its methods.
+ * @param {Array<[string, string]>} sources - each file's path and text
  * @returns {Map<CommandType, string[]>}
  */
-function pageCallers() {
+function callersIn(sources) {
   /** @type {Map<CommandType, string[]>} */
   const callers = new Map();
-  for (const file of pageFiles()) {
-    const lines = fs.readFileSync(path.join(ROOT, file), 'utf8').split('\n');
+  for (const [, text] of sources) {
+    // The class and method each line is in, and where each line starts
+    /** @type {string[]} */
+    const inside = [];
+    /** @type {number[]} */
+    const starts = [];
     let className = '';
     let method = '';
-    for (const line of lines) {
+    let offset = 0;
+    for (const line of text.split('\n')) {
       const declared = /^(?:export )?class (\w+)/.exec(line);
       if (declared) className = declared[1];
       const header = /^ {2}(?:async |static )*(?:get |set )?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/.exec(line);
       if (header && !['if', 'for', 'while', 'switch', 'catch'].includes(header[1])) method = header[1];
-      /** @type {CommandType[]} */
-      const sent = [];
-      for (const match of line.matchAll(/documentClient\.(\w+)\(/g)) {
-        if (Object.hasOwn(CLIENT_METHODS, match[1])) sent.push(CLIENT_METHODS[match[1]]);
-      }
-      for (const match of line.matchAll(/removeNotes\(\{\s*type: '(\w+)'/g))
-        sent.push(/** @type {CommandType} */ (match[1]));
-      for (const match of line.matchAll(/\bstorage\.(\w+)\(/g)) {
-        if (Object.hasOwn(FACADE_METHODS, match[1])) sent.push(FACADE_METHODS[match[1]]);
-      }
-      for (const type of sent) {
-        const list = callers.get(type) || [];
-        list.push(`${className}.${method}`);
-        callers.set(type, list);
-      }
+      inside.push(`${className}.${method}`);
+      starts.push(offset);
+      offset += line.length + 1;
+    }
+    /**
+     * @param {number} index - where a call starts in the text
+     * @param {CommandType} type
+     */
+    const sent = (index, type) => {
+      let line = 0;
+      while (line + 1 < starts.length && starts[line + 1] <= index) line += 1;
+      const list = callers.get(type) || [];
+      list.push(inside[line]);
+      callers.set(type, list);
+    };
+    for (const match of text.matchAll(/documentClient\s*\.\s*(\w+)\s*\(/g)) {
+      if (Object.hasOwn(CLIENT_METHODS, match[1])) sent(match.index, CLIENT_METHODS[match[1]]);
+    }
+    for (const match of text.matchAll(/removeNotes\(\s*\{\s*type:\s*'(\w+)'/g)) {
+      sent(match.index, /** @type {CommandType} */ (match[1]));
+    }
+    for (const match of text.matchAll(/\bstorage\s*\.\s*(\w+)\s*\(/g)) {
+      if (Object.hasOwn(FACADE_METHODS, match[1])) sent(match.index, FACADE_METHODS[match[1]]);
     }
   }
   return callers;
 }
+
+/** Each call a page file makes that sends a guarded command (callersIn) */
+const pageCallers = () => callersIn(pageFiles().map(file => [file, fs.readFileSync(path.join(ROOT, file), 'utf8')]));
 
 describe("#17's AC1: every writer's scope and guard", () => {
   it('names every catalog command once', () => {
@@ -162,6 +179,31 @@ describe("#17's AC1: every writer's scope and guard", () => {
         assert.deepEqual(paths, [], type);
       }
     }
+  });
+
+  it('finds a call split over lines, as one on a line (R131)', () => {
+    const page = [
+      'class Panel {',
+      '  async save(state) {',
+      '    await this.documentClient',
+      '      .saveContent(state);',
+      '    this.documentClient.renameNote(',
+      "      'n1',",
+      '    );',
+      '  }',
+      '',
+      '  trash() {',
+      '    return this.removal.removeNotes({',
+      "      type: 'trashNote',",
+      '    });',
+      '  }',
+      '}',
+    ].join('\n');
+    assert.deepEqual(Object.fromEntries(callersIn([['js/panel.js', page]])), {
+      saveNoteContent: ['Panel.save'],
+      renameNote: ['Panel.save'],
+      trashNote: ['Panel.trash'],
+    });
   });
 
   it('every page caller of a guarded command is the one the table names, and none sends a version', () => {

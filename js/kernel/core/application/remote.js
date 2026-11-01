@@ -1,8 +1,9 @@
 /**
  * Remote changes (#17 PR 4b, the lead's Q2): notes as another profile has them, which #19's
- * sync engine sends. Sync has never applied one: DatabaseManager defines neither of the methods
- * its apply paths call (scripts/write-paths.js, UNDEFINED_WRITES), so those paths stay as they
- * are, and nothing sends these commands until #19 does.
+ * sync engine sends. Sync has never applied one: DatabaseManager never defined importNote or
+ * importAll, so Keep both throws at its first importNote, before its saveElement, and a remote
+ * apply finds no importAll and logs a skip (scripts/write-paths.js, UNDEFINED_WRITES). Those
+ * paths stay as they are, and nothing sends these commands until #19 does.
  *
  * applyRemoteChanges takes a note at a time, so one note's conflict leaves the others to land,
  * and answers with an outcome per note, which says what each part did (noteOutcome). Each
