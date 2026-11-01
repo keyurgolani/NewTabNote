@@ -342,31 +342,47 @@ describe('the producers that take outside text, in a new tab (#14 slice 2)', () 
     ]);
   });
 
+  /** A drag's data, as a DataTransfer holds it */
+  const transfer = (entries = {}) => {
+    const data = new Map(Object.entries(entries));
+    return { setData: (type, value) => data.set(type, value), getData: type => data.get(type) ?? '', get types() { return [...data.keys()]; } };
+  };
+  /** A block's element, as the editor's drag handlers read it */
+  const blockEl = id => ({ dataset: { id }, classList: { add() {}, remove() {} } });
+  /** A drag of block `id` the page's editor starts */
+  const startDrag = (editor, id) => {
+    const data = transfer();
+    editor.onDragStart({ target: { closest: () => blockEl(id) }, dataTransfer: data });
+    return data;
+  };
+  /** `dataTransfer` dropped on the sidebar's list, which makes a note of it */
+  const dropOnSidebar = (env, sidebar, dataTransfer) => runUntil(env, sidebar._onSidebarDrop({ dataTransfer, preventDefault() {}, stopPropagation() {}, target: { closest: () => null } }));
+  /** The content of every stored block in the notes named `name` */
+  const contentsNamed = async (env, name) => {
+    const ids = (await storedNotes(env)).filter(n => n.name === name).map(n => n.id);
+    return (await storedBlocks(env)).filter(b => ids.includes(b.canvasId)).map(b => b.content);
+  };
+
   it("a block dropped on the sidebar keeps its markup only when this page's editor started the drag, and any other drag's markup is stored as text", async () => {
     const { env, page, sidebar } = await openPage();
     const editor = page.tabs.editor;
     editor.getBlockById('a1').content = '<b>Kept</b>';
-    /** A drag's data, as a DataTransfer holds it */
-    const transfer = (entries = {}) => {
-      const data = new Map(Object.entries(entries));
-      return { setData: (type, value) => data.set(type, value), getData: type => data.get(type) ?? '', get types() { return [...data.keys()]; } };
-    };
-    const drop = dataTransfer => runUntil(env, sidebar._onSidebarDrop({ dataTransfer, preventDefault() {}, stopPropagation() {}, target: { closest: () => null } }));
-    const contentsOf = async name => {
-      const ids = (await storedNotes(env)).filter(n => n.name === name).map(n => n.id);
-      return (await storedBlocks(env)).filter(b => ids.includes(b.canvasId)).map(b => b.content);
-    };
+    // The editor stays on note A, so each drag below is of its block
+    sidebar.onOpenNoteInNewTab = async () => {};
+    const drop = dataTransfer => dropOnSidebar(env, sidebar, dataTransfer);
+    const contentsOf = name => contentsNamed(env, name);
 
     // A drag the page's editor started, dropped while it lasts
-    const own = transfer();
-    const blockEl = { dataset: { id: 'a1' }, classList: { add() {}, remove() {} } };
-    editor.onDragStart({ target: { closest: () => blockEl }, dataTransfer: own });
+    const own = startDrag(editor, 'a1');
     await drop(own);
     assert.deepEqual(await contentsOf('Kept'), ['<b>Kept</b>']);
-    // The same data once that drag has ended
-    editor.onDragEnd({});
+    // Its data dropped again: the drop that read its token used it up
     await drop(own);
-    assert.deepEqual((await contentsOf('Kept')).sort(), ['&lt;b&gt;Kept&lt;/b&gt;', '<b>Kept</b>']);
+    // A drag that ended without a drop
+    const ended = startDrag(editor, 'a1');
+    editor.onDragEnd({});
+    await drop(ended);
+    assert.deepEqual((await contentsOf('Kept')).sort(), ['&lt;b&gt;Kept&lt;/b&gt;', '&lt;b&gt;Kept&lt;/b&gt;', '<b>Kept</b>']);
 
     // Drags from anywhere else, with or without a token of their own
     const foreign = { 'application/x-block-content': 'Foreign', 'application/x-block-type': 'text', 'application/x-block-html': '<i>Foreign</i> <u>x</u>' };
@@ -379,6 +395,19 @@ describe('the producers that take outside text, in a new tab (#14 slice 2)', () 
     // A drag with text alone is its text, escaped, from anywhere
     await drop(transfer({ 'application/x-block-content': 'a < b', 'application/x-block-type': 'text' }));
     assert.deepEqual(await contentsOf('a < b'), ['a &lt; b']);
+  });
+
+  it("a reorder in the editor leaves no drag token, though the drag's end lands on a block the reorder re-rendered", async () => {
+    const { env, page, sidebar } = await openPage();
+    const editor = page.tabs.editor;
+    editor.getBlockById('a1').content = '<b>Moved</b>';
+    editor.blocks.push(new (env.get('Block'))({ id: 'a2', type: 'text', content: 'second' }));
+    const data = startDrag(editor, 'a1');
+    editor.onDrop({ preventDefault() {}, dataTransfer: data, target: { closest: () => blockEl('a2') } });
+    assert.deepEqual(editor.blocks.map(b => b.id), ['a2', 'a1']);
+    // No dragend reaches the editor, since the element it lands on is gone
+    await dropOnSidebar(env, sidebar, data);
+    assert.deepEqual(await contentsNamed(env, 'Moved'), ['&lt;b&gt;Moved&lt;/b&gt;']);
   });
 
   it("an inline AI action: the reply goes into the block as its text, and a block that wouldn't decode keeps its content", async () => {

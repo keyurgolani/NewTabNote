@@ -128,6 +128,17 @@ describe('the render-sink ledger (security/render-sinks.json)', () => {
     ]);
   });
 
+  it("finds setAttribute('srcdoc'), and no other attribute", () => {
+    const found = scanSource(`
+      function frame(el, html) { el.setAttribute('srcdoc', html); el['setAttribute']('SRCDOC', '<p></p>'); }
+      function other(el, html) { el.setAttribute('title', html); el.setAttribute('srcdoc', ''); }
+    `);
+    assert.deepEqual(found.map(({ sink, kind, function: name }) => [sink, kind, name]), [
+      ['setAttribute srcdoc', 'dynamic', 'frame'],
+      ['setAttribute srcdoc', 'static', 'frame'],
+    ]);
+  });
+
   it('finds execCommand with a command that is not a literal, unless it is given no value', () => {
     const found = scanSource(`
       function any(doc, command, html) { doc.execCommand(command, false, html); }
