@@ -70,6 +70,21 @@ function shown({ part, host }) {
   };
 }
 
+/** A button's shown label: its first span when it keeps the width of a second label */
+const labelOf = (button) => (button.children.length === 2 ? button.children[0].textContent : button.textContent);
+
+/**
+ * The shown buttons by their slot, from where the buttons start (the row's end beside the words,
+ * the line's start under them): "slot:label", with "·" for a place kept empty at Try again's width
+ */
+function slots({ part }) {
+  return [part.tryButton, part.reloadButton, part.anywayButton, part.spacer]
+    .filter((item) => item && !item.hidden)
+    .map((item) => [Number(item.dataset.slot), item === part.spacer ? '·' : labelOf(item)])
+    .sort(([a], [b]) => a - b)
+    .map(([at, label]) => `${at}:${label}`);
+}
+
 /** Everything the live region says from now on, in order, without the emptying before each */
 function sayings(part) {
   const words = [];
@@ -297,45 +312,95 @@ describe('PartState (js/ui/part-state.js)', () => {
     assert.deepEqual(ctx.seen.reloads, ['guarded', 'guarded', 'now']);
   });
 
-  it("Try again after a failed save says it's saving while the guards run, and says the failure again when the save fails again", async () => {
+  it("Try again after a failed save reads Saving… at its own width while the guards run, and a save that fails again says so in its own words", async () => {
     const failed = "Failed to save your changes, so the page didn't reload.";
     const tryLine = 'Please try again. If it keeps failing, copy anything you need, then reload.';
+    const failedAgain = "Failed to save your changes again, so the page didn't reload.";
+    const copyLine = 'Copy anything you need, then reload.';
     const saving = 'Saving your changes before reloading.';
     const ctx = charts({ saves: false });
     await ctx.part.load(async () => ({ status: 'failed', reason: 'evaluation-failed', retry: null }));
     ctx.part.reloadButton.focus();
     ctx.part.reloadButton.click();
     await settle();
+    assert.deepEqual([shown(ctx).line, shown(ctx).note], [failed, tryLine]);
     const words = sayings(ctx.part);
     ctx.part.tryButton.click();
-    // Try again keeps its place and focus, aria-disabled, and the row says what the guards do
-    // where "Please try again." was, as Reload reads Saving… on itself
+    // Try again keeps its place, its width and its focus, aria-disabled, and reads Saving… as
+    // Reload does, with what the guards do where "Please try again." was
+    assert.equal(ctx.part.tryButton.children.length, 2, 'Try again keeps the width of Saving… and of itself');
+    const [label, reserved] = ctx.part.tryButton.children;
+    assert.deepEqual([label.textContent, reserved.textContent, reserved.getAttribute('aria-hidden')], ['Saving…', 'Try again', 'true']);
     assert.equal(ctx.part.tryButton.getAttribute('aria-disabled'), 'true');
     assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
-    assert.deepEqual(shown(ctx), {
-      placed: true,
-      state: 'save-failed',
-      form: 'part-state',
-      line: failed,
-      note: saving,
-      buttons: ['Try again', 'Reload anyway'],
-      said: saving,
-    });
+    assert.deepEqual([shown(ctx).line, shown(ctx).note, shown(ctx).said], [failed, saving, saving]);
     await settle();
-    // The save failed again, and the row says so again, with Try again pressable and focused
+    // The save failed again, in words that say so, with Try again pressable and focused
     assert.deepEqual(shown(ctx), {
       placed: true,
       state: 'save-failed',
       form: 'part-state',
-      line: failed,
-      note: tryLine,
+      line: failedAgain,
+      note: copyLine,
       buttons: ['Try again', 'Reload anyway'],
-      said: `${failed} ${tryLine}`,
+      said: `${failedAgain} ${copyLine}`,
     });
-    assert.deepEqual(words, [saving, `${failed} ${tryLine}`]);
+    assert.deepEqual([label.textContent, reserved.textContent], ['Try again', 'Saving…']);
     assert.equal(ctx.part.tryButton.getAttribute('aria-disabled'), null);
     assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
-    assert.deepEqual(ctx.seen.reloads, ['guarded', 'guarded']);
+    // From the third failure the words don't change, and they're said again each time
+    ctx.part.tryButton.click();
+    await settle();
+    assert.deepEqual([shown(ctx).line, shown(ctx).note], [failedAgain, copyLine]);
+    assert.deepEqual(words, [saving, `${failedAgain} ${copyLine}`, saving, `${failedAgain} ${copyLine}`]);
+    assert.deepEqual(ctx.seen.reloads, ['guarded', 'guarded', 'guarded']);
+  });
+
+  it("a part's failure that comes again from the third Try again on is said again, by the place pressed", async () => {
+    const again = "Failed to load the charts again. Reloading the page may fix it, and doesn't delete your notes.";
+    const ctx = charts();
+    await ctx.part.load(async () => missing(async () => missing()));
+    ctx.part.tryButton.click();
+    await settle();
+    const words = sayings(ctx.part);
+    ctx.part.tryButton.click();
+    await settle();
+    assert.equal(shown(ctx).said, again);
+    assert.deepEqual(words, [again]);
+  });
+
+  it("the model's failure from the third Try again on is said again only in the place pressed", async () => {
+    const env = createLegacyEnv();
+    env.load('js/ui/part-state.js');
+    const doc = env.document;
+    const PartState = env.get('PartState');
+    const group = new (env.get('PartGroup'))();
+    const part = (name) => {
+      const live = doc.createElement('div');
+      const host = doc.createElement('div');
+      doc.body.appendChild(live);
+      doc.body.appendChild(host);
+      const state = new PartState({
+        doc, words: env.get('PART_WORDS').semantic, live, group,
+        place: (element) => { for (const child of [...host.children]) host.removeChild(child); if (element) host.appendChild(element); },
+      });
+      return { name, part: state };
+    };
+    const search = part('search');
+    const related = part('related');
+    const failure = missing(async () => missing());
+    search.part.fail(failure);
+    related.part.fail(failure);
+    search.part.tryButton.click();
+    await settle();
+    const searchSaid = sayings(search.part);
+    const relatedSaid = sayings(related.part);
+    search.part.tryButton.click();
+    await settle();
+    assert.equal(search.part.state, 'again');
+    assert.equal(related.part.state, 'again');
+    assert.equal(searchSaid.length, 1, 'the place pressed says it again');
+    assert.deepEqual(relatedSaid, [], 'the other place says nothing new');
   });
 
   it("Try again after a failed save gives way to an editor's own notice that now explains it, with the save's words back", async () => {
@@ -367,6 +432,23 @@ describe('PartState (js/ui/part-state.js)', () => {
     assert.equal(ctx.doc.activeElement, ctx.notice);
   });
 
+  it("keeps a failed save in the row, with focus on Try again, when the editor's notice that explains it can't take focus, as on Stats where the editor is hidden", async () => {
+    const ctx = charts({ saves: false, notice: true });
+    // A notice in a hidden editor takes no focus
+    ctx.notice.focus = () => {};
+    await ctx.part.load(async () => ({ status: 'failed', reason: 'evaluation-failed', retry: null }));
+    ctx.part.reloadButton.focus();
+    ctx.part.reloadButton.click();
+    await settle();
+    assert.deepEqual([shown(ctx).state, shown(ctx).line], ['save-failed', "Failed to save your changes, so the page didn't reload."]);
+    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+    // Its Try again, stopped the same way, keeps the save's words and focus
+    ctx.part.tryButton.click();
+    await settle();
+    assert.deepEqual([shown(ctx).state, shown(ctx).line], ['save-failed', "Failed to save your changes again, so the page didn't reload."]);
+    assert.equal(ctx.doc.activeElement, ctx.part.tryButton);
+  });
+
   it('a step of its own that throws is a failure trying again cannot help', async () => {
     const ctx = charts();
     await ctx.part.load(async () => { throw new Error('the place threw'); });
@@ -374,22 +456,95 @@ describe('PartState (js/ui/part-state.js)', () => {
   });
 });
 
-/** Every rule in css/ that names the status line's arc, with the at-rules around it */
-function arcRules() {
+describe("PartState's buttons keep their places (js/ui/part-state.js)", () => {
+  it('after a failed Try again, Try again stays in its place and Reload goes on the far side', async () => {
+    const ctx = charts();
+    await ctx.part.load(async () => missing(async () => missing()));
+    assert.deepEqual(slots(ctx), ['0:Try again']);
+    ctx.part.tryButton.click();
+    await settle();
+    assert.deepEqual(slots(ctx), ['0:Try again', '1:Reload']);
+    ctx.part.tryButton.click();
+    await settle();
+    assert.deepEqual(slots(ctx), ['0:Try again', '1:Reload']);
+  });
+
+  it("a Try again whose file then threw keeps its place empty at Try again's width, with Reload on the far side", async () => {
+    const ctx = charts();
+    await ctx.part.load(async () => missing(async () => ({ status: 'failed', reason: 'evaluation-failed', retry: null })));
+    ctx.part.tryButton.click();
+    await settle();
+    assert.deepEqual(slots(ctx), ['0:·', '1:Reload']);
+    // The empty place is Try again's twin, there for its width alone
+    const { spacer, tryButton } = ctx.part;
+    assert.deepEqual([spacer.getAttribute('aria-hidden'), spacer.tabIndex], ['true', -1]);
+    assert.match(spacer.className, /\bpart-state-spacer\b/);
+    assert.deepEqual([...spacer.children].map((span) => span.textContent), [...tryButton.children].map((span) => span.textContent));
+    assert.equal(spacer.className.replace(/\s*part-state-spacer\b/, ''), tryButton.className.replace(/\s*part-state-try\b/, ''));
+  });
+
+  it("after a failed save, Try again takes the place of the Reload just pressed, and the quiet Reload anyway goes on the far side", async () => {
+    const ctx = charts({ saves: false });
+    await ctx.part.load(async () => ({ status: 'failed', reason: 'evaluation-failed', retry: null }));
+    assert.deepEqual(slots(ctx), ['0:Reload']);
+    ctx.part.reloadButton.click();
+    await settle();
+    assert.deepEqual(slots(ctx), ['0:Try again', '1:Reload anyway']);
+    assert.match(ctx.part.anywayButton.className, /\bpart-state-anyway\b/);
+  });
+
+  it("after a failed save from the Reload beside Try again, Try again takes that Reload's place, and its own stays empty", async () => {
+    const ctx = charts({ saves: false });
+    await ctx.part.load(async () => missing(async () => missing()));
+    ctx.part.tryButton.click();
+    await settle();
+    ctx.part.reloadButton.click();
+    await settle();
+    assert.deepEqual(slots(ctx), ['0:·', '1:Try again', '2:Reload anyway']);
+    // Its Try again, failing again, leaves every button where it is
+    ctx.part.tryButton.click();
+    await settle();
+    assert.deepEqual(slots(ctx), ['0:·', '1:Try again', '2:Reload anyway']);
+  });
+
+  it('a redraw leaves the buttons where they are, and a new load starts them again', async () => {
+    const ctx = charts();
+    await ctx.part.load(async () => missing(async () => ({ status: 'failed', reason: 'evaluation-failed', retry: null })));
+    ctx.part.tryButton.click();
+    await settle();
+    ctx.part.redraw();
+    assert.deepEqual(slots(ctx), ['0:·', '1:Reload']);
+    await ctx.part.load(async () => missing(async () => missing()));
+    assert.deepEqual(slots(ctx), ['0:Try again']);
+  });
+});
+
+/**
+ * Every rule in css/ whose selector `matches`, with the at-rules around it
+ * @param {RegExp} matches
+ */
+function cssRules(matches) {
   const dir = path.join(__dirname, '..', 'css');
   const rules = [];
   for (const file of fs.readdirSync(dir).filter((name) => name.endsWith('.css')).sort()) {
     walk(parse(fs.readFileSync(path.join(dir, file), 'utf8')), (node, ancestors) => {
       if (node.type !== 'rule') return;
-      if (!splitTopLevel(node.prelude).some((selector) => /\.part-state-spin(?![\w-])/.test(selector))) return;
+      const selectors = splitTopLevel(node.prelude).map((selector) => selector.trim().replace(/\s+/g, ' '));
+      if (!selectors.some((selector) => matches.test(selector))) return;
       rules.push({
         file,
+        selectors,
         at: ancestors.filter((ancestor) => ancestor.type === 'at-rule').map((ancestor) => `@${ancestor.name} ${ancestor.prelude}`),
         values: Object.fromEntries(node.declarations.map(({ property, value, important }) => [property, important ? `${value} !important` : value])),
       });
     });
   }
   return rules;
+}
+
+/** Every rule in css/ that names the status line's arc, with the at-rules around it */
+function arcRules() {
+  return cssRules(/\.part-state-spin(?![\w-])/).map(({ file, at, values }) => ({ file, at, values }));
 }
 
 /**
@@ -416,5 +571,43 @@ describe("the status line's arc (css/editor.css)", () => {
     // Motion past 5 s beside content needs a way to stop it (WCAG 2.2.2), and the model's load
     // can run a minute
     assert.equal(turnsFor(rules[0].values.animation), 5);
+  });
+});
+
+describe("a part's panel and its buttons (css/editor.css)", () => {
+  it("takes its place's width, never its words', so a long failure doesn't widen the stats view", () => {
+    const panel = cssRules(/^\.part-state$/).filter(({ at }) => at.length === 0);
+    assert.ok(panel.some(({ values }) => values['container-type'] === 'inline-size'), 'its own width is its place\'s');
+  });
+
+  it("puts the buttons under the words, adding to their right, unless the second failure's words and both its buttons fit in one row", () => {
+    // Under the words: the words take a line of their own
+    const text = cssRules(/^\.part-state-text$/).filter(({ at }) => at.length === 0);
+    assert.equal(text[text.length - 1].values.flex, '1 1 100%');
+    // Beside them, where the second failure fits in one row: the buttons end the row, start from
+    // its end, and keep to its top, where the words grow from
+    const beside = cssRules(/^\.part-state:not\(\.is-narrow\) > \.part-state-(text|actions)$/).map(({ selectors, at, values }) => ({ selectors, at, values }));
+    assert.deepEqual(beside, [
+      { selectors: ['.part-state:not(.is-narrow) > .part-state-text'], at: ['@container (min-width: 470px)'], values: { 'flex-basis': '0' } },
+      {
+        selectors: ['.part-state:not(.is-narrow) > .part-state-actions'],
+        at: ['@container (min-width: 470px)'],
+        values: { 'flex-direction': 'row-reverse', 'flex-wrap': 'nowrap', 'align-self': 'flex-start' },
+      },
+    ]);
+    // A button's slot is its order from where the buttons start
+    const order = cssRules(/^\.part-state-actions > \[data-slot="\d"\]$/).map(({ selectors, values }) => [selectors[0], values.order]);
+    assert.deepEqual(order, [['.part-state-actions > [data-slot="1"]', '1'], ['.part-state-actions > [data-slot="2"]', '2']]);
+  });
+
+  it('draws Reload anyway quiet, with no fill or border and the secondary label, still 44 px, and keeps an empty place empty', () => {
+    const anyway = cssRules(/^\.part-state-anyway(:hover)?$/).map(({ selectors, values }) => ({ selectors, values }));
+    assert.deepEqual(anyway, [
+      { selectors: ['.part-state-anyway'], values: { 'border-color': 'transparent', background: 'none', color: 'var(--text-secondary)' } },
+      { selectors: ['.part-state-anyway:hover'], values: { background: 'none', color: 'var(--text-primary)', 'text-decoration': 'underline' } },
+    ]);
+    const target = cssRules(/^\.part-state-btn$/).find(({ values }) => values['min-height']);
+    assert.deepEqual([target.values['min-width'], target.values['min-height']], ['44px', '44px']);
+    assert.deepEqual(cssRules(/^\.part-state-spacer$/).map(({ values }) => values), [{ visibility: 'hidden' }]);
   });
 });
