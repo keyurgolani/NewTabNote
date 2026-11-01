@@ -5,10 +5,19 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 import { SECRET_SETTING_KEYS, createLegacySecretReader } from '../../js/kernel/adapters/indexeddb/legacy-secrets.js';
+import {
+  DEFAULT_LIMITS,
+  RECOVERY_DB_NAME,
+  copyPoint,
+  openRecovery,
+  startPoint,
+  storesToCopy,
+} from '../../js/kernel/adapters/indexeddb/recovery-points.js';
+import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { PROVIDER_SETTING_KEYS, SYNC_SETTING_KEYS } from '../../js/kernel/composition/holder-settings.js';
 import { kernelClient, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
@@ -378,19 +387,63 @@ describe('the settings llm.js and sync keep outside the kernel (#17 PR 4b)', () 
     }
     // A command after them, so the operations ledger holds a row to look in
     await tab.note('After');
+    // And a recovery point made now, as the worker makes one before a repair, so the recovery
+    // database holds a copy of every store to look in (R131)
+    await recoveryPointOf(tab.env.indexedDB);
+    /** @type {string[]} */
+    const databases = (await tab.env.indexedDB.databases()).map((/** @type {{name: string}} */ { name }) => name);
+    assert.deepEqual(databases.sort(), ['CanvasTabDB', RECOVERY_DB_NAME]);
+    const dumps = await Promise.all(databases.map(name => legacyEnv.dumpDatabase(tab.env.indexedDB, name)));
+    assert.ok(JSON.stringify(dumps).includes('"pointId":"p-canary"'), 'the point holds its copy');
     const secrets = [key, password];
     const hashes = secrets.map(secret => createHash('sha256').update(secret).digest('hex'));
-    const held = JSON.stringify([tab.sent, logged.lines, await legacyEnv.dumpDatabase(tab.env.indexedDB)]);
+    // Every chrome.storage.local key but the two 1.4.x keeps them in, and each of those two
+    // holds its own secret alone
+    const { setting_llmApiKey: keyed, setting_syncWebdavConfig: config, ...others } = tab.env.chrome.local;
+    assert.ok(Object.keys(others).length > 0);
+    const held = JSON.stringify([tab.sent, logged.lines, dumps, others]);
     for (const value of [...secrets, ...hashes]) assert.equal(held.includes(value), false);
+    assert.deepEqual([JSON.stringify(keyed).includes(password), JSON.stringify(config).includes(key)], [false, false]);
     assert.deepEqual(tab.sent, [], 'no setting went through the kernel');
     // Where 1.4.x keeps them, which #20's reader and remover name, and nowhere else
-    assert.equal(tab.env.chrome.local.setting_llmApiKey, key);
-    assert.equal(tab.env.chrome.local.setting_syncWebdavConfig.password, password);
+    assert.equal(keyed, key);
+    assert.equal(config.password, password);
     const reader = createLegacySecretReader({ indexedDB: tab.env.indexedDB, settings: tab.host.settings });
     assert.deepEqual([...(await reader.present())].sort(), ['setting_llmApiKey', 'setting_syncWebdavConfig']);
     await tab.close();
   });
 });
+
+/**
+ * A recovery point of CanvasTabDB as it is, made as the worker makes one before a repair
+ * @param {IDBFactory} factory
+ */
+async function recoveryPointOf(factory) {
+  const source = /** @type {IDBDatabase} */ (await openWithoutUpgrade(factory, 'CanvasTabDB'));
+  const recovery = /** @type {IDBDatabase} */ (await openRecovery(factory, { create: true }));
+  try {
+    const { point, progress } = await startPoint(recovery, {
+      id: 'p-canary',
+      kind: 'pre-repair',
+      sourceShape: 'current',
+      sourceVersion: source.version,
+      structuralVersion: null,
+      logicalVersion: null,
+      target: null,
+      stores: storesToCopy(source),
+      createdAt: Date.now(),
+    });
+    const io = {
+      keyRange: requireCommonJs('fake-indexeddb').IDBKeyRange,
+      crypto: /** @type {any} */ (webcrypto),
+      limits: DEFAULT_LIMITS,
+    };
+    await copyPoint({ source, recovery, point, progress, io });
+  } finally {
+    source.close();
+    recovery.close();
+  }
+}
 
 /**
  * What the console is handed until `restore`, as [level, ...args], each error with its message
