@@ -11,7 +11,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createLockManager, createDatabase, dumpDatabase, settle, waitFor, plain, note, block, FakeDocument,
-  startEditorClient,
+  startEditorClient, watchTransactions,
 } = require('./helpers/legacy-env');
 const { loadPageModule } = require('./helpers/page-module');
 
@@ -432,9 +432,10 @@ describe('the notice', () => {
     delete env.global.chrome;
     env.load(...FILES);
     assert.equal(typeof env.get('chrome.storage.onChanged.addListener'), 'function', 'storage.js put its stand-in in place');
-    // The settings port hears of changes through the page's Storage, as the new tab's root builds it
-    const { createNewTabSettingsClient } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
-    const settings = createNewTabSettingsClient(null, { storage: env.get('Storage') });
+    // The settings port hears of changes through chrome.storage.onChanged, the stand-in's here,
+    // as the new tab's root builds it
+    const { createNewTabSettingsClient, newTabHost } = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+    const settings = createNewTabSettingsClient(null, newTabHost());
     const { notice, card } = showNotice(env, { settings });
     notice.close();
     assert.equal(shown(card), false);
@@ -536,9 +537,23 @@ describe('the receipt Settings writes after a full export', () => {
   });
 
   it('a failed export says so and hands nothing over', async () => {
-    const { Storage, settings, toasts, downloads } = await settingsSetup();
-    Storage.exportAllAsBlob = async () => { throw new Error('read failed'); };
-    assert.equal(await settings.exportAll(), false);
+    const { settings, toasts, downloads } = await settingsSetup();
+    // The read fails: the readonly transaction over the notes and blocks that #17's adapter
+    // reads the export in since #17 PR 4a
+    let failed = false;
+    const unwatch = watchTransactions(({ stores, mode, name, open }) => {
+      if (!failed && name === 'CanvasTabDB' && mode === 'readonly' && stores.includes('canvases') && stores.includes('elements')) {
+        failed = true;
+        throw new DOMException('read failed', 'UnknownError');
+      }
+      return open();
+    });
+    try {
+      assert.equal(await settings.exportAll(), false);
+    } finally {
+      unwatch();
+    }
+    assert.equal(failed, true, 'the read failed');
     assert.equal(downloads.length, 0);
     assert.deepEqual(toasts, [{ message: 'Export failed', kind: 'error' }]);
   });

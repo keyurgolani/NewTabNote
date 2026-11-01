@@ -22,9 +22,9 @@
  *   `shrinkOnly` seeds its rows by hand.
  * declared-gap rows record gaps no rule sees, so they're checked for shape and never against
  * hits: count 1, an adapter module that declares gaps as file, which has to exist, and the
- * issue that closes them as owner (DECLARED_GAP_OWNERS): #17 for the legacy adapter's, which
- * #17's adapter closes, and #18 for #17's adapter's one, the backup tasks #18's engine brings.
- * A module's gaps are told apart by verify. A rule whose messages name what they found
+ * issue that closes them as owner (DECLARED_GAP_OWNERS). None does since #17 PR 4a: #17's
+ * adapter runs the backup tasks, and the legacy adapter, whose gaps #17's adapter closed, is
+ * deleted. A module's gaps are told apart by verify. A rule whose messages name what they found
  * (NAMED_RULES: app-callback names the callback, legacy-store the handle) may have rows that
  * each name one (`name`), which count that one's hits; the file and rule's row without a name
  * counts the rest. Every other row is one per file and rule.
@@ -86,14 +86,10 @@ const RULES = {
   'chrome.storage.local': 'chrome.storage.local outside js/kernel/adapters/ and js/kernel/composition/',
 };
 const DECLARED_GAP = 'declared-gap';
-// The modules that declare gaps (their adapter flags), each with the issue that closes them: the
-// legacy adapter's, which #17's adapter closes, and #17's adapter's one, the legacy backup tasks
-// it doesn't run, which #18's backup engine closes
-const DECLARED_GAP_OWNERS = Object.freeze({
-  'js/kernel/adapters/legacy/adapter.js': 17,
-  'js/kernel/adapters/indexeddb/adapter.js': 18,
-});
-const DECLARED_GAP_FILES = Object.keys(DECLARED_GAP_OWNERS);
+// The modules that declare gaps (their adapter flags), each with the issue that closes them.
+// None since #17 PR 4a: #17's adapter has every flag, and the legacy adapter, whose four gaps it
+// closed, is deleted
+const DECLARED_GAP_OWNERS = Object.freeze({});
 // The raw access a blind write may replace in the same file under a shrinkOnly rule: an
 // unconverted caller moves onto #17's adapter, which commits it, before it gets a command
 const CONVERTS_FROM = { legacyBlindWrite: ['getStore', 'objectStore'] };
@@ -284,9 +280,15 @@ function parseShrinkOnly(value, name, problems) {
 
 /**
  * Parse and validate ledger text. Returns the rows in a Map by rowKey, the rules its
- * `shrinkOnly` lists, and each problem.
+ * `shrinkOnly` lists, and each problem. `gapOwners` are the modules that declare gaps, each
+ * with the issue that closes them, DECLARED_GAP_OWNERS unless a test names others.
+ * @param {string} text
+ * @param {string} root
+ * @param {string} name
+ * @param {Readonly<Record<string, number>>} [gapOwners]
  */
-function parseLedger(text, root, name) {
+function parseLedger(text, root, name, gapOwners = DECLARED_GAP_OWNERS) {
+  const gapFiles = Object.keys(gapOwners);
   const rows = new Map();
   const problems = [];
   let data;
@@ -331,11 +333,13 @@ function parseLedger(text, root, name) {
     }
     if (row.rule === DECLARED_GAP) {
       if (row.count !== 1) fail('is a declared-gap row, so its count is 1');
-      if (!DECLARED_GAP_FILES.includes(row.file)) {
-        fail(`is a declared-gap row, so its file is ${DECLARED_GAP_FILES.join(' or ')}`);
+      if (gapFiles.length === 0) {
+        fail('is a declared-gap row, which no adapter module declares');
+      } else if (!gapFiles.includes(row.file)) {
+        fail(`is a declared-gap row, so its file is ${gapFiles.join(' or ')}`);
       } else {
         if (!fs.existsSync(path.join(root, row.file))) fail(`names ${row.file}, which doesn't exist`);
-        const owner = DECLARED_GAP_OWNERS[/** @type {keyof typeof DECLARED_GAP_OWNERS} */ (row.file)];
+        const owner = gapOwners[row.file];
         if (row.owner !== owner) fail(`is a declared-gap row, so #${owner} owns it`);
       }
     }
@@ -487,6 +491,8 @@ async function main(argv = process.argv.slice(2), options = {}) {
     readBase: readBaseLedger = readBase,
     log = console.log,
     error = console.error,
+    // The modules that declare gaps, which a test can name, as none does since #17 PR 4a
+    declaredGapOwners = DECLARED_GAP_OWNERS,
   } = options;
   const ledgerPath = path.join(root, LEDGER);
 
@@ -517,7 +523,7 @@ async function main(argv = process.argv.slice(2), options = {}) {
 
   const exists = fs.existsSync(ledgerPath);
   const ledger = exists
-    ? parseLedger(fs.readFileSync(ledgerPath, 'utf8'), root, LEDGER)
+    ? parseLedger(fs.readFileSync(ledgerPath, 'utf8'), root, LEDGER, declaredGapOwners)
     : { rows: new Map(), shrinkOnly: new Set(), problems: [] };
   if (ledger.problems.length > 0) {
     return fail(`${LEDGER} has ${plural(ledger.problems.length, 'problem')}`, ledger.problems.map(message => ({ message, at: [] })));
@@ -563,7 +569,7 @@ async function main(argv = process.argv.slice(2), options = {}) {
     if (found.missing) {
       baseNote = `; ${base} has no ledger, so every row is new`;
     } else {
-      const baseLedger = parseLedger(found.text, root, `${LEDGER} at ${base}`);
+      const baseLedger = parseLedger(found.text, root, `${LEDGER} at ${base}`, declaredGapOwners);
       problems.push(...compareBase(ledger.rows, baseLedger.rows, base, {
         shrinkOnly: ledger.shrinkOnly,
         baseShrinkOnly: baseLedger.shrinkOnly,
@@ -587,4 +593,5 @@ if (require.main === module) {
 
 module.exports = {
   main, lint, ruleOf, nameOf, parseLedger, serializeLedger, seedRow, compare, compareBase, RULES, NAMED_RULES, SEED_OWNERS, LEDGER,
+  DECLARED_GAP_OWNERS,
 };

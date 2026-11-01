@@ -45,6 +45,18 @@
  * aborted. The adapter can tell only by which comes first, so a unit that finishes before an
  * abort reaches it is answered as any other command, retry included.
  *
+ * A call whose transaction can't start on a closing or closed connection answers
+ * `reload-required`, as every call after it does (connection.js), and so does one IndexedDB
+ * fails in flight once the connection is gone or going, which runs no more. Chrome's forced
+ * close (the database deleted, or its storage failing) aborts each transaction open on the
+ * connection before the page hears of the close (e2e/connection-closing.spec.js), so a read, an
+ * export, an automatic backup, or a ledger or change-log read in flight then answers
+ * `transaction-failed`, on a connection that still reads as open, and the next call
+ * `reload-required`. A command's run again fails once the close has reached the page, as does
+ * any call that started in between, so each answers `reload-required`. A chrome.storage failure
+ * answers as it is. A call another context's upgrade lands on comes through, since that close
+ * waits for it, and answers as it ended.
+ *
  * Flags:
  * - atomicMultiStore: true, since a command is one transaction.
  * - revisions: true. Each note has a content revision, a placement version, and a source
@@ -60,32 +72,44 @@
  * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})`: since
  * #17 PR 1b the service worker's (`versioned` once its migration run has brought the database
  * to this build's version, `existing` when the run left it as it was), Popup's and Side
- * Panel's (`existing`). The new tab stays on #12's legacy adapter until #17 PR 4 moves it
- * (connection.js).
+ * Panel's (`existing`), and since #17 PR 4a the new tab's (`existing`, with its maintenance,
+ * #33's copy and the backup tasks; composition/newtab.js), which #12's legacy adapter was
+ * until then (connection.js).
  */
 
 import { COMMANDS } from '../../core/contracts/commands.js';
-import { UnavailableError, committed, rejected, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import {
+  STORAGE_EXCEPTIONS,
+  UnavailableError,
+  committed,
+  rejected,
+  unavailable,
+  unavailableFrom,
+} from '../../core/contracts/outcomes.js';
 import { withoutPlacement } from '../../core/domain/placement.js';
 import { digestOf } from '../../core/memory/fingerprint.js';
 import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 import { systemClock } from '../../core/ports/runtime.js';
+import { createAutoBackup, exportFile, prepareImport, readExport } from './backups.js';
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
+import { TRANSFORM_DAILY_KEY, answerOf } from './daily-answer.js';
 import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { runIntegrityCheck } from './integrity.js';
 import { createIndexedDbLedger, ledgerRow, replayFrom, sweepLedger } from './ledger.js';
+import { copyMissingStores } from './recovery-copies.js';
 import {
   CHANGES_KEY,
   CHANGES_STORE,
   CONFLICTS_STORE,
+  DAILY_INDEX_STORE,
   META_STORE,
   OPERATIONS_STORE,
   TOMBSTONES_STORE,
 } from './registry.js';
-import { abort, indexValue, result } from './requests.js';
+import { abort, endOf, indexValue, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 import { createVersionTracker } from './versions.js';
@@ -104,6 +128,7 @@ import { createVersionTracker } from './versions.js';
 /** @typedef {import('../../core/contracts/outcomes.js').Conflict} Conflict */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
 /** @typedef {import('./integrity.js').IntegrityLog} IntegrityLog */
+/** @typedef {import('./connection.js').OpenState} OpenState */
 /** @typedef {import('./versions.js').VersionTracker} VersionTracker */
 /** @typedef {import('../../core/domain/tombstone.js').TombstoneRecord} TombstoneRecord */
 
@@ -127,6 +152,21 @@ import { createVersionTracker } from './versions.js';
  * @property {IntegrityLog} [integrityLog]
  *   Where the read-only integrity check reports (integrity.js): the context's console unless a
  *   test passes another
+ * @property {boolean} [maintains]
+ *   An `existing` open runs startup maintenance too: the new tab's (#17 PR 4a), which opens the
+ *   database as it is and still writes a new profile's first-run settings. Popup and Side Panel
+ *   leave it to the new tab and the worker.
+ * @property {boolean} [copiesMissingStores]
+ *   An `existing` open saves #33's recovery copy of a database at 8 that lacks some legacy
+ *   store before it opens it, as js/storage.js's page open did: the new tab's (#17 PR 4a,
+ *   recovery-copies.js)
+ * @property {boolean} [backups]
+ *   It runs 1.4.x's backup tasks and makes the export file (backups.js): the new tab's, which
+ *   passes chrome.storage.local as `settings`, for the automatic backups and the recovery copy
+ *   (#17 PR 4a, the lead's Q1). Popup, Side Panel, and the service worker run none, as the
+ *   policy has it, so their adapters answer each as one without the `backups` flag does.
+ * @property {import('./recovery-copies.js').CopyLocks | null} [locks]
+ *   Web Locks, which that copy's check and write hold so tabs that open together write one
  * @property {Clock} [clock] - when a ledger row, a conflict record, and a tombstone are written
  * @property {typeof IDBKeyRange} [keyRange] - for the change log's reads, the global one unless given
  */
@@ -136,12 +176,20 @@ import { createVersionTracker } from './versions.js';
  *   mode: OpenMode,
  *   open: () => Promise<void>,
  *   close: () => void,
+ *   beforeClose: (flush: () => void) => () => void,
+ *   openState: () => OpenState,
+ *   missingStores: () => string[],
+ *   upgraded: () => boolean,
  *   ledger: IdempotencyLedger,
  *   commitLog: CommitLog,
  *   sweepLedger: () => Promise<{swept: boolean, deleted: number}>,
  * }} IndexedDbAdapter
  *   `ledger` and `commitLog` are #13's ports over this adapter's ledger and change log, and
- *   `sweepLedger` their retention (ledger.js), which only the worker runs
+ *   `sweepLedger` their retention (ledger.js), which only the worker runs. `beforeClose`,
+ *   `openState`, `missingStores`, and `upgraded` are the connection's (connection.js), what
+ *   the new tab read of js/storage.js's: a flush before another context's upgrade closes it,
+ *   the state App and the export notice read, the legacy stores a degraded database lacks, and
+ *   whether it's at this build's version.
  */
 
 /** @type {IDBTransactionOptions} */
@@ -156,22 +204,7 @@ const contextConsole = Object.freeze({
   warn: (message, error) => globalThis.console.warn(message, error),
 });
 
-/**
- * How a transaction ended: committed, or aborted with its error, which is null when this
- * adapter aborted it
- * @typedef {{committed: true} | {committed: false, error: DOMException | null}} Ending
- */
-
-/**
- * @param {IDBTransaction} tx
- * @returns {Promise<Ending>}
- */
-function ending(tx) {
-  return new Promise(resolve => {
-    tx.addEventListener('complete', () => resolve({ committed: true }));
-    tx.addEventListener('abort', () => resolve({ committed: false, error: tx.error }));
-  });
-}
+/** @typedef {import('./requests.js').Ending} Ending */
 
 /**
  * The IndexedDB stores among `stores` the database has, once each
@@ -182,6 +215,18 @@ function ending(tx) {
 function present(db, stores) {
   const names = new Set(stores.filter(store => Object.hasOwn(IDB_STORES, store)).map(store => IDB_STORES[store]));
   return [...names].filter(name => db.objectStoreNames.contains(name));
+}
+
+/**
+ * `names` with `meta` when they hold the daily index and the database has `meta`, so a Daily
+ * Note lookup reads logical 3's kept answer in its own transaction (daily-answer.js, F10)
+ * @param {IDBDatabase} db
+ * @param {string[]} names
+ * @returns {string[]}
+ */
+function withAnswer(db, names) {
+  if (!names.includes(DAILY_INDEX_STORE) || names.includes(META_STORE)) return names;
+  return db.objectStoreNames.contains(META_STORE) ? [...names, META_STORE] : names;
 }
 
 /**
@@ -228,6 +273,19 @@ const isCatalogCommand = work => {
   const { type } = /** @type {{type?: unknown}} */ (work.command);
   return typeof type === 'string' && Object.hasOwn(COMMANDS, type);
 };
+
+/**
+ * The ledger row `work`'s commandId has, read in a readonly transaction of its own, or
+ * undefined: none for work that isn't a catalog command, or on a database below version 10
+ * @param {IDBDatabase} db
+ * @param {Work} work
+ * @returns {Promise<import('./ledger.js').LedgerRow | undefined>}
+ */
+async function keptRow(db, work) {
+  if (!isCatalogCommand(work) || !db.objectStoreNames.contains(OPERATIONS_STORE)) return undefined;
+  const store = db.transaction(OPERATIONS_STORE, 'readonly').objectStore(OPERATIONS_STORE);
+  return /** @type {import('./ledger.js').LedgerRow | undefined} */ (await result(store.get(work.commandId)));
+}
 
 /**
  * A unit's view of its command's transaction: only the stores it named, and no writes when
@@ -298,6 +356,11 @@ function view(db, tx, scope, writable, tracker) {
       return store === 'notes' ? tracker.versions(key) : undefined;
     },
     has: store => handle(store) !== null,
+    // Logical 3's kept answer, from `meta`, which a transaction over the daily index spans
+    dailyAnswer: async () =>
+      tx && tx.objectStoreNames.contains(META_STORE)
+        ? answerOf(await result(tx.objectStore(META_STORE).get(TRANSFORM_DAILY_KEY)))
+        : null,
     put: (store, record) => {
       const objectStore = writing(store);
       if (!objectStore) {
@@ -415,15 +478,27 @@ export function createIndexedDbAdapter({
   requireCore = false,
   awaitUpgrade = null,
   integrityLog = contextConsole,
+  maintains = false,
+  copiesMissingStores = false,
+  backups = false,
+  locks = null,
   clock = systemClock,
   keyRange,
 }) {
-  const connection = createConnection({ indexedDB, mode, openWithinMs, requireCore, awaitUpgrade });
+  const connection = createConnection({
+    indexedDB,
+    mode,
+    openWithinMs,
+    requireCore,
+    awaitUpgrade,
+    beforeOpen: copiesMissingStores ? () => copyMissingStores({ indexedDB, settings, clock, locks }) : null,
+  });
   const database = () => connection.database();
 
   /**
    * What a failure to start a transaction means: the connection closed under it (another
-   * context's upgrade, or Chrome), or its own failure
+   * context's upgrade, or Chrome), or its own failure. On a connection this adapter adopted, an
+   * InvalidStateError from transaction() can only mean it's closing or closed.
    * @param {unknown} error
    * @returns {UnavailableError}
    */
@@ -434,6 +509,60 @@ export function createIndexedDbAdapter({
     }
     return failureOf(error);
   };
+
+  /**
+   * Whether the connection is gone, or going. Chrome's forced close (the database deleted, or
+   * its storage failing) reaches the page only after Chrome has aborted each transaction open on
+   * the connection, so a failure from those aborts still finds it open, and one after finds it
+   * refusing a transaction. IndexedDB refuses a transaction on a closing connection with an
+   * InvalidStateError before it looks at the stores asked for, and one over no store with an
+   * InvalidAccessError, so asking for one over none tells which, and opens nothing
+   * (e2e/connection-closing.spec.js has both orders in Chromium).
+   * It asks only once the connection is open, which connection.js has it be only in the open's
+   * success, after any upgrade transaction on it has finished, so never while one is live,
+   * which IndexedDB refuses a transaction during too.
+   * @returns {boolean}
+   */
+  const going = () => {
+    if (connection.state() === 'gone') return true;
+    if (connection.state() !== 'open') return false;
+    try {
+      connection.database().transaction([], 'readonly');
+    } catch (error) {
+      if (nameOf(error) !== 'InvalidStateError') return false;
+      connection.lost();
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * Whether IndexedDB failed it: its failures are DOMExceptions, and chrome.storage's, and this
+   * adapter's own, aren't
+   * @param {unknown} error
+   */
+  const fromIndexedDb = error => typeof DOMException === 'function' && error instanceof DOMException;
+
+  /**
+   * What a call that failed in flight answers: for an IndexedDB failure on a connection that's
+   * gone or going, reload-required, as every call after it answers (connection.js), and
+   * otherwise what the failure means. Should IndexedDB ever answer the empty transaction in the
+   * other order, it answers as it did before going() asked.
+   * @param {unknown} error
+   * @returns {UnavailableError}
+   */
+  const failureIn = error =>
+    fromIndexedDb(error) && going() ? new UnavailableError('storage', 'reload-required', false) : failureOf(error);
+
+  /**
+   * The answer for a run whose transaction failed, and whether it may run once more: for an
+   * IndexedDB failure on a connection that's gone or going, reload-required, and no other run
+   * @param {unknown} cause
+   * @param {Write} write
+   * @returns {Attempt}
+   */
+  const failedRun = (cause, write) =>
+    fromIndexedDb(cause) && going() ? answered(unavailable('storage', 'reload-required', false)) : failed(cause, write);
 
   /**
    * The values IndexedDB's `settings` store holds for `keys`, records of `{key, value}`, as
@@ -466,7 +595,7 @@ export function createIndexedDbAdapter({
         if (record && record.value !== undefined) values[key] = record.value;
       }
     } catch (error) {
-      throw failureOf(error);
+      throw failureIn(error);
     }
     return values;
   };
@@ -559,7 +688,7 @@ export function createIndexedDbAdapter({
       // The primary note's revision may move, or be reported, though no unit touches the note
       /** @type {StoreName[]} */
       const primaryStores = work.primary ? ['notes'] : [];
-      const names = present(db, [...unitStores, ...primaryStores]);
+      const names = withAnswer(db, present(db, [...unitStores, ...primaryStores]));
       // A deletion's own rows in step 10's stores aren't counted for a retry, as the
       // bookkeeping isn't: each command's tombstones and conflict records are its own
       const unitNames = present(
@@ -599,12 +728,12 @@ export function createIndexedDbAdapter({
     // empty stores, and a write fails or is skipped as Storage's would
     if (!tx) {
       return running.then(first => {
-        if ('error' in first) return failed(first.error, NO_WRITE);
+        if ('error' in first) return failedRun(first.error, NO_WRITE);
         return answered(first.stop || work.done());
       });
     }
     const open = tx;
-    const ended = ending(open);
+    const ended = endOf(open);
     /** @type {Promise<Decided>} */
     const deciding = running.then(async first => {
       try {
@@ -637,14 +766,14 @@ export function createIndexedDbAdapter({
       if ('end' in first) {
         return first.end.committed
           ? endedEarly()
-          : { ...failed(first.end.error || aborted(), write), transient: false };
+          : { ...failedRun(first.end.error || aborted(), write), transient: false };
       }
       if ('error' in first) {
         abort(open);
         const end = await ended;
         if (end.committed) return endedEarly();
         // Its own error says why the transaction aborted, when it aborted for one
-        return failed(end.error || first.error, write);
+        return failedRun(end.error || first.error, write);
       }
       if ('abort' in first) {
         abort(open);
@@ -654,7 +783,7 @@ export function createIndexedDbAdapter({
       }
       const end = await ended;
       if (end.committed) return answered(first.commit);
-      return failed(end.error || aborted(), write);
+      return failedRun(end.error || aborted(), write);
     });
   };
 
@@ -722,7 +851,9 @@ export function createIndexedDbAdapter({
    * Startup maintenance: the settings Storage writes on a profile's first run, each one only
    * where nothing is stored, then nothing else. It reads no store, so it runs while the
    * database is blocked too. The read-only integrity check is an effect of its own
-   * (checkIntegrity), which the worker runs after an install or an update.
+   * (checkIntegrity), which the worker runs after an install or an update. It runs on a
+   * `versioned` open, the worker's, and on an `existing` one that `maintains`, the new tab's
+   * (#17 PR 4a).
    *
    * It's best effort, as Storage.initializeDefaultSettings is, since a root that maintains as
    * it opens answers every call with maintenance's failure: when chrome.storage fails it, it
@@ -734,7 +865,7 @@ export function createIndexedDbAdapter({
    */
   const maintain = async work => {
     // Popup and Side Panel never maintain the database
-    if (mode !== 'versioned') return unavailable('adapter', 'maintenance-needs-versioned-open', false);
+    if (mode !== 'versioned' && !maintains) return unavailable('adapter', 'maintenance-needs-versioned-open', false);
     try {
       const stored = (await settings.get([INITIALIZED_KEY, ...Object.keys(FIRST_RUN_SETTINGS)])) || {};
       if (!stored[INITIALIZED_KEY]) {
@@ -745,6 +876,58 @@ export function createIndexedDbAdapter({
       return committed('maintenance-deferred', [], { severity: 'warning' });
     }
     return work.done();
+  };
+
+  /**
+   * chrome.storage.local, as the backup tasks use it: a root that turns `backups` on passes it,
+   * with its get of every key and its remove
+   */
+  const backupStore = /** @type {import('./backups.js').BackupStore} */ (/** @type {unknown} */ (settings));
+
+  /**
+   * A legacy backup task (backups.js), on an adapter that runs them. The automatic backup goes
+   * to chrome.storage.local, as Storage's did. The import commits as one unit of its command, in
+   * one transaction with its ledger row, its notes' versions, and its changes, after Replace
+   * all's recovery copy; its outcome names what it added and trashed. A resend of one that
+   * committed answers from its ledger row and imports nothing: Replace all reads the row before
+   * its copy, so the lost-reply case saves no second copy of every note. Only a send that races
+   * the first, both reading no row, saves one more, and its commit then answers from the row the
+   * first wrote. A refused backup, or a recovery copy that couldn't be saved, writes nothing to
+   * IndexedDB. A task that fails before any commit (the automatic backup, or an import's reads)
+   * names the storage exception it failed with, as the legacy adapter's did, so #20's
+   * `backup.auto-failed` keeps it; the import's commit answers as every command's does.
+   * @param {Work} work
+   * @param {import('../../core/ports/repository.js').BackupTask} task
+   * @returns {Promise<CommitResult>}
+   */
+  const commitBackup = async (work, task) => {
+    // Popup, Side Panel, and the service worker run none, until #18's backup engine (the `backups` flag)
+    if (!backups) return { outcome: unavailable('adapter', 'backups-need-legacy-storage', false), replayed: false };
+    /** @type {IDBDatabase} */
+    let db;
+    try {
+      db = connection.database();
+    } catch (error) {
+      return { outcome: unavailableFrom(startFailure(error)), replayed: false };
+    }
+    try {
+      if (task.action === 'auto') {
+        await createAutoBackup({ db, settings: backupStore, clock });
+        return { outcome: work.done(), replayed: false };
+      }
+      if (task.mode === 'replace') {
+        const row = await keptRow(db, work);
+        if (row) return replayFrom(row, work.command);
+      }
+      const prepared = await prepareImport({ db, settings: backupStore, clock, backup: task.backup, mode: task.mode });
+      if ('refused' in prepared) return { outcome: prepared.refused, replayed: false };
+      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit]);
+    } catch (error) {
+      const outcome = unavailableFrom(failureIn(error));
+      const name = nameOf(error);
+      if (name !== undefined && STORAGE_EXCEPTIONS.includes(name)) outcome.exception = name;
+      return { outcome, replayed: false };
+    }
   };
 
   /**
@@ -759,10 +942,14 @@ export function createIndexedDbAdapter({
   return Object.freeze({
     name: 'indexeddb',
     mode,
-    flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: false }),
+    flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups }),
 
     open: () => connection.open(),
     close: () => connection.close(),
+    beforeClose: flush => connection.beforeClose(flush),
+    openState: () => connection.openState(),
+    missingStores: () => connection.missingStores(),
+    upgraded: () => connection.upgraded(),
 
     // What commit keeps is in IndexedDB, which nothing reads synchronously, so a command's own
     // record answers from commit. Only a bulk command's reservation, which no transaction
@@ -784,10 +971,8 @@ export function createIndexedDbAdapter({
         if (effect.kind === 'units') pending = commitUnits(work, effect.units);
         else if (effect.kind === 'settings') {
           pending = commitSettings(work, effect.area, effect.values).then(outcome => ({ outcome, replayed: false }));
-        } else if (effect.kind === 'backup') {
-          // The legacy backup tasks run only on 1.4.x's Storage until #18's engine (the `backups` flag)
-          pending = Promise.resolve({ outcome: unavailable('adapter', 'backups-need-legacy-storage', false), replayed: false });
-        } else if (effect.kind === 'integrity-check') {
+        } else if (effect.kind === 'backup') pending = commitBackup(work, effect);
+        else if (effect.kind === 'integrity-check') {
           // Read-only, it keeps no ledger row, as settings and maintenance keep none
           pending = checkIntegrity(work).then(outcome => ({ outcome, replayed: false }));
         } else pending = maintain(work).then(outcome => ({ outcome, replayed: false }));
@@ -810,7 +995,7 @@ export function createIndexedDbAdapter({
       let tx = null;
       try {
         db = connection.database();
-        const names = present(db, stores);
+        const names = withAnswer(db, present(db, stores));
         if (names.length > 0) tx = db.transaction(names, 'readonly');
       } catch (error) {
         throw startFailure(error);
@@ -818,12 +1003,27 @@ export function createIndexedDbAdapter({
       try {
         return await body(view(db, tx, stores, false, createVersionTracker()));
       } catch (error) {
-        throw failureOf(error);
+        throw failureIn(error);
       }
     },
 
-    // The export file runs only on 1.4.x's Storage until #18's engine (the `backups` flag)
-    exportBackup: () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false)),
+    // Export JSON's file, and Create Backup's with its fields, on an adapter that runs the
+    // backup tasks (backups.js), read in one readonly transaction
+    async exportBackup(extra) {
+      if (!backups) throw new UnavailableError('adapter', 'backups-need-legacy-storage', false);
+      /** @type {IDBDatabase} */
+      let db;
+      try {
+        db = connection.database();
+      } catch (error) {
+        throw startFailure(error);
+      }
+      try {
+        return await exportFile(await readExport(db), clock.now(), extra);
+      } catch (error) {
+        throw failureIn(error);
+      }
+    },
 
     async readSettings(area, keys) {
       if (area === 'idbSettings') return readIdbSettings(keys);
@@ -844,11 +1044,17 @@ export function createIndexedDbAdapter({
       return values;
     },
 
-    ledger: createIndexedDbLedger({ database }),
+    ledger: createIndexedDbLedger({ database, failure: failureIn }),
     get commitLog() {
-      if (!commitLog) commitLog = createIndexedDbCommitLog({ database, keyRange: keyRange || globalThis.IDBKeyRange });
+      if (!commitLog) {
+        commitLog = createIndexedDbCommitLog({
+          database,
+          keyRange: keyRange || globalThis.IDBKeyRange,
+          failure: failureIn,
+        });
+      }
       return commitLog;
     },
-    sweepLedger: () => sweepLedger({ database, now: clock.now() }),
+    sweepLedger: () => sweepLedger({ database, now: clock.now(), failure: failureIn }),
   });
 }

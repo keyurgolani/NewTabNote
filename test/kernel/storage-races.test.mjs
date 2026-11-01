@@ -1,40 +1,59 @@
-// Races on the legacy adapter (#12, "Test plan"), over production js/storage.js. Commands
-// start together and aren't awaited one by one, from one tab or from two tabs of one
-// profile. Each race has to converge with no lost update.
+// Races on #17's adapter (#12, "Test plan"), which legacy-races.test.mjs ran on the legacy
+// adapter until #17 PR 4a deleted it. Commands start together and aren't awaited one by one,
+// from one tab or from two tabs of one profile, each tab with an adapter of its own. Each race
+// has to converge with no lost update.
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 
-import { adapterFor, closeAll, kernelFor, legacyContext } from './legacy-fixture.mjs';
+import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { faultyFactory } from './storage-faults.mjs';
+import { KeyRange, closeAll, kernelOn, profile } from './storage-fixture.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';
 
-/** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
+/** @typedef {import('./storage-fixture.mjs').Profile} Profile */
+/** @typedef {import('./storage-faults.mjs').Faults} Faults */
 /** @typedef {import('../../js/kernel/core/application/kernel.js').Kernel} Kernel */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').BulkOutcome} BulkOutcome */
 /** @typedef {import('../../js/kernel/core/domain/note.js').NoteRecord} NoteRecord */
 
-/** @type {LegacyContext[]} */
-const opened = [];
-after(() => closeAll(opened));
+/** @type {{IDBDatabase: typeof IDBDatabase}} */
+const { IDBDatabase: FakeDatabase } = createRequire(import.meta.url)('fake-indexeddb');
+
+/** @type {Profile[]} */
+const profiles = [];
+after(() => profiles.forEach(closeAll));
 
 /**
- * Two tabs of one profile, each with its own legacy adapter and kernel
- * @returns {Promise<{tabA: Kernel, tabB: Kernel, first: LegacyContext}>}
+ * Two tabs of one profile, each with its own adapter, over a fault wrapper of its own, and its
+ * own kernel. Tab A's database is made as the worker's open makes it, at this build's version.
+ * @returns {Promise<{tabA: Kernel, tabB: Kernel, faultsA: Faults}>}
  */
 async function twoTabs() {
-  const first = legacyContext();
-  const second = legacyContext(first.env);
-  opened.push(first, second);
+  const of = profile();
+  profiles.push(of);
   const runtime = { ids: testIds(), clock: testClock() };
-  const adapterA = adapterFor(first);
-  const adapterB = adapterFor(second);
+  /** @param {Faults} faults */
+  const adapterOver = faults => {
+    const adapter = createIndexedDbAdapter({
+      indexedDB: faults.factory,
+      settings: of.chrome.api.storage.local,
+      keyRange: KeyRange,
+      clock: runtime.clock,
+    });
+    of.adapters.push(adapter);
+    return adapter;
+  };
+  const adapterA = adapterOver(of.faults);
   await adapterA.open();
+  const adapterB = adapterOver(faultyFactory(of.real));
   await adapterB.open();
   return {
-    tabA: kernelFor(adapterA, runtime, CALLERS.newtab),
-    tabB: kernelFor(adapterB, runtime, { surface: 'newtab', contextId: 'newtab-2' }),
-    first,
+    tabA: kernelOn(adapterA, runtime, CALLERS.newtab),
+    tabB: kernelOn(adapterB, runtime, { surface: 'newtab', contextId: 'newtab-2' }),
+    faultsA: of.faults,
   };
 }
 
@@ -60,7 +79,7 @@ async function namesIn(kernel, view) {
   return state.kind === 'ready' ? state.data.map(note => note.name) : [];
 }
 
-describe('races on the legacy adapter', () => {
+describe("races on #17's adapter", () => {
   it('moving two folders into each other from two tabs at once commits one move and refuses the other', async () => {
     const { tabA, tabB } = await twoTabs();
     for (const folderId of ['a', 'b']) {
@@ -102,11 +121,13 @@ describe('races on the legacy adapter', () => {
   });
 
   it('a bulk trash where one note fails trashes the others, while another tab renames one of them', async () => {
-    const { tabA, tabB, first } = await twoTabs();
+    const { tabA, tabB, faultsA } = await twoTabs();
     for (const noteId of ['n1', 'n2', 'n3']) {
       await tabA.execute({ type: 'createNote', commandId: `create-${noteId}`, noteId, name: noteId });
     }
-    first.failing.push('notes');
+    // Tab A's first note write fails as one the browser refuses at once, which no run of it
+    // gets past
+    faultsA.throwOnNextWrite('canvases', 'DataError');
     const [bulk, renamed] = await Promise.all([
       tabA.execute({ type: 'runBulkAction', commandId: 'trash', action: 'trash', noteIds: ['n1', 'n2', 'n3'] }),
       tabB.execute({ type: 'renameNote', commandId: 'rename', noteId: 'n3', name: 'Renamed' }),
@@ -141,15 +162,21 @@ describe('races on the legacy adapter', () => {
       return state.kind === 'ready' ? state.data.map(block => block.id) : [];
     };
 
-    // Tab B's save lands just after tab A's first transaction over the blocks commits. A trash
-    // that decided in one transaction and deleted the note in a later one left B's block there.
-    const { tabA, tabB, first } = await twoTabs();
+    // Tab B's save starts as soon as tab A's first transaction over the blocks commits. The
+    // trash decides and deletes in that one transaction, so the save finds the note gone.
+    const { tabA, tabB } = await twoTabs();
     await tabA.execute({ type: 'createNote', commandId: 'create-late', noteId: 'late' });
     /** @type {Promise<Outcome | BulkOutcome> | undefined} */
     let saving;
-    const { transaction } = first.storage;
-    first.storage.transaction = (/** @type {string | string[]} */ names, /** @type {IDBTransactionMode} */ mode) => {
-      const tx = transaction(names, mode);
+    const { transaction } = FakeDatabase.prototype;
+    /**
+     * @this {IDBDatabase}
+     * @param {string | string[]} names
+     * @param {IDBTransactionMode} [mode]
+     * @param {IDBTransactionOptions} [options]
+     */
+    FakeDatabase.prototype.transaction = function watched(names, mode, options) {
+      const tx = transaction.call(this, names, mode, options);
       if (!saving && mode === 'readwrite' && [names].flat().includes('elements')) {
         tx.addEventListener('complete', () => {
           saving = tabB.execute(save('late'));
@@ -157,8 +184,12 @@ describe('races on the legacy adapter', () => {
       }
       return tx;
     };
-    const trashedLate = await tabA.execute(trash('late'));
-    first.storage.transaction = transaction;
+    let trashedLate;
+    try {
+      trashedLate = await tabA.execute(trash('late'));
+    } finally {
+      FakeDatabase.prototype.transaction = transaction;
+    }
     const savedLate = await saving;
     assert.deepEqual(
       [

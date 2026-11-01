@@ -34,15 +34,34 @@
  * After either, and after close(), every call answers `reload-required`, which no resend
  * fixes: pages reload to open the database again (#17: "Pages ask for a reload"). #17 slice
  * 2 adds the journal that keeps what a closing connection couldn't commit.
+ *
+ * What the new tab took from js/storage.js's connection comes with it (#17 PR 4a), so the page
+ * can open this adapter: before a versionchange closes the connection, each function passed to
+ * beforeClose runs, synchronously, so an editor writes what it has pending and the write it
+ * opens then still commits; openState answers in the words Storage's openState used; and
+ * missingStores names the legacy stores the open database lacks.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { openFailureOf } from './failures.js';
 import { pendingStructural } from './registry.js';
-import { CORE_STORES, DB_NAME, DB_VERSION, LEGACY_VERSION } from './schema.js';
+import { CORE_STORES, DB_NAME, DB_VERSION, LEGACY_VERSION, STORE_SCHEMAS } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 
 /** @typedef {'versioned' | 'existing'} OpenMode */
+
+/**
+ * The connection in the words js/storage.js's openState has used since 1.4.x, which the new
+ * tab's App and its export notice read: `closed` until it opens, `open`, `newer-version` and
+ * `missing-core-stores` for those two refusals, `failed` for any other failed open,
+ * `version-changed` once another context's upgrade closed it, and `closed-by-browser` once
+ * Chrome closed it itself or a call found it closed. After close() it's `closed`.
+ * @typedef {'closed' | 'open' | 'newer-version' | 'missing-core-stores' | 'failed' | 'version-changed'
+ *   | 'closed-by-browser'} OpenState
+ */
+
+/** The legacy stores, in the order Storage's requiredStores lists them */
+const LEGACY_STORES = Object.freeze(Object.keys(STORE_SCHEMAS));
 
 /**
  * - `closed`: open() not called yet
@@ -64,6 +83,19 @@ import { openWithoutUpgrade } from './shapes.js';
  * @property {() => void} lost - for an IDBDatabase call that found the connection closed
  * @property {() => void} close
  * @property {() => ConnectionState} state
+ * @property {(flush: () => void) => () => void} beforeClose
+ *   Runs `flush` when another context's upgrade closes the connection, right before it closes,
+ *   so a transaction `flush` opens then still commits. What it throws is reported, and the
+ *   others and the close still run. A connection Chrome closes itself is gone already, so
+ *   nothing runs then. Answers a function that stops it.
+ * @property {() => OpenState} openState
+ * @property {() => string[]} missingStores
+ *   The legacy stores the database lacks, once an open found it, the one it refused for its
+ *   notes or blocks too, as Storage's missingStores names them. None before then.
+ * @property {() => boolean} upgraded
+ *   Whether the database is open at this build's version, which since #17 PR 1b only the
+ *   worker's run brings it to, as Storage's isUpgraded answered: false before it opens, and once
+ *   it's gone
  */
 
 /**
@@ -75,6 +107,10 @@ import { openWithoutUpgrade } from './shapes.js';
  * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
  *   What an `existing` open waits on first when it finds no database, or one below this
  *   build's version. It never rejects: a page passes its wait on the worker's run.
+ * @property {(() => Promise<unknown>) | null} [beforeOpen]
+ *   What an `existing` open runs next, before it opens the database: the new tab's #33 copy of
+ *   a database at 8 that lacks stores (recovery-copies.js). Whatever it answers, and if it
+ *   rejects, the open goes on.
  */
 
 /** How long open() waits before it answers for an open that hasn't finished (#17: "within 5 seconds") */
@@ -114,6 +150,7 @@ export function createConnection({
   openWithinMs = OPEN_WITHIN_MS,
   requireCore = false,
   awaitUpgrade = null,
+  beforeOpen = null,
 }) {
   /** @type {ConnectionState} */
   let state = 'closed';
@@ -123,19 +160,48 @@ export function createConnection({
   let failure = null;
   /** @type {Promise<void> | null} */
   let opening = null;
+  /**
+   * Why the connection is gone, as openState says it: the first reason it went, kept
+   * @type {OpenState | null}
+   */
+  let goneAs = null;
+  /** @type {string[]} */
+  let missing = [];
+  /** @type {Set<() => void>} */
+  const flushers = new Set();
+
+  /** @param {OpenState} why */
+  const gone = why => {
+    state = 'gone';
+    if (!goneAs) goneAs = why;
+  };
+
+  // Each runs, whatever another one threw, and the close goes ahead after them
+  const flushAll = () => {
+    for (const flush of [...flushers]) {
+      try {
+        flush();
+      } catch (error) {
+        const report = /** @type {{reportError?: (error: unknown) => void}} */ (globalThis).reportError;
+        if (typeof report === 'function') report(error);
+      }
+    }
+  };
 
   /**
    * Keeps `database` as this connection's, closing it on versionchange so it never blocks
-   * another context's upgrade
+   * another context's upgrade, once what the page has pending opened its writes
    * @param {IDBDatabase} database
    */
   const adopt = database => {
     database.onversionchange = () => {
+      // Each write a flush opens now is let finish by the close
+      if (db === database && state === 'open') flushAll();
       database.close();
-      if (db === database) state = 'gone';
+      if (db === database) gone('version-changed');
     };
     database.onclose = () => {
-      if (db === database) state = 'gone';
+      if (db === database) gone('closed-by-browser');
     };
     db = database;
     state = 'open';
@@ -207,6 +273,8 @@ export function createConnection({
           reject(new UnavailableError('storage', 'reload-required', false));
           return;
         }
+        // Named even when the open is refused for them, as Storage names them
+        missing = LEGACY_STORES.filter(name => !database.objectStoreNames.contains(name));
         if (
           (mode === 'versioned' || requireCore) &&
           CORE_STORES.some(name => !database.objectStoreNames.contains(name))
@@ -301,16 +369,28 @@ export function createConnection({
         return opening;
       }
       state = 'opening';
-      opening =
-        mode === 'existing' && awaitUpgrade
-          ? waitForUpgrade(awaitUpgrade).then(() => {
-              // close() while it waited: it opens nothing
-              if (/** @type {ConnectionState} */ (state) === 'gone') {
-                throw new UnavailableError('storage', 'reload-required', false);
-              }
-              return connectWithin();
-            })
-          : connectWithin();
+      const waited = mode === 'existing' && awaitUpgrade ? waitForUpgrade(awaitUpgrade) : null;
+      // What the root runs first, after any wait on the worker's run, which never fails the open
+      const ahead =
+        mode === 'existing' && beforeOpen
+          ? (waited || Promise.resolve()).then(() =>
+              Promise.resolve()
+                .then(beforeOpen)
+                .then(
+                  () => undefined,
+                  () => undefined,
+                ),
+            )
+          : waited;
+      opening = ahead
+        ? ahead.then(() => {
+            // close() while it waited: it opens nothing
+            if (/** @type {ConnectionState} */ (state) === 'gone') {
+              throw new UnavailableError('storage', 'reload-required', false);
+            }
+            return connectWithin();
+          })
+        : connectWithin();
       // Once open() has answered, a later failure is answered by database()
       opening.catch(() => {});
       return opening;
@@ -334,14 +414,42 @@ export function createConnection({
     },
 
     lost() {
-      if (state === 'open') state = 'gone';
+      if (state === 'open') gone('closed-by-browser');
     },
 
     close() {
       if (db) db.close();
-      state = 'gone';
+      gone('closed');
     },
 
     state: () => state,
+
+    beforeClose(flush) {
+      flushers.add(flush);
+      return () => {
+        flushers.delete(flush);
+      };
+    },
+
+    openState() {
+      switch (state) {
+        case 'open':
+          return 'open';
+        case 'gone':
+          return goneAs || 'closed';
+        case 'failed': {
+          const code = failure ? failure.code : '';
+          if (code === 'version-too-new') return 'newer-version';
+          if (code === 'missing-core-stores') return 'missing-core-stores';
+          return 'failed';
+        }
+        default:
+          return 'closed';
+      }
+    },
+
+    missingStores: () => [...missing],
+
+    upgraded: () => state === 'open' && db !== null && db.version >= DB_VERSION,
   });
 }

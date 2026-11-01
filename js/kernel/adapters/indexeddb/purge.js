@@ -62,7 +62,7 @@ import {
   verifyPoint,
 } from './recovery-points.js';
 import { META_STORE } from './registry.js';
-import { result } from './requests.js';
+import { committed, result } from './requests.js';
 import { DB_NAME } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 
@@ -217,10 +217,7 @@ async function recordStops(indexedDB, stops) {
   try {
     if (!db.objectStoreNames.contains(META_STORE)) return;
     const tx = db.transaction(META_STORE, 'readwrite', STRICT);
-    const done = new Promise((resolve, reject) => {
-      tx.addEventListener('complete', () => resolve(undefined));
-      tx.addEventListener('abort', () => reject(tx.error || new DOMException('The transaction aborted', 'AbortError')));
-    });
+    const done = committed(tx);
     if (stops.length > 0) tx.objectStore(META_STORE).put(/** @type {StopRecord} */ ({ key: PURGE_STOP_KEY, stops }));
     else tx.objectStore(META_STORE).delete(PURGE_STOP_KEY);
     await done;

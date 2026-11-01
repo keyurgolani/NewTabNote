@@ -522,14 +522,16 @@ describe('the graphs in the sources, as the bundler folds them', () => {
   const all = graphFrom([...PAGE_ENTRIES, config.BACKGROUND_ENTRY], { vendored: true });
 
   it("reaches the kernel from the service worker, on #17's adapter and its migration runner, and passes the background's checks", () => {
-    for (const file of ['js/background.js', 'js/utils.js', 'js/storage.js', 'js/kernel/composition/background.js',
+    for (const file of ['js/background.js', 'js/kernel/composition/background.js',
       'js/kernel/adapters/indexeddb/adapter.js', 'js/kernel/adapters/indexeddb/migrate.js',
       'js/kernel/core/application/kernel.js']) {
       assert.ok(background.includes(file), file);
     }
     // #17 PR 1b: the worker upgrades the database and opens it on #17's adapter, not the legacy one
     assert.ok(!background.includes('js/kernel/adapters/legacy/adapter.js'));
-    // js/utils.js's trapFocus reads document behind its typeof check (#27 slice 2)
+    // #17 PR 4a (Q8): the harness seeds a profile through test/fixtures/storage/profile-store.mjs,
+    // so the worker has no Storage or Utils global, and neither file is in its graph
+    for (const file of ['js/storage.js', 'js/utils.js']) assert.ok(!background.includes(file), file);
     assert.deepEqual(checkBackgroundSources(background.map((file) => ({ file, text: read(file) }))), []);
   });
 

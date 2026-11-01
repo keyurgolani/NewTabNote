@@ -42,19 +42,21 @@
  * assignDailyKeys), and fills step 11's daily index. The rules weigh every Daily Note at once,
  * so the run reads them all first, in bounded readonly batches, and keeps the answer in `meta`
  * (TRANSFORM_DAILY_KEY) until the step's receipt, so a cut-off run picks up with the same answer
- * whatever its batches wrote. A lookup between two batches finds what the answer gives, since a
- * note a batch marked as a duplicate never counts as a claim (assignDailyKeys), so its repair
- * writes the fields that note's own batch would. A batch claims each key in the index as it
- * writes the note that holds it. An entry for another note the run read goes by the answer, and
- * one for a note a page made since the run read the notes goes to the earlier made of the two.
- * Its receipt counts the notes it read and filled, the ones it moved to their local date, and
- * the ones it marked as duplicates, never content.
+ * whatever its batches wrote. A lookup between two batches reads that answer in its own
+ * transaction and goes by it (daily-answer.js, domain/daily.js's underAnswer; #17 PR 4a, F10),
+ * so it finds what it will once the run is done, even for a note that changed since the run read
+ * it, and its repair writes the fields that note's own batch would. A batch claims each key in
+ * the index as it writes the note that holds it. An entry for another note the run read goes by
+ * the answer, and one for a note a page made since the run read the notes goes to the earlier
+ * made of the two. Its receipt counts the notes it read and filled, the ones it moved to their
+ * local date, and the ones it marked as duplicates, never content.
  */
 
 import { assignDailyKeys, canHoldKey, holdsKey, madeBefore, withAssignedKey } from '../../core/domain/daily.js';
 import { filledUpdatedAt, hasIndexedTime, hasTrashTime } from '../../core/domain/note.js';
 import { hasPlacementGroup, isDateKey, placementFindingsOf, placementGroupOf } from '../../core/domain/placement.js';
 import { zoneOf } from '../../core/ports/runtime.js';
+import { TRANSFORM_DAILY_KEY, answerOf } from './daily-answer.js';
 import { failureOf } from './failures.js';
 import { approximateBytes } from './records.js';
 import {
@@ -106,8 +108,9 @@ export const TRANSFORM_KEY = 'transform';
 /** `meta`'s record of a run that read every store and then stopped (see the top of this file) */
 export const TRANSFORM_STOP_KEY = 'transform-stop';
 
-/** `meta`'s record of logical 3's answer while its batches run (see the top of this file) */
-export const TRANSFORM_DAILY_KEY = 'transform-daily';
+// `meta`'s record of logical 3's answer while its batches run (see the top of this file), which
+// a Daily Note lookup reads in its own transaction (daily-answer.js, #17 PR 4a)
+export { TRANSFORM_DAILY_KEY };
 
 /** How long such a stop stands, as the worker's RETRY_AFTER_MS for the runner */
 export const TRANSFORM_RETRY_AFTER_MS = 30 * 60 * 1000;
@@ -119,11 +122,7 @@ export const TRANSFORM_RETRY_AFTER_MS = 30 * 60 * 1000;
  * @typedef {Record<string, number>} TransformCounts
  */
 
-/**
- * Logical 3's answer, as `meta` keeps it: each Daily Note's id, key, holder when another holds
- * it, and whether it moves to its local date, and the zone the run took local dates in
- * @typedef {{key: typeof TRANSFORM_DAILY_KEY, zone: string, assignments: Array<[string, string, string | null, boolean]>}} TransformDaily
- */
+/** @typedef {import('./daily-answer.js').TransformDaily} TransformDaily */
 
 /**
  * Where a cut-off run got to
@@ -372,11 +371,8 @@ async function assignedNow(db, io, zone) {
  * @returns {Promise<Map<string, DailyAssignment>>}
  */
 async function dailyAnswer(db, io, { zone, kept }) {
-  if (kept && Array.isArray(kept.assignments)) {
-    return new Map(
-      kept.assignments.map(([id, dailyKey, duplicateOf, rekeyed]) => [id, { dailyKey, duplicateOf, rekeyed }]),
-    );
-  }
+  const keptAnswer = answerOf(kept);
+  if (keptAnswer) return keptAnswer;
   const assigned = await assignedNow(db, io, zone);
   const tx = db.transaction(META_STORE, 'readwrite', STRICT);
   const done = committed(tx);

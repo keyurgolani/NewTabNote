@@ -10,7 +10,7 @@
 import { BULK_ACTIONS } from '../contracts/commands.js';
 import { isId, isIdList, isIdOrNull, isRecord } from '../contracts/checks.js';
 import { bulk, committed, conflict, empty, failed, ready, rejected } from '../contracts/outcomes.js';
-import { dailyHolder, holdsKey, withAssignedKey } from '../domain/daily.js';
+import { dailyHolder, holdsKey, underAnswer, withAssignedKey } from '../domain/daily.js';
 import {
   NOTE_VIEWS,
   blocksFromTemplate,
@@ -335,6 +335,9 @@ function isCapture(value) {
  * deletion left the entry stale. With `repair`, on a database that has the index, the note it
  * found gets its key and the index its entry in the same transaction, so the next lookup reads
  * the index alone. Below version 11 the index isn't there, and every lookup scans, as 1.4.x's.
+ * While logical 3's batches run, every note goes by the run's kept answer, read in `tx`
+ * (domain/daily.js, underAnswer), so a lookup between two batches finds what it will once the
+ * run is done, and a repair writes what the note's own batch would (#17 PR 4a, F10).
  * @param {ReadTx} tx
  * @param {string} key
  * @param {string} zone
@@ -342,19 +345,24 @@ function isCapture(value) {
  * @returns {Promise<{note: NoteRecord, repaired: boolean} | undefined>}
  */
 async function dailyNoteIn(tx, key, zone, repair) {
+  const answer = await tx.dailyAnswer();
   const entry = await tx.get('dailyIndex', key);
   if (entry && isId(entry.noteId)) {
-    const indexed = await tx.get('notes', entry.noteId);
+    const stored = await tx.get('notes', entry.noteId);
+    const [indexed] = stored ? underAnswer([stored], answer) : [];
     if (indexed && holdsKey(indexed, key)) return { note: indexed, repaired: false };
   }
-  const found = dailyHolder(await tx.getAll('notes'), key, zone);
+  const notes = await tx.getAll('notes');
+  const found = dailyHolder(underAnswer(notes, answer), key, zone);
   if (!found) return undefined;
   if (!repair || !tx.has('dailyIndex')) return { note: found.note, repaired: false };
   const write = /** @type {Tx} */ (tx);
   const keyed = withAssignedKey(found.note, found.assignment);
-  if (keyed !== found.note) write.put('notes', keyed);
+  // Against the note as stored: the answer's key fields are written too, as its batch would
+  const stored = notes.find(note => note.id === keyed.id);
+  if (keyed !== stored) write.put('notes', keyed);
   write.put('dailyIndex', { dailyKey: key, noteId: keyed.id });
-  return { note: keyed, repaired: keyed !== found.note };
+  return { note: keyed, repaired: keyed !== stored };
 }
 
 /**

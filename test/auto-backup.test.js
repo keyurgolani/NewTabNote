@@ -1,13 +1,15 @@
 'use strict';
 
-// Automatic backups through production js/storage.js on fake-indexeddb and legacy-env's
-// chrome.storage.local stub: each backup is the export of what the database holds, stored
-// under auto_backup_<ms>, the newest three kept, and lastBackupAt set once one is stored.
-// A chrome.storage read that fails lists no backups, and a write that fails stores none.
+// Automatic backups as the page makes them since #17 PR 4a, the createAutoBackup command on
+// #17's adapter (backups.js) through the page's settings port, on fake-indexeddb and
+// legacy-env's chrome.storage.local stub: each backup is the export of what the database holds,
+// stored under auto_backup_<ms>, the newest three kept, and lastBackupAt set once one is stored.
+// Storage.getAutoBackups lists them, and a chrome.storage read that fails lists none; a write
+// that fails stores none.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, createDatabase, note, block, plain } = require('./helpers/legacy-env');
+const { createLegacyEnv, createDatabase, note, block, plain, startNewTabKernel } = require('./helpers/legacy-env');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 
@@ -15,8 +17,9 @@ const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js'];
 const nextMillisecond = () => new Promise((resolve) => setTimeout(resolve, 3));
 
 /**
- * Storage started on a database holding note N (Groceries) with one block, as a new tab
- * starts it
+ * A new tab started on a database holding note N (Groceries) with one block, as its root starts
+ * it, with the holders' Storage beside #17's adapter, and its settings port, whose
+ * createAutoBackup runs on the adapter
  */
 async function started() {
   const env = createLegacyEnv({ document: null });
@@ -25,17 +28,17 @@ async function started() {
   });
   env.load(...FILES);
   const storage = env.get('Storage');
-  await storage.init();
+  await startNewTabKernel(env);
   /** The auto_backup_ keys chrome.storage.local holds, oldest first */
   const backupKeys = () => Object.keys(env.chrome.local).filter((key) => key.startsWith('auto_backup_')).sort();
-  return { env, storage, backupKeys };
+  return { env, storage, settings: env.settingsClient, backupKeys };
 }
 
 describe('auto-backup to chrome.storage.local', () => {
   it('createAutoBackup stores the export of the database under an auto_backup_ key', async () => {
-    const { env, storage, backupKeys } = await started();
+    const { env, settings, backupKeys } = await started();
     const before = Date.now();
-    await storage.createAutoBackup();
+    await settings.createAutoBackup();
 
     const keys = backupKeys();
     assert.equal(keys.length, 1);
@@ -49,18 +52,18 @@ describe('auto-backup to chrome.storage.local', () => {
   });
 
   it('createAutoBackup sets lastBackupAt', async () => {
-    const { env, storage } = await started();
+    const { env, storage, settings } = await started();
     const before = Date.now();
-    await storage.createAutoBackup();
+    await settings.createAutoBackup();
     assert.ok(env.chrome.local.setting_lastBackupAt >= before);
     assert.ok(await storage.getSetting('lastBackupAt', 0) >= before);
   });
 
   it('keeps only the newest three backups', async () => {
-    const { storage, backupKeys } = await started();
+    const { storage, settings, backupKeys } = await started();
     const made = [];
     for (let i = 0; i < 4; i++) {
-      await storage.createAutoBackup();
+      await settings.createAutoBackup();
       made.push(backupKeys().at(-1));
       await nextMillisecond();
     }
@@ -75,10 +78,10 @@ describe('auto-backup to chrome.storage.local', () => {
   });
 
   it('getAutoBackups lists the newest first, with what each stored', async () => {
-    const { storage, backupKeys } = await started();
-    await storage.createAutoBackup();
+    const { storage, settings, backupKeys } = await started();
+    await settings.createAutoBackup();
     await nextMillisecond();
-    await storage.createAutoBackup();
+    await settings.createAutoBackup();
 
     const backups = plain(await storage.getAutoBackups());
     assert.deepEqual(backups.map((b) => b.key), backupKeys().reverse());
@@ -87,8 +90,8 @@ describe('auto-backup to chrome.storage.local', () => {
   });
 
   it('getAutoBackups resolves an empty list when chrome.storage reports lastError', async () => {
-    const { env, storage, backupKeys } = await started();
-    await storage.createAutoBackup();
+    const { env, storage, settings, backupKeys } = await started();
+    await settings.createAutoBackup();
     assert.equal(backupKeys().length, 1);
 
     env.chrome.failNextGet();
@@ -98,9 +101,13 @@ describe('auto-backup to chrome.storage.local', () => {
   });
 
   it('createAutoBackup rejects when chrome.storage refuses the write, and stores nothing', async () => {
-    const { env, storage, backupKeys } = await started();
+    const { env, settings, backupKeys } = await started();
     env.chrome.failNextSet();
-    await assert.rejects(storage.createAutoBackup(), { message: 'Resource::kQuotaBytes quota exceeded' });
+    // The command answers what refused it: chrome.storage.local's quota, as its message says
+    await assert.rejects(settings.createAutoBackup(), (error) => {
+      assert.deepEqual([error.name, error.outcome.kind, error.outcome.cause, error.code], ['SettingsWriteError', 'unavailable', 'quota', 'quota']);
+      return true;
+    });
     assert.deepEqual(backupKeys(), []);
     assert.equal(env.chrome.local.setting_lastBackupAt, undefined);
   });

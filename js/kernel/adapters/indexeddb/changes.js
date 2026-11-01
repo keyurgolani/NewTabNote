@@ -14,7 +14,7 @@
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { failureOf } from './failures.js';
 import { CHANGES_KEY, CHANGES_STORE, META_STORE } from './registry.js';
-import { result } from './requests.js';
+import { committed, result } from './requests.js';
 
 /** @typedef {import('../../core/ports/commit-log.js').Change} Change */
 /** @typedef {import('../../core/ports/commit-log.js').ChangeEntry} ChangeEntry */
@@ -70,15 +70,8 @@ export function writeChanges(tx, head, changes, opId) {
   return seq;
 }
 
-/**
- * @param {IDBTransaction} tx
- * @returns {Promise<void>}
- */
-const completion = tx =>
-  new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onabort = () => reject(tx.error || new DOMException('The transaction was aborted', 'AbortError'));
-  });
+/** How an append or a prune ends, Chrome's close of the connection included (requests.js) */
+const completion = committed;
 
 /**
  * Appends one commit's changes in a transaction of its own, as the adapter does in a commit's,
@@ -118,11 +111,12 @@ export async function pruneChanges(db, keyRange, through) {
 
 /**
  * The change log's cursor read over a connection's database (ports/commit-log.js). A
- * database without `changes` has an empty log.
- * @param {{database: () => IDBDatabase, keyRange: typeof IDBKeyRange}} options
+ * database without `changes` has an empty log. `failure` says what a failed read answers: the
+ * adapter's says reload-required on a connection that's gone or going (adapter.js).
+ * @param {{database: () => IDBDatabase, keyRange: typeof IDBKeyRange, failure?: (error: unknown) => UnavailableError}} options
  * @returns {CommitLog}
  */
-export function createIndexedDbCommitLog({ database, keyRange }) {
+export function createIndexedDbCommitLog({ database, keyRange, failure = failureOf }) {
   /**
    * The log's head record, and the rows of the commits after `cursor` up to `last`, in one
    * readonly transaction, so the rows and the head agree
@@ -144,7 +138,7 @@ export function createIndexedDbCommitLog({ database, keyRange }) {
       const rows = /** @type {ChangeRow[]} */ (await result(tx.objectStore(CHANGES_STORE).getAll(bound)));
       return { head, rows };
     } catch (error) {
-      throw failureOf(error);
+      throw failure(error);
     }
   };
 

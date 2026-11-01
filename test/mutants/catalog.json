@@ -35,9 +35,9 @@
       "id": "commit-wait-idb-abort-reads-committed",
       "behavior": "commit waits",
       "protects": "A transaction that aborts after its requests succeeded answers unavailable, never committed.",
-      "file": "js/kernel/adapters/indexeddb/adapter.js",
-      "find": "tx.addEventListener('abort', () => resolve({ committed: false, error: tx.error }));",
-      "replace": "tx.addEventListener('abort', () => resolve({ committed: true }));",
+      "file": "js/kernel/adapters/indexeddb/requests.js",
+      "find": "    const aborted = () => settle({ committed: false, error: tx.error });",
+      "replace": "    const aborted = () => settle({ committed: true });",
       "test": "test/kernel/storage-commit.test.mjs",
       "name": "a transaction that aborts after its requests succeeded answers unavailable, and stores none of them"
     },
@@ -72,16 +72,6 @@
       "name": "doesn't run a failed write again once this context sent a later one, so it can't land over the later one"
     },
     {
-      "id": "commit-wait-legacy-answer-before-complete",
-      "behavior": "commit waits",
-      "protects": "A unit on the legacy adapter answers only once its transaction commits.",
-      "file": "js/kernel/adapters/legacy/adapter.js",
-      "find": "      await committed;\n      return undefined;",
-      "replace": "      return undefined;",
-      "test": "test/kernel/legacy.test.mjs",
-      "name": "a write whose transaction aborts as it commits is unavailable, never committed"
-    },
-    {
       "id": "commit-wait-idb-throw-keeps-earlier-writes",
       "behavior": "commit waits",
       "protects": "A unit that throws aborts its command's transaction, so nothing an earlier unit wrote commits.",
@@ -100,6 +90,36 @@
       "replace": "",
       "test": "test/kernel/storage-commit.test.mjs",
       "name": "a unit declared readonly can't write, even in a command another unit makes readwrite"
+    },
+    {
+      "id": "commit-wait-idb-end-on-chrome-close",
+      "behavior": "commit waits",
+      "protects": "A command whose transaction Chrome's close of the connection catches answers, though the transaction fires neither complete nor abort, never waiting on it for good.",
+      "file": "js/kernel/adapters/indexeddb/requests.js",
+      "find": "    db.addEventListener('close', closed);\n",
+      "replace": "",
+      "test": "test/kernel/storage-mid-close.test.mjs",
+      "name": "Chrome closes it while a command commits: reload-required once its run again fails there, nothing written, and the next call the same"
+    },
+    {
+      "id": "commit-wait-idb-read-on-closed-connection",
+      "behavior": "commit waits",
+      "protects": "A read that IndexedDB fails once Chrome's close of the connection has reached the page answers reload-required, as every call after it does, never a failure a resend could get past.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "    fromIndexedDb(error) && going() ? new UnavailableError('storage', 'reload-required', false) : failureOf(error);",
+      "replace": "    failureOf(error);",
+      "test": "test/kernel/storage-mid-close.test.mjs",
+      "name": "a read that starts once Chrome's aborts have reached the page, before its close does: reload-required"
+    },
+    {
+      "id": "commit-wait-idb-run-again-on-closed-connection",
+      "behavior": "commit waits",
+      "protects": "A command whose run again fails once Chrome's close of the connection has reached the page answers reload-required, never retries-exhausted, and runs no more.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "    fromIndexedDb(cause) && going() ? answered(unavailable('storage', 'reload-required', false)) : failed(cause, write);",
+      "replace": "    failed(cause, write);",
+      "test": "test/kernel/storage-mid-close.test.mjs",
+      "name": "Chrome closes it while a command commits: reload-required once its run again fails there, nothing written, and the next call the same"
     },
     {
       "id": "schema-codec-accepts-getter",
@@ -184,70 +204,70 @@
     {
       "id": "backup-drops-archived-notes",
       "behavior": "backup inclusion",
-      "protects": "exportAll includes archived notes.",
-      "file": "js/storage.js",
-      "find": "    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];",
-      "replace": "    const notes = [...(await this.getAllNotes(false)), ...(await this.getTemplates())];",
+      "protects": "The export includes archived notes.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "  const listed = [...byUpdate].reverse().filter(note => !note.trashed && !note.isTemplate);",
+      "replace": "  const listed = [...byUpdate].reverse().filter(note => !note.trashed && !note.isTemplate && !note.archived);",
       "test": "test/export.test.js",
       "name": "includes active and archived notes, templates, folders, and their media; not trash"
     },
     {
       "id": "backup-drops-templates",
       "behavior": "backup inclusion",
-      "protects": "exportAll includes templates.",
-      "file": "js/storage.js",
-      "find": "    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];",
-      "replace": "    const notes = [...(await this.getAllNotes(true))];",
+      "protects": "The export includes templates.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "  const notes = [...listed, ...templates].map(note => withoutPlacement(note));",
+      "replace": "  const notes = [...listed].map(note => withoutPlacement(note));",
       "test": "test/export.test.js",
       "name": "includes active and archived notes, templates, folders, and their media; not trash"
     },
     {
       "id": "backup-drops-folders",
       "behavior": "backup inclusion",
-      "protects": "exportAll includes every folder.",
-      "file": "js/storage.js",
-      "find": "    return { notes, elements, media, folders: await this.getAllFolders() };",
-      "replace": "    return { notes, elements, media, folders: [] };",
+      "protects": "The export includes every folder.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "  return { notes, elements, media, folders };",
+      "replace": "  return { notes, elements, media, folders: [] };",
       "test": "test/export.test.js",
       "name": "includes active and archived notes, templates, folders, and their media; not trash"
     },
     {
       "id": "backup-drops-media",
       "behavior": "backup inclusion",
-      "protects": "exportAll includes the media of the notes it exports.",
-      "file": "js/storage.js",
-      "find": "      media: mediaWithBase64,\n      folders,\n    };",
-      "replace": "      media: [],\n      folders,\n    };",
+      "protects": "The export includes the media of the notes it exports.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "    ? /** @type {Row[]} */ (await result(tx.objectStore('media').getAll())).filter(row => exported.has(row.canvasId))",
+      "replace": "    ? []",
       "test": "test/export.test.js",
       "name": "includes active and archived notes, templates, folders, and their media; not trash"
     },
     {
       "id": "backup-drops-blocks",
       "behavior": "backup inclusion",
-      "protects": "exportAll includes every exported note's blocks.",
-      "file": "js/storage.js",
-      "find": "      elements.push(...(await this.getElementsByNote(note.id)));",
-      "replace": "      if (!note.archived) elements.push(...(await this.getElementsByNote(note.id)));",
+      "protects": "The export includes every exported note's blocks.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "  for (const note of notes) elements.push(...(await result(blocks.getAll(note.id))));",
+      "replace": "  for (const note of notes) if (!note.archived) elements.push(...(await result(blocks.getAll(note.id))));",
       "test": "test/export.test.js",
       "name": "round-trips through Replace all into an empty profile with folder placement intact (AC5)"
     },
     {
       "id": "backup-blob-drops-folders",
       "behavior": "backup inclusion",
-      "protects": "Export JSON as a file holds the folders exportAll holds.",
-      "file": "js/storage.js",
-      "find": "    list('folders', folders);",
-      "replace": "    list('folders', []);",
+      "protects": "Export JSON's file holds the folders the export holds.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "  list('folders', folders);",
+      "replace": "  list('folders', []);",
       "test": "test/export.test.js",
       "name": "holds the same JSON as exportAll, without indentation, with extra fields last"
     },
     {
       "id": "backup-includes-trash",
       "behavior": "backup inclusion",
-      "protects": "exportAll leaves out notes in trash.",
-      "file": "js/storage.js",
-      "find": "    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates())];",
-      "replace": "    const notes = [...(await this.getAllNotes(true)), ...(await this.getTemplates()), ...(await this.getTrashedNotes())];",
+      "protects": "The export leaves out notes in trash.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "  const listed = [...byUpdate].reverse().filter(note => !note.trashed && !note.isTemplate);",
+      "replace": "  const listed = [...byUpdate].reverse().filter(note => !note.isTemplate);",
       "test": "test/export.test.js",
       "name": "includes active and archived notes, templates, folders, and their media; not trash"
     },
@@ -544,12 +564,12 @@
     {
       "id": "save-splits-note-and-blocks",
       "behavior": "#33 save fixes",
-      "protects": "saveNoteContent writes a note's fields and its blocks in one unit, so a save of a deleted note writes neither.",
+      "protects": "saveNoteContent writes a note's fields and its blocks in one unit, so a stale save, which is a conflict, writes neither.",
       "file": "js/kernel/core/application/notes.js",
       "find": "    /** @type {Unit[]} */\n    const units = [save];",
       "replace": "    /** @type {Unit[]} */\n    const units = [\n      { stores: ['blocks'], async run(tx) { for (const block of records) tx.put('blocks', block); } },\n      { ...save, stores: ['notes'], run: tx => save.run({ ...tx, put: (store, record) => (store === 'blocks' ? undefined : tx.put(store, record)) }) },\n    ];",
-      "test": "test/kernel/legacy.test.mjs",
-      "name": "for a note deleted since the editor loaded it writes nothing, blocks included"
+      "test": "test/kernel/storage-contract.test.mjs",
+      "name": "revisions: committed outcomes report the revision, and a stale expectedRevision is a conflict that changes nothing in the note or its blocks"
     },
     {
       "id": "save-resurrects-deleted-note",

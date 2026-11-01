@@ -1,6 +1,6 @@
 /**
  * The repository port: what a kernel adapter offers the use cases. Stores go by domain
- * names here, and each adapter maps them to its own (the legacy adapter's `notes` is
+ * names here, and each adapter maps them to its own (#17's adapter's `notes` is
  * IndexedDB's `canvases`).
  *
  * A command's writes come as units. A unit names its stores, reads committed state, checks
@@ -94,6 +94,11 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
  * @property {(store: StoreName) => boolean} has
  *   Whether the database has `store`, so a write to it lands: false for a LATER_STORES store a
  *   database below its version lacks, or for a store a damaged one lacks
+ * @property {() => Promise<ReadonlyMap<string, import('../domain/daily.js').DailyAssignment> | null>} dailyAnswer
+ *   While #17's logical 3 runs, the answer it keeps for each Daily Note it read, by note id, read
+ *   in this transaction, so a Daily Note lookup between two of its batches finds what it will
+ *   once the run is done (#17 PR 4a, F10); null when no run is going. Only #17's adapter runs
+ *   one, in a transaction over `dailyIndex`; the others answer null.
  */
 
 /**
@@ -235,8 +240,10 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
 
 /**
  * What an adapter guarantees. The contract suite expects the documented difference for
- * each flag, and each one the legacy adapter lacks is a `declared-gap` row in the ledger, as
- * is `backups` on #17's adapter, which #18's backup engine closes.
+ * each flag. A shipped adapter that lacks one records it as a `declared-gap` row in the
+ * ledger, and none does since #17 PR 4a: #17's adapter has every flag, `backups` where its
+ * root asks for it, the new tab's, and the legacy adapter, which lacked atomicMultiStore,
+ * revisions, and idempotency, is deleted. The memory adapter runs no backup tasks.
  * @typedef {object} AdapterFlags
  * @property {boolean} atomicMultiStore - a command's units commit together or not at all
  * @property {boolean} revisions
@@ -255,8 +262,9 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   such as #20's storage probe, keeps no record, so every run of it runs.
  * @property {boolean} backups
  *   The adapter runs the legacy backup tasks (BackupTask) and makes the export file
- *   (exportBackup): the import, auto-backup, and export run 1.4.x's Storage code, recovery
- *   copy, keys, retention, and record shapes included. One without answers `unavailable`,
+ *   (exportBackup): the import, auto-backup, and export do what 1.4.x's Storage did, recovery
+ *   copy, keys, retention, and record shapes included, through Storage's own code on the legacy
+ *   adapter and backups.js's port of it on #17's. One without answers `unavailable`,
  *   `adapter`, `backups-need-legacy-storage`, and writes nothing, until #18's backup engine
  *   runs on every adapter.
  */

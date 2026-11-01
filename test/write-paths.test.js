@@ -11,7 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   WRITES, READS, MODE_WRITES, COMMANDS, RULES, STATUSES, DOC,
-  scanSource, classify, collect, check, main,
+  scanSource, storageMembers, staleListings, classify, collect, check, main,
 } = require('../scripts/write-paths.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -54,9 +54,10 @@ describe('the write-path doc', () => {
   it("Storage's own deletes run on no live path, so every delete leaves its tombstone (#17 PR 2b)", () => {
     // DatabaseManager's deletes leave no tombstone, so a note they deleted would stay in the
     // recovery points. #12 slice 7 deleted App's copies of the controller paths that called
-    // them, so none is listed now, and one that comes back has to be one of these
+    // them, so none is listed now, and one that comes back has to be one of these. #17 PR 4a
+    // deleted emptyTrash, cleanupTrash, and bulkNoteAction, so a call to one fails the scan
     const { rows } = collect(ROOT);
-    const deletes = rows.filter(row => /\.(permanentlyDeleteNote|emptyTrash|cleanupTrash|deleteFolder|bulkNoteAction)\(/.test(row.call));
+    const deletes = rows.filter(row => /\.(permanentlyDeleteNote|deleteFolder)\(/.test(row.call));
     for (const row of deletes) {
       assert.ok(['deleted in slice 7', 'no live caller'].includes(row.status), `${row.method}: ${row.call} is ${row.status}`);
     }
@@ -65,6 +66,17 @@ describe('the write-path doc', () => {
   it('no DatabaseManager method is listed as both a read and a write', () => {
     const listed = [...WRITES, ...MODE_WRITES, ...READS];
     assert.equal(listed.length, new Set(listed).size);
+  });
+
+  it("lists only what DatabaseManager defines, and rules only ops something writes with (R88's read of #17 PR 4a)", () => {
+    const members = storageMembers(ROOT);
+    assert.deepEqual([...WRITES, ...READS].filter(op => !members.has(op)), []);
+    assert.deepEqual(staleListings(members), []);
+    // A DatabaseManager that loses a listed method fails the check until the lists drop it
+    const { problems } = withRepo({ 'js/storage.js': 'class DatabaseManager {\n  getNote() {}\n}\n' }, root => collect(root));
+    assert.ok(problems.some(p => /^WRITES in scripts\/write-paths\.js lists updateNote, which DatabaseManager doesn't define: drop it$/.test(p)), problems[0]);
+    assert.ok(problems.some(p => /^READS in scripts\/write-paths\.js lists getAllNotes, which DatabaseManager doesn't define/.test(p)));
+    assert.ok(!problems.some(p => / lists getNote,/.test(p)));
   });
 
   it('every rule names a command, and every command has a slice or a ledger issue', () => {
@@ -94,14 +106,14 @@ describe('scanning', () => {
         run(note) {
           Storage.updateNote(note);
           self.Storage.trashNote(note.id);
-          (typeof window !== 'undefined' ? window : self).Storage.emptyTrash();
+          (typeof window !== 'undefined' ? window : self).Storage.permanentlyDeleteNote(note.id);
           this.storage.setSetting('theme', 'dark');
           appStorage().createNote('x');
           this._getStorage().saveElement({});
           const storage = this.storage;
           storage.archiveNote(note.id);
           const { storage: db } = this;
-          db.restoreNote(note.id);
+          db.unarchiveNote(note.id);
           Storage.transaction(['canvases'], 'readwrite');
           Storage.getStore('canvases', 'readwrite');
           Storage.getNote(note.id);
@@ -111,8 +123,8 @@ describe('scanning', () => {
         }
       }`);
     assert.deepEqual(problems, []);
-    assert.deepEqual(calls, ['updateNote', 'trashNote', 'emptyTrash', 'setSetting theme', 'createNote', 'saveElement',
-      'archiveNote', 'restoreNote', 'transaction canvases', 'getStore canvases']);
+    assert.deepEqual(calls, ['updateNote', 'trashNote', 'permanentlyDeleteNote', 'setSetting theme', 'createNote', 'saveElement',
+      'archiveNote', 'unarchiveNote', 'transaction canvases', 'getStore canvases']);
   });
 
   it('shows the receiver it resolved, never a local name', () => {
@@ -122,7 +134,7 @@ describe('scanning', () => {
         run(note) {
           const db = this.storage;
           db.archiveNote(note.id);
-          editorStorage().saveNoteWithBlocks(note, []);
+          editorStorage().saveElement(note.blocks[0]);
         }
       }
       function add(db, note) {
@@ -134,7 +146,7 @@ describe('scanning', () => {
       function cache(id) { const api = A._chromeApi(); const area = api.storage.local; area.set({ lastOpenedNoteId: id }); }`);
     assert.deepEqual(hits.map(h => h.call), [
       'this.storage.archiveNote(…)',
-      'Storage.saveNoteWithBlocks(…)',
+      'Storage.saveElement(…)',
       "objectStore('canvases').add(…)",
       'cursor.delete(…)',
       'chrome.storage.local.set({lastOpenedNoteId})',
@@ -155,12 +167,12 @@ describe('scanning', () => {
   it('lists the fields an update sets', () => {
     const { hits } = ops(`
       class S {
-        rename(folder, name) { folder.name = name; this.storage.updateFolder(folder); }
+        rename(note, name) { note.name = name; this.storage.updateNote(note); }
         pin(note) { note.pinned = !note.pinned; note.updatedAt = Date.now(); this.storage.updateNote(note); }
         insights(found) { this.noteData.insights = found; Storage.updateNote(this.noteData); }
       }`);
     assert.deepEqual(hits.map(h => h.call), [
-      'this.storage.updateFolder({name})',
+      'this.storage.updateNote({name})',
       'this.storage.updateNote({pinned, updatedAt})',
       'Storage.updateNote({insights})',
     ]);
@@ -203,7 +215,7 @@ describe('scanning', () => {
     const { hits } = ops(`
       class App {
         run() {
-          async function helper() { await Storage.emptyTrash(); }
+          async function helper() { await Storage.trashNote(id); }
           return helper();
         }
       }`);
@@ -236,7 +248,7 @@ describe('scanning', () => {
         run(id) {
           this.archiveNote(id);
           this.notesManager.archiveNote(id);
-          this.sidebarController.emptyTrash();
+          this.sidebarController.trashNote(id);
           this.searchEngine.updateNote(id);
           LLM.init();
         }
@@ -245,6 +257,20 @@ describe('scanning', () => {
       storage.createNote('Quick');`);
     assert.deepEqual(problems, []);
     assert.deepEqual(calls, []);
+  });
+
+  it("fails a call to a method DatabaseManager doesn't define though a list names it, as Storage.isUpgraded() since #17 PR 4a (R88)", () => {
+    const members = storageMembers(ROOT);
+    assert.equal(members.has('isUpgraded'), false, 'js/storage.js lost it');
+    const { calls, problems } = ops('Storage.isUpgraded();\nStorage.getNote(id);\n', 'js/x.js', { members });
+    assert.deepEqual(calls, []);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /calls Storage\.isUpgraded, which DatabaseManager doesn't define/);
+    // A read and a write the lists name fail the same way once DatabaseManager loses them
+    const lost = ops('Storage.getNote(id);\nStorage.updateNote(note);\n', 'js/x.js', { members: new Set(['constructor']) });
+    assert.deepEqual(lost.calls, []);
+    assert.match(lost.problems[0], /calls Storage\.getNote, which DatabaseManager doesn't define/);
+    assert.match(lost.problems[1], /calls Storage\.updateNote, which DatabaseManager doesn't define/);
   });
 
   it('reports a Storage method DatabaseManager lacks, one it has but nobody classified, and one handed on uncalled', () => {
@@ -269,9 +295,9 @@ describe('scanning', () => {
         bind() {
           button.addEventListener('click', async () => { await this.storage.createFolder('x'); });
           this.panel.onResizeEnd = (w) => this.storage.setSetting('sidebarWidth', w);
-          const items = [{ label: 'Rename', action: async () => { await this.storage.updateFolder(f); } }];
+          const items = [{ label: 'Delete', action: async () => { await this.storage.deleteFolder(f.id); } }];
           chrome.runtime.onInstalled.addListener(() => Storage.init());
-          [1].forEach(() => Storage.emptyTrash());
+          [1].forEach(() => Storage.trashNote(id));
         }
       }`);
     assert.deepEqual(hits.map(h => h.method), [
@@ -296,11 +322,12 @@ describe('classifying', () => {
     assert.deepEqual([key.command, key.status], ['saveProviderSettings', 'ledgered to #11']);
   });
 
-  it('matches folder writes on the fields they set, not on menu text', () => {
-    const write = (fields) => classify(hit({ method: 'SidebarController.showFolderContextMenu > action', op: 'updateFolder', fields })).command;
-    assert.equal(write(['name']), 'renameFolder');
-    assert.equal(write(['parentId']), 'moveFolder');
-    assert.equal(write(['collapsed']), 'setFolderCollapsed');
+  it('matches note writes on the fields they set, not on menu text', () => {
+    // Folder renames, moves, and collapses matched this way until #17 PR 4a deleted Storage.updateFolder
+    const write = (fields) => classify(hit({ method: 'SidebarController.showNoteContextMenu > action', op: 'updateNote', fields })).command;
+    assert.equal(write(['pinned']), 'setPinned');
+    assert.equal(write(['folderId']), 'moveNoteToFolder');
+    assert.equal(write(['insights']), 'attachInsights');
   });
 
   it('leaves a new call in a method-scoped rule unclassified', () => {
@@ -314,7 +341,7 @@ describe('classifying', () => {
   });
 
   it('leaves a call no rule covers unclassified', () => {
-    assert.equal(classify(hit({ op: 'saveMedia' })).command, null);
+    assert.equal(classify(hit({ op: 'deleteMediaByNote' })).command, null);
   });
 });
 
@@ -388,20 +415,20 @@ new SidebarController().toggleNotePin(n);
 
   it('passes when a menu label or a local name changes', () => {
     const menu = (label, local) => `class SidebarController {
-  showFolderContextMenu(folder) {
+  showNoteContextMenu(note) {
     const items = [{ label: '${label}', action: async () => {
-      folder.name = 'x';
+      note.pinned = true;
       const ${local} = this.storage;
-      await ${local}.updateFolder(folder);
+      await ${local}.updateNote(note);
     } }];
     return items;
   }
 }
-new SidebarController().showFolderContextMenu(f);
+new SidebarController().showNoteContextMenu(n);
 `;
-    withRepo({ 'js/sidebar.js': menu('Rename', 'db') }, (root) => {
+    withRepo({ 'js/sidebar.js': menu('Pin', 'db') }, (root) => {
       assert.equal(main(['--write'], { root, ...quiet }), 0);
-      fs.writeFileSync(path.join(root, 'js/sidebar.js'), menu('Rename folder', 'folders'));
+      fs.writeFileSync(path.join(root, 'js/sidebar.js'), menu('Pin note', 'notes'));
       assert.deepEqual(check(root), []);
     });
   });
@@ -418,10 +445,10 @@ new SidebarController().showFolderContextMenu(f);
   });
 
   it('refuses to write or pass a call no rule covers', () => {
-    withRepo({ 'js/sidebar.js': source('\n    this.storage.saveMedia(id, note.id, blob, type);') }, (root) => {
+    withRepo({ 'js/sidebar.js': source('\n    this.storage.deleteMediaByNote(note.id);') }, (root) => {
       assert.equal(main(['--write'], { root, ...quiet }), 1);
       assert.ok(!fs.existsSync(path.join(root, DOC)));
-      assert.match(check(root).join('\n'), /saveMedia\(…\) has no rule/);
+      assert.match(check(root).join('\n'), /deleteMediaByNote\(…\) has no rule/);
     });
   });
 

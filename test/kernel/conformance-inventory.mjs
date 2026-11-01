@@ -30,7 +30,6 @@ export const PORTS = Object.freeze({
     suite: { module: 'test/kernel/contract.mjs', runner: 'runContractSuite' },
     implementations: [
       { module: 'js/kernel/core/memory/adapter.js', run: 'test/kernel/memory.test.mjs' },
-      { module: 'js/kernel/adapters/legacy/adapter.js', run: 'test/kernel/legacy.test.mjs' },
       { module: 'js/kernel/adapters/indexeddb/adapter.js', run: 'test/kernel/storage-contract.test.mjs' },
     ],
   },
@@ -155,9 +154,18 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
  * @type {Readonly<Record<string, readonly string[]>>}
  */
 export const HELPERS = Object.freeze({
+  // #17 PR 4a: 1.4.x's backup tasks and export file, which #17's adapter runs where its root
+  // asks (`backups`), and the kernel-adapter suite's backups checks run on it
+  'js/kernel/adapters/indexeddb/backups.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 2a's conflict records and note versions, which only #17's adapter writes
   'js/kernel/adapters/indexeddb/conflicts.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  // #17 PR 4a, F10: logical 3's kept answer, which the transforms (unshared) write and a Daily
+  // Note lookup on the adapter reads
+  'js/kernel/adapters/indexeddb/daily-answer.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  // #17 PR 4a: Blobs as data URLs in the new tab's recovery copies and export files, and those
+  // copies. The pre-update copy's export and #20's salvage file, both unshared, load it too
+  'js/kernel/adapters/indexeddb/data-urls.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 2b's tombstones: the adapter completes them, and the purge (unshared, so not named
   // here) reads and marks them
   'js/kernel/adapters/indexeddb/deletion.js': ['js/kernel/adapters/indexeddb/adapter.js'],
@@ -167,22 +175,16 @@ export const HELPERS = Object.freeze({
     'js/kernel/adapters/indexeddb/ledger.js',
   ],
   // The read-only integrity check, which test/kernel/storage-integrity.test.mjs also holds to
-  // Storage's
+  // frozen 1.4.1's
   'js/kernel/adapters/indexeddb/integrity.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  'js/kernel/adapters/indexeddb/recovery-copies.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
     'js/kernel/adapters/indexeddb/adapter.js',
     'js/kernel/adapters/indexeddb/changes.js',
     'js/kernel/adapters/indexeddb/ledger.js',
-    'js/kernel/adapters/legacy/adapter.js',
   ],
-  'js/kernel/adapters/indexeddb/schema.js': [
-    'js/kernel/adapters/indexeddb/adapter.js',
-    'js/kernel/adapters/legacy/adapter.js',
-  ],
-  'js/kernel/adapters/indexeddb/settings.js': [
-    'js/kernel/adapters/indexeddb/adapter.js',
-    'js/kernel/adapters/legacy/adapter.js',
-  ],
+  'js/kernel/adapters/indexeddb/schema.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  'js/kernel/adapters/indexeddb/settings.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/versions.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // The digest #17's ledger keeps too, so a command is the same command on every adapter
   'js/kernel/core/memory/fingerprint.js': [
@@ -204,10 +206,11 @@ export const COMPOSERS = Object.freeze({
     port: 'messaging-transport',
     of: ['js/kernel/core/messaging/in-process.js', 'js/kernel/adapters/messaging/runtime-port.js'],
   },
+  // #17 PR 4a: the new tab's root opens #17's adapter with the new tab's options
+  'js/kernel/composition/newtab.js': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
   // #20 slice 1b: a context's failure events, on NewTabNoteTrust (js/kernel/composition/
   // lazy-failure-events.js, the new tab's, only imports this one and composes nothing itself)
   'js/kernel/composition/trust.js': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },
-  'test/kernel/legacy-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/legacy/adapter.js'] },
   'test/kernel/storage-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
   'test/kernel/trust-support.mjs': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },
 });
@@ -274,10 +277,10 @@ export const UNSHARED = Object.freeze({
     implements: "#17's export of a pre-migration point as 1.4.1's import file",
     tests: 'test/kernel/storage-legacy-export.test.mjs',
   },
-  // #17 PR 1b took #33's copy back to js/storage.js, and with it the module these lived in
-  'js/kernel/adapters/indexeddb/data-urls.js': {
-    implements: "Blobs as data URLs, in the pre-update copy's export and #20's salvage file",
-    tests: 'test/kernel/storage-legacy-export.test.mjs',
+  // #17 PR 4a: moved from js/storage.js, which the new tab no longer needs for it
+  'js/kernel/adapters/indexeddb/raw-export.js': {
+    implements: "the new tab's Recovery (composition/newtab.js): the storage guard's raw export of CanvasTabDB",
+    tests: 'test/kernel/storage-raw-export.test.mjs',
   },
   // #20 slice 3's ports for the remediation pipeline (js/trust/core/remediation/ports.js), each
   // the one implementation of its port, which no shipped root makes until slice 4

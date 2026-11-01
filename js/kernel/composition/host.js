@@ -1,7 +1,7 @@
 /**
- * What the composition roots share (#12, "Where the kernel runs"): the legacy storage and
- * settings a page or the worker loaded, and the kernel each root builds on its adapter, with
- * the client it hands out.
+ * What the composition roots share (#12, "Where the kernel runs"): the settings and the
+ * storage host a page or the worker reads from its globals, and the kernel each root builds on
+ * its adapter, with the client it hands out.
  *
  * Loading this module touches no browser API, so a root can load before its page's or the
  * worker's globals exist, as js/background.js needs. Everything here reads them when it's
@@ -13,8 +13,7 @@ import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { randomIds } from './ids.js';
 
-/** @typedef {import('../adapters/legacy/adapter.js').LegacyStorage} LegacyStorage */
-/** @typedef {import('../adapters/legacy/adapter.js').SettingsStore} SettingsStore */
+/** @typedef {import('../adapters/indexeddb/adapter.js').SettingsStore} SettingsStore */
 /** @typedef {import('../core/application/kernel.js').KernelClient} KernelClient */
 /** @typedef {import('../core/contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('../core/ports/repository.js').KernelAdapter} KernelAdapter */
@@ -22,11 +21,13 @@ import { randomIds } from './ids.js';
 /** @typedef {import('../core/ports/runtime.js').Logger} Logger */
 
 /**
- * What the legacy adapter runs on: js/storage.js's DatabaseManager, which the page or the
- * worker imports before it builds its kernel, and chrome.storage.local.
- * @typedef {object} LegacyHost
- * @property {LegacyStorage} storage
- * @property {SettingsStore} settings
+ * js/storage.js's DatabaseManager, which the new tab's root opens beside #17's adapter for the
+ * holders #22 and #19 own until #17 PR 4b makes it a facade (newtab.js). TypeScript reads the
+ * legacy `Storage` global as the DOM's Storage, so the root reads it through this.
+ * @typedef {object} LegacyStorage
+ * @property {(options?: {watchConnection?: boolean}) => Promise<void>} open
+ * @property {string} openState
+ * @property {string[]} missingStores
  */
 
 /**
@@ -48,14 +49,44 @@ export function chromeSettings() {
 }
 
 /**
- * The `Storage` global js/storage.js sets, and chrome.storage.local, both read when a call
- * reaches them
- * @returns {LegacyHost}
+ * chrome.storage.local as the new tab's backup tasks use it (#17 PR 4a, backups.js): its get,
+ * of every key too, its set, and its remove, which the automatic backup prunes its oldest with,
+ * read when a call reaches it. Popup's and Side Panel's run no backup task, so they get
+ * chromeSettings() alone.
+ * @returns {import('../adapters/indexeddb/backups.js').BackupStore}
  */
-export function legacyHost() {
+export function chromeBackupSettings() {
   return {
-    storage: /** @type {LegacyStorage} */ (/** @type {{Storage?: unknown}} */ (globalThis).Storage),
-    settings: chromeSettings(),
+    get: keys => chrome.storage.local.get(keys),
+    set: items => chrome.storage.local.set(items),
+    remove: keys => chrome.storage.local.remove(keys),
+  };
+}
+
+/**
+ * #13's settings.changed notice from chrome.storage.onChanged, as js/storage.js's
+ * onSettingsChange gave it to the new tab until #17 PR 4a: the keys of each change to
+ * chrome.storage.local's `setting_` keys, by name only, so no listener is handed a value, not
+ * llmApiKey's either, and reads what it needs again. chrome.storage is read when a listener is
+ * added, and the answer stops it.
+ * @returns {import('./settings.js').SettingsChanges}
+ */
+export function chromeSettingsChanges() {
+  return listener => {
+    /**
+     * @param {Record<string, unknown>} changes - chrome.storage's, whose values go no further
+     * @param {string} areaName
+     */
+    const heard = (changes, areaName) => {
+      if (areaName !== 'local') return;
+      const keys = Object.keys(changes)
+        .filter(key => key.startsWith('setting_'))
+        .map(key => key.slice('setting_'.length));
+      if (keys.length > 0) listener(Object.freeze({ type: 'settings.changed', keys: Object.freeze(keys) }));
+    };
+    const { onChanged } = chrome.storage;
+    onChanged.addListener(heard);
+    return () => onChanged.removeListener(heard);
   };
 }
 
@@ -144,11 +175,13 @@ const consoleLogger = Object.freeze({
  * One context's kernel on `adapter`, which starts opening now, and its client. Its caller is
  * `surface` with an id of its own, which the policy checks on every command and query.
  * `maintainOnOpen` runs startup maintenance before anything else, as the new tab's and the
- * worker's Storage.init did. Every id it and its client make is a UUID (ids.js).
- * @param {{adapter: KernelAdapter & {open(): Promise<void>}, surface: Surface, maintainOnOpen?: boolean}} options
+ * worker's Storage.init did. `ready` is what the kernel waits on before it runs anything, the
+ * adapter's open unless the root has more to open (the new tab's). Every id it and its client
+ * make is a UUID (ids.js).
+ * @param {{adapter: KernelAdapter & {open(): Promise<void>}, surface: Surface, maintainOnOpen?: boolean, ready?: Promise<unknown>}} options
  * @returns {Client}
  */
-export function kernelClient({ adapter, surface, maintainOnOpen = false }) {
+export function kernelClient({ adapter, surface, maintainOnOpen = false, ready = adapter.open() }) {
   const kernel = createKernel({
     adapter,
     policy: createBaselinePolicy(),
@@ -156,7 +189,7 @@ export function kernelClient({ adapter, surface, maintainOnOpen = false }) {
     ids: randomIds,
     clock: systemClock,
     logger: consoleLogger,
-    ready: adapter.open(),
+    ready,
     maintainOnOpen,
   });
   return Object.freeze({

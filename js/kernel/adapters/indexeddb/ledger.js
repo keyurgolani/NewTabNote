@@ -25,7 +25,7 @@ import { UnavailableError, rejected } from '../../core/contracts/outcomes.js';
 import { digestOf } from '../../core/memory/fingerprint.js';
 import { failureOf } from './failures.js';
 import { META_STORE, OPERATIONS_STORE } from './registry.js';
-import { result } from './requests.js';
+import { committed, endOf, result } from './requests.js';
 
 /** @typedef {import('../../core/contracts/outcomes.js').Committed} Committed */
 /** @typedef {import('../../core/contracts/outcomes.js').Conflict} Conflict */
@@ -100,12 +100,18 @@ function readFrom(row, command) {
 }
 
 /**
+ * What a failed read or sweep answers: the adapter's says reload-required on a connection
+ * that's gone or going (adapter.js), and failures.js's says what the failure means
+ * @typedef {(error: unknown) => UnavailableError} FailureOf
+ */
+
+/**
  * The ledger's read port over a connection's database (ports/idempotency-ledger.js). A read
  * writes nothing, and a database without `operations` has no record of anything.
- * @param {{database: () => IDBDatabase}} options
+ * @param {{database: () => IDBDatabase, failure?: FailureOf}} options
  * @returns {IdempotencyLedger}
  */
-export function createIndexedDbLedger({ database }) {
+export function createIndexedDbLedger({ database, failure = failureOf }) {
   return Object.freeze({
     async read(command) {
       const commandId = /** @type {unknown} */ (command?.commandId);
@@ -116,7 +122,7 @@ export function createIndexedDbLedger({ database }) {
         const store = db.transaction(OPERATIONS_STORE, 'readonly').objectStore(OPERATIONS_STORE);
         return readFrom(/** @type {LedgerRow | undefined} */ (await result(store.get(commandId))), command);
       } catch (error) {
-        throw failureOf(error);
+        throw failure(error);
       }
     },
   });
@@ -150,8 +156,9 @@ function sweepBatch(db, { cutoff, maxRows, batch }) {
         cursor.continue();
       };
     };
-    tx.oncomplete = () => resolve(deleted);
-    tx.onabort = () => reject(tx.error || new DOMException('The transaction was aborted', 'AbortError'));
+    endOf(tx).then(end =>
+      end.committed ? resolve(deleted) : reject(end.error || new DOMException('The transaction was aborted', 'AbortError')),
+    );
   });
 }
 
@@ -160,7 +167,7 @@ function sweepBatch(db, { cutoff, maxRows, batch }) {
  * past `maxRows`, in strict transactions of `batch` rows, then records when it swept in `meta`.
  * It does nothing within `everyMs` of the last sweep, or on a database below version 10. Cut
  * off, the next sweep finishes it, since the record is written only at the end.
- * @param {{database: () => IDBDatabase, now: number, maxAgeMs?: number, maxRows?: number, everyMs?: number, batch?: number}} options
+ * @param {{database: () => IDBDatabase, now: number, maxAgeMs?: number, maxRows?: number, everyMs?: number, batch?: number, failure?: FailureOf}} options
  * @returns {Promise<{swept: boolean, deleted: number}>}
  */
 export async function sweepLedger({
@@ -170,6 +177,7 @@ export async function sweepLedger({
   maxRows = LEDGER_MAX_ROWS,
   everyMs = LEDGER_SWEEP_EVERY_MS,
   batch = LEDGER_SWEEP_BATCH,
+  failure = failureOf,
 }) {
   try {
     const db = database();
@@ -188,12 +196,9 @@ export async function sweepLedger({
     }
     const done = db.transaction(META_STORE, 'readwrite', STRICT);
     done.objectStore(META_STORE).put({ key: SWEPT_KEY, sweptAt: now });
-    await new Promise((resolve, reject) => {
-      done.oncomplete = () => resolve(undefined);
-      done.onabort = () => reject(done.error);
-    });
+    await committed(done);
     return { swept: true, deleted };
   } catch (error) {
-    throw failureOf(error);
+    throw failure(error);
   }
 }

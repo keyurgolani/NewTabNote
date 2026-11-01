@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
-import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
+import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
 import {
   DEFAULT_LIMITS,
   POINTS_LOCK,
@@ -292,6 +292,21 @@ function filledNote(before) {
     };
   }
   return { ...before, .../** @type {Record<string, any>} */ (BASIC_GROUPS)[before.name] };
+}
+
+/**
+ * #17's adapter over `of` as the new tab's root opens it since #17 PR 4a (createNewTabAdapter):
+ * the database as it is, with its maintenance, #33's copy and the backup tasks, and no wait on
+ * the worker, whose run the case has already run or left out
+ * @param {Profile} of
+ */
+function newTabAdapterOn(of) {
+  return createNewTabAdapter({
+    indexedDB: of.faults.factory,
+    settings: of.chrome.api.storage.local,
+    awaitUpgrade: async () => {},
+    locks: null,
+  });
 }
 
 describe('logical 2 (#17 PR 3a)', () => {
@@ -874,7 +889,7 @@ describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily inde
     assert.deepEqual(keys['chain-oct-28-evening'], ['2025-10-29', '2025-10-29', 'chain-oct-29-evening']);
   });
 
-  it('a note a lookup opens while the run goes, as one restored from the trash then, keeps what a page saved and a capture added into it, still listed under its name, as a duplicate once the run is done', async () => {
+  it('a lookup while the run goes follows its answer: Oct 28 opens the note the answer gives it, a capture goes there, and a note restored from the trash then keeps what a page saved into it, listed under its name, as a duplicate (#17 PR 4a, F10)', async () => {
     // Oct 28's own Daily Note, made that morning, in the trash when the run read the notes
     /** @type {Made} */
     const morning = ['chain-oct-28-morning', 'Oct 28', '2025-10-28', Date.UTC(2025, 9, 28, 16)];
@@ -890,12 +905,13 @@ describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily inde
       hooks: {
         between: async label => {
           if (label !== 'daily-assigned') return;
-          // Restored from the trash after the run weighed the notes, before any of its batches,
-          // so Oct 28 opens it for now, where the run's answer gives the date to the evening note
-          // named for it (the case #17 PR 4's lookup that follows the answer closes)
+          // Restored from the trash after the run weighed the notes, before any of its batches.
+          // The run's answer gives Oct 28 to the evening note named for it, and the lookup goes by
+          // it, so Oct 28 opens that note, as it will once the run is done. Until #17 PR 4a it
+          // opened the restored one, until the run's takeover gave the date back.
           await withCommands(of, send => send({ type: 'restoreNote', noteId: morning[0] }), onOct28);
           seen.opened = (await openDays(of, onOct28, [{ dateStr: '2025-10-28' }]))['2025-10-28'];
-          // What a page types into the note that opened
+          // What a page types into the restored note
           const blocks = ['Evening', 'Next morning', 'Typed while the run went'].map((content, order) => ({
             id: order < 2 ? `${morning[0]}-${order}` : 'typed-during-run',
             type: 'text',
@@ -921,18 +937,20 @@ describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily inde
       },
     });
     assert.equal(outcome.status, 'transformed');
-    assert.equal(seen.opened, morning[0]);
+    assert.equal(seen.opened, 'chain-oct-28-evening');
     const kept = (await notesIn(of))[morning[0]];
     assert.deepEqual(
       [Boolean(kept.trashed), Boolean(kept.archived), Boolean(kept.isTemplate), kept.name],
       [false, false, false, 'Daily Note - Oct 28, 2025'],
     );
-    const contents = recordsIn(await dump(of), 'CanvasTabDB', 'elements')
-      .map(({ value }) => value)
+    const blocks = recordsIn(await dump(of), 'CanvasTabDB', 'elements').map(({ value }) => value);
+    const contents = blocks
       .filter(block => block.canvasId === morning[0])
       .map(block => block.content)
       .sort();
-    assert.deepEqual(contents, ['Captured while the run went', 'Evening', 'Next morning', 'Typed while the run went']);
+    assert.deepEqual(contents, ['Evening', 'Next morning', 'Typed while the run went']);
+    // The capture went to the note Oct 28 opened
+    assert.equal(blocks.find(block => block.id === 'captured-during-run')?.canvasId, 'chain-oct-28-evening');
     // Still listed, and once the run is done, the duplicate of the note the run gives the date
     await withCommands(of, async (_, kernel) => {
       const listed = await kernel.query({ type: 'listNotes', view: 'active' });
@@ -940,6 +958,51 @@ describe("logical 3 (#17 PR 3b): each Daily Note's local key, and the daily inde
     });
     assert.equal((await indexIn(of))['2025-10-28'], 'chain-oct-28-evening');
     assert.equal(kept.dailyDuplicateOf, 'chain-oct-28-evening');
+  });
+
+  it('a Daily Note renamed to another day while the run goes, then that day and the day the answer gives it opened, ends where an uncut run, the rename, and the same lookups do (#17 PR 4a, F10)', async () => {
+    const renamed = 'Daily Note - Oct 25, 2025';
+    const days = [{ dateStr: '2025-10-25' }, { dateStr: '2025-10-28' }];
+    /** @param {Profile} of */
+    const rename = of =>
+      withCommands(
+        of,
+        send => send({ type: 'renameNote', noteId: 'chain-oct-28-evening', name: renamed, origin: 'typed' }),
+        onOct30,
+      );
+    // An uncut run, then the rename, then a page opening both days
+    const reference = await withDaily(CHAIN);
+    assert.equal((await transform(reference, { clock: inLA, limits: ONE })).status, 'transformed');
+    await rename(reference);
+    const opened = await openDays(reference, onOct30, days);
+    // The run gave the evening note Oct 28, which its name no longer gives, and Oct 25 had none
+    assert.deepEqual(opened, { '2025-10-25': 'new', '2025-10-28': 'chain-oct-28-evening' });
+    const expected = await dailyState(reference);
+
+    // The rename and the lookups between the run's read of the notes and its first batch
+    const of = await withDaily(CHAIN);
+    /** @type {Record<string, string | null> | null} */
+    let during = null;
+    const outcome = await transform(of, {
+      clock: inLA,
+      limits: ONE,
+      hooks: {
+        between: async label => {
+          if (label !== 'daily-assigned' || during) return;
+          await rename(of);
+          during = await openDays(of, onOct30, days);
+        },
+      },
+    });
+    assert.equal(outcome.status, 'transformed');
+    assert.deepEqual(during, opened);
+    assert.deepEqual(await dailyState(of), expected);
+    // And the note keeps its new name and what was written in it
+    const { 'chain-oct-28-evening': kept } = await writtenIn(of);
+    assert.deepEqual(
+      [kept.name, kept.blocks.map((/** @type {{content: string}} */ block) => block.content)],
+      [renamed, ['Evening', 'Next morning']],
+    );
   });
 
   it('takes a date back from a Daily Note a page made during the run after the one that holds it, whose entry the index had, which becomes its duplicate', async () => {
@@ -1133,15 +1196,13 @@ describe("the new tab's startup trash cleanup and the notes 1.4.x never listed (
   };
 
   /**
-   * The new tab's kernel on the legacy adapter over `of`, as App runs its startup cleanup
+   * The new tab's kernel over `of`, on #17's adapter as its root opens it since #17 PR 4a, as App
+   * runs its startup cleanup
    * @param {Profile} of
    * @param {number} now
    */
   const newTab = async (of, now) => {
-    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
-    env.load('js/utils.js', 'js/storage.js');
-    const storage = env.get('Storage');
-    const adapter = createLegacyAdapter({ storage, settings: of.chrome.api.storage.local, mode: 'versioned' });
+    const adapter = newTabAdapterOn(of);
     await adapter.open();
     const kernel = createKernel({
       adapter,
@@ -1150,7 +1211,7 @@ describe("the new tab's startup trash cleanup and the notes 1.4.x never listed (
       ids: { next: () => `tab-${(commandCount += 1)}` },
       clock: { now: () => now },
     });
-    open.push({ close: () => storage.db && storage.db.close() });
+    open.push(adapter);
     return kernel;
   };
 
@@ -1221,10 +1282,7 @@ describe('below version 10, where 1.4.1 still opens the database, no command wri
   it("the new tab's kernel on a database the run didn't reach writes none, so the transform takes the flags 1.4.1 left", async () => {
     const of = await profileWith(BASIC);
     // This build's new tab on the database as it is, at 8: the run was short of space, say
-    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
-    env.load('js/utils.js', 'js/storage.js');
-    const storage = env.get('Storage');
-    const adapter = createLegacyAdapter({ storage, settings: of.chrome.api.storage.local, mode: 'versioned' });
+    const adapter = newTabAdapterOn(of);
     await adapter.open();
     const ids = { next: () => `p3-${(commandCount += 1)}` };
     const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock: later });
@@ -1235,7 +1293,7 @@ describe('below version 10, where 1.4.1 still opens the database, no command wri
       const made = await kernel.execute({ type: 'createNote', commandId: ids.next(), noteId, name });
       assert.equal(made.kind, 'committed', JSON.stringify(made));
     }
-    storage.db.close();
+    adapter.close();
     const at8 = await notesIn(of);
     for (const id of ['made-at-8', 'moved-later']) assert.deepEqual(groupOf(at8[id]), {}, id);
 

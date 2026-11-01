@@ -83,8 +83,9 @@ export const STORAGE_EXCEPTIONS = Object.freeze([
 /**
  * Storage couldn't run the command. `retryable` says whether the same command, sent again,
  * can succeed. `exception` is the storage exception it failed with, one of
- * STORAGE_EXCEPTIONS, where an adapter reports it (the legacy backup tasks do), so a
- * diagnostic tells an UnknownError from an AbortError that both read as one code.
+ * STORAGE_EXCEPTIONS, where an adapter reports it (the legacy backup tasks do, and on #17's
+ * adapter those that fail before a commit), so a diagnostic tells an UnknownError from an
+ * AbortError that both read as one code.
  * @typedef {object} Unavailable
  * @property {'unavailable'} kind
  * @property {UnavailableCause} cause

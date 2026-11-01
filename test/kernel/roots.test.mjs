@@ -1,10 +1,10 @@
 // What each composition root builds (#12, "Where the kernel runs"; #17 PR 1b): one kernel per
-// context, with its surface as the caller the policy checks. The new tab's is on the legacy
-// adapter over production js/storage.js in test/helpers/legacy-env.js, and opens the database
-// as it is once the worker's run has had its 5 seconds. The worker's runs #17's migration run
-// first, then opens #17's adapter, and Popup's and Side Panel's open #17's adapter as it is.
-// The worker's maintenance leaves out the integrity check, which it runs when asked (#35
-// slice 1).
+// context, with its surface as the caller the policy checks. The worker's runs #17's migration
+// run first, then opens #17's adapter, and Popup's and Side Panel's open #17's adapter as it is.
+// So does the new tab's since #17 PR 4a, once the worker's run has had its 5 seconds, with
+// production js/storage.js open beside it for the holders #22 and #19 own, in
+// test/helpers/legacy-env.js. The worker's maintenance leaves out the integrity check, which
+// it runs when asked (#35 slice 1).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,8 +13,13 @@ import { webcrypto } from 'node:crypto';
 
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
-import { PURGE_MESSAGE, wakeWorkerToPurge } from '../../js/kernel/composition/host.js';
-import { createNewTabClient, createNewTabLegacyStores, withPurgeWake } from '../../js/kernel/composition/newtab.js';
+import { PURGE_MESSAGE, waitForWorkerUpgrade, wakeWorkerToPurge } from '../../js/kernel/composition/host.js';
+import {
+  createNewTabAdapter,
+  createNewTabClient,
+  createNewTabLegacyStores,
+  withPurgeWake,
+} from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
@@ -27,10 +32,30 @@ import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 const { IDBKeyRange: KeyRange } = createRequire(import.meta.url)('fake-indexeddb');
 
 /**
- * What the new tab's root reads from its context's globals: the Storage global and chrome.storage.local
+ * What the new tab's root reads from its context's globals (newtab.js, newTabHost): the page's
+ * IndexedDB, chrome.storage.local, its wait on the worker's run, its Web Locks, where it hears of
+ * settings changes, and the Storage global
+ * @param {LegacyContext} context
+ * @returns {import('../../js/kernel/composition/newtab.js').NewTabHost}
+ */
+const hostOf = context => ({
+  indexedDB: context.env.indexedDB,
+  settings: context.env.chrome.api.storage.local,
+  awaitUpgrade: () => waitForWorkerUpgrade({ runtime: context.env.chrome.api.runtime }),
+  locks: context.env.global.navigator.locks || null,
+  changes: listener => () => {},
+  storage: context.storage,
+});
+
+/**
+ * The new tab's adapter and client, as its root builds them
  * @param {LegacyContext} context
  */
-const hostOf = context => ({ storage: context.storage, settings: context.env.chrome.api.storage.local });
+const newTabOf = context => {
+  const host = hostOf(context);
+  const adapter = createNewTabAdapter(host);
+  return { adapter, client: createNewTabClient(adapter, host) };
+};
 
 /**
  * What Popup's and Side Panel's roots read from a page's globals, `waits` counting their waits
@@ -69,7 +94,7 @@ const databases = async factory =>
 describe('each composition root', () => {
   it('builds a kernel whose caller is its surface', async () => {
     const tab = legacyContext();
-    const newtab = createNewTabClient(hostOf(tab));
+    const { client: newtab } = newTabOf(tab);
     assert.equal(await newtab.whenReady(), null);
     const popup = createPopupClient(pageHostOf(tab));
     const panel = createSidePanelClient(pageHostOf(tab));
@@ -131,7 +156,7 @@ describe('each composition root', () => {
     assert.deepEqual(fresh.env.chrome.writes(), []);
     // So does the new tab, whose wake reaches no worker here (worker: false): it opens what's
     // there, which is nothing, so it refuses, and makes nothing
-    const refused = await createNewTabClient(hostOf(fresh)).whenReady();
+    const refused = await newTabOf(fresh).client.whenReady();
     assert.deepEqual(refused && [refused.cause, refused.code], ['storage', 'no-database']);
     assert.deepEqual(await fresh.env.indexedDB.databases(), []);
 
@@ -148,7 +173,10 @@ describe('each composition root', () => {
     );
     // And a new tab that wakes it then opens the database as it is, and maintains it
     const next = legacyContext(fresh.env);
-    assert.equal(await createNewTabClient(hostOf(next)).whenReady(), null);
+    const opened = newTabOf(next);
+    assert.equal(await opened.client.whenReady(), null);
+    assert.equal(opened.adapter.upgraded(), true);
+    // The holders' Storage opened it too
     assert.equal(next.storage.db.version, DB_VERSION);
     closeAll([fresh, next]);
   });
@@ -157,7 +185,9 @@ describe('each composition root', () => {
     // Another context's upgrade never waits on either: the new tab's editor keeps its text while
     // it asks for a reload, and the worker's next command opens the database again
     const tab = legacyContext();
-    assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
+    const { adapter, client: newtab } = newTabOf(tab);
+    assert.equal(await newtab.whenReady(), null);
+    // The holders' Storage watches its own
     const db = /** @type {IDBDatabase} */ (tab.storage.db);
     assert.deepEqual(
       [db.onversionchange, db.onclose].map(handler => typeof handler === 'function'),
@@ -174,10 +204,24 @@ describe('each composition root', () => {
         capture: { type: 'text', content: id },
       });
     assert.equal((await capture('first')).kind, 'committed');
-    // A newer build's upgrade: nothing blocks it, and the worker's next open finds it too new
-    const upgraded = await legacyEnv.requestToPromise(tab.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1));
+    // A newer build's upgrade: neither of the new tab's connections blocks it, #17's adapter's or
+    // the holders' Storage's (#17 PR 4a), nor the worker's, and the worker's next open finds it
+    // too new
+    const upgraded = await new Promise((resolve, reject) => {
+      const request = tab.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error('a connection the new tab or the worker held blocked the upgrade'));
+    });
     /** @type {IDBDatabase} */ (upgraded).close();
     assert.equal(tab.storage.openState, 'version-changed');
+    assert.deepEqual([adapter.openState(), adapter.upgraded()], ['version-changed', false]);
+    const reload = await newtab.execute({
+      type: 'createNote',
+      commandId: newtab.ids.next(),
+      noteId: newtab.ids.next(),
+    });
+    assert.deepEqual(reload.kind === 'unavailable' && [reload.cause, reload.code], ['storage', 'reload-required']);
     const refused = await capture('second');
     assert.deepEqual(refused.kind === 'unavailable' && [refused.cause, refused.code], [
       'newer-schema',
@@ -186,7 +230,7 @@ describe('each composition root', () => {
     closeAll([tab]);
   });
 
-  it('checks integrity as the new tab starts, and in the worker only when asked, as runIntegrityCheck (#35)', async () => {
+  it('checks integrity in the worker only when asked, as runIntegrityCheck (#35), and not as the new tab starts (#17 PR 4a)', async () => {
     /** @param {LegacyContext} context */
     const reported = context =>
       context.env.logs.filter((/** @type {{args: unknown[]}} */ log) =>
@@ -201,20 +245,20 @@ describe('each composition root', () => {
       return profile;
     };
 
-    const tab = await withOrphan();
-    assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
-    assert.equal(reported(tab), 1);
-
-    // The worker's start writes first-run settings only. Its kernel is on #17's adapter (#17 PR
-    // 1b), whose check reports to the worker's console, as Storage's did
+    // Both starts write first-run settings only: the new tab's, whose maintenance is on #17's
+    // adapter since #17 PR 4a, and the worker's, whose kernel is on it since #17 PR 1b. #17's
+    // adapter's check reports to the console of the context it runs in, as Storage's did
     /** @type {unknown[][]} */
     const said = [];
     const info = console.info;
     console.info = (/** @type {unknown[]} */ ...args) => {
       said.push(args);
     };
+    const tab = await withOrphan();
     const profile = await withOrphan();
     try {
+      assert.equal(await newTabOf(tab).client.whenReady(), null);
+      assert.deepEqual(said, [], "the new tab's start checks nothing");
       const worker = createWorkerClient(workerHostOf(profile));
       assert.equal(await worker.whenReady(), null);
       assert.equal(profile.env.chrome.local.setting_storageInitialized, true);
@@ -225,6 +269,7 @@ describe('each composition root', () => {
       console.info = info;
     }
     assert.deepEqual(said, [['Integrity check (read-only) found orphaned records:', { orphanedElements: 1 }]]);
+    assert.equal(reported(tab), 0, "and nothing on the new tab's page");
     assert.equal(reported(profile), 0, "and nothing on the profile's pages");
     const elements = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(profile.env.indexedDB), 'elements');
     assert.ok(elements.orphan, 'the orphaned block is still there');
@@ -233,14 +278,25 @@ describe('each composition root', () => {
 
   it("hands NotesManager, GraphView and SyncService only their own calls on the new tab's Storage", async () => {
     const tab = legacyContext();
-    assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
+    assert.equal(await newTabOf(tab).client.whenReady(), null);
     const stores = createNewTabLegacyStores(hostOf(tab));
     assert.deepEqual(Object.keys(stores.searchIndex).sort(), [
-      'getAllVectors', 'hasStore', 'removeSearchIndexEntry', 'saveVector', 'setSearchIndex', 'setSearchIndexEntry',
+      'getAllVectors',
+      'hasStore',
+      'removeSearchIndexEntry',
+      'saveVector',
+      'setSearchIndex',
+      'setSearchIndexEntry',
     ]);
     assert.deepEqual(Object.keys(stores.graph).sort(), ['getAllNotes', 'getStore']);
     // Storage defines no importAll or importNote, so sync finds neither on its handle, as on Storage
-    assert.deepEqual(Object.keys(stores.sync).sort(), ['exportAll', 'getSetting', 'getStore', 'saveElement', 'setSetting']);
+    assert.deepEqual(Object.keys(stores.sync).sort(), [
+      'exportAll',
+      'getSetting',
+      'getStore',
+      'saveElement',
+      'setSetting',
+    ]);
     for (const store of Object.values(stores)) {
       assert.ok(Object.isFrozen(store));
       for (const name of ['db', 'transaction', 'createNote', 'updateNote', 'deleteNote', 'importData']) {
@@ -259,7 +315,7 @@ describe("the new tab's wake of the worker's purge (#17 PR 2b)", () => {
     const tab = legacyContext();
     /** @type {string[]} */
     const wakes = [];
-    const newtab = withPurgeWake(createNewTabClient(hostOf(tab)), () => wakes.push('wake'));
+    const newtab = withPurgeWake(newTabOf(tab).client, () => wakes.push('wake'));
     assert.equal(await newtab.whenReady(), null);
     /**
      * @param {Record<string, unknown>} fields

@@ -1,27 +1,36 @@
 // The rules the kernel copies from production code (#12, "Data and migration"), each run
-// both ways from the same records: production js/storage.js, background.js, or the
-// controller that applies the rule, in one profile, and the kernel over the legacy adapter
-// in another. Each pair has to leave the same records. Two rules the kernel changes on
+// both ways from the same records: 1.4.x's Storage, the frozen v1.4.1's since #17 PR 4a took
+// js/storage.js's copies of its writers out, which matched it line for line, background.js, or
+// the controller that applies the rule, in one profile, and the kernel in another, on #17's
+// adapter since #17 PR 4a deleted the legacy adapter, opened as the new tab's root opens a
+// database the worker's run didn't reach: as it is, at 8. Each pair has to leave the same records. Two rules the kernel changes on
 // purpose are left out, as #12 has them: attachInsights writes only insight fields, and
 // applyDerivedTitle drops its title once the user set one. Two more since #17 PR 3a, each
 // checked as the difference it is: the kernel writes placement, kind, and lifecycle beside the
 // flags on a note it makes (domain/placement.js), which the comparisons take off and check
 // apart, and it lists a note without an updatedAt the index holds (KD-011), which Storage lists
-// once #17's transform has filled the field.
+// once #17's transform has filled the field. And #17's adapter puts a note's versions on its
+// record (#17 PR 2a, versions.js), at 8 too, which the comparisons take off and createNote's
+// case checks.
 
 import { createRequire } from 'node:module';
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
+import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { filledByLogical2 } from '../../js/kernel/adapters/indexeddb/transforms.js';
+import { VERSION_FIELDS } from '../../js/kernel/adapters/indexeddb/versions.js';
+import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
+import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createsCycle } from '../../js/kernel/core/domain/folder.js';
+import { isEmpty, isUntitled } from '../../js/kernel/core/domain/note.js';
 import { PLACEMENT_FIELDS, withoutPlacement } from '../../js/kernel/core/domain/placement.js';
-import { adapterFor, closeAll, kernelFor, legacyContext, legacyEnv } from './legacy-fixture.mjs';
-import { testIds } from './support.mjs';
+import { closeAll, legacyContext, legacyEnv, releaseContext } from './legacy-fixture.mjs';
+import { CALLERS, testIds } from './support.mjs';
 
 // #34's worker harness is CommonJS, and starts background.js as the module worker it is,
 // which takes vm.SourceTextModule: npm test starts node with --experimental-vm-modules
@@ -33,6 +42,7 @@ const legacyTextPaths = createRequire(import.meta.url)('../fixtures/legacy-text-
 const RUNS_MODULES = typeof (/** @type {any} */ (vm).SourceTextModule) === 'function';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
+/** @typedef {import('./legacy-fixture.mjs').PageContext} PageContext */
 /** @typedef {import('../../js/kernel/core/application/kernel.js').Kernel} Kernel */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').BulkOutcome} BulkOutcome */
@@ -47,9 +57,43 @@ const TIME_FIELDS = new Set(['createdAt', 'updatedAt', 'archivedAt', 'trashedAt'
 /** What the editor loads before it can open a note, past what every legacy context loads */
 const EDITOR_FILES = ['js/core/storage-error.js', 'js/sidebar-utils.js', 'js/blocks.js', 'js/editor.js'];
 
-/** @type {LegacyContext[]} */
+/** @type {PageContext[]} */
 const opened = [];
 after(() => closeAll(opened));
+
+/** @type {{IDBKeyRange: typeof IDBKeyRange}} */
+const { IDBKeyRange: KeyRange } = createRequire(import.meta.url)('fake-indexeddb');
+
+/** @type {Array<{close: () => void}>} */
+const adapters = [];
+after(() => adapters.forEach(adapter => adapter.close()));
+
+/**
+ * The kernel on #17's adapter over `context`'s profile, opened as the new tab's root opens a
+ * database the worker's run didn't reach: as it is, with the backup tasks (composition/newtab.js),
+ * and the real clock, as Storage's is, unless a case gives one
+ * @param {PageContext} context
+ * @param {import('../../js/kernel/core/ports/runtime.js').Clock} [clock]
+ * @returns {Promise<Kernel>}
+ */
+async function kernelOver(context, clock = { now: () => Date.now() }) {
+  const adapter = createIndexedDbAdapter({
+    indexedDB: context.env.indexedDB,
+    settings: context.env.chrome.api.storage.local,
+    keyRange: KeyRange,
+    mode: 'existing',
+    backups: true,
+  });
+  adapters.push(adapter);
+  await adapter.open();
+  return createKernel({
+    adapter,
+    policy: createBaselinePolicy(),
+    caller: CALLERS.newtab,
+    ids: testIds('k'),
+    clock,
+  });
+}
 
 /**
  * `value` with each time a write stamped, any after the seeded ones, read as 'written', so
@@ -71,18 +115,18 @@ function stamped(value) {
 /**
  * An instant of June 15, 2026 both in UTC and in this machine's zone, whatever the zone: halfway
  * between that day's noon in UTC and its noon here, the middle of the hours the two days share,
- * in any zone from UTC-12 to UTC+14. Storage names today's Daily Note by the local day and keys
- * it by the UTC one, and the parity kernel's clock has no zone, so it names and keys by the UTC
- * day (#17 PR 3b's dailyNoteName takes the clock's zone). Where the two days differ, so do the
- * two notes, so the cases that make today's Daily Note run at this moment on both sides.
+ * in any zone from UTC-12 to UTC+14. The frozen 1.4.1 names today's Daily Note by the local day
+ * and keys it by the UTC one, and the parity kernel's clock has no zone, so it names and keys by
+ * the UTC day (#17 PR 3b's dailyNoteName takes the clock's zone). Where the two days differ, so
+ * do the two notes, so the cases that make today's Daily Note run at this moment on both sides.
  */
 const SAME_DAY = (Date.UTC(2026, 5, 15, 12) + new Date(2026, 5, 15, 12).getTime()) / 2;
 
 /**
- * Has the code in each of `contexts` read `at` as now, as a page at that moment would: Date
- * with no arguments, and Date.now()
+ * Has the 1.4.1 code in each of `contexts` read `at` as now, as a page at that moment would:
+ * Date with no arguments, and Date.now()
  * @param {number} at
- * @param {LegacyContext[]} contexts
+ * @param {PageContext[]} contexts
  */
 function nowIn(at, contexts) {
   for (const { env } of contexts) {
@@ -102,30 +146,42 @@ function nowIn(at, contexts) {
 }
 
 /**
- * Two profiles that start from the same records: `viaStorage` for production code, and
- * `viaKernel` for the kernel, whose clock is the real one, as Storage's is, or, with `at`, one
- * that reads `at`, as Storage's Date does then on both sides
+ * Two profiles that start from the same records: `viaStorage` for 1.4.x's code, the frozen
+ * v1.4.1 Storage since #17 PR 4a took js/storage.js's own copies of its writers out
+ * (releaseContext), and `viaKernel` for the kernel, whose clock is the real one, as Storage's is,
+ * or, with `at`, one that reads `at`, as 1.4.1's Date does then on both sides. The kernel's
+ * profile has a 1.4.1 Storage open too, which a case reads it through.
  * @param {Record<string, unknown[]>} [records] - rows per IndexedDB store
  * @param {{at?: number}} [options]
- * @returns {Promise<{viaStorage: LegacyContext, viaKernel: LegacyContext, kernel: Kernel}>}
+ * @returns {Promise<{viaStorage: PageContext, viaKernel: PageContext, kernel: Kernel}>}
  */
 async function twin(records = {}, { at } = {}) {
-  const viaStorage = legacyContext();
-  const viaKernel = legacyContext();
+  const viaStorage = releaseContext();
+  const viaKernel = releaseContext();
   opened.push(viaStorage, viaKernel);
   if (at !== undefined) nowIn(at, [viaStorage, viaKernel]);
   for (const { env } of [viaStorage, viaKernel]) await legacyEnv.createDatabase(env.indexedDB, { records });
   await viaStorage.storage.open();
-  const adapter = adapterFor(viaKernel);
-  await adapter.open();
-  const clock = at === undefined ? { now: () => Date.now() } : { now: () => at };
-  return { viaStorage, viaKernel, kernel: kernelFor(adapter, { ids: testIds('k'), clock }) };
+  await viaKernel.storage.open();
+  return {
+    viaStorage,
+    viaKernel,
+    kernel: await kernelOver(viaKernel, at === undefined ? undefined : { now: () => at }),
+  };
 }
 
 /**
+ * `note` without the versions #17's adapter puts on a note's record (#17 PR 2a)
+ * @param {Record<string, unknown>} note
+ */
+const withoutVersions = note =>
+  Object.fromEntries(Object.entries(note).filter(([field]) => !VERSION_FIELDS.includes(field)));
+
+/**
  * A profile's records in the IndexedDB stores `names`, by key, with written times as 'written',
- * and each note without the group the kernel writes beside its flags (groupsIn reads that)
- * @param {LegacyContext} context
+ * and each note without the group the kernel writes beside its flags (groupsIn reads that) or
+ * its versions
+ * @param {PageContext} context
  * @param {string[]} names
  * @returns {Promise<any>}
  */
@@ -136,7 +192,12 @@ async function recordsIn(context, names) {
       names.map(name => {
         const records = legacyEnv.recordsOf(dump, name);
         if (name !== 'canvases') return [name, records];
-        return [name, Object.fromEntries(Object.entries(records).map(([key, note]) => [key, withoutPlacement(note)]))];
+        return [
+          name,
+          Object.fromEntries(
+            Object.entries(records).map(([key, note]) => [key, withoutVersions(withoutPlacement(note))]),
+          ),
+        ];
       }),
     ),
   );
@@ -144,7 +205,7 @@ async function recordsIn(context, names) {
 
 /**
  * Each note's placement, kind, and lifecycle, by id, for the notes that have them (#17 PR 3a)
- * @param {LegacyContext} context
+ * @param {PageContext} context
  * @returns {Promise<Record<string, Record<string, unknown>>>}
  */
 async function groupsIn(context) {
@@ -164,7 +225,7 @@ async function groupsIn(context) {
  * What #17's transform writes on a profile's notes (logical 2, transforms.js), put straight into
  * its database, since a profile at version 8 has no `meta` for a run to read. The run starts
  * now, as the parity kernels' clocks read, which a trashed note's time in the trash takes.
- * @param {LegacyContext} context
+ * @param {PageContext} context
  */
 async function filledAsTheTransformFills(context) {
   /** @type {IDBDatabase} */
@@ -197,7 +258,7 @@ async function filledAsTheTransformFills(context) {
  * Each search entry's name. Storage.updateNote stamps the entry again on every note write,
  * and the kernel only on a rename, which #12 has as the one command that updates the search
  * index, so a command that isn't a rename leaves the entry's time out of the comparison.
- * @param {LegacyContext} context
+ * @param {PageContext} context
  * @returns {Promise<Record<string, unknown>>}
  */
 async function searchNames(context) {
@@ -208,7 +269,7 @@ async function searchNames(context) {
 /**
  * A Daily Note as a profile holds it: its record, its search entry, and its blocks in order,
  * with the ids each side gives the template's copies left out
- * @param {LegacyContext} context
+ * @param {PageContext} context
  * @param {string} noteId
  */
 async function dailyNoteMade(context, noteId) {
@@ -248,6 +309,14 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assertCommitted(await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: made.id, name: 'Plan' }));
     const stores = ['canvases', 'search_index'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
+    // #17's adapter gives the note its versions, which 1.4.x keeps as fields it doesn't read
+    /** @param {PageContext} context */
+    const versionsIn = async context => {
+      const note = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(context.env.indexedDB), 'canvases')[made.id];
+      return VERSION_FIELDS.map(field => note[field]);
+    };
+    assert.deepEqual(await versionsIn(viaKernel), [1, 0, 0]);
+    assert.deepEqual(await versionsIn(viaStorage), [undefined, undefined, undefined]);
     // 1.4.1 still opens version 8, so the group waits for the run and the transform; the contract
     // suite checks the one the kernel writes at 10
     assert.deepEqual(await groupsIn(viaKernel), {});
@@ -332,7 +401,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     );
     // Template copies line up by order, since each side gives them its own ids, and the
     // capture's own block is left out: Storage.ensureDailyNote makes the note without one
-    /** @param {LegacyContext} context */
+    /** @param {PageContext} context */
     const made = async context => {
       const found = await recordsIn(context, ['canvases', 'search_index', 'elements']);
       const copies = Object.values(found.elements)
@@ -557,7 +626,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     /**
      * The fields a rename decides: the title, whether the user set it, when a model did, and
      * the search entry. The editor's save writes the rest of the note too.
-     * @param {LegacyContext} context
+     * @param {PageContext} context
      */
     const title = async context => {
       const found = await recordsIn(context, ['canvases', 'search_index']);
@@ -710,7 +779,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       await kernel.execute({ type: 'saveNoteContent', commandId: 'c1', noteId: 'n1', blocks, linkedNames }),
     );
     // Each side gives its links ids of its own, so they compare by what they link
-    /** @param {LegacyContext} context */
+    /** @param {PageContext} context */
     const links = async context =>
       Object.values((await recordsIn(context, ['links'])).links)
         .map(({ id, ...link }) => link)
@@ -1038,7 +1107,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
 
   it("the note list's views list what Storage lists, in its order, at load and after each commit, and the note without an indexed updatedAt last (#17 PR 3a, KD-011)", async () => {
     const at = (/** @type {number} */ offset) => SEEDED_AT + offset;
-    const context = legacyContext();
+    const context = releaseContext();
     opened.push(context);
     await legacyEnv.createDatabase(context.env.indexedDB, {
       records: {
@@ -1062,11 +1131,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
         ],
       },
     });
-    const adapter = adapterFor(context);
-    await adapter.open();
-    const kernel = kernelFor(adapter, { ids: testIds('k'), clock: { now: () => Date.now() } });
+    const kernel = await kernelOver(context);
     const list = createNoteList({ query: kernel.query, subscribe: kernel.subscribe, whenReady: kernel.whenReady });
     const { storage } = context;
+    await storage.open();
     /** @type {Array<[NoteView, () => Promise<Array<{id: string}>>]>} */
     const views = [
       ['active', () => storage.getAllNotes()],
@@ -1167,7 +1235,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
       ],
     });
     const asStored = legacyEnv.plain(await viaStorage.storage.getElementsByNote('n1'));
-    assert.deepEqual(asStored.map((/** @type {{id: string}} */ block) => block.id), ['B', 'a', 'c', 'm', 'q', 'z']);
+    assert.deepEqual(
+      asStored.map((/** @type {{id: string}} */ block) => block.id),
+      ['B', 'a', 'c', 'm', 'q', 'z'],
+    );
     const documentClient = createDocumentClient(/** @type {any} */ ({ ...kernel, ids: testIds('d') }));
     assert.deepEqual(legacyEnv.plain(await documentClient.blocksAsStored('n1')), asStored);
   });
@@ -1291,11 +1362,13 @@ describe("the kernel's copies of production rules, run both ways", () => {
   /**
    * Everything chrome.storage.local holds for `context`, with a time a write stamped read as
    * 'written'
-   * @param {LegacyContext} context
+   * @param {PageContext} context
    * @returns {Promise<Record<string, any>>}
    */
   const localOf = async context => {
-    const stored = legacyEnv.plain(await new Promise(resolve => context.env.chrome.api.storage.local.get(null, resolve)));
+    const stored = legacyEnv.plain(
+      await new Promise(resolve => context.env.chrome.api.storage.local.get(null, resolve)),
+    );
     const now = Date.now();
     return JSON.parse(
       JSON.stringify(stored, (key, value) =>
@@ -1332,7 +1405,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
     await send({ type: 'saveChatHistory', chat: 'note', history, messages });
     await send({ type: 'saveChatHistory', chat: 'global', history: [], messages: [] });
     await send({ type: 'savePromptTemplates', templates });
-    await send({ type: 'setPreferences', values: { embeddingsEnabled: true, autoTitleEnabled: true, insightsEnabled: true } });
+    await send({
+      type: 'setPreferences',
+      values: { embeddingsEnabled: true, autoTitleEnabled: true, insightsEnabled: true },
+    });
     await send({ type: 'completeOnboarding' });
     await send({ type: 'recordBackup', fullExport: true, backup: true });
     await send({ type: 'recordExportNotice', version: 1, outcome: 'exported' });
@@ -1340,14 +1416,14 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.deepEqual(await localOf(viaKernel), await localOf(viaStorage));
   });
 
-  it("saveTheme stores the record Storage.saveCustomTheme stores for the Theme Builder", async () => {
+  it('saveTheme stores the record Storage.saveCustomTheme stores for the Theme Builder', async () => {
     const { viaStorage, viaKernel, kernel } = await twin();
     const properties = { '--bg-primary': '#101010', '--text-primary': '#fafafa' };
     const saved = await viaStorage.storage.saveCustomTheme({ name: 'Dusk', properties });
     assertCommitted(
       await kernel.execute({ type: 'saveTheme', commandId: 'c1', themeId: saved.id, name: 'Dusk', properties }),
     );
-    const themes = async (/** @type {LegacyContext} */ context) =>
+    const themes = async (/** @type {PageContext} */ context) =>
       legacyEnv.plain(await context.storage.getCustomThemes()).map((/** @type {any} */ theme) => ({
         ...theme,
         updatedAt: theme.updatedAt > SEEDED_AT ? 'written' : theme.updatedAt,
@@ -1402,7 +1478,9 @@ describe("the kernel's copies of production rules, run both ways", () => {
         { id: 'untimed', name: 'No time', properties: {} },
       ],
     });
-    const storage = viaKernel.storage;
+    // The Theme Builder's saves, by 1.4.1's Storage on the kernel's profile, since js/storage.js's
+    // copy of saveCustomTheme went with #17 PR 4a
+    const { storage } = viaKernel;
     await storage.saveCustomTheme({ name: 'Dusk', properties: { '--bg-primary': '#101010' } });
     await new Promise(resolve => setTimeout(resolve, 2));
     await storage.saveCustomTheme({ name: 'Dawn', properties: { '--bg-primary': '#fafafa' } });
@@ -1450,13 +1528,19 @@ describe("the kernel's copies of production rules, run both ways", () => {
       backupCreatedAt: new Date().toISOString(),
       backupVersion: 1,
     });
-    assert.deepEqual(await fileOf(/** @type {Blob} */ (backup.kind === 'ready' && backup.data)), await fileOf(expected));
+    assert.deepEqual(
+      await fileOf(/** @type {Blob} */ (backup.kind === 'ready' && backup.data)),
+      await fileOf(expected),
+    );
   });
 
   it("profileHoldsContent decides what the export notice decided with Storage's isNoteUntitled and isNoteEmpty", async () => {
     for (const records of /** @type {Array<Record<string, unknown[]>>} */ ([
       {},
-      { canvases: [legacyEnv.note('u1', { name: 'Untitled' })], elements: [legacyEnv.block('b1', 'u1', 0, '<br>&nbsp;')] },
+      {
+        canvases: [legacyEnv.note('u1', { name: 'Untitled' })],
+        elements: [legacyEnv.block('b1', 'u1', 0, '<br>&nbsp;')],
+      },
       { canvases: [legacyEnv.note('u1', { name: 'Untitled 3' })], elements: [legacyEnv.block('b1', 'u1', 0, 'Words')] },
       { canvases: [legacyEnv.note('x1', { name: 'Plan', trashed: true, trashedAt: SEEDED_AT })] },
       { canvases: [legacyEnv.note('a1', { name: 'Kept', archived: true })] },
@@ -1488,7 +1572,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
       // Each backup is keyed by its time, so the next one gets a key of its own
       await new Promise(resolve => setTimeout(resolve, 2));
     }
-    /** @param {LegacyContext} context */
+    /** @param {PageContext} context */
     const backups = async context => {
       const stored = await localOf(context);
       const keys = Object.keys(stored).filter(key => key.startsWith('auto_backup_'));
@@ -1520,18 +1604,28 @@ describe("the kernel's copies of production rules, run both ways", () => {
       await kernel.execute({ type: 'importBackup', commandId: 'c1', mode: 'replace', backup: structuredClone(backup) })
     );
     assertCommitted(outcome);
-    // The note it added, then the folder it added, then the note it trashed, as Storage's result names them
+    // The note it added, then the folder it added, then the note it trashed, as Storage's result
+    // names them. 1.4.1's names no folders it added, and every folder in the file is new here.
     assert.equal(outcome.changedIds.length, 3);
-    assert.deepEqual(outcome.changedIds.slice(1), [...result.addedFolderIds, ...result.trashedIds]);
+    const addedFolderIds = backup.folders.map(added => added.id);
+    assert.deepEqual(outcome.changedIds.slice(1), [...addedFolderIds, ...result.trashedIds]);
 
     /** Each context's records, with the import's new ids as the order they were made in */
-    const shaped = async (/** @type {LegacyContext} */ context, /** @type {string} */ importedId) => {
-      const { canvases: notes, elements: blocks, folders } = await recordsIn(context, ['canvases', 'elements', 'folders']);
+    const shaped = async (/** @type {PageContext} */ context, /** @type {string} */ importedId) => {
+      const {
+        canvases: notes,
+        elements: blocks,
+        folders,
+      } = await recordsIn(context, ['canvases', 'elements', 'folders']);
       const rename = (/** @type {any} */ value) => JSON.parse(JSON.stringify(value).replaceAll(importedId, 'IMPORTED'));
-      return rename({ notes, blocks: Object.values(blocks).map((/** @type {any} */ b) => ({ ...b, id: 'block' })), folders });
+      return rename({
+        notes,
+        blocks: Object.values(blocks).map((/** @type {any} */ b) => ({ ...b, id: 'block' })),
+        folders,
+      });
     };
     assert.deepEqual(await shaped(viaKernel, outcome.changedIds[0]), await shaped(viaStorage, result.importedIds[0]));
-    const copies = async (/** @type {LegacyContext} */ context) =>
+    const copies = async (/** @type {PageContext} */ context) =>
       Object.keys(await localOf(context)).filter(key => key.startsWith('recovery_backup_')).length;
     assert.deepEqual([await copies(viaKernel), await copies(viaStorage)], [1, 1]);
   });
@@ -1540,7 +1634,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
 
   /**
    * A profile's snapshots by key, with each written time read as 'written'
-   * @param {LegacyContext} context
+   * @param {PageContext} context
    */
   const snapshotsIn = async context => {
     const { snapshots } = await recordsIn(context, ['snapshots']);
@@ -1688,11 +1782,59 @@ describe("the kernel's copies of production rules, run both ways", () => {
     );
     const stores = ['canvases', 'elements'];
     assert.deepEqual(await recordsIn(viaKernel, stores), await recordsIn(viaStorage, stores));
-    /** @param {LegacyContext} context */
+    /** @param {PageContext} context */
     const links = async context =>
       Object.values((await recordsIn(context, ['links'])).links).map(({ id, ...link }) => link);
     assert.deepEqual(await links(viaKernel), await links(viaStorage));
     assert.equal((await links(viaKernel)).length, 1);
+  });
+
+  it('decides untitled and empty the way Storage.isNoteUntitled and Storage.isNoteEmpty do', async () => {
+    const page = releaseContext();
+    opened.push(page);
+    /** @type {Array<Record<string, unknown>[]>} */
+    const blockSets = [
+      [],
+      [{ content: '<p> </p>' }],
+      [{ content: '<p>x</p>' }],
+      [{ imageUrl: 'data:,' }],
+      [{ tableData: [['Header 1', ' ']] }],
+      [{ tableData: [['Header 1'], ['cell']] }],
+      [{ url: 'https://example.test', title: 'Example' }],
+      [{ url: 'https://example.test' }],
+      [{ children: '<p>child</p>' }],
+      [{ equation: ' ' }],
+      [{ equation: 'x' }],
+      // Only text blocks of spaces, line breaks, and non-breaking spaces are empty
+      [{ content: ' <br>&nbsp;<BR/>\n&NBSP;<br />' }, { content: null }],
+      [{ type: undefined, content: ' ' }],
+      [{ content: '<b></b>' }],
+      [{ content: '<img src="data:,">' }],
+      [{ content: 5 }],
+      [{ type: 'divider' }],
+      [{ type: 'image', imageUrl: 'data:,' }],
+      [{ type: 'table', tableData: [['Header 1', ' ']] }],
+      [{ type: 'bookmark', url: 'https://example.test', title: 'Example' }],
+      [{ content: '' }, { type: 'divider' }],
+    ];
+    await legacyEnv.createDatabase(page.env.indexedDB, {
+      records: {
+        elements: blockSets.flatMap((blocks, set) =>
+          blocks.map((fields, index) =>
+            legacyEnv.block(`b${set}-${index}`, `set${set}`, index, '', { content: '', ...fields }),
+          ),
+        ),
+      },
+    });
+    await page.storage.open();
+    for (const [set, blocks] of blockSets.entries()) {
+      const stored = legacyEnv.plain(await page.storage.getElementsByNote(`set${set}`));
+      assert.equal(isEmpty(stored), await page.storage.isNoteEmpty(`set${set}`), JSON.stringify(blocks));
+    }
+    for (const name of ['', '  ', 'Untitled', 'untitled 4', 'Untitled draft', 'Plan', undefined]) {
+      const note = { id: 'n', name };
+      assert.equal(isUntitled(note), Boolean(page.storage.isNoteUntitled(note)), JSON.stringify(name));
+    }
   });
 
   it("the kernel's preview, todo progress, and wiki-link names are SidebarUtils' and 1.4.x Utils'", async () => {
