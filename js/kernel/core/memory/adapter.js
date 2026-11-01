@@ -298,6 +298,11 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       getAll: async store => clone(records(store)),
       getAllKeys: async store =>
         records(store).map(record => keyFrom(store, /** @type {string} */ (keyOf(store, record)))),
+      getKey: async (store, key) => {
+        scoped(store);
+        const stored = keyString(store, key);
+        return stored !== undefined && current(store, stored) !== undefined ? key : undefined;
+      },
       getAllByIndex: async (store, index, value) => clone(byIndex(store, index, value)),
       getKeysByIndex: async (store, index, value) =>
         byIndex(store, index, value).map(record => keyFrom(store, /** @type {string} */ (keyOf(store, record)))),
