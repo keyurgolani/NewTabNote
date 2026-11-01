@@ -33,6 +33,13 @@
 /** @typedef {Change & {commitSeq: number}} ChangeEntry */
 
 /**
+ * What an adapter appends for one entity (#17 PR 4c): the change, with the ops the commit took
+ * (contracts/entities.js, changeOp), which the log keeps and no read here hands on, since a page
+ * catches up by hint (the lead, 4c's Q4). #19 adds the reader its merge needs.
+ * @typedef {Change & {ops?: import('../contracts/entities.js').ChangeOp[]}} LoggedChange
+ */
+
+/**
  * @typedef {{kind: 'changes', entries: ChangeEntry[], cursor: number, more: boolean}
  *   | {kind: 'resync-required', floor: number, head: number}} ChangesSince
  */

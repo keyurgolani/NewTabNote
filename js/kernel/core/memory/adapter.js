@@ -42,6 +42,7 @@
 import { clone } from '../contracts/clone.js';
 import { COMMANDS } from '../contracts/commands.js';
 import { UnavailableError, rejected, unavailable, unavailableFrom } from '../contracts/outcomes.js';
+import { blocksByNote, folderOps, noteOps } from '../domain/changes.js';
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
 import { IDB_SETTINGS_KEYS, STORES } from '../ports/repository.js';
@@ -59,6 +60,9 @@ import { digestOf, sameConflict } from './fingerprint.js';
 /** @typedef {import('../ports/repository.js').Unit} Unit */
 /** @typedef {import('../ports/repository.js').Work} Work */
 /** @typedef {import('../ports/commit-log.js').Change} Change */
+/** @typedef {import('../ports/commit-log.js').LoggedChange} LoggedChange */
+/** @typedef {import('../contracts/entities.js').ChangeOp} ChangeOp */
+/** @typedef {import('../domain/changes.js').Around} Around */
 /** @typedef {import('./commit-log.js').MemoryCommitLog} MemoryCommitLog */
 /** @typedef {import('./ledger.js').MemoryLedger} MemoryLedger */
 
@@ -373,18 +377,65 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   };
 
   /**
+   * The change log's ops for a commit's writes (#17 PR 4c, domain/changes.js), worked out from
+   * each note, block, and folder as stored before the commit and as its writes leave it, by
+   * revisionKey, with a note the commit wrote only blocks of under its own. Call it before the
+   * writes go in.
+   * @param {Pending} pending
+   * @returns {Map<string, ChangeOp[]>}
+   */
+  const changeOps = pending => {
+    /**
+     * @param {StoreName} store
+     * @param {string} key
+     * @param {Record<string, unknown> | undefined} record
+     * @returns {Around}
+     */
+    const around = (store, key, record) => ({ before: storeOf(store).get(key) ?? null, after: record ?? null });
+    const byNote = blocksByNote(
+      [...pending.values()]
+        .filter(write => write.store === 'blocks')
+        .map(({ store, key, record }) => /** @type {[string, Around]} */ ([key, around(store, key, record)])),
+    );
+    /** @type {Map<string, ChangeOp[]>} */
+    const ops = new Map();
+    for (const { store, key, record } of pending.values()) {
+      if (store === 'notes') {
+        ops.set(revisionKey(store, key), noteOps(around(store, key, record), byNote.get(key) || []));
+        byNote.delete(key);
+      } else if (store === 'folders') {
+        ops.set(revisionKey(store, key), folderOps(around(store, key, record)));
+      }
+    }
+    for (const [noteId, blocks] of byNote) {
+      const list = noteOps({ before: null, after: undefined }, blocks);
+      // Blocks of a note that isn't stored are no note's
+      if (list.length > 0 && storeOf('notes').has(noteId)) ops.set(revisionKey('notes', noteId), list);
+    }
+    return ops;
+  };
+
+  /**
    * The entities a commit changed, for the commit log, typed by the store it wrote: each note
-   * and folder it put or deleted, and the primary record when only its revision moved, as when
-   * blocks were deleted from a note. So deleteFolder's notes, filed at the root, go in as notes.
+   * and folder it put or deleted, the primary record when only its revision moved, as when
+   * blocks were deleted from a note, and a note it wrote only blocks of, each with its ops. So
+   * deleteFolder's notes, filed at the root, go in as notes.
    * @param {Pending} pending
    * @param {{store: StoreName, key: string} | null} moved
-   * @returns {Array<{store: 'notes' | 'folders', key: string}>}
+   * @param {Map<string, ChangeOp[]>} ops - changeOps'
+   * @returns {Array<{store: 'notes' | 'folders', key: string, ops: ChangeOp[]}>}
    */
-  const changedEntities = (pending, moved) => {
-    /** @type {Map<string, {store: 'notes' | 'folders', key: string}>} */
+  const changedEntities = (pending, moved, ops) => {
+    /** @type {Map<string, {store: 'notes' | 'folders', key: string, ops: ChangeOp[]}>} */
     const changed = new Map();
-    for (const { store, key } of [...pending.values(), ...(moved ? [moved] : [])]) {
-      if (store === 'notes' || store === 'folders') changed.set(revisionKey(store, key), { store, key });
+    /** @type {Array<{store: StoreName, key: string}>} */
+    const blockOnly = [...ops.keys()]
+      .filter(id => id.startsWith('notes\0'))
+      .map(id => ({ store: /** @type {StoreName} */ ('notes'), key: id.slice('notes\0'.length) }));
+    for (const { store, key } of [...pending.values(), ...(moved ? [moved] : []), ...blockOnly]) {
+      const id = revisionKey(store, key);
+      if ((store === 'notes' || store === 'folders') && !changed.has(id))
+        changed.set(id, { store, key, ops: ops.get(id) || [] });
     }
     return [...changed.values()];
   };
@@ -392,7 +443,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   /**
    * What a command's commit did: its outcome, the notes and folders it changed, and the keys of
    * the tombstones it put, which take the commit's seq once the log has it
-   * @typedef {{outcome: Outcome, changed: Array<{store: 'notes' | 'folders', key: string}>, tombstones: string[]}} Applied
+   * @typedef {{outcome: Outcome, changed: Array<{store: 'notes' | 'folders', key: string, ops: ChangeOp[]}>, tombstones: string[]}} Applied
    */
 
   /**
@@ -463,6 +514,8 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         return { outcome: stop, changed: [], tombstones: [] };
       }
     }
+    // The change log's ops, from the records as they were, before the writes go in
+    const ops = changeOps(pending);
     // A deleted record's revision stays, as #17's tombstone keeps `lastRevision`, so a record
     // made again under its key carries on past it, and a save loaded before the delete is a
     // conflict
@@ -483,22 +536,23 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       storeOf('tombstones').set(key, filled);
       tombstones.push(key);
     }
-    return { outcome: finish(work), changed: changedEntities(pending, moved), tombstones };
+    return { outcome: finish(work), changed: changedEntities(pending, moved, ops), tombstones };
   };
 
   /**
    * The changes a committed command appends to the commit log: each entity it changed, at its
-   * revision, or 0 for one that has none, which every folder is. Settings and maintenance
-   * change no entity.
+   * revision, or 0 for one that has none, which every folder is, with its ops. Settings and
+   * maintenance change no entity.
    * @param {Applied} applied
-   * @returns {Change[]}
+   * @returns {LoggedChange[]}
    */
   const changesOf = ({ outcome, changed }) => {
     if (outcome.kind !== 'committed') return [];
-    return changed.map(({ store, key }) => ({
+    return changed.map(({ store, key, ops }) => ({
       entityType: store === 'notes' ? 'note' : 'folder',
       entityId: key,
       revision: store === 'notes' ? (revisions.get(revisionKey(store, key)) ?? 0) : 0,
+      ops,
     }));
   };
 

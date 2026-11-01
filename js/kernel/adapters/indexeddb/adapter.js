@@ -320,18 +320,30 @@ function view(db, tx, scope, writable, tracker) {
     return handle(store);
   };
   /**
+   * Tells the tracker what a read found of a note, a block, or a folder, for its versions and
+   * the change log's ops (versions.js)
+   * @param {StoreName} store
+   * @param {IDBValidKey} key
+   * @param {Record<string, unknown> | undefined} record
+   */
+  const saw = (store, key, record) => {
+    if (store === 'notes') tracker.saw(key, record);
+    else if (store === 'blocks') tracker.sawBlock(key, record);
+    else if (store === 'folders') tracker.sawFolder(key, record);
+  };
+  /**
    * @param {StoreName} store
    * @param {Array<Record<string, unknown>>} records
    */
   const sawAll = (store, records) => {
-    if (store === 'notes') for (const record of records) tracker.saw(/** @type {string} */ (record.id), record);
+    for (const record of records) saw(store, /** @type {string} */ (record.id), record);
     return records;
   };
   return /** @type {Tx} */ ({
     get: async (store, key) => {
       const objectStore = handle(store);
       const record = objectStore ? await result(objectStore.get(key)) : undefined;
-      if (store === 'notes') tracker.saw(key, record);
+      saw(store, key, record);
       return record;
     },
     getAll: async store => {
@@ -345,7 +357,11 @@ function view(db, tx, scope, writable, tracker) {
     getAllByIndex: async (store, index, value) => {
       const objectStore = handle(store);
       const key = indexValue(value);
-      return sawAll(store, objectStore ? await result(objectStore.index(index).getAll(key)) : []);
+      if (!objectStore) return [];
+      const read = result(objectStore.index(index).getAll(key));
+      // Every block of the note, as it was before any write after this read
+      if (store === 'blocks' && index === 'canvasId') tracker.coverBlocks(key, read);
+      return sawAll(store, await read);
     },
     getKeysByIndex: async (store, index, value) => {
       const objectStore = handle(store);
@@ -385,9 +401,17 @@ function view(db, tx, scope, writable, tracker) {
         );
         return;
       }
+      // A block's and a folder's writes go through the tracker too, for the change log's ops
+      if (store === 'blocks') {
+        tracker.putBlock(objectStore, record);
+        return;
+      }
+      if (store === 'folders') {
+        tracker.putFolder(objectStore, record);
+        return;
+      }
       objectStore.put(record);
-      if (store === 'folders') tracker.touched('folder', /** @type {string} */ (record.id));
-      else if (store === 'tombstones') tracker.tombstone(/** @type {TombstoneRecord} */ (record));
+      if (store === 'tombstones') tracker.tombstone(/** @type {TombstoneRecord} */ (record));
       else tracker.wrote();
     },
     delete: (store, key) => {
@@ -397,9 +421,16 @@ function view(db, tx, scope, writable, tracker) {
         tracker.deleteNote(objectStore, key);
         return;
       }
+      if (store === 'blocks') {
+        tracker.deleteBlock(objectStore, key);
+        return;
+      }
+      if (store === 'folders') {
+        tracker.deleteFolder(objectStore, key);
+        return;
+      }
       objectStore.delete(key);
-      if (store === 'folders') tracker.touched('folder', key);
-      else tracker.wrote();
+      tracker.wrote();
     },
   });
 }
