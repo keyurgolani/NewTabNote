@@ -249,10 +249,19 @@
       "file": "js/controllers/ai-chat-controller.js",
       "function": "renderSmartInsights",
       "kind": "static",
-      "count": 4,
+      "count": 2,
       "owner": 21,
       "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
-      "note": "The insights' empty messages and a related note's icon"
+      "note": "The tags' and the action items' empty messages"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "renderRelatedNotes",
+      "kind": "static",
+      "count": 2,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "A related note's icon and the list's empty message, which renderSmartInsights drew before #27 slice 3b drew Related Notes on its own answer"
     }
   ]
 }
