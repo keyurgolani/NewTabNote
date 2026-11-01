@@ -8,15 +8,17 @@
  * @param {((name: string) => Promise<any>)|null} [deps.loadLibrary] - The page loader's
  *   (js/runtime/lazy.js), which Chart.js loads through at the first Stats (#27 slice 3). Without
  *   it, Chart.js is the global its script defined, as before.
- * @param {((context: string, error: unknown) => void)|null} [deps.showUnexpectedError] - App's
- *   "An unexpected error occurred" toast, where a Chart.js that didn't load lands
+ * @param {any} [deps.partReload] - App's guarded Reload for the charts' failure (App.partReload,
+ *   js/ui/part-state.js); null for the browser's
  */
 class AnalyticsController {
-  constructor({ domRefs, logger, loadLibrary = null, showUnexpectedError = null }) {
+  constructor({ domRefs, logger, loadLibrary = null, partReload = null }) {
     this.domRefs = domRefs;
     this.logger = logger;
     this.loadLibrary = loadLibrary;
-    this.showUnexpectedError = showUnexpectedError;
+    this.partReload = partReload;
+    /** @type {any} The charts' place's state (#27 slice 3b), made at init with its live region */
+    this.chartsPart = undefined;
 
     // Analytics state
     this.statsOpen = false;
@@ -65,6 +67,45 @@ class AnalyticsController {
     if (statsCloseBtn) {
       statsCloseBtn.addEventListener('click', () => this.toggleStats());
     }
+    // Its live region goes on the page now, before it has anything to say
+    this.chartsPlace();
+  }
+
+  /**
+   * Where the four charts go says how Chart.js's load went (#27 slice 3b, js/ui/part-state.js):
+   * one failure for the four, in their place and at their width, with the counts kept, or their
+   * status line once the load has run 400 ms. Null without the dashboard's markup.
+   * @returns {any}
+   */
+  chartsPlace() {
+    if (this.chartsPart !== undefined) return this.chartsPart;
+    const dashboard = document.getElementById('stats-dashboard');
+    const grid = dashboard ? dashboard.querySelector('.charts-grid') : null;
+    if (!grid || typeof PartState === 'undefined') {
+      this.chartsPart = null;
+      return null;
+    }
+    const cards = () => /** @type {HTMLElement[]} */ (Array.from(grid.children)).filter((child) => !child.classList.contains('part-state'));
+    this.chartsPart = new PartState({
+      doc: document,
+      words: PART_WORDS.charts,
+      live: dashboard,
+      place: (/** @type {HTMLElement | null} */ element) => {
+        for (const card of cards()) card.style.display = element ? 'none' : '';
+        const drawn = this.chartsPart.element;
+        if (element && element.parentNode !== grid) grid.appendChild(element);
+        if (!element && drawn && drawn.parentNode) drawn.remove();
+      },
+      reload: this.partReload,
+      loaded: (/** @type {any} */ result) => this.drawCharts(result.module),
+      // Try again worked: focus goes to the first chart's heading
+      focusAfter: () => {
+        const heading = grid.querySelector('h3');
+        if (heading) heading.setAttribute('tabindex', '-1');
+        return heading;
+      },
+    });
+    return this.chartsPart;
   }
 
   // ─── Toggle stats dashboard ───
@@ -108,9 +149,17 @@ class AnalyticsController {
    */
   async renderAnalytics() {
     if (typeof Analytics === 'undefined') return;
-    // Chart.js loads at the first Stats, while the counts are read (#27 slice 3). The loader's
-    // answer never rejects.
-    const chartLoad = this.loadLibrary ? this.loadLibrary('chart') : null;
+    // Chart.js loads at the first Stats, while the counts are read (#27 slice 3), through the
+    // charts' place, which draws them once the counts are read or says how the load went (#27
+    // slice 3b). The loader's answer never rejects.
+    /** @type {() => void} */
+    let countsRead = () => {};
+    this.countsRead = new Promise((resolve) => { countsRead = () => resolve(undefined); });
+    const load = () => (this.loadLibrary ? this.loadLibrary('chart') : Promise.resolve({ status: 'loaded', module: Chart }));
+    const place = this.chartsPlace();
+    const charts = place
+      ? place.load(load)
+      : load().then((/** @type {any} */ result) => (result.status === 'loaded' ? this.drawCharts(result.module) : null));
 
     // The note list reads every list again first, so the stats count what's stored, other
     // tabs' notes included, as they did when they read storage
@@ -127,12 +176,20 @@ class AnalyticsController {
     const allText = this.notes.map(n => n.name).join(' ');
     const tags = Analytics.extractTags(allText);
     document.getElementById('stat-active-tags').textContent = tags.length;
+    countsRead();
+    await charts;
+  }
 
+  /**
+   * Draw the four charts with Chart.js, in place of the ones drawn before, once this Stats' counts
+   * are read, since the charts read the same lists
+   * @param {any} ChartLibrary
+   * @returns {Promise<void>}
+   */
+  async drawCharts(ChartLibrary) {
+    if (this.countsRead) await this.countsRead;
     // Destroy existing charts to prevent memory leaks/overlap
     Object.values(this.charts).forEach(chart => chart.destroy());
-
-    const ChartLibrary = chartLoad ? await this.loadedCharts(chartLoad) : Chart;
-    if (!ChartLibrary) return;
 
     // 1. Activity Chart
     const activityData = await Analytics.getActivityData(30);
@@ -223,19 +280,6 @@ class AnalyticsController {
         plugins: { legend: { position: 'right' } }
       }
     });
-  }
-
-  /**
-   * Chart.js from the loader's answer. One that didn't load leaves the counts and draws no chart,
-   * and the page shows the toast an error here showed before, so it answers null.
-   * @param {Promise<any>} loading
-   * @returns {Promise<any>}
-   */
-  async loadedCharts(loading) {
-    const loaded = await loading;
-    if (loaded.status === 'loaded') return loaded.module;
-    if (this.showUnexpectedError) this.showUnexpectedError('AnalyticsController', new Error(`Chart.js didn't load (${loaded.reason})`));
-    return null;
   }
 }
 

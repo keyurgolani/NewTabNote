@@ -155,11 +155,14 @@ class App {
     this.secondaryEditor = null;
     // Removals whose panes are still moving, which hold the empty state (holdEmptyState)
     this._emptyStateHolds = 0;
-    // Search Indexer: Fuse.js loads at the first index, and one that didn't load lands on the toast
+    // Search Indexer: Fuse.js loads at the first index, and each place that searches says when
+    // it didn't load (#27 slice 3b)
     this.searchEngine = new SearchEngine({}, {
       loadLibrary: this.libraryLoader(),
-      showUnexpectedError: (context, error) => this.showUnexpectedError(context, error),
     });
+    // The embedding model's places, under search's results and in Related Notes, which show one
+    // state: one Try again clears both (#27 slice 3b)
+    this.modelParts = typeof PartGroup !== 'undefined' ? new PartGroup() : null;
     // Sidebar controller
     this.sidebarController = null;
     // Tab controller
@@ -258,10 +261,26 @@ class App {
   }
 
   /**
+   * What a part's Reload uses when its library didn't load (js/ui/part-state.js, #27 slice 3b):
+   * the loader's reload once every save guard says it saved, its reload without them for "Reload
+   * anyway", and the words of the notice an open editor shows for changes it couldn't save, which
+   * speak for a save that stopped the reload. Null without the loader, when a part's Reload is
+   * the browser's.
+   * @returns {any}
+   */
+  partReload() {
+    const { loader } = this;
+    if (!loader) return null;
+    return {
+      guarded: () => loader.reloadAfterGuards(),
+      now: () => loader.reloadNow(),
+      ownNotice: () => (this.tabController ? this.tabController.ownNoticeText() : null),
+    };
+  }
+
+  /**
    * "An unexpected error occurred", the toast an unhandled rejection shows, and its line in the
-   * log. Stats' charts and search land here on purpose when their library didn't load, as they
-   * did as an unhandled rejection before the libraries loaded lazily (#27 slice 3); #27 slice
-   * 3b's labelled failure with Retry replaces it there.
+   * log
    * @param {string} context
    * @param {unknown} error
    * @returns {void}
@@ -273,12 +292,13 @@ class App {
 
   /**
    * Have a reload through the page's loader wait until every open editor, the PiP one included,
-   * has written what it has pending: the reload guard the update notice's Reload waits on (#27
-   * slice 3; the notice is slice 3b's). Nothing without the loader.
+   * has written what it has pending, and not reload when one couldn't: the guard every Reload a
+   * part's failure shows runs first (#27 slice 3b). The flush is quiet, since the Reload's own
+   * line says a failed save. Nothing without the loader.
    * @returns {void}
    */
   guardReloads() {
-    if (this.loader) this.loader.registerReloadGuard(() => this.tabController.saveOpenEditors());
+    if (this.loader) this.loader.registerReloadGuard(() => this.tabController.saveOpenEditors({ quiet: true }));
   }
 
   /**
@@ -289,8 +309,14 @@ class App {
       // Initialize core infrastructure
       this.logger = createLogger();
       this.attachFailureEvents();
-      // transformers.js loads through the page's loader at the model's first load (#27 slice 3)
-      if (typeof Embeddings !== 'undefined') Embeddings.loadLibrary = this.libraryLoader();
+      // transformers.js loads through the page's loader at the model's first load (#27 slice 3),
+      // and the model's places say when its first download runs (#27 slice 3b)
+      if (typeof Embeddings !== 'undefined') {
+        Embeddings.loadLibrary = this.libraryLoader();
+        Embeddings.onDownload = (downloading) => {
+          if (this.modelParts) this.modelParts.loadingNote(downloading ? PART_NOTES.firstDownload : '');
+        };
+      }
       this.domRefs = createDomRefs();
 
       // The tab's kernel opens storage and runs startup maintenance, as Storage.init did here
@@ -755,6 +781,9 @@ class App {
     });
 
     this.sidebarController.searchEngine = this.searchEngine;
+    // Search's and the model's failures in the list, with the page's guarded Reload (#27 slice 3b)
+    this.sidebarController.partReload = this.partReload();
+    this.sidebarController.modelParts = this.modelParts;
 
     // Wire callbacks so the controller can trigger App-level actions
     this.sidebarController.onOpenNoteInNewTab = (noteId) => this.openNoteInNewTab(noteId);
@@ -799,6 +828,9 @@ class App {
 
     // Share search engine reference
     this.aiChatController.searchEngine = this.searchEngine;
+    // All Notes' search failure and Related Notes' model state (#27 slice 3b)
+    this.aiChatController.partReload = this.partReload();
+    this.aiChatController.modelParts = this.modelParts;
 
     // Wire callbacks so the controller can trigger App-level actions
     this.aiChatController.getEditor = () => this.getEditor();
@@ -818,8 +850,10 @@ class App {
       validateBackup: this.validateBackup,
       domRefs: this.domRefs,
       logger: this.logger,
-      // JSZip loads at the first Markdown export (#27 slice 3)
+      // JSZip loads at the first Markdown export (#27 slice 3), and its section says when an
+      // export failed, with Try again and the page's guarded Reload (#27 slice 3b)
       loadLibrary: this.libraryLoader(),
+      partReload: this.partReload(),
     });
 
     // Wire callbacks so the controller can trigger App-level actions
@@ -956,9 +990,10 @@ class App {
     this.analyticsController = new AnalyticsController({
       domRefs: this.domRefs,
       logger: this.logger,
-      // Chart.js loads at the first Stats, and one that didn't load lands on the toast (#27 slice 3)
+      // Chart.js loads at the first Stats (#27 slice 3), and the charts' place says when it
+      // didn't load, with Try again and the page's guarded Reload (#27 slice 3b)
       loadLibrary: this.libraryLoader(),
-      showUnexpectedError: (context, error) => this.showUnexpectedError(context, error),
+      partReload: this.partReload(),
     });
 
     // Closing Stats puts back the sidebars as they are, however they were opened or closed

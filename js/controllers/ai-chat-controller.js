@@ -71,6 +71,19 @@ class AIChatController {
 
     // SearchEngine reference (set by App)
     this.searchEngine = null;
+    /** @type {any} App's guarded Reload for the parts' failures here (App.partReload), set by App */
+    this.partReload = null;
+    /** @type {any} The model's places (a PartGroup), set by App: one state here and under search's results */
+    this.modelParts = null;
+    /** @type {any} Related Notes' place for the model's state (#27 slice 3b) */
+    this._relatedPart = undefined;
+    /** @type {any} All Notes' place for search's state, where the chat's answer goes */
+    this._allNotesPart = undefined;
+    /** The question All Notes' Try again asks again */
+    this._allNotesQuestion = '';
+    // The Insights tab's sections each draw their newest answer
+    this._insightsTurn = 0;
+    this._relatedTurn = 0;
 
     // App-level callbacks (set by App after construction)
     this.getEditor = null;           // () => BlockEditor
@@ -222,6 +235,9 @@ class AIChatController {
 
     // Setup Global Chat
     this.setupGlobalChat();
+    // Related Notes' live region goes on the page now, before it has anything to say
+    this.relatedPlace();
+    this.allNotesPlace();
 
     // Setup LLM settings
     this.setupLLMSettings();
@@ -439,6 +455,8 @@ class AIChatController {
     if (messagesContainer) {
       const messages = messagesContainer.querySelectorAll('.ai-chat-message');
       messages.forEach(msg => msg.remove());
+      // A failure under the last question goes with it
+      if (this._allNotesPart) this._allNotesPart.stop();
       const welcome = messagesContainer.querySelector('.global-chat-welcome');
       if (welcome) welcome.style.display = '';
     }
@@ -1575,6 +1593,53 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (welcome) welcome.style.display = 'none';
 
     this.addGlobalChatMessage(message, 'user');
+    await this.answerAllNotes(message);
+  }
+
+  /**
+   * All Notes' place for search's state (#27 slice 3b, change 13): when Fuse.js didn't load, the
+   * chat says so where its answer would go, under the question, and not as an answer, with Try
+   * again, which loads it and asks the same question again. The messages are a live region
+   * already, which says what it says. Null without the chat's markup.
+   * @returns {any}
+   */
+  allNotesPlace() {
+    if (this._allNotesPart !== undefined) return this._allNotesPart;
+    const messages = document.getElementById('global-chat-messages');
+    if (!messages || typeof PartState === 'undefined') {
+      this._allNotesPart = null;
+      return null;
+    }
+    this._allNotesPart = new PartState({
+      doc: document,
+      words: PART_WORDS.search,
+      live: null,
+      place: (/** @type {HTMLElement | null} */ element) => {
+        const drawn = this._allNotesPart.element;
+        if (!element) {
+          if (drawn && drawn.parentNode) drawn.remove();
+          return;
+        }
+        if (element.parentNode !== messages || messages.lastChild !== element) messages.appendChild(element);
+        messages.scrollTop = messages.scrollHeight;
+      },
+      reload: this.partReload,
+      loaded: () => this.answerAllNotes(this._allNotesQuestion),
+      focusAfter: () => document.getElementById('global-chat-input'),
+    });
+    return this._allNotesPart;
+  }
+
+  /**
+   * Answer a question across all notes: search finds the relevant notes, and the provider answers
+   * from them
+   * @param {string} message
+   * @returns {Promise<void>}
+   */
+  async answerAllNotes(message) {
+    // A new question takes the last one's failure away
+    const part = this.allNotesPlace();
+    if (part) part.clear();
 
     const loading = document.getElementById('global-chat-loading');
     const loadingText = document.getElementById('global-chat-loading-text');
@@ -1599,7 +1664,16 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       if (this.searchEngine) {
         const searchIndexData = await this.documentClient.searchEntries();
         // Fuse.js builds from every entry before the search runs: it loads at the first one (#27 slice 3)
-        await this.searchEngine.updateIndex(searchIndexData);
+        const indexed = await this.searchEngine.updateIndex(searchIndexData);
+        if (indexed.status !== 'loaded' && part) {
+          // The search never ran: its failure goes where the answer would, not an answer that
+          // blames the question (#27 slice 3b)
+          loading?.classList.add('hidden');
+          if (sendBtn) /** @type {HTMLButtonElement} */ (sendBtn).disabled = false;
+          this._allNotesQuestion = message;
+          part.fail(indexed);
+          return;
+        }
       }
 
       const searchResults = this.searchEngine ? await this.searchEngine.search(message) : [];
@@ -2904,44 +2978,138 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const loading = document.getElementById('ai-smart-loading');
     if (force) loading?.classList.remove('hidden');
 
-    try {
-      const searchResults = this.searchEngine ? await this.searchEngine.search(text) : [];
-      const relatedResults = searchResults
-        .filter(r => r.id !== editor.noteId)
-        .slice(0, 5)
-        .filter(r => r.score > 0.4);
-
-      let insights = null;
-      const note = editor.noteData;
-
-      if (note && note.insights) {
-        const currentContentHash = this.generateContentHash(text);
-        const storedContentHash = note.lastInsightsContentHash;
-
-        if (!storedContentHash || storedContentHash === currentContentHash) {
-          insights = note.insights;
-        }
-      }
-
-      if (!insights) {
-        insights = await this.llm.extractInsights(text, editor.titleEl?.textContent || '');
-      }
-
-      this.renderSmartInsights(insights, relatedResults);
-
-    } catch (error) {
+    // Each section draws when its own answer arrives (#27 slice 3b): the provider's tags and
+    // action items don't wait for the model, whose first load can take a minute, and Related
+    // Notes shows the model's status meanwhile
+    const turn = ++this._insightsTurn;
+    const insights = this._noteInsights(editor, text).then((found) => {
+      if (turn === this._insightsTurn) this.renderSmartInsights(found);
+    }, (error) => {
       console.error('Smart suggestions failed:', error);
-    } finally {
+    }).finally(() => {
       loading?.classList.add('hidden');
-    }
+    });
+    const related = this.drawRelatedNotes(editor, text).catch((error) => {
+      console.error('Related notes failed:', error);
+    });
+    await Promise.all([insights, related]);
   }
 
-  renderSmartInsights(insights, related) {
-    const emptyState = document.getElementById('ai-smart-empty');
-    const resultsArea = document.getElementById('ai-smart-results');
+  /**
+   * The note's insights: the ones stored with it while its text is the same, or the provider's
+   * @param {any} editor
+   * @param {string} text
+   * @returns {Promise<any>}
+   */
+  async _noteInsights(editor, text) {
+    const note = editor.noteData;
+    if (note && note.insights) {
+      const currentContentHash = this.generateContentHash(text);
+      const storedContentHash = note.lastInsightsContentHash;
 
-    emptyState?.classList.add('hidden');
-    resultsArea?.classList.remove('hidden');
+      if (!storedContentHash || storedContentHash === currentContentHash) {
+        return note.insights;
+      }
+    }
+    return this.llm.extractInsights(text, editor.titleEl?.textContent || '');
+  }
+
+  /**
+   * Related Notes' place for the model's state (#27 slice 3b, change 12): its status while the
+   * model loads, where its matches then join the keyword ones, or its failure, which search's
+   * results show too. Null without the tab's markup.
+   * @returns {any}
+   */
+  relatedPlace() {
+    if (this._relatedPart !== undefined) return this._relatedPart;
+    const sidebar = document.getElementById('ai-sidebar');
+    const container = document.getElementById('ai-related-notes');
+    if (!sidebar || !container || typeof PartState === 'undefined') {
+      this._relatedPart = null;
+      return null;
+    }
+    this._relatedPart = new PartState({
+      doc: document,
+      words: PART_WORDS.semantic,
+      live: sidebar,
+      place: (/** @type {HTMLElement | null} */ element) => {
+        const drawn = this._relatedPart.element;
+        if (!element) {
+          if (drawn && drawn.parentNode) drawn.remove();
+          return;
+        }
+        // Under the matches it has; "No related notes found" would be false beside it
+        if (element.parentNode !== container || container.lastChild !== element) container.appendChild(element);
+        container.querySelectorAll('.ai-related-empty').forEach((empty) => empty.remove());
+      },
+      group: this.modelParts,
+      reload: this.partReload,
+      loaded: () => {
+        const editor = this.getEditor ? this.getEditor() : null;
+        if (editor && editor.noteId) return this.drawRelatedNotes(editor, editor.getAllBlocksTextContent());
+        return undefined;
+      },
+      // Try again worked: focus goes to the section's heading
+      focusAfter: () => {
+        const section = container.parentNode;
+        const heading = section ? /** @type {HTMLElement | null} */ (section.querySelector('.ai-smart-section-header')) : null;
+        if (heading) heading.setAttribute('tabindex', '-1');
+        return heading;
+      },
+      note: () => PART_NOTES.relatedKeywordOnly,
+    });
+    return this._relatedPart;
+  }
+
+  /**
+   * Related Notes for the note's text. With the model loaded, or no vectors for it to match, its
+   * matches and the keyword ones rank together, as before; until it loads, the keyword matches
+   * draw at once with the model's status under them, and its matches join them there.
+   * @param {any} editor
+   * @param {string} text
+   * @returns {Promise<void>}
+   */
+  async drawRelatedNotes(editor, text) {
+    const turn = ++this._relatedTurn;
+    const engine = this.searchEngine;
+    const model = this.relatedPlace();
+    const pick = (/** @type {Array<any>} */ results) => results.filter(r => r.id !== editor.noteId).slice(0, 5).filter(r => r.score > 0.4);
+    if (!engine || !engine.semantic || Embeddings.isReady || !model) {
+      const searchResults = engine ? await engine.search(text) : [];
+      if (turn !== this._relatedTurn) return;
+      if (model) model.clear();
+      this.renderRelatedNotes(pick(searchResults), { empty: true });
+      return;
+    }
+    const listed = pick(engine.keywordSearch(text).map((/** @type {any} */ r) => ({ ...r, score: r.keywordScore })));
+    this.renderRelatedNotes(listed, { empty: false });
+    const loaded = await model.loading(() => Embeddings.init());
+    if (turn !== this._relatedTurn) return;
+    if (loaded.status !== 'loaded') {
+      model.fail(loaded);
+      return;
+    }
+    model.clear();
+    const shown = new Set(listed.map(r => r.id));
+    // A pure model match ranks as search ranks one
+    const matches = (await engine.semanticSearch(text)).map(r => ({ id: r.id, score: r.semanticScore * 0.8 }))
+      .filter(r => !shown.has(r.id)).sort((a, b) => b.score - a.score);
+    if (turn !== this._relatedTurn) return;
+    const added = pick(matches).slice(0, Math.max(0, 5 - listed.length));
+    this.renderRelatedNotes([...listed, ...added], { empty: true });
+  }
+
+  /**
+   * The Insights tab's sections show, in place of its empty state
+   * @returns {void}
+   */
+  _showSmartResults() {
+    document.getElementById('ai-smart-empty')?.classList.add('hidden');
+    document.getElementById('ai-smart-results')?.classList.remove('hidden');
+  }
+
+  renderSmartInsights(insights) {
+    this._showSmartResults();
 
     // Tags
     const tagsContainer = document.getElementById('ai-suggested-tags');
@@ -2993,7 +3161,17 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       }
     }
 
-    // Related Notes
+  }
+
+  /**
+   * Related Notes' list: `related`, or "No related notes found" when it's empty and `empty`
+   * (not while the model may still add some, or beside its failure)
+   * @param {Array<any>} related
+   * @param {{empty: boolean}} options
+   * @returns {void}
+   */
+  renderRelatedNotes(related, { empty }) {
+    this._showSmartResults();
     const relatedContainer = document.getElementById('ai-related-notes');
     if (relatedContainer) {
       relatedContainer.innerHTML = '';
@@ -3018,8 +3196,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
           });
           relatedContainer.appendChild(el);
         });
-      } else {
-        relatedContainer.innerHTML = '<span class="ai-sources-title" style="text-transform:none">No related notes found</span>';
+      } else if (empty) {
+        relatedContainer.innerHTML = '<span class="ai-sources-title ai-related-empty" style="text-transform:none">No related notes found</span>';
       }
     }
   }

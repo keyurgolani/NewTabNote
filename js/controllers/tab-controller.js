@@ -172,11 +172,34 @@ class TabController {
 
   /**
    * Write what every open editor has pending, as Export JSON and Create
-   * Backup do before they read, so the file has the last edit.
-   * @returns {Promise<void>}
+   * Backup do before they read, so the file has the last edit. Answers whether
+   * every editor holds nothing unstored (BlockEditor.flushSave), which a reload
+   * through the page's loader waits on; a quiet flush leaves a failed retry's
+   * toast to the caller.
+   * @param {{quiet?: boolean}} [options]
+   * @returns {Promise<boolean>}
    */
-  async saveOpenEditors() {
-    await Promise.all(this.getOpenEditors().map((editor) => editor.flushSave()));
+  async saveOpenEditors(options) {
+    const saved = await Promise.all(this.getOpenEditors().map((editor) => editor.flushSave(options)));
+    return saved.every((answer) => answer === true);
+  }
+
+  /**
+   * The words of the notice an open editor shows for changes it couldn't save (the reload-required
+   * notice's, or a deleted note's), when the editors' notices explain every save that failed. A
+   * part's Reload that a save stopped lets that notice speak and moves focus to its words, not to
+   * its button, whose Reload runs no save guards (#27 slice 3b). Null when no editor shows one, or
+   * a failed save has no notice of its own, which the part's own line says.
+   * @returns {HTMLElement | null}
+   */
+  ownNoticeText() {
+    let words = null;
+    for (const editor of this.getOpenEditors()) {
+      const own = editor.ownNoticeText();
+      if (own) words = words || own;
+      else if (editor.hasFailedSave()) return null;
+    }
+    return words;
   }
 
   /**

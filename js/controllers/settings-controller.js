@@ -16,11 +16,20 @@
  * @param {((name: string) => Promise<any>)|null} [deps.loadLibrary] - The page loader's
  *   (js/runtime/lazy.js), which JSZip loads through at the first Markdown export (#27 slice 3).
  *   Without it, JSZip is the global its script defined, as before.
+ * @param {any} [deps.partReload] - App's guarded Reload for the export's failure (App.partReload,
+ *   js/ui/part-state.js); null for the browser's
  */
 class SettingsController {
-  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null }) {
+  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null, partReload = null }) {
     this.settings = settings;
     this.loadLibrary = loadLibrary;
+    this.partReload = partReload;
+    /** @type {any} The Markdown export's row in its section (#27 slice 3b), made at init */
+    this._exportPart = undefined;
+    // An export runs one at a time
+    this._exporting = false;
+    /** @type {string} Export All's own label, which Exporting… takes the place of */
+    this._exportLabel = '';
     /** @type {any} */
     this.documentClient = documentClient;
     this.validateBackup = validateBackup;
@@ -151,6 +160,9 @@ class SettingsController {
       exportZipBtn.addEventListener('click', async () => {
         await this.exportAllAsMarkdown();
       });
+      // Exporting… takes the label's place at the label's width (#27 slice 3b)
+      this._swapLabel(exportZipBtn);
+      this.exportPlace();
     }
 
     // Create Backup
@@ -770,9 +782,135 @@ class SettingsController {
     }
   }
 
+  /**
+   * The Markdown export's row (#27 slice 3b, change 14): any failure of Export All (ZIP/MD) says
+   * so in its section, under a hairline, with Try again. Only JSZip's failure takes the second
+   * failure's words and points at Export JSON, since a failed read of the notes stops that too.
+   * Null without the section's markup.
+   * @returns {any}
+   */
+  exportPlace() {
+    if (this._exportPart !== undefined) return this._exportPart;
+    const button = document.getElementById('export-zip-btn');
+    const section = button ? button.closest('.settings-section') : null;
+    if (!section || typeof PartState === 'undefined') {
+      this._exportPart = null;
+      return null;
+    }
+    this._exportPart = new PartState({
+      doc: document,
+      words: PART_WORDS.export,
+      live: section,
+      form: 'flat',
+      place: (/** @type {HTMLElement | null} */ element) => {
+        const drawn = this._exportPart.element;
+        if (!element) {
+          if (drawn && drawn.parentNode) drawn.remove();
+          return;
+        }
+        if (element.parentNode !== section) section.appendChild(element);
+      },
+      reload: this.partReload,
+      // Try again is Export All again: the row goes, and Export All takes focus and says
+      // Exporting… while it runs
+      tryAgain: (/** @type {any} */ failure) => {
+        this._exportPart.clear();
+        if (button) button.focus();
+        return this._runExport(failure);
+      },
+      focusAfter: () => /** @type {HTMLElement | null} */ (button),
+      again: (/** @type {any} */ failure) => failure.library === true,
+    });
+    return this._exportPart;
+  }
+
+  /**
+   * Export All (ZIP/MD): every active note as Markdown in one ZIP, handed to the browser, or its
+   * failure in the section's row
+   * @returns {Promise<void>}
+   */
   async exportAllAsMarkdown() {
+    if (this._exporting) return;
+    const part = this.exportPlace();
+    if (part) {
+      await part.load(() => this._runExport(null));
+      return;
+    }
+    const result = await this._runExport(null);
+    if (result.status !== 'loaded') Utils.showToast('Export failed', 'error');
+  }
+
+  /**
+   * One export, with Export All aria-disabled and, past 400 ms, saying Exporting…
+   * @param {any} failure - the failure Try again answers, whose JSZip retry runs first
+   * @returns {Promise<any>} a Result: loaded once the browser has the file
+   */
+  async _runExport(failure) {
+    const button = document.getElementById('export-zip-btn');
+    this._exporting = true;
+    if (button) button.setAttribute('aria-disabled', 'true');
     try {
-      const ZipLibrary = await this.zipLibrary();
+      return await whileLoading(() => this._exportMarkdown(failure), {
+        show: () => this._showExporting(button, true),
+        hide: () => this._showExporting(button, false),
+      });
+    } finally {
+      this._exporting = false;
+      if (button) button.removeAttribute('aria-disabled');
+    }
+  }
+
+  /**
+   * A button whose label another one can take at its width: both sit in one cell
+   * @param {HTMLElement} button
+   * @returns {void}
+   */
+  _swapLabel(button) {
+    if (button.querySelector('[data-reserved]')) return;
+    const label = button.textContent.trim();
+    button.textContent = '';
+    button.classList.add('part-state-swap');
+    const shown = document.createElement('span');
+    shown.textContent = label;
+    const reserved = document.createElement('span');
+    reserved.setAttribute('data-reserved', '');
+    reserved.setAttribute('aria-hidden', 'true');
+    reserved.textContent = 'Exporting…';
+    button.appendChild(shown);
+    button.appendChild(reserved);
+    this._exportLabel = label;
+  }
+
+  /**
+   * @param {HTMLElement | null} button
+   * @param {boolean} exporting
+   * @returns {void}
+   */
+  _showExporting(button, exporting) {
+    if (!button || button.children.length !== 2) return;
+    const [shown, reserved] = button.children;
+    const label = this._exportLabel || 'Export All (ZIP/MD)';
+    if (exporting) {
+      shown.innerHTML = '<svg class="part-state-spin" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M14.4 8A6.4 6.4 0 1 1 8 1.6"/></svg>';
+      shown.appendChild(document.createTextNode('Exporting…'));
+    } else {
+      shown.textContent = label;
+    }
+    reserved.textContent = exporting ? label : 'Exporting…';
+  }
+
+  /**
+   * The Markdown export itself. Answers a Result: loaded once the browser has the file, or
+   * failed: JSZip's failure as the loader answered it, with `library` set, or the export's own,
+   * whose retry runs the export again
+   * @param {any} failure
+   * @returns {Promise<any>}
+   */
+  async _exportMarkdown(failure) {
+    const zipLoad = failure && failure.library ? await failure.retry() : await this.zipLibrary();
+    if (zipLoad.status !== 'loaded') return { ...zipLoad, library: true };
+    try {
+      const ZipLibrary = zipLoad.module;
       const zip = new ZipLibrary();
       const folder = zip.folder("NewTabNote-Export");
 
@@ -810,22 +948,20 @@ class SettingsController {
 
       Utils.showToast('All notes exported as ZIP', 'success');
       await this.settings.recordBackup({ fullExport: false, backup: true });
+      return { status: 'loaded', module: null };
     } catch (error) {
       console.error('ZIP export failed:', error);
-      Utils.showToast('Export failed', 'error');
+      return { status: 'failed', reason: 'export-failed', retry: () => this._exportMarkdown(null) };
     }
   }
 
   /**
-   * JSZip: through the page's loader, at the first Markdown export, or the global without it.
-   * One that didn't load throws, so the export fails as it did before, with "Export failed".
-   * @returns {Promise<any>}
+   * JSZip: through the page's loader, at the first Markdown export, or the global without it
+   * @returns {Promise<any>} the loader's Result
    */
   async zipLibrary() {
-    if (!this.loadLibrary) return JSZip;
-    const loaded = await this.loadLibrary('jszip');
-    if (loaded.status === 'loaded') return loaded.module;
-    throw new Error(`JSZip didn't load (${loaded.reason})`);
+    if (!this.loadLibrary) return { status: 'loaded', module: JSZip };
+    return this.loadLibrary('jszip');
   }
 
   async exportCurrentNote() {

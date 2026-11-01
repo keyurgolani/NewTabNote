@@ -178,6 +178,14 @@ class ExtensionSession {
   }
 
   /**
+   * The folder the session loaded the extension from: its copy of the build, where a spec can
+   * put back a file it took out, as a repaired install does
+   */
+  get extensionDir() {
+    return this._extensionDir;
+  }
+
+  /**
    * The extension's service worker. Playwright keeps the same Worker across a restart of
    * the worker; the bootstrap reinstalls the hooks in the new global.
    */
