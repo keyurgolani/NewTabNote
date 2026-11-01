@@ -7,19 +7,20 @@
       "slice": "1b",
       "summary": "The first baseline: the CSP written out with declared fixes, the permissions as 1.4.0 has them, the destination registry, the network ledger, and the sources that hold the network rules.",
       "files": [
-        "js/background.js",
-        "js/background.js#offscreen-reasons",
         "js/kernel/composition/api-request.js",
         "js/kernel/composition/destination-match.js",
         "js/kernel/composition/destinations.js",
         "js/kernel/composition/network-guard-install.js",
         "js/kernel/composition/network-guard.js",
+        "js/kernel/composition/worker-network.js",
         "js/offscreen.js",
         "manifest.json#content_security_policy",
         "manifest.json#externally_connectable",
         "manifest.json#host_permissions",
         "manifest.json#optional_permissions",
+        "manifest.json#other-keys",
         "manifest.json#permissions",
+        "offscreen-reasons",
         "security/destinations.json",
         "security/network-ledger.json"
       ],
@@ -73,27 +74,36 @@
           "why": "The set stays 1.4.0's: no new install warning."
         },
         {
-          "change": "the destination registry, the network ledger, and the destination client, its rules, the network guard and its installer, the proxy policy and the two proxies recorded",
-          "why": "A change to where the extension may connect, or to the code that decides it, needs an entry that says why."
+          "change": "the rest of the manifest recorded, its name, description, version and icons aside",
+          "why": "A key outside the CSP and the permissions, such as a content script, a web-accessible resource, a sandbox CSP or the service worker's entry, changes what the extension may do as much as they do."
+        },
+        {
+          "change": "the offscreen document's reasons recorded wherever a script creates it",
+          "why": "Each reason is a capability the document is given, and security/permissions.json names each with its issue."
+        },
+        {
+          "change": "the destination registry, the network ledger, and the destination client, its rules, the network guard and its installer, the proxy policy, the worker's network module and the offscreen document recorded",
+          "why": "A change to where the extension may connect, or to the code that decides it, needs an entry that says why. The worker's network is a module of its own, which js/background.js installs in one call, so the rest of the worker changes with no entry."
         }
       ],
-      "digest": "fd1b8cc67d9e8424517304a680d0d57626692625dcad3e083e59d1e248ae1c5d",
+      "digest": "76ce8efa2f656aedfc99d15a7a6fc3c1206cdf3a15db493a96434a22637c77d2",
       "parts": {
-        "js/background.js": "12d207adeda29315f268afe0b6000bfa54a3ba1888472224aabe2eedfa2ae849",
-        "js/background.js#offscreen-reasons": "66d9243ff9ade281459c6358787679bda232c3ac361dae4c502c49a9b173b83b",
-        "js/kernel/composition/api-request.js": "34c90eae92432a9ebce1c8f96c9fb676dc5e6fb491cf28d530a963f7540d7d52",
+        "js/kernel/composition/api-request.js": "14a5d618c896b2b736b15bfd50d13d30b9540b606cfbd0c20174a704e1076ff1",
         "js/kernel/composition/destination-match.js": "b9725f1088d5ab006ebc81166430724491aa06fa9690d15734fc48289dc553ba",
         "js/kernel/composition/destinations.js": "c1bae4880b894e9dc0afaa646581810baf62cdc1c52f1467e4c4dda87d61a268",
         "js/kernel/composition/network-guard-install.js": "12f36235675fc6b504753580d6a531ffc095cc73249deade8f1c5ac47a36cdff",
         "js/kernel/composition/network-guard.js": "e2551f1c510048483a61737fb5e90d7f1ac0b1f09550bab501dc55aabe5d1fd9",
+        "js/kernel/composition/worker-network.js": "cc85da6764f77ebe6dc45212305f70570c389dcc36d2459c69b29fb69091cd77",
         "js/offscreen.js": "20036820d166579fee96e3ea4d9ff531b150a587b23085f2800b8c48d60743e8",
         "manifest.json#content_security_policy": "a1b8f34e65bbcd66b6d5d03ad7eaffcb683901b61c3fa7d715599703c051b5b8",
         "manifest.json#externally_connectable": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
         "manifest.json#host_permissions": "5f4ed99615445d130b0fb3654feebddb0d93eb72d2e6bf528a6f5a124ee8deb0",
         "manifest.json#optional_permissions": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "manifest.json#other-keys": "2d006669fab2ab52382c5fc40558f77b48b518ae6b4797c9788c5135f9514fce",
         "manifest.json#permissions": "ffe1bfb51eec1b9606935bb59c7f8b4fe2a68e2576471a09bd1a5b2a57c1a5e7",
+        "offscreen-reasons": "761219ed3472cbba4de7118f82fb954313f1ffe9dbc7cb22ccafdff665cfa2c1",
         "security/destinations.json": "9c5fbf72ab97407c11f40896daa90c2deeb015421bd233e67a1b4280f33464ac",
-        "security/network-ledger.json": "0df0ed5f06ecd3b842687fda57446c28415b1d299e3eae5f3cdedc66b71e82d3"
+        "security/network-ledger.json": "02ff31ea7319015e4c18f76f8120050213509b25316146a8f4ce9a73aee75b85"
       }
     }
   ]

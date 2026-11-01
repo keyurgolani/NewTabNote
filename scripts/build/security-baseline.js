@@ -8,22 +8,29 @@
  *                                  security/changes.json entry recorded, or that entry doesn't
  *                                  name each part that changed since the one before it, its
  *                                  issue, or why
+ *   security/csp-repeated          the extension pages' CSP names a directive twice: Chromium
+ *                                  enforces the first copy, and the baseline reads it the same way
  *   security/permissions           the built manifest's permissions, host permissions, optional
  *                                  ones, or the offscreen document's reasons, and
  *                                  security/permissions.json differ, either way, or an entry
- *                                  there lacks its issue, warning, request point or rationale
+ *                                  there lacks its issue, warning, request point or rationale,
+ *                                  or a script creates the document with reasons it can't read
  *   security/externally-connectable the manifest has externally_connectable
  *   security/unsafe-inline         style-src still allows 'unsafe-inline' though #16's counts of
  *                                  style attributes and <style> blocks are zero
  *   security/file                  a file in security/ doesn't read as its shape
+ *   security/history               an entry the base branch's security/changes.json has is
+ *                                  changed or gone (checkHistory; npm run
+ *                                  check:security-baseline -- --base <ref>, which CI runs)
  *
- * The compared set, part by part: the manifest's CSP (each directive, its sources sorted), its
- * permissions, host permissions, optional ones, and externally_connectable; the offscreen
- * document's reasons, as js/background.js creates it; the destination registry and the
- * network ledger; and the sources that hold the network rules: the destination client and its
- * rule module, the network guard and its installer, the proxy policy, and the two proxies.
- * An entry records each part's SHA-256 and one digest over them all. `npm run
- * check:security-baseline -- --print` prints what an entry for the tree as it is would record.
+ * The compared set, part by part: the manifest's CSP (each directive as Chromium reads it, its
+ * sources sorted), its permissions, host permissions, optional ones, externally_connectable,
+ * and every other key but the cosmetic ones (COSMETIC_KEYS); the offscreen document's reasons,
+ * wherever a first-party script creates it; the destination registry and the network ledger;
+ * and the sources that hold the network rules: the destination client and its rule module, the
+ * network guard and its installer, the proxy policy, the worker's network module, and the
+ * offscreen document. An entry records each part's SHA-256 and one digest over them all. `npm
+ * run check:security-baseline -- --print` prints what an entry for the tree as it is would record.
  */
 
 const crypto = require('node:crypto');
@@ -40,9 +47,21 @@ const SOURCES = Object.freeze([
   'js/kernel/composition/network-guard.js',
   'js/kernel/composition/network-guard-install.js',
   'js/kernel/composition/api-request.js',
-  'js/background.js',
+  'js/kernel/composition/worker-network.js',
   'js/offscreen.js',
 ]);
+
+/**
+ * The manifest's keys that change what the store shows and nothing the extension may do,
+ * which the baseline leaves out
+ */
+const COSMETIC_KEYS = Object.freeze(['name', 'short_name', 'description', 'version', 'version_name', 'icons', 'author', 'homepage_url']);
+
+/** The manifest's keys the compared set holds as parts of their own */
+const OWN_PARTS = Object.freeze(['permissions', 'host_permissions', 'optional_permissions', 'optional_host_permissions', 'externally_connectable']);
+
+/** A call that creates the offscreen document */
+const CREATE_DOCUMENT = /\bcreateDocument\s*\(/g;
 
 const PERMISSIONS_FILE = 'security/permissions.json';
 const CHANGES_FILE = 'security/changes.json';
@@ -75,46 +94,164 @@ function canonical(value) {
 }
 
 /**
- * A CSP's directives, each to its sources sorted, lowercased
- * @param {unknown} policy
- * @returns {Record<string, string[]>}
+ * A CSP source as Chromium compares it: a keyword, a scheme and a host without case, and a
+ * hash's or nonce's value, and a path, with it
+ * @param {string} source
+ * @returns {string}
  */
-function directives(policy) {
+function normalSource(source) {
+  const value = /^'(sha256-|sha384-|sha512-|nonce-)(.*)'$/i.exec(source);
+  if (value) return `'${value[1].toLowerCase()}${value[2]}'`;
+  if (source.startsWith("'")) return source.toLowerCase();
+  const host = /^([a-z][a-z0-9+.-]*:\/\/[^/]*)(.*)$/i.exec(source);
+  if (host) return `${host[1].toLowerCase()}${host[2]}`;
+  return source.toLowerCase();
+}
+
+/**
+ * A CSP read as Chromium reads it: each directive's first copy, its sources sorted, and the
+ * names of the directives it repeats, which Chromium ignores
+ * @param {unknown} policy
+ * @returns {{directives: Record<string, string[]>, repeated: string[]}}
+ */
+function parsePolicy(policy) {
   /** @type {Record<string, string[]>} */
-  const out = {};
-  if (typeof policy !== 'string') return out;
+  const directives = {};
+  /** @type {string[]} */
+  const repeated = [];
+  if (typeof policy !== 'string') return { directives, repeated };
   for (const directive of policy.split(';')) {
-    const [name, ...sources] = directive.trim().split(/\s+/).filter(Boolean);
-    if (!name) continue;
-    out[name.toLowerCase()] = sources.map((source) => source.toLowerCase()).sort();
+    const [rawName, ...sources] = directive.trim().split(/\s+/).filter(Boolean);
+    if (!rawName) continue;
+    const name = rawName.toLowerCase();
+    if (Object.hasOwn(directives, name)) {
+      if (!repeated.includes(name)) repeated.push(name);
+      continue;
+    }
+    directives[name] = sources.map(normalSource).sort();
   }
-  return out;
+  return { directives, repeated };
 }
 
 /**
  * The extension pages' CSP in `manifest`
  * @param {any} manifest
- * @returns {Record<string, string[]>}
+ * @returns {string | undefined}
  */
-function cspOf(manifest) {
+function pagesPolicy(manifest) {
   const csp = manifest && manifest.content_security_policy;
-  return directives(csp && typeof csp === 'object' ? csp.extension_pages : csp);
+  return csp && typeof csp === 'object' ? csp.extension_pages : csp;
 }
 
 /**
- * The reasons js/background.js creates the offscreen document with
+ * The extension pages' CSP in `manifest`, directive by directive, as Chromium reads it
+ * @param {any} manifest
+ * @returns {Record<string, string[]>}
+ */
+function cspOf(manifest) {
+  return parsePolicy(pagesPolicy(manifest)).directives;
+}
+
+/**
+ * The reasons a script creates the offscreen document with, and how many of its createDocument
+ * calls give reasons that aren't a list of string literals
  * @param {string} source
- * @returns {string[]}
+ * @returns {{reasons: string[], unread: number}}
  */
 function offscreenReasons(source) {
-  const found = /createDocument\(\{[\s\S]*?reasons:\s*\[([^\]]*)\]/.exec(source);
-  return found ? [...found[1].matchAll(/['"]([A-Z_]+)['"]/g)].map(([, reason]) => reason).sort() : [];
+  /** @type {Set<string>} */
+  const reasons = new Set();
+  let unread = 0;
+  for (const call of source.matchAll(CREATE_DOCUMENT)) {
+    const rest = source.slice(/** @type {number} */ (call.index) + call[0].length);
+    // Its options object, after a type cast's comment and parenthesis if it has them
+    const found = /^\s*(?:\/\*\*?[^*]*\*+\/\s*\(\s*)?\{[^{}]*?\breasons\s*:\s*\[([^\]]*)\]/.exec(rest);
+    const listed = found ? found[1].split(',').map((item) => item.trim()).filter(Boolean) : [];
+    const literal = listed.length > 0 && listed.every((item) => /^(['"])[A-Z_]+\1$/.test(item));
+    if (!literal) {
+      unread += 1;
+      continue;
+    }
+    for (const item of listed) reasons.add(item.slice(1, -1));
+  }
+  return { reasons: [...reasons].sort(), unread };
+}
+
+/**
+ * The offscreen document's reasons in each of `scripts` that creates it
+ * @param {Inputs} inputs
+ * @returns {{byFile: Record<string, string[]>, reasons: string[], unread: string[]}}
+ */
+function offscreenUse({ read, scripts = SOURCES }) {
+  /** @type {Record<string, string[]>} */
+  const byFile = {};
+  /** @type {Set<string>} */
+  const all = new Set();
+  /** @type {string[]} */
+  const unread = [];
+  for (const file of [...scripts].sort()) {
+    const text = read(file);
+    if (!/\bcreateDocument\s*\(/.test(text)) continue;
+    const found = offscreenReasons(text);
+    byFile[file] = found.reasons;
+    found.reasons.forEach((reason) => all.add(reason));
+    if (found.unread > 0) unread.push(file);
+  }
+  return { byFile, reasons: [...all].sort(), unread };
+}
+
+/**
+ * The first-party scripts under `root`'s js/, which the offscreen reasons are read from: every
+ * .js and .mjs file but the vendored ones in js/lib/
+ * @param {string} root
+ * @returns {string[]}
+ */
+function firstPartyScripts(root) {
+  /** @type {string[]} */
+  const found = [];
+  const walk = (/** @type {string} */ dir) => {
+    for (const entry of fs.readdirSync(path.join(root, dir), { withFileTypes: true })) {
+      const file = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (file !== 'js/lib') walk(file);
+      } else if (/\.m?js$/.test(entry.name)) {
+        found.push(file);
+      }
+    }
+  };
+  if (fs.existsSync(path.join(root, 'js'))) walk('js');
+  return found.sort();
+}
+
+/**
+ * The manifest without its cosmetic keys and the ones held as parts of their own: the extension
+ * pages' CSP comes out of content_security_policy, and the rest of it, a sandbox CSP, stays
+ * @param {any} manifest
+ * @returns {Record<string, unknown>}
+ */
+function otherKeys(manifest) {
+  /** @type {Record<string, unknown>} */
+  const rest = {};
+  if (!manifest || typeof manifest !== 'object') return rest;
+  for (const [key, value] of Object.entries(manifest)) {
+    if (COSMETIC_KEYS.includes(key) || OWN_PARTS.includes(key)) continue;
+    if (key === 'content_security_policy' && value && typeof value === 'object') {
+      const { extension_pages: _, ...others } = /** @type {Record<string, unknown>} */ (value);
+      if (Object.keys(others).length > 0) rest[key] = others;
+      continue;
+    }
+    if (key === 'content_security_policy') continue;
+    rest[key] = value;
+  }
+  return rest;
 }
 
 /**
  * @typedef {object} Inputs
  * @property {any} manifest - the built manifest
  * @property {(file: string) => string} read - a file of the sources, by its path from the root
+ * @property {readonly string[]} [scripts] - the first-party scripts the offscreen reasons are read from
+ *   (firstPartyScripts), SOURCES when it's left out
  */
 
 /**
@@ -122,7 +259,8 @@ function offscreenReasons(source) {
  * @param {Inputs} inputs
  * @returns {Record<string, string>}
  */
-function compared({ manifest, read }) {
+function compared(inputs) {
+  const { manifest, read } = inputs;
   const sorted = (/** @type {unknown} */ list) => (Array.isArray(list) ? [...list].map(String).sort() : []);
   /** @type {Record<string, string>} */
   const parts = {
@@ -131,7 +269,8 @@ function compared({ manifest, read }) {
     'manifest.json#host_permissions': canonical(sorted(manifest.host_permissions)),
     'manifest.json#optional_permissions': canonical([...sorted(manifest.optional_permissions), ...sorted(manifest.optional_host_permissions)]),
     'manifest.json#externally_connectable': canonical(manifest.externally_connectable === undefined ? null : manifest.externally_connectable),
-    'js/background.js#offscreen-reasons': canonical(offscreenReasons(read('js/background.js'))),
+    'manifest.json#other-keys': canonical(otherKeys(manifest)),
+    'offscreen-reasons': canonical(offscreenUse(inputs).byFile),
     [DESTINATIONS_FILE]: canonical(JSON.parse(read(DESTINATIONS_FILE))),
     [LEDGER_FILE]: canonical(JSON.parse(read(LEDGER_FILE))),
   };
@@ -170,10 +309,11 @@ function readJson(read, file) {
  * The manifest's permissions against security/permissions.json, both ways
  * @param {any} manifest
  * @param {any} declared
- * @param {string} background - js/background.js's source
+ * @param {{reasons: string[], unread: string[]}} offscreen - the reasons the scripts create the
+ *   offscreen document with (offscreenUse)
  * @returns {Problem[]}
  */
-function permissionProblems(manifest, declared, background) {
+function permissionProblems(manifest, declared, offscreen) {
   /** @type {Problem[]} */
   const problems = [];
   const fail = (/** @type {string} */ message) => problems.push(problem('security/permissions', PERMISSIONS_FILE, message));
@@ -211,7 +351,8 @@ function permissionProblems(manifest, declared, background) {
   both('the optional permission', manifest.optional_permissions, named(declared.permissions, 'name', false));
   both('the host permission', manifest.host_permissions, named(declared.hosts, 'pattern', true));
   both('the optional host permission', manifest.optional_host_permissions, named(declared.hosts, 'pattern', false));
-  both('the offscreen reason', offscreenReasons(background), declared.offscreenReasons.map((/** @type {any} */ entry) => String(entry && entry.reason)));
+  both('the offscreen reason', offscreen.reasons, declared.offscreenReasons.map((/** @type {any} */ entry) => String(entry && entry.reason)));
+  for (const file of offscreen.unread) fail(`${file} creates the offscreen document with reasons that aren't a list of string literals, so they can't be checked`);
   if (declared.externallyConnectable !== false) fail('externallyConnectable is false: no web page or other extension may connect');
   return problems;
 }
@@ -229,9 +370,23 @@ function checkSecurityBaseline(inputs) {
     problems.push(problem('security/externally-connectable', 'manifest.json', 'externally_connectable lets a web page or another extension open a channel to this one; it stays absent'));
   }
 
+  const { repeated } = parsePolicy(pagesPolicy(manifest));
+  if (repeated.length > 0) {
+    problems.push(problem('security/csp-repeated', 'manifest.json', `the extension pages' CSP names ${repeated.join(', ')} more than once; Chromium enforces only the first copy, so name each directive once`));
+  }
+
   const declared = readJson(read, PERMISSIONS_FILE);
   if (!declared.ok) problems.push(declared.problem);
-  else problems.push(...permissionProblems(manifest, declared.value, read('js/background.js')));
+  else {
+    let offscreen;
+    try {
+      offscreen = offscreenUse(inputs);
+    } catch (error) {
+      offscreen = null;
+      problems.push(problem('security/file', 'js/', `the scripts couldn't be read for the offscreen reasons: ${error && /** @type {any} */ (error).message ? /** @type {any} */ (error).message : error}`));
+    }
+    if (offscreen) problems.push(...permissionProblems(manifest, declared.value, offscreen));
+  }
 
   // 'unsafe-inline' goes once nothing needs it: #16's counts of what it lets through
   const design = readJson(read, DESIGN_BASELINE);
@@ -275,6 +430,34 @@ function checkSecurityBaseline(inputs) {
 }
 
 /**
+ * security/changes.json against the base branch's copy: each entry the base has is still there,
+ * in its place and unchanged, so entries are only ever appended. A base with no file (null)
+ * has nothing to keep.
+ * @param {{current: string, base: string | null}} texts
+ * @returns {Problem[]}
+ */
+function checkHistory({ current, base }) {
+  if (base === null) return [];
+  const fail = (/** @type {string} */ message) => [problem('security/history', CHANGES_FILE, message)];
+  const entriesOf = (/** @type {string} */ text) => {
+    try {
+      const value = JSON.parse(text);
+      return value && Array.isArray(value.entries) ? value.entries : null;
+    } catch {
+      return null;
+    }
+  };
+  const before = entriesOf(base);
+  if (!before) return [];
+  const now = entriesOf(current);
+  if (!now) return fail("doesn't read as a list of entries, so the base branch's entries can't be found in it");
+  if (now.length < before.length) return fail(`has ${now.length} ${now.length === 1 ? 'entry' : 'entries'}, and the base branch's copy has ${before.length}: entries are only appended, never taken out`);
+  const changed = before.map((/** @type {unknown} */ entry, /** @type {number} */ i) => (canonical(entry) === canonical(now[i]) ? null : i + 1)).filter((/** @type {number | null} */ at) => at !== null);
+  if (changed.length > 0) return fail(`changes the base branch's entr${changed.length === 1 ? 'y' : 'ies'} ${changed.join(', ')}: an entry stays as it was reviewed, and a change goes in a new one`);
+  return [];
+}
+
+/**
  * Inputs from a build's directory and the sources at `root`
  * @param {string} buildDir
  * @param {string} root
@@ -284,7 +467,8 @@ function inputsFrom(buildDir, root) {
   return {
     manifest: JSON.parse(fs.readFileSync(path.join(buildDir, 'manifest.json'), 'utf8')),
     read: (file) => fs.readFileSync(path.join(root, file), 'utf8'),
+    scripts: firstPartyScripts(root),
   };
 }
 
-module.exports = { checkSecurityBaseline, recordOf, compared, cspOf, offscreenReasons, inputsFrom, SOURCES, CHANGES_FILE, PERMISSIONS_FILE };
+module.exports = { checkSecurityBaseline, checkHistory, recordOf, compared, cspOf, parsePolicy, offscreenReasons, firstPartyScripts, inputsFrom, SOURCES, COSMETIC_KEYS, CHANGES_FILE, PERMISSIONS_FILE };

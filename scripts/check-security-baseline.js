@@ -4,47 +4,123 @@
 /**
  * npm run check:security-baseline (#21 slice 1b, PR 3): a built extension's manifest, and the
  * sources that hold its network rules, against security/ (scripts/build/security-baseline.js).
- * The build runs the same check on what it writes.
+ * The build runs the same check on what it writes. With --base, security/changes.json is also
+ * held to the base branch's copy: every entry there stays as it is, so entries only get
+ * appended. In CI (CI set) a base it can't read fails the check; locally it says so and goes on.
  *
- *   npm run check:security-baseline                  check dist/
- *   npm run check:security-baseline -- <dir>         check another build
- *   npm run check:security-baseline -- --print       what an entry for the tree as it is records,
- *                                                    to copy into security/changes.json with its
- *                                                    issue, files and rationale
+ *   npm run check:security-baseline                          check dist/
+ *   npm run check:security-baseline -- <dir>                 check another build
+ *   npm run check:security-baseline -- --base origin/next    and the history against that ref
+ *   npm run check:security-baseline -- --history-only --base <ref>
+ *                                                            only the history, with no build
+ *   npm run check:security-baseline -- --print               what an entry for the tree as it
+ *                                                            is records, to copy into
+ *                                                            security/changes.json with its
+ *                                                            issue, files and rationale
  */
 
+const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
-const { checkSecurityBaseline, recordOf, inputsFrom } = require('./build/security-baseline.js');
+const { checkSecurityBaseline, checkHistory, recordOf, inputsFrom, CHANGES_FILE } = require('./build/security-baseline.js');
 const { format, plural } = require('./build/diagnostics.js');
 
 const ROOT = path.join(__dirname, '..');
+const USAGE = 'usage: node scripts/check-security-baseline.js [<dir>] [--base <git ref>] [--history-only] [--print]';
+
+/**
+ * security/changes.json at `ref`: its text, null when the ref has no such file, or why the ref
+ * can't be read
+ * @param {string} ref
+ * @param {string} root
+ * @returns {{text: string | null} | {unreadable: string}}
+ */
+function baseCopy(ref, root) {
+  const git = (/** @type {string[]} */ args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+  } catch {
+    return { unreadable: `git can't resolve ${ref} to a commit; fetch it, or check out with enough history` };
+  }
+  try {
+    git(['cat-file', '-e', `${ref}:${CHANGES_FILE}`]);
+  } catch {
+    return { text: null };
+  }
+  try {
+    return { text: git(['show', `${ref}:${CHANGES_FILE}`]) };
+  } catch (reason) {
+    return { unreadable: `git can't show ${CHANGES_FILE} at ${ref}: ${reason instanceof Error ? reason.message : reason}` };
+  }
+}
 
 /**
  * @param {string[]} [argv]
- * @param {{log?: (line: string) => void, error?: (line: string) => void}} [io]
+ * @param {{log?: (line: string) => void, error?: (line: string) => void, env?: NodeJS.ProcessEnv, root?: string}} [io]
  * @returns {number}
  */
-function main(argv = process.argv.slice(2), { log = console.log, error = console.error } = {}) {
-  const print = argv.includes('--print');
-  const [dirArg] = argv.filter((arg) => arg !== '--print');
-  const dir = path.resolve(dirArg || path.join(ROOT, 'dist'));
-  if (!fs.existsSync(path.join(dir, 'manifest.json'))) {
-    error(`check:security-baseline failed: no build at ${path.relative(process.cwd(), dir) || '.'}. Run \`npm run build\` first.`);
-    return 1;
+function main(argv = process.argv.slice(2), { log = console.log, error = console.error, env = process.env, root = ROOT } = {}) {
+  let print = false;
+  let historyOnly = false;
+  /** @type {string | null} */
+  let base = null;
+  /** @type {string[]} */
+  const dirs = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--print') print = true;
+    else if (argv[i] === '--history-only') historyOnly = true;
+    else if (argv[i] === '--base' && argv[i + 1] && !argv[i + 1].startsWith('-')) base = argv[++i];
+    else if (argv[i].startsWith('-') || dirs.length > 0) {
+      error(USAGE);
+      return 2;
+    } else dirs.push(argv[i]);
   }
-  const inputs = inputsFrom(dir, ROOT);
-  if (print) {
-    log(JSON.stringify(recordOf(inputs), null, 2));
-    return 0;
+  const ci = Boolean(env.CI);
+  /** @type {import('./build/diagnostics.js').Problem[]} */
+  const problems = [];
+
+  if (base === null) {
+    if (historyOnly && ci) {
+      error(`check:security-baseline failed: --history-only needs --base, the ref whose ${CHANGES_FILE} the entries are held to`);
+      return 1;
+    }
+    if (!print) log(`check:security-baseline: ${CHANGES_FILE}'s history isn't checked; pass --base <ref> to hold it to the base branch's copy`);
+  } else {
+    const copy = baseCopy(base, root);
+    if ('unreadable' in copy) {
+      if (ci) {
+        error(`check:security-baseline failed: can't read the base: ${copy.unreadable}`);
+        return 1;
+      }
+      log(`check:security-baseline: can't read the base, so ${CHANGES_FILE}'s history isn't checked: ${copy.unreadable}`);
+    } else {
+      if (copy.text === null) log(`check:security-baseline: ${base} has no ${CHANGES_FILE}, so no entry is held yet`);
+      problems.push(...checkHistory({ current: fs.readFileSync(path.join(root, CHANGES_FILE), 'utf8'), base: copy.text }));
+    }
   }
-  const problems = checkSecurityBaseline(inputs);
+
+  if (!historyOnly) {
+    const dir = path.resolve(dirs[0] || path.join(root, 'dist'));
+    if (!fs.existsSync(path.join(dir, 'manifest.json'))) {
+      error(`check:security-baseline failed: no build at ${path.relative(process.cwd(), dir) || '.'}. Run \`npm run build\` first.`);
+      return 1;
+    }
+    const inputs = inputsFrom(dir, root);
+    if (print) {
+      log(JSON.stringify(recordOf(inputs), null, 2));
+      return 0;
+    }
+    problems.push(...checkSecurityBaseline(inputs));
+  }
+
   if (problems.length > 0) {
     error(`check:security-baseline failed: ${plural(problems.length, 'problem')}`);
     problems.forEach((found) => error(`  - ${format(found)}`));
     return 1;
   }
-  log('check:security-baseline: OK, the manifest, the CSP, the permissions, the destinations, the ledger and the network sources match security/');
+  log(historyOnly
+    ? `check:security-baseline: OK, ${CHANGES_FILE} keeps every entry ${base} has`
+    : 'check:security-baseline: OK, the manifest, the CSP, the permissions, the destinations, the ledger and the network sources match security/');
   return 0;
 }
 
@@ -52,4 +128,4 @@ if (require.main === module) {
   process.exitCode = main();
 }
 
-module.exports = { main };
+module.exports = { main, baseCopy };

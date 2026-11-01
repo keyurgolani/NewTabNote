@@ -1,6 +1,6 @@
 /**
  * The policy of the two request proxies until #9 and #11 delete them (#21 slice 1a, "The
- * proxies"): `API_REQUEST` in the service worker (js/background.js) and `OFFSCREEN_API_REQUEST`
+ * proxies"): `API_REQUEST` in the service worker (worker-network.js) and `OFFSCREEN_API_REQUEST`
  * in the offscreen document (js/offscreen.js). Both fail closed:
  *
  * - only this extension's own senders: its id, and a sender URL on its own origin (an
@@ -13,7 +13,8 @@
  * - only `method` and a string `body` in the options, a body only with POST, and under
  *   MAX_BODY_BYTES in UTF-8;
  * - sent with `fetch`, no header but `Content-Type`, no cookies, and `redirect: 'error'`, so
- *   no redirect is followed.
+ *   no redirect is followed, and `send` sends only a request `checkRequest` took, frozen as it
+ *   took it, so a caller can't skip the check or change the request after it.
  *
  * A refused request is final: the page doesn't fetch it itself instead (js/llm.js).
  *
@@ -42,6 +43,9 @@ export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 /** The methods a body may go with */
 const BODY_METHODS = Object.freeze(['POST']);
+
+/** The requests checkRequest took, the only ones send sends */
+const TAKEN = new WeakSet();
 
 /**
  * `value` parsed with `URL`, or null
@@ -136,7 +140,9 @@ export function checkRequest(request, { loopback }) {
   if (!found.row.proxy) return { ok: false, code: 'destination-refused' };
   // The proxy sends no header of the caller's, so a credential could only ride in the query
   if (queryProblems(found.url.href).length > 0) return { ok: false, code: 'destination-refused' };
-  return withBody({ ok: true, url: found.url.href, method: upper, loopback: found.row.location === 'loopback' }, body);
+  const checked = Object.freeze(withBody({ ok: true, url: found.url.href, method: upper, loopback: found.row.location === 'loopback' }, body));
+  TAKEN.add(checked);
+  return checked;
 }
 
 /**
@@ -187,10 +193,12 @@ export async function answerOf(response) {
 
 /**
  * Send a checked request with fetch (fetchInit), and read its answer (answerOf). Both proxies
- * send through this one call. It rejects as fetch does, a refused redirect included.
+ * send through this one call. It rejects as fetch does, a refused redirect included, and with a
+ * TypeError for anything checkRequest didn't return, a copy of what it returned included.
  * @param {CheckedRequest} checked
  * @returns {Promise<{ok: boolean, status: number, data: unknown}>}
  */
 export async function send(checked) {
+  if (!TAKEN.has(checked)) throw new TypeError('send takes only a request checkRequest took');
   return answerOf(await fetch(checked.url, fetchInit(checked)));
 }

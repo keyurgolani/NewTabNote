@@ -150,8 +150,10 @@ describe('the security baseline (scripts/build/security-baseline.js)', () => {
       assert.deepEqual(cspOf(manifest)[name], first.split(' ').slice(1).sort());
       driftsThenPasses({ manifest }, ['security/csp-repeated', 'security/drift']);
     }
-    // In any case
-    driftsThenPasses({ manifest: withPolicy(`${policy}; CONNECT-SRC 'self'`) }, ['security/csp-repeated', 'security/drift']);
+    // A later copy, in any case, changes nothing Chromium enforces, and still fails
+    const later = withPolicy(`${policy}; CONNECT-SRC *`);
+    assert.deepEqual(cspOf(later), cspOf(MANIFEST));
+    assert.deepEqual(codes(check({ manifest: later }).problems), ['security/csp-repeated']);
   });
 
   it('compares hash and nonce sources with their case, and keywords, schemes and hosts without', () => {
@@ -226,7 +228,10 @@ describe('security/changes.json only grows (checkHistory)', () => {
   it("compares with a git ref's copy: in CI it fails when it can't read the ref, and locally it says so", () => {
     const lines = [];
     const io = { log: (line) => lines.push(line), error: (line) => lines.push(line) };
-    assert.equal(cli.main(['--history-only', '--base', 'HEAD'], { ...io, env: {} }), 0, lines.join('\n'));
+    // HEAD's copy reads; whether this tree keeps its entries is checkHistory's, above
+    cli.main(['--history-only', '--base', 'HEAD'], { ...io, env: {} });
+    assert.doesNotMatch(lines.join('\n'), /can't read/);
+    assert.equal(typeof cli.baseCopy('HEAD', ROOT).text, 'string');
     lines.length = 0;
     assert.equal(cli.main(['--history-only', '--base', 'refs/heads/ntn-no-such-ref'], { ...io, env: { CI: 'true' } }), 1, lines.join('\n'));
     assert.match(lines.join('\n'), /can't read/);
@@ -306,7 +311,7 @@ describe("the rows the built page guard inlines (scripts/build/guard.js's checkG
     match = await import('../js/kernel/composition/destination-match.js');
     client = await import('../js/kernel/composition/destinations.js');
   });
-  const guardWith = (literal) => fromMap({ 'js/network-guard.js': `(function(){var R=${literal};self.x=R})();` }, 'the build');
+  const guardWith = (literal) => fromMap(new Map([['js/network-guard.js', `(function(){var R=${literal};self.x=R})();`]]), 'the build');
   const minified = (json) => json.replace(/"([A-Za-z]+)":/g, '$1:');
 
   it("takes the validated registry's rows, as the bundler writes them, quoted or not", async () => {

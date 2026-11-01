@@ -37,8 +37,8 @@ const { checkNoticeFiles, checkBanners, checkSourceMaps, checkVendor, checkBundl
 const { checkEnvironment, checkSourceEnvironment } = require('./environment.js');
 const { checkCommonJs } = require('./commonjs.js');
 const { checkBackgroundOutput, checkBackgroundSources } = require('./background.js');
-const { checkGuardPages, checkGuardScript } = require('./guard.js');
-const { checkSecurityBaseline } = require('./security-baseline.js');
+const { checkGuardPages, checkGuardRows, checkGuardScript } = require('./guard.js');
+const { checkSecurityBaseline, firstPartyScripts } = require('./security-baseline.js');
 const { sourceInfo, buildId: computeBuildId, kernelVersions, writeBuildInfo } = require('./build-info.js');
 const { bundle } = require('./bundle.js');
 const { listedInputs } = require('./inputs.js');
@@ -215,7 +215,7 @@ function securityBaseline(files, root) {
   } catch {
     return [];
   }
-  return checkSecurityBaseline({ manifest, read: (file) => fs.readFileSync(path.join(root, file), 'utf8') });
+  return checkSecurityBaseline({ manifest, read: (file) => fs.readFileSync(path.join(root, file), 'utf8'), scripts: firstPartyScripts(root) });
 }
 
 /**
@@ -331,7 +331,7 @@ async function build(argv = process.argv.slice(2)) {
 
     // 4. What the build wrote
     console.log('\n🔎 Checking the output...');
-    const checked = checkOutput(staging, bundled, ROOT_DIR);
+    const checked = [...checkOutput(staging, bundled, ROOT_DIR), ...await checkGuardRows(fromDirectory(staging, 'the build'), ROOT_DIR)];
     if (checked.length > 0) {
       checked.forEach(report);
       removeOutput(staging);

@@ -18,9 +18,11 @@ const ROOT = path.join(__dirname, '..');
 const fixtures = readFixtures();
 
 // Codes no fixture can show: a mistyped argument, no npm ci, a zip write that throws, the
-// canary, which its own fixture proves absent, and a page's preloads, which the bundler writes
-// from the graph it built (test/bundler.test.js covers that rule)
-const NOT_RULES = ['build/usage', 'toolchain/missing-tool', 'package/write', 'env/canary', 'closure/preload'];
+// canary, which its own fixture proves absent, a page's preloads, which the bundler writes
+// from the graph it built (test/bundler.test.js covers that rule), and security/changes.json's
+// history, which npm run check:security-baseline -- --base holds to a git ref, not the build
+// (test/security-baseline.test.js covers it)
+const NOT_RULES = ['build/usage', 'toolchain/missing-tool', 'package/write', 'env/canary', 'closure/preload', 'security/history'];
 
 describe('test/build-fixtures/', () => {
   it('has a fixture for every build failure rule, and the canary run', () => {

@@ -121,6 +121,12 @@ jobs:
         env:
           BASE: ${{ steps.ledger-base.outputs.base }}
         run: npm run check:boundaries -- ${BASE:+--base "$BASE"} 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      # #21 slice 1b: security/changes.json keeps every entry the same base has, so entries are
+      # only appended. With CI set, a base it can't read, or none, fails the step
+      - name: npm run check:security-baseline -- --history-only
+        env:
+          BASE: ${{ steps.ledger-base.outputs.base }}
+        run: npm run check:security-baseline -- --history-only ${BASE:+--base "$BASE"} 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
         id: excerpt
         if: failure() || cancelled()

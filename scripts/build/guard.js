@@ -14,6 +14,10 @@
  *   guard/registry-unreadable the destination registry has a problem (destinations.js says
  *                             which), so the build won't inline it in the page guard, or the
  *                             built guard reads rows it can't use and refuses every destination
+ *   guard/rows                the rows the built page guard inlines, read back from it, aren't
+ *                             the validated registry's, cut as the guard reads them: this holds
+ *                             the build code that inlines them, which the security baseline
+ *                             doesn't hash, to the registry, which it does
  *
  * The pages pass bundles js/network-guard.js into a classic script at its own path, and the
  * report (scripts/build/vite-config.js's reportPlugin) records each chunk's modules in
@@ -217,4 +221,78 @@ async function guardRegistry(root) {
   }
 }
 
-module.exports = { checkGuardPages, checkGuardScript, guardOrderProblems, guardRegistry, GUARD_FIRST };
+/**
+ * The rows literal the bundler wrote into a built guard: the one object whose first key is
+ * `compact`, read up to its closing brace, past any brace in a string
+ * @param {string} text
+ * @returns {{literal: string} | {problem: string}}
+ */
+function rowsLiteral(text) {
+  const starts = [...text.matchAll(/\{\s*(?:"compact"|'compact'|compact)\s*:\s*\[/g)].map((found) => /** @type {number} */ (found.index));
+  if (starts.length !== 1) return { problem: `it holds ${starts.length === 0 ? 'no' : starts.length} inlined rows literal${starts.length === 1 ? '' : 's'}, not one` };
+  const [start] = starts;
+  let depth = 0;
+  /** @type {string | null} */
+  let quote = null;
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (quote) {
+      if (char === '\\') i += 1;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') quote = char;
+    else if (char === '{' || char === '[') depth += 1;
+    else if (char === '}' || char === ']') {
+      depth -= 1;
+      if (depth === 0) return { literal: text.slice(start, i + 1) };
+    }
+  }
+  return { problem: "its inlined rows literal doesn't end" };
+}
+
+/**
+ * The rows the built page guard inlines, read back from what the build wrote, against the
+ * validated registry's (destinations.js, from the sources at `root`), each cut as the guard
+ * reads them (destination-match.js's guardRows)
+ * @param {PackageFiles} files
+ * @param {string} root
+ * @returns {Promise<Problem[]>}
+ */
+async function checkGuardRows(files, root) {
+  const fail = (/** @type {string} */ message) => [problem('guard/rows', GUARD_SCRIPT, message)];
+  if (!files.has(GUARD_SCRIPT)) return [];
+  const found = rowsLiteral(files.text(GUARD_SCRIPT));
+  if ('problem' in found) return fail(found.problem);
+  let inlined;
+  try {
+    // Data only: no global to reach, and a time limit
+    inlined = JSON.parse(JSON.stringify(vm.runInNewContext(`(${found.literal})`, Object.create(null), { timeout: 1000 })));
+  } catch (error) {
+    return fail(`its inlined rows don't read as data: ${error && /** @type {any} */ (error).message ? /** @type {any} */ (error).message : error}`);
+  }
+  try {
+    const at = (/** @type {string} */ file) => pathToFileURL(path.join(root, file)).href;
+    const client = await import(at('js/kernel/composition/destinations.js'));
+    const match = await import(at('js/kernel/composition/destination-match.js'));
+    const expected = match.guardRows(client.DESTINATIONS);
+    const actual = match.guardRows(inlined);
+    if (client.REGISTRY_PROBLEMS.length > 0 || expected === null) return [];
+    if (actual === null) return fail("its inlined rows aren't the shape the guard reads");
+    const key = (/** @type {unknown} */ row) => JSON.stringify(row);
+    /** @type {string[]} */
+    const want = expected.map(key);
+    /** @type {string[]} */
+    const got = actual.map(key);
+    const extra = got.filter((/** @type {string} */ row) => !want.includes(row));
+    const missing = want.filter((/** @type {string} */ row) => !got.includes(row));
+    if (extra.length > 0 || missing.length > 0 || got.length !== want.length) {
+      return fail(`its inlined rows aren't the registry's: ${extra.length} the registry lacks, ${missing.length} of the registry's left out, ${got.length} in all against ${want.length}`);
+    }
+    return [];
+  } catch (error) {
+    return fail(`the registry couldn't be read to compare: ${error && /** @type {any} */ (error).message ? /** @type {any} */ (error).message : error}`);
+  }
+}
+
+module.exports = { checkGuardPages, checkGuardScript, checkGuardRows, guardOrderProblems, guardRegistry, GUARD_FIRST };

@@ -38,7 +38,7 @@
     },
     "js/background.js": {
       "TS2304": {
-        "Cannot find name 'chrome'.": 21
+        "Cannot find name 'chrome'.": 16
       }
     },
     "js/blocks.js": {

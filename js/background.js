@@ -1,6 +1,8 @@
 /**
  * Background service worker for New Tab Note
- * Handles context menus, keyboard shortcuts, and API requests via offscreen document.
+ * Handles context menus and keyboard shortcuts. Its network, the API request proxy and the
+ * offscreen document it goes through included, is js/kernel/composition/worker-network.js's,
+ * installed in one call at the end of this file.
  *
  * A module worker (manifest background "type": "module"). Everything it imports runs before
  * the listeners below register, and a throw there stops the worker with no menus or
@@ -25,13 +27,7 @@ import {
   unavailableCoordinator,
 } from './kernel/composition/coordinator.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
-import { checkRequest, isOwnSender, send, storedLoopbackOrigin } from './kernel/composition/api-request.js';
-import { REGISTRY_PROBLEMS } from './kernel/composition/destinations.js';
-import { REFUSAL_MESSAGE, refusalFields } from './kernel/composition/network-refusals.js';
-
-// A registry the destination client found a problem with: the client refuses every request,
-// and so does the network guard, which reports why once (#21 slice 1b)
-if (REGISTRY_PROBLEMS.length > 0 && contextGuard) contextGuard.refuseAll();
+import { installWorkerNetwork } from './kernel/composition/worker-network.js';
 
 /** This worker instance's id, which #13's router sends in each welcome (#35) */
 const instanceId = coordinatorInstanceId();
@@ -107,8 +103,6 @@ const CAPTURE_FAILURES = {
 };
 const CAPTURE_FAILED = "the notes database couldn't store it";
 
-let creatingOffscreen;
-
 function supportsSidePanel() {
   return Boolean(chrome.sidePanel && chrome.sidePanel.open);
 }
@@ -138,152 +132,6 @@ async function openExtensionSidePanel(tab) {
   } catch (error) {
     console.warn('Failed to open side panel, opening fallback page:', error.message);
     await openFallbackPage();
-  }
-}
-
-/**
- * Ensure the offscreen document exists for API proxying.
- * @returns {Promise<void>}
- */
-async function ensureOffscreenDocument() {
-  // Check if offscreen document already exists. Both paths stay string literals, so the
-  // build's closure check (#27) can find offscreen.html in the package.
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: ['OFFSCREEN_DOCUMENT'],
-    documentUrls: [chrome.runtime.getURL('offscreen.html')]
-  });
-
-  if (existingContexts.length > 0) {
-    return;
-  }
-
-  // Create offscreen document if it doesn't exist. One that couldn't be made is made again at
-  // the next request, so a failure once doesn't send every later one around it.
-  if (!creatingOffscreen) {
-    creatingOffscreen = chrome.offscreen.createDocument({
-      url: 'offscreen.html',
-      reasons: ['DOM_SCRAPING'],
-      justification: 'Making API requests to bypass CORS for Ollama and other LLM providers'
-    }).finally(() => {
-      creatingOffscreen = null;
-    });
-  }
-  await creatingOffscreen;
-}
-
-/**
- * How long the worker waits for the offscreen document's answer. Under the page's own 30 s
- * (js/llm.js's fetchViaBackground), so the worker answers first: with no answer, and the page's
- * fallback sends the request, which then goes out at most twice, as before.
- */
-const OFFSCREEN_ANSWER_MS = 25_000;
-
-/** What askOffscreen answers when the document doesn't answer in time */
-const OFFSCREEN_LATE = Symbol('offscreen-late');
-
-/**
- * `message` sent to the offscreen document, and its answer, or OFFSCREEN_LATE when it doesn't
- * answer within OFFSCREEN_ANSWER_MS
- * @param {object} message
- * @returns {Promise<unknown>}
- */
-async function askOffscreen(message) {
-  /** @type {ReturnType<typeof setTimeout> | undefined} */
-  let timer;
-  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(OFFSCREEN_LATE), OFFSCREEN_ANSWER_MS); });
-  try {
-    return await Promise.race([chrome.runtime.sendMessage(message), late]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  // A page's network guard refused a call (#21 slice 1b): journaled here, from this extension only
-  if (request && request.type === REFUSAL_MESSAGE) {
-    // Its surface is the sending page's; one that comes before the journal is set up is dropped
-    try {
-      const fields = isOwnSender(sender) ? refusalFields(request.report, sender.url) : null;
-      if (fields && failureEvents && typeof failureEvents.event === 'function') failureEvents.event('network.request-refused', fields);
-    } catch {
-      // The journal is best effort
-    }
-    return false;
-  }
-  if (request && request.type === 'API_REQUEST') {
-    // Only this extension's own pages and worker (#21): a web page or another extension
-    // never gets a request made for it
-    if (!isOwnSender(sender)) {
-      sendResponse({ error: 'request-refused' });
-      return false;
-    }
-    handleApiRequest(request)
-      .then(response => {
-        // No answer in time: the page's own fallback sends it, so it goes out at most twice
-        if (response === null) {
-          sendResponse(null);
-          return;
-        }
-        if ('error' in response) console.debug('Background: API request failed:', response.error);
-        else console.debug('Background: API response status:', response.status, 'ok:', response.ok);
-        sendResponse(response);
-      })
-      .catch(error => {
-        console.error('Background: API error:', error.message);
-        sendResponse({ error: error.message });
-      });
-    return true;
-  }
-});
-
-/**
- * Handle an API request by proxying it via fetch or the offscreen document, once the policy
- * took it (js/kernel/composition/api-request.js): a packaged destination, or the Ollama URL's
- * loopback origin, with Content-Type only
- * @param {{url: string, options: Object}} request - Request details
- * @returns {Promise<{ok: boolean, status: number, data: *} | {error: string} | null>} Response
- *   object, or null when the offscreen document didn't answer in time
- */
-async function handleApiRequest(request) {
-  const checked = checkRequest(request, { loopback: await storedLoopbackOrigin() });
-  if (!checked.ok) return { error: 'request-refused' };
-
-  console.debug('Background: Making fetch to', checked.url);
-
-  // The Ollama URL goes through the offscreen document, which checks it again
-  if (checked.loopback) {
-    try {
-      await ensureOffscreenDocument();
-      /** @type {{method: string, body?: string}} */
-      const options = { method: checked.method };
-      if (checked.body !== undefined) options.body = checked.body;
-      const response = /** @type {{ok: boolean, status: number, data: *} | {error: string} | undefined | typeof OFFSCREEN_LATE} */ (await askOffscreen({
-        type: 'OFFSCREEN_API_REQUEST',
-        url: checked.url,
-        options,
-        loopbackOrigin: new URL(checked.url).origin,
-      }));
-      // Its answer is final, an error included, so the loopback origin is reached once. The
-      // worker fetches itself only when the document can't be reached or answers nothing; one
-      // that doesn't answer in time leaves it to the page's fallback
-      if (response === OFFSCREEN_LATE) return null;
-      if (response) return response;
-    } catch (e) {
-      console.debug('Background: Offscreen failed, trying direct fetch:', e.message);
-    }
-  }
-
-  try {
-    const answer = await send(checked);
-    console.debug('Background: Fetch response status:', answer.status);
-    return answer;
-  } catch (error) {
-    console.error('Background: Fetch error:', error.message);
-    return {
-      ok: false,
-      status: 0,
-      error: error.message
-    };
   }
 }
 
@@ -433,8 +281,6 @@ async function captureToDailyNote(item) {
 try {
   const events = createFailureEvents({ surface: 'worker-internal' });
   failureEvents = events;
-  // The calls the network guard refused, the ones it held since the worker started first
-  if (contextGuard) contextGuard.onRefused((report) => events.event('network.request-refused', report));
   // Sightings a context held in chrome.storage.local because NewTabNoteTrust wouldn't open
   // reconcile now, not only at the next failure; with none held this reads one key and opens
   // nothing
@@ -442,6 +288,9 @@ try {
 } catch {
   // The journal is best effort: without it the worker does exactly what it did
 }
+// The worker's network (#21 slice 1b): its one onMessage listener, the request proxy, and the
+// guard's wiring, which journals what the guard refused into the events above. It never throws.
+installWorkerNetwork({ guard: contextGuard, events: failureEvents });
 try {
   coordinator = createCoordinator({ instanceId, makeKernel: () => createWorkerClient(), events: failureEvents });
 } catch (error) {

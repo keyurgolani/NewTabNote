@@ -1,0 +1,14 @@
+{
+  "rule": "the extension pages' CSP names a directive twice, and Chromium enforces only the first copy",
+  "expect": [
+    "security/csp-repeated",
+    "security/drift"
+  ],
+  "edits": [
+    {
+      "file": "manifest.json",
+      "replace": "\"extension_pages\": \"default-src 'self';",
+      "with": "\"extension_pages\": \"default-src 'self'; connect-src 'self';"
+    }
+  ]
+}
