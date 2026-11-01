@@ -97,6 +97,7 @@ async function seed(ctx, store, records) {
  * A note's record, with its versions when the adapter keeps them
  * @param {Context} ctx
  * @param {string} noteId
+ * @returns {Promise<{record: Row, versions: Row}>}
  */
 const noteOf = (ctx, noteId) =>
   ctx.adapter.read(['notes'], async tx => {
