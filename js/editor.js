@@ -3169,6 +3169,9 @@ class BlockEditor {
   onDrop(e) {
     e.preventDefault();
     this.container.classList.remove('drag-over');
+    // The drop ends the drag, and a reorder's re-render removes the element its dragend would
+    // reach, so the drag's token goes now (#14 slice 2)
+    Utils.endBlockDrag();
 
     // Handle file drop
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {

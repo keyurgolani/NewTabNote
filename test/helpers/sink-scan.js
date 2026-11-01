@@ -6,6 +6,7 @@
  * `el['name']` or either in parentheses, and the sinks are:
  * - an assignment to `innerHTML`, `outerHTML` or `srcdoc`, by `=`, `+=`, `||=`, `??=` or
  *   `&&=`, or through `Object.assign` with an object literal or `Reflect.set`;
+ * - `setAttribute('srcdoc', ...)`;
  * - a call to `insertAdjacentHTML`, `setHTMLUnsafe` or `createContextualFragment`;
  * - a document's `write` or `writeln`, on any receiver whose name has "doc" in it;
  * - `execCommand('insertHTML', ...)`, and `execCommand` with a command that isn't a literal;
@@ -15,7 +16,17 @@
  * - `static`: a string or a template with no substitutions, which is packaged markup;
  * - `dynamic`: anything else.
  * A sink given the empty string, or an `execCommand` given no value, puts nothing in, so it
- * isn't one. A key or a source object that isn't a literal can't be read, and isn't counted.
+ * isn't one.
+ *
+ * What it can't see, so a review has to:
+ * - a sink reached through a reference to its method or setter: `.call`, `.apply`, `.bind`,
+ *   a destructured method, `Reflect.apply`, or an `innerHTML` descriptor's setter;
+ * - `Object.assign` with a computed key, a spread, or a source that isn't an object literal,
+ *   and any other key that isn't a literal;
+ * - `setAttribute` with a name that isn't a literal, `setAttributeNS`, and an iframe's `src`
+ *   set to a `data:` address;
+ * - `write` or `writeln` on a receiver whose name has no "doc" in it, or one reached through a
+ *   call, such as `open().write(...)`.
  * security/render-sinks.json lists the files that are block code, and the sinks each may have.
  */
 
@@ -139,6 +150,10 @@ function sinksOf(node) {
   if (name === 'set' && lastName(receiver) === 'Reflect') {
     const key = args[1] && isStaticText(args[1]) ? /** @type {ts.StringLiteral} */ (args[1]).text : null;
     return key !== null && ASSIGNED.has(key) && !isEmptyText(args[2]) ? [{ sink: `Reflect.set ${key}`, value: args[2] }] : [];
+  }
+  if (name === 'setAttribute' && args[0] && isStaticText(args[0])) {
+    const attribute = /** @type {ts.StringLiteral} */ (args[0]).text.toLowerCase();
+    return attribute === 'srcdoc' && !isEmptyText(args[1]) ? [{ sink: 'setAttribute srcdoc', value: args[1] }] : [];
   }
   if (CALLED.has(name)) return [{ sink: name, value: args[name === 'insertAdjacentHTML' ? 1 : 0] }];
   if (PARSED.has(name)) return [{ sink: name, value: args[0] }];

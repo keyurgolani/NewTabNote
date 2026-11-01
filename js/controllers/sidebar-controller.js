@@ -446,14 +446,15 @@ class SidebarController {
 
   /**
    * A dropped block's markup (#14 slice 2): a dropped block keeps its markup only when this
-   * page's editor started the drag (Utils.isOwnBlockDrag). Any other drag's markup is its text,
-   * escaped into rich text.
+   * page's editor started the drag (Utils.takeBlockDrag, which this drop uses up). Any other
+   * drag's markup is its text, escaped into rich text.
    * @param {DataTransfer} dataTransfer
    * @returns {string}
    */
   _droppedMarkup(dataTransfer) {
+    const own = Utils.takeBlockDrag(dataTransfer.getData(Utils.BLOCK_DRAG_TOKEN));
     const html = dataTransfer.getData('application/x-block-html');
-    if (!html || Utils.isOwnBlockDrag(dataTransfer.getData(Utils.BLOCK_DRAG_TOKEN))) return html;
+    if (!html || own) return html;
     return globalThis.BlockRendering.escapePlainText(html);
   }
 

@@ -945,8 +945,9 @@ const Utils = {
 
   /**
    * A block drag this page's editor starts (#14 slice 2): a new token for its drag data, which
-   * holds until the drag ends (endBlockDrag). A dropped block keeps its markup only when this
-   * page's editor started the drag (isOwnBlockDrag).
+   * holds until the drop that reads it (takeBlockDrag) or the drag's end (endBlockDrag),
+   * whichever comes first. A dropped block keeps its markup only when this page's editor
+   * started the drag.
    * @returns {string}
    */
   startBlockDrag() {
@@ -961,12 +962,14 @@ const Utils = {
 
   /**
    * Whether `token`, from a drop's data, is the token of the block drag this page's editor has
-   * going
+   * going. A drop ends the drag, so the token no longer holds after it, whatever the answer.
    * @param {unknown} token
    * @returns {boolean}
    */
-  isOwnBlockDrag(token) {
-    return typeof token === 'string' && token !== '' && token === this._blockDragToken;
+  takeBlockDrag(token) {
+    const own = typeof token === 'string' && token !== '' && token === this._blockDragToken;
+    this._blockDragToken = null;
+    return own;
   },
 
   /**
