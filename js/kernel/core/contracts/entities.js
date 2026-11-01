@@ -152,9 +152,62 @@ export const themeRecord = v.looseObject({
   updatedAt: v.optional(timestamp),
 });
 
+/** The fields of a record no change op names: its id, and when it was last saved */
+const UNNAMED_FIELDS = new Set(['id', 'updatedAt']);
+
 /**
- * One entry of #17's change log, which #13's CommitFeed reads from a cursor. #17 defines each
- * op (its slice 4), and #19 fills `parentRevisionIds` and `originDeviceId`.
+ * @param {Record<string, unknown>} entries - a record schema's
+ * @returns {readonly string[]}
+ */
+const opFieldsOf = entries =>
+  Object.freeze(
+    Object.keys(entries)
+      .filter(field => !UNNAMED_FIELDS.has(field))
+      .sort(),
+  );
+
+/**
+ * The fields of a note a change op may name (#17 PR 4c): each one noteRecord names but its id
+ * and `updatedAt`. A note's versions aren't schema fields, so no op names them, and a field
+ * only an imported file named can't land in the log.
+ */
+export const NOTE_OP_FIELDS = opFieldsOf(noteRecord.entries);
+
+/** The fields of a folder a change op may name, as NOTE_OP_FIELDS are a note's */
+export const FOLDER_OP_FIELDS = opFieldsOf(folderRecord.entries);
+
+/**
+ * @param {readonly string[]} fields
+ */
+const changedFields = fields => v.pipe(v.array(v.picklist(fields)), v.minLength(1));
+
+/** @param {'insertBlock' | 'updateBlock' | 'moveBlock' | 'deleteBlock'} op */
+const blockOp = op => v.strictObject({ op: v.literal(op), blockId: entityId('block') });
+
+/**
+ * What a commit did to one entity, one op of its change record (#17 PR 4c, the lead's Q4): a
+ * note made, changed, or deleted for good, a block of it inserted, changed, moved, or
+ * deleted, or a folder made, changed, or deleted. Each holds the op's name and a block's id or
+ * the names of the fields that changed, never a value. Each is strict, so nothing else can go
+ * in one without a change to this schema. #19's merge adds the content its ops need.
+ */
+export const changeOp = v.variant('op', [
+  v.strictObject({ op: v.literal('createNote') }),
+  v.strictObject({ op: v.literal('updateNote'), fields: changedFields(NOTE_OP_FIELDS) }),
+  v.strictObject({ op: v.literal('deleteNote') }),
+  blockOp('insertBlock'),
+  blockOp('updateBlock'),
+  blockOp('moveBlock'),
+  blockOp('deleteBlock'),
+  v.strictObject({ op: v.literal('createFolder') }),
+  v.strictObject({ op: v.literal('updateFolder'), fields: changedFields(FOLDER_OP_FIELDS) }),
+  v.strictObject({ op: v.literal('deleteFolder') }),
+]);
+
+/**
+ * One entry of #17's change log, which #13's CommitFeed reads from a cursor: an entity a commit
+ * changed, at its revision, with the ops it took (#17 PR 4c). #19 fills `parentRevisionIds`
+ * and `originDeviceId`.
  */
 export const changeRecord = v.looseObject({
   seq: commitSeq,
@@ -162,7 +215,7 @@ export const changeRecord = v.looseObject({
   entityId: id,
   revision,
   opId: id,
-  ops: content(v.array(v.looseObject({}))),
+  ops: v.array(changeOp),
   parentRevisionIds: v.optional(v.array(v.string())),
   originDeviceId: v.optional(v.nullable(v.string())),
 });
@@ -174,6 +227,7 @@ export const changeRecord = v.looseObject({
 /** @typedef {v.InferOutput<typeof snapshotRecord>} SnapshotEntity */
 /** @typedef {v.InferOutput<typeof themeRecord>} ThemeEntity */
 /** @typedef {v.InferOutput<typeof changeRecord>} ChangeEntity */
+/** @typedef {v.InferOutput<typeof changeOp>} ChangeOp */
 /** @typedef {v.InferOutput<typeof searchEntryRecord>} SearchEntryEntity */
 /** @typedef {v.InferOutput<typeof linkRecord>} LinkEntity */
 /** @typedef {v.InferOutput<typeof vectorRecord>} VectorEntity */

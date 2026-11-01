@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 
 import * as v from '../../js/lib/valibot/index.mjs';
 import {
+  FOLDER_OP_FIELDS,
+  NOTE_OP_FIELDS,
   blockInput,
   blockRecord,
   changeRecord,
@@ -275,11 +277,59 @@ describe('entity schemas (#13, AC1)', () => {
   });
 
   it("describe #17's change records, which #13's CommitFeed reads", () => {
-    const change = { seq: 1, entityType: 'note', entityId: 'n1', revision: 2, opId: 'c1', ops: [{ op: 'put' }] };
+    const change = {
+      seq: 1,
+      entityType: 'note',
+      entityId: 'n1',
+      revision: 2,
+      opId: 'c1',
+      ops: [
+        { op: 'updateNote', fields: ['name', 'pinned'] },
+        { op: 'insertBlock', blockId: 'b1' },
+      ],
+    };
     assert.equal(accepts(changeRecord, change), true);
+    assert.equal(accepts(changeRecord, { ...change, ops: [] }), true);
     assert.equal(accepts(changeRecord, { ...change, seq: 0 }), false);
     assert.equal(accepts(changeRecord, { ...change, entityType: 'tab' }), false);
-    assert.deepEqual(v.getMetadata(changeRecord.entries.ops), { content: true });
+  });
+
+  it("pin the change log's ops to their names, a block's id, and the record's own field names, so no value fits in one (#17 PR 4c)", () => {
+    const op = (/** @type {unknown} */ value) =>
+      accepts(changeRecord, { seq: 1, entityType: 'note', entityId: 'n1', revision: 1, opId: 'c1', ops: [value] });
+    for (const value of [
+      { op: 'createNote' },
+      { op: 'deleteNote' },
+      { op: 'moveBlock', blockId: 'b1' },
+      { op: 'deleteBlock', blockId: 'b1' },
+      { op: 'createFolder' },
+      { op: 'updateFolder', fields: ['collapsed'] },
+      { op: 'deleteFolder' },
+    ]) {
+      assert.equal(op(value), true, JSON.stringify(value));
+    }
+    for (const value of [
+      // A value, a field the schema doesn't name, an op it doesn't know, or an empty list
+      { op: 'updateNote', fields: ['name'], name: 'Plan' },
+      { op: 'updateBlock', blockId: 'b1', content: 'text' },
+      { op: 'updateNote', fields: ['Plans for Tuesday'] },
+      { op: 'updateNote', fields: ['revision'] },
+      { op: 'updateNote', fields: ['updatedAt'] },
+      { op: 'updateNote', fields: [] },
+      { op: 'updateFolder', fields: ['name', 'pinned'] },
+      { op: 'insertBlock', blockId: '' },
+      { op: 'insertBlock', blockId: 'b'.repeat(MAX_ID_LENGTH + 1) },
+      { op: 'renameNote' },
+      { op: 'createNote', note: { id: 'n1' } },
+    ]) {
+      assert.equal(op(value), false, JSON.stringify(value));
+    }
+    // Nothing in a change record is content
+    assert.deepEqual(v.getMetadata(changeRecord.entries.ops), {});
+    assert.ok(
+      NOTE_OP_FIELDS.includes('name') && !NOTE_OP_FIELDS.includes('id') && !NOTE_OP_FIELDS.includes('updatedAt'),
+    );
+    assert.deepEqual([...FOLDER_OP_FIELDS], ['collapsed', 'color', 'createdAt', 'name', 'parentId']);
   });
 });
 
