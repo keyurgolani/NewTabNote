@@ -179,6 +179,11 @@ class TabController {
    * @param {{quiet?: boolean}} [options]
    * @returns {Promise<boolean>}
    */
+  async saveOpenEditors(options) {
+    const saved = await Promise.all(this.getOpenEditors().map((editor) => editor.flushSave(options)));
+    return saved.every((answer) => answer === true);
+  }
+
   /**
    * The button of the notice an open editor shows for changes it couldn't save (the reload-required
    * notice's Reload, or a deleted note's Save as a new note), when the editors' notices explain
@@ -195,11 +200,6 @@ class TabController {
       else if (editor.hasFailedSave()) return null;
     }
     return button;
-  }
-
-  async saveOpenEditors(options) {
-    const saved = await Promise.all(this.getOpenEditors().map((editor) => editor.flushSave(options)));
-    return saved.every((answer) => answer === true);
   }
 
   /**
