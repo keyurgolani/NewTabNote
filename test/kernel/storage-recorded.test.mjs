@@ -4,7 +4,9 @@
 // itself; each runs through #17's registry to its newest version (10 since #17 PR 2a) and
 // equals its expected file, which derive-expected.mjs derives without the runner, recovery
 // point included; a run stopped at each step and run again ends the same; and the canaries hold
-// every user-text field the seed wrote, so no recorded value came from a real profile.
+// every user-text field the seed wrote, so no recorded value came from a real profile. v1.4.0's
+// blocks recording (record-release.mjs --blocks, #17 PR 4a), its editor save of a code block, a
+// bookmark and a table for the profile store, is checked the same way.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,28 +26,26 @@ const SHAPES = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'shapes.json'), 'u
 const FALLBACKS = /** @type {Record<string, string>} */ ({});
 
 /**
- * Every release's recording, by its release. record-release.mjs --blocks's v8.v1.4.0.blocks.json
- * (#17 PR 4a) isn't one: it holds v1.4.0's editor save of three block types for the profile
- * store, whose test reads it, as storage-fixtures.test.mjs's coverage check does. A second
- * recording of one release fails here, where a map would keep one of them unseen.
- * @returns {Map<string, Fixture>}
+ * Every recording, by its release: each release's, and apart from them the blocks recordings
+ * record-release.mjs --blocks makes (`<shape>.<tag>.blocks.json`, #17 PR 4a). A second recording
+ * of one release, of either kind, fails here, where a map would keep one of them unseen.
+ * @returns {{releases: Map<string, Fixture>, blocks: Map<string, Fixture>}}
  */
 function recorded() {
   const dir = path.join(FIXTURES, 'recorded');
-  const out = new Map();
-  const files = fs.existsSync(dir)
-    ? fs.readdirSync(dir).filter(name => name.endsWith('.json') && !name.endsWith('.blocks.json'))
-    : [];
-  for (const file of files.sort()) {
+  const releases = new Map();
+  const blocks = new Map();
+  for (const file of fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith('.json')).sort() : []) {
     const fixture = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+    const out = file.endsWith('.blocks.json') ? blocks : releases;
     if (out.has(fixture.header.source.tag))
       throw new Error(`recorded/${file}: a second recording of ${fixture.header.source.tag}`);
     out.set(fixture.header.source.tag, fixture);
   }
-  return out;
+  return { releases, blocks };
 }
 
-const RECORDED = recorded();
+const { releases: RECORDED, blocks: BLOCKS } = recorded();
 
 /** The tags this clone has, or null in a shallow one (CI's checkout has none) */
 function tagsHere() {
@@ -77,16 +77,31 @@ const SLOTS_OF = /** @type {Record<string, string[]>} */ ({
   "SyncService.connect's WebDAV settings (setSetting syncWebdavConfig)": ['webdav-username', 'webdav-password'],
 });
 
+/** The canary slots the blocks recording's seed fills, every one of them its editor save keeps */
+const BLOCK_SLOTS = ['blocks-note-title', 'code-block', 'bookmark-title', 'table-cell'];
+
 /**
  * The slots `fixture`'s write paths imply that it doesn't hold
  * @param {any} fixture
+ * @param {string[]} [always] the slots it holds whatever its write paths: ALWAYS for a release's
+ *   recording, BLOCK_SLOTS for a blocks recording
  * @returns {string[]}
  */
-function missingSlots(fixture) {
+function missingSlots(fixture, always = ALWAYS) {
   const held = canarySlots(fixture);
-  const wanted = new Set([...ALWAYS, ...fixture.header.source.writePaths.flatMap((/** @type {string} */ p) => SLOTS_OF[p] || [])]);
+  const wanted = new Set([...always, ...fixture.header.source.writePaths.flatMap((/** @type {string} */ p) => SLOTS_OF[p] || [])]);
   return [...wanted].filter(slot => !held.includes(slot)).sort();
 }
+
+/**
+ * Each recording with the id its header has and the slots it always holds: each release's, then
+ * each blocks recording, checked as the releases' are
+ * @type {Array<{tag: string, fixture: any, id: string, always: string[]}>}
+ */
+const RECORDINGS = [
+  ...[...RECORDED].map(([tag, fixture]) => ({ tag, fixture, id: `${fixture.header.shape}.${tag}`, always: ALWAYS })),
+  ...[...BLOCKS].map(([tag, fixture]) => ({ tag, fixture, id: `${fixture.header.shape}.${tag}.blocks`, always: BLOCK_SLOTS })),
+];
 
 describe('the recorded release fixtures', () => {
   it('every release from v1.0.0 to v1.4.0 has one, or is a listed fallback', () => {
@@ -105,11 +120,17 @@ describe('the recorded release fixtures', () => {
     assert.deepStrictEqual(missingSlots(JSON.parse(text)), ['folder-1', 'webdav-password']);
   });
 
-  for (const [tag, fixture] of RECORDED) {
+  it("v1.4.0 has the one blocks recording, and its slot check fails on one that lost a block's slot", () => {
+    assert.deepStrictEqual([...BLOCKS.keys()], ['v1.4.0']);
+    const text = JSON.stringify(BLOCKS.get('v1.4.0')).replaceAll('{{CANARY:table-cell}}', 'a');
+    assert.deepStrictEqual(missingSlots(JSON.parse(text), BLOCK_SLOTS), ['table-cell']);
+  });
+
+  for (const { tag, fixture, id, always } of RECORDINGS) {
     const { header } = fixture;
     it(`${header.id}: the header names ${tag}, its shape, and the recorder`, () => {
       assert.equal(header.provenance, 'recorded');
-      assert.equal(header.id, `${header.shape}.${tag}`);
+      assert.equal(header.id, id);
       assert.deepStrictEqual(header.releases, [tag]);
       assert.ok(SHAPES[header.shape].releases.includes(tag), `${tag} isn't a ${header.shape} release`);
       assert.equal(header.source.recorder, 'scripts/fixtures/record-release.mjs');
@@ -133,8 +154,8 @@ describe('the recorded release fixtures', () => {
       assert.equal(header.source.tree, git(`${tag}^{tree}`));
     });
 
-    it(`${header.id}: every canary slot its write paths imply is there, the AI key among them`, () => {
-      assert.deepStrictEqual(missingSlots(fixture), []);
+    it(`${header.id}: every canary slot its write paths imply is there${always === ALWAYS ? ', the AI key among them' : ''}`, () => {
+      assert.deepStrictEqual(missingSlots(fixture, always), []);
       assert.doesNotMatch(JSON.stringify(fixture), /ntn-canary-/, 'a filled canary was committed');
     });
 
