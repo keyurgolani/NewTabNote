@@ -1,6 +1,7 @@
 /**
  * HTML sanitization utilities.
- * Strips dangerous elements and attributes from HTML content to prevent XSS.
+ * Strips dangerous elements and attributes from HTML content to prevent XSS, and keeps a
+ * link's address only where the link rule allows it (keepAllowedLinks).
  *
  * @module sanitize
  */
@@ -46,7 +47,26 @@ function sanitizeHtml(html) {
 
   const doc = new DOMParser().parseFromString(html, 'text/html');
   sanitizeNode(doc.body);
+  keepAllowedLinks(doc.body);
   return doc.body.innerHTML;
+}
+
+/** The addresses a link keeps, as an AI reply's links do (Utils.parseMarkdownText) */
+const LINK_SCHEMES_RE = /^(?:https?|mailto):/i;
+
+/**
+ * Apply the link rule to the parsed HTML: a link keeps its address only for http, https and
+ * mailto, or as a wiki link (`#`, class `wiki-link`), and any other loses it and keeps its text.
+ * Each address is read as the parsed document holds it. Every caller of sanitizeHtml renders an
+ * AI reply.
+ * @param {Element} root
+ */
+function keepAllowedLinks(root) {
+  for (const link of root.querySelectorAll('a[href]')) {
+    const href = link.getAttribute('href') || '';
+    const wikiLink = href === '#' && link.classList.contains('wiki-link');
+    if (!wikiLink && !LINK_SCHEMES_RE.test(href)) link.removeAttribute('href');
+  }
 }
 
 /**
