@@ -14,7 +14,7 @@
 ![Slash command block menu](docs/screenshots/02-slash-menu.png)
 - **18+ Block Types**: Structured content with headings, tables, code blocks, math equations (LaTeX), and more.
 - **Slash Commands**: Type `/` to instantly access any block type.
-- **Markdown Support**: Use familiar shortcuts like `#`, `-`, `>`, and `` ``` `` for lightning-fast writing.
+- **Markdown Support**: Paste Markdown with `#`, `-`, `>`, and `` ``` `` and it turns into headings, lists, quotes, and code blocks.
 - **Drag & Drop**: Effortlessly reorder your thoughts with a simple handle.
 
 ### 🤖 Your Personal AI Assistant
