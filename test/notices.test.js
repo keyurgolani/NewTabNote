@@ -76,6 +76,14 @@ describe('privacy policy (AC9)', () => {
     ]);
   });
 
+  it("takes the destinations the policy has to name from the registry, so a row added is one more it names", () => {
+    const { policyDestinations } = require('../scripts/check-notices.js');
+    const rows = JSON.parse(fs.readFileSync(path.join(ROOT, 'security', 'destinations.json'), 'utf8')).destinations;
+    assert.deepEqual(REQUIRED_DESTINATIONS, policyDestinations(rows));
+    const added = policyDestinations([...rows, { ...rows.find((row) => row.location === 'remote' && row.reachedBy === 'fetch'), id: 'example', origin: 'https://example.test' }]);
+    assert.deepEqual(added.filter((name) => !REQUIRED_DESTINATIONS.includes(name)), ['example.test']);
+  });
+
   it('flags each missing network destination and undescribed host', () => {
     for (const destination of REQUIRED_DESTINATIONS) {
       const problems = checkPolicy(policy.split(destination).join('[removed]'), manifest);

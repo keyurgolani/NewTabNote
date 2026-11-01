@@ -143,6 +143,26 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
     assert.equal(check(null), false);
   });
 
+  it('sends only a request checkRequest took, as it took it', async () => {
+    const fetched = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      fetched.push(String(url));
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const checked = policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/models', options: {} }, { loopback: null });
+      assert.ok(Object.isFrozen(checked));
+      assert.equal((await policy.send(checked)).status, 200);
+      for (const made of [{ ...checked }, { ok: true, url: 'https://example.test/x', method: 'GET', loopback: false }, JSON.parse(JSON.stringify(checked))]) {
+        await assert.rejects(policy.send(made), TypeError, JSON.stringify(made));
+      }
+      assert.deepEqual(fetched, ['https://api.z.ai/api/paas/v4/models']);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it('builds the request with Content-Type only, no cookies, and no redirect followed', () => {
     const post = policy.checkRequest({ type: 'API_REQUEST', url: 'https://api.z.ai/api/paas/v4/chat/completions', options: { method: 'POST', body: '{}' } }, { loopback: null });
     assert.deepEqual(policy.fetchInit(post), {
@@ -214,7 +234,7 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
       }
     };
     walk('js');
-    const proxy = new Set(['js/background.js', 'js/offscreen.js', 'js/kernel/composition/api-request.js']);
+    const proxy = new Set(['js/kernel/composition/worker-network.js', 'js/offscreen.js', 'js/kernel/composition/api-request.js']);
     const callers = files.filter((file) => !proxy.has(file) && /API_REQUEST|fetchViaBackground\(/.test(fs.readFileSync(path.join(ROOT, file), 'utf8')));
     assert.ok(callers.includes('js/llm.js'), callers.join());
     // The registry's rows, which the proxy narrows to the ones its callers use
@@ -381,7 +401,7 @@ describe('API_REQUEST in the worker (js/background.js)', () => {
     assert.deepEqual(fetches, [], 'the page sends it next, once');
     // The page waits longer than the worker, so the worker's answer comes first
     const pageWait = Number(/\}, (\d+)\); \/\/ 30 second timeout/.exec(fs.readFileSync(path.join(ROOT, 'js/llm.js'), 'utf8'))[1]);
-    const workerWait = Number(/const OFFSCREEN_ANSWER_MS = ([\d_]+);/.exec(fs.readFileSync(path.join(ROOT, 'js/background.js'), 'utf8'))[1].replace(/_/g, ''));
+    const workerWait = Number(/const OFFSCREEN_ANSWER_MS = ([\d_]+);/.exec(fs.readFileSync(path.join(ROOT, 'js/kernel/composition/worker-network.js'), 'utf8'))[1].replace(/_/g, ''));
     assert.ok(workerWait < pageWait, `${workerWait} < ${pageWait}`);
   });
 

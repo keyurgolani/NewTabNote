@@ -12,7 +12,7 @@ const path = require('node:path');
 const { CODES } = require('../scripts/build/diagnostics.js');
 const os = require('node:os');
 const { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, CANARY_NAMES } = require('../scripts/build/verify-fixtures.js');
-const { checkSecurityBaseline, SOURCES, CHANGES_FILE } = require('../scripts/build/security-baseline.js');
+const { checkSecurityBaseline, firstPartyScripts, SOURCES, CHANGES_FILE } = require('../scripts/build/security-baseline.js');
 
 const ROOT = path.join(__dirname, '..');
 const fixtures = readFixtures();
@@ -63,6 +63,8 @@ describe('test/build-fixtures/', () => {
   it("a fixture that sets securityEntry is one for another rule, and its entry records the edited tree", () => {
     const flagged = fixtures.filter((fixture) => fixture.securityEntry);
     assert.ok(flagged.length > 0);
+    // A fixture for a security/ rule never gets the entry that would hide it
+    assert.deepEqual(fixtures.filter((fixture) => fixture.name.startsWith('security-') && fixture.securityEntry).map((fixture) => fixture.name), []);
     for (const fixture of flagged) {
       assert.equal(fixture.securityEntry, true, fixture.name);
       assert.ok(!(fixture.expect || []).some((code) => code.startsWith('security/')), `${fixture.name} expects a security/ code`);
@@ -75,9 +77,10 @@ describe('test/build-fixtures/', () => {
       }
       const fixture = { name: 'an-edit', rule: 'an edit to a source the baseline records' };
       assert.throws(() => recordSecurityEntry(dir, fixture), /change nothing/);
+      fs.cpSync(path.join(ROOT, 'js'), path.join(dir, 'js'), { recursive: true });
       applyEdits(dir, [{ file: 'js/offscreen.js', append: '\n// an edit\n' }]);
       const read = (/** @type {string} */ file) => fs.readFileSync(path.join(dir, file), 'utf8');
-      const drift = () => checkSecurityBaseline({ manifest: JSON.parse(read('manifest.json')), read }).map((found) => found.code);
+      const drift = () => checkSecurityBaseline({ manifest: JSON.parse(read('manifest.json')), scripts: firstPartyScripts(dir), read }).map((found) => found.code);
       assert.deepEqual(drift(), ['security/drift']);
       recordSecurityEntry(dir, fixture);
       assert.deepEqual(drift(), []);

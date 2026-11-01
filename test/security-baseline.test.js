@@ -1,27 +1,38 @@
 'use strict';
 
 // #21 slice 1b, PR 3: the security baseline (scripts/build/security-baseline.js), which the
-// build and npm run check:security-baseline run. The manifest's CSP and permissions, the
+// build and npm run check:security-baseline run. The manifest, cosmetic keys aside, the
 // offscreen document's reasons, the destination registry, the network ledger, and the
 // sources that hold the network rules change only with a security/changes.json entry that
-// records them, names what changed and says why. security/permissions.json and the manifest
-// agree both ways, the required set stays 1.4.0's, externally_connectable stays absent, and
-// 'unsafe-inline' goes once #16's counts reach zero.
+// records them, names what changed and says why, and entries only ever get appended. The CSP
+// reads as Chromium reads it. security/permissions.json and the manifest agree both ways, the
+// required set stays 1.4.0's, externally_connectable stays absent, and 'unsafe-inline' goes
+// once #16's counts reach zero.
 
-const { describe, it } = require('node:test');
+const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { checkSecurityBaseline, recordOf, cspOf, offscreenReasons, SOURCES } = require('../scripts/build/security-baseline.js');
+const { checkSecurityBaseline, checkHistory, recordOf, cspOf, offscreenReasons, firstPartyScripts, SOURCES } = require('../scripts/build/security-baseline.js');
+const cli = require('../scripts/check-security-baseline.js');
 
 const ROOT = path.join(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 const MANIFEST = JSON.parse(read('manifest.json'));
+const SCRIPTS = firstPartyScripts(ROOT);
 
 /** The checker on the tree, with `edits` (a path to its new text) and `manifest` changed */
 function check({ manifest = MANIFEST, edits = {} } = {}) {
-  const inputs = { manifest, read: (file) => (Object.hasOwn(edits, file) ? edits[file] : read(file)) };
+  const scripts = [...new Set([...SCRIPTS, ...Object.keys(edits).filter((file) => /^js\/.*\.m?js$/.test(file))])].sort();
+  const inputs = { manifest, scripts, read: (file) => (Object.hasOwn(edits, file) ? edits[file] : read(file)) };
   return { problems: checkSecurityBaseline(inputs), inputs };
+}
+
+/** `manifest` with its extension pages' CSP set to `policy` */
+function withPolicy(policy, manifest = MANIFEST) {
+  const changed = structuredClone(manifest);
+  changed.content_security_policy.extension_pages = policy;
+  return changed;
 }
 
 const codes = (problems) => [...new Set(problems.map(({ code }) => code))].sort();
@@ -88,16 +99,73 @@ describe('the security baseline (scripts/build/security-baseline.js)', () => {
       'js/kernel/composition/network-guard.js',
       'js/kernel/composition/network-guard-install.js',
       'js/kernel/composition/api-request.js',
-      'js/background.js',
+      'js/kernel/composition/worker-network.js',
       'js/offscreen.js',
     ]);
     for (const file of SOURCES) driftsThenPasses({ edits: { [file]: `${read(file)}\n// an edit\n` } });
   });
 
+  it("takes an edit to js/background.js, which installs the worker's network in one call, with no entry", () => {
+    assert.deepEqual(check({ edits: { 'js/background.js': `${read('js/background.js')}\n// an edit\n` } }).problems, []);
+  });
+
   it('fails on an offscreen reason added with no entry, and when security/permissions.json lacks it', () => {
-    const background = read('js/background.js').replace("reasons: ['DOM_SCRAPING']", "reasons: ['DOM_SCRAPING', 'BLOBS']");
-    assert.deepEqual(offscreenReasons(background), ['BLOBS', 'DOM_SCRAPING']);
-    driftsThenPasses({ edits: { 'js/background.js': background } }, ['security/drift', 'security/permissions']);
+    const file = 'js/kernel/composition/worker-network.js';
+    const source = read(file).replace("reasons: ['DOM_SCRAPING']", "reasons: ['DOM_SCRAPING', 'BLOBS']");
+    assert.deepEqual(offscreenReasons(source).reasons, ['BLOBS', 'DOM_SCRAPING']);
+    driftsThenPasses({ edits: { [file]: source } }, ['security/drift', 'security/permissions']);
+  });
+
+  it('reads the offscreen reasons wherever a script creates the document, and refuses reasons it can\'t read', () => {
+    const elsewhere = `${read('js/popup.js')}\nchrome.offscreen.createDocument({ url: 'offscreen.html', reasons: ['CLIPBOARD'], justification: 'x' });\n`;
+    driftsThenPasses({ edits: { 'js/popup.js': elsewhere } }, ['security/drift', 'security/permissions']);
+    const unread = `${read('js/popup.js')}\nconst reasons = ['CLIPBOARD'];\nchrome.offscreen.createDocument({ url: 'offscreen.html', reasons, justification: 'x' });\n`;
+    assert.deepEqual(offscreenReasons(unread), { reasons: [], unread: 1 });
+    assert.ok(check({ edits: { 'js/popup.js': unread } }).problems.some((found) => found.code === 'security/permissions' && /reasons/.test(found.message)));
+  });
+
+  it('fails on any other manifest key changed with no entry, and takes a cosmetic one', () => {
+    const changes = [
+      (manifest) => { manifest.content_scripts = [{ matches: ['<all_urls>'], js: ['js/x.js'] }]; },
+      (manifest) => { manifest.web_accessible_resources = [{ resources: ['newtab.html'], matches: ['<all_urls>'] }]; },
+      (manifest) => { manifest.background.service_worker = 'js/other.js'; },
+      (manifest) => { manifest.sandbox = { pages: ['sandbox.html'] }; manifest.content_security_policy.sandbox = "sandbox allow-scripts; script-src 'self'"; },
+    ];
+    for (const change of changes) {
+      const manifest = structuredClone(MANIFEST);
+      change(manifest);
+      driftsThenPasses({ manifest });
+    }
+    const cosmetic = structuredClone(MANIFEST);
+    Object.assign(cosmetic, { name: 'Another name', short_name: 'x', description: 'Another description', version: '9.9.9', version_name: '9.9.9 beta' });
+    cosmetic.icons = { 16: 'icons/other.png' };
+    assert.deepEqual(check({ manifest: cosmetic }).problems, []);
+  });
+
+  it('reads the CSP as Chromium does: a repeated directive fails, entry or not, and only its first copy counts', () => {
+    const policy = MANIFEST.content_security_policy.extension_pages;
+    for (const first of ['connect-src *', "script-src 'self' 'unsafe-eval'"]) {
+      const manifest = withPolicy(`${first}; ${policy}`);
+      const [name] = first.split(' ');
+      assert.deepEqual(cspOf(manifest)[name], first.split(' ').slice(1).sort());
+      driftsThenPasses({ manifest }, ['security/csp-repeated', 'security/drift']);
+    }
+    // In any case
+    driftsThenPasses({ manifest: withPolicy(`${policy}; CONNECT-SRC 'self'`) }, ['security/csp-repeated', 'security/drift']);
+  });
+
+  it('compares hash and nonce sources with their case, and keywords, schemes and hosts without', () => {
+    assert.deepEqual(cspOf(withPolicy("SCRIPT-SRC 'SELF' 'SHA256-AbC=' 'nonce-XyZ' HTTPS: HTTPS://Example.TEST/Path")), {
+      'script-src': ["'nonce-XyZ'", "'self'", "'sha256-AbC='", 'https:', 'https://example.test/Path'],
+    });
+    const policy = MANIFEST.content_security_policy.extension_pages.replace("script-src 'self'", "script-src 'self' 'sha256-AbC='");
+    const { inputs } = check({ manifest: withPolicy(policy) });
+    const recorded = withEntry(inputs);
+    assert.deepEqual(check({ manifest: withPolicy(policy), edits: { 'security/changes.json': recorded } }).problems, []);
+    const recased = withPolicy(policy.replace("'sha256-AbC='", "'sha256-abc='"));
+    assert.deepEqual(codes(check({ manifest: recased, edits: { 'security/changes.json': recorded } }).problems), ['security/drift']);
+    const keyword = withPolicy(policy.replace("script-src 'self'", "script-src 'SELF'"));
+    assert.deepEqual(check({ manifest: keyword, edits: { 'security/changes.json': recorded } }).problems, []);
   });
 
   it("fails on an entry that doesn't name a part it changes, its issue, or why", () => {
@@ -131,13 +199,52 @@ describe('the security baseline (scripts/build/security-baseline.js)', () => {
   });
 });
 
+describe('security/changes.json only grows (checkHistory)', () => {
+  const current = read('security/changes.json');
+  const parsed = JSON.parse(current);
+  const appended = () => {
+    const changes = structuredClone(parsed);
+    changes.entries.push({ ...changes.entries[0], summary: 'a later entry' });
+    return JSON.stringify(changes);
+  };
+
+  it('takes the file as the base has it, the same with entries appended, and a base with no file', () => {
+    assert.deepEqual(checkHistory({ current, base: current }), []);
+    assert.deepEqual(checkHistory({ current: appended(), base: current }), []);
+    assert.deepEqual(checkHistory({ current, base: null }), []);
+  });
+
+  it('fails on an earlier entry rewritten or taken out', () => {
+    const rewritten = structuredClone(parsed);
+    rewritten.entries[0].digest = '0'.repeat(64);
+    assert.deepEqual(codes(checkHistory({ current: JSON.stringify(rewritten), base: current })), ['security/history']);
+    const removed = { ...parsed, entries: [] };
+    assert.deepEqual(codes(checkHistory({ current: JSON.stringify(removed), base: current })), ['security/history']);
+    assert.deepEqual(codes(checkHistory({ current, base: appended() })), ['security/history']);
+  });
+
+  it("compares with a git ref's copy: in CI it fails when it can't read the ref, and locally it says so", () => {
+    const lines = [];
+    const io = { log: (line) => lines.push(line), error: (line) => lines.push(line) };
+    assert.equal(cli.main(['--history-only', '--base', 'HEAD'], { ...io, env: {} }), 0, lines.join('\n'));
+    lines.length = 0;
+    assert.equal(cli.main(['--history-only', '--base', 'refs/heads/ntn-no-such-ref'], { ...io, env: { CI: 'true' } }), 1, lines.join('\n'));
+    assert.match(lines.join('\n'), /can't read/);
+    lines.length = 0;
+    assert.equal(cli.main(['--history-only', '--base', 'refs/heads/ntn-no-such-ref'], { ...io, env: {} }), 0, lines.join('\n'));
+    assert.match(lines.join('\n'), /can't read/);
+    lines.length = 0;
+    assert.equal(cli.main(['--history-only'], { ...io, env: { CI: 'true' } }), 1, lines.join('\n'));
+  });
+});
+
 describe('security/permissions.json', () => {
   const declared = JSON.parse(read('security/permissions.json'));
 
   it('lists each permission, host and offscreen reason with its issue, warning, request point and rationale, and the manifest asks for exactly those', () => {
     assert.deepEqual(declared.permissions.map((entry) => entry.name).sort(), [...MANIFEST.permissions].sort());
     assert.deepEqual(declared.hosts.map((entry) => entry.pattern).sort(), [...MANIFEST.host_permissions].sort());
-    assert.deepEqual(declared.offscreenReasons.map((entry) => entry.reason), offscreenReasons(read('js/background.js')));
+    assert.deepEqual(declared.offscreenReasons.map((entry) => entry.reason), offscreenReasons(read('js/kernel/composition/worker-network.js')).reasons);
     for (const entry of [...declared.permissions, ...declared.hosts]) {
       assert.ok(Number.isSafeInteger(entry.issue) && entry.rationale.length > 10 && entry.requestedAt === 'install' && entry.required === true, JSON.stringify(entry));
     }
@@ -185,5 +292,41 @@ describe("the extension pages' CSP (manifest.json)", () => {
     assert.deepEqual(sources.filter((source) => source.startsWith('https:')).sort(), [...remote].sort());
     assert.ok(sources.includes('http://localhost:*') && sources.includes('http://127.0.0.1:*'));
     assert.ok(!sources.some((source) => ['https:', 'https://*', '*', 'http:'].includes(source)), sources.join(' '));
+  });
+});
+
+describe("the rows the built page guard inlines (scripts/build/guard.js's checkGuardRows)", () => {
+  const { checkGuardRows } = require('../scripts/build/guard.js');
+  const { fromMap } = require('../scripts/build/package-files.js');
+  /** @type {any} */
+  let match;
+  /** @type {any} */
+  let client;
+  before(async () => {
+    match = await import('../js/kernel/composition/destination-match.js');
+    client = await import('../js/kernel/composition/destinations.js');
+  });
+  const guardWith = (literal) => fromMap({ 'js/network-guard.js': `(function(){var R=${literal};self.x=R})();` }, 'the build');
+  const minified = (json) => json.replace(/"([A-Za-z]+)":/g, '$1:');
+
+  it("takes the validated registry's rows, as the bundler writes them, quoted or not", async () => {
+    const json = JSON.stringify(match.compactRows(match.guardRows(client.DESTINATIONS)));
+    assert.deepEqual(await checkGuardRows(guardWith(json), ROOT), []);
+    assert.deepEqual(await checkGuardRows(guardWith(minified(json)), ROOT), []);
+  });
+
+  it("fails on a row added, changed or taken out, and on rows it can't find once", async () => {
+    const rows = match.guardRows(client.DESTINATIONS);
+    const variants = [
+      [...rows, { ...rows[0], origin: 'https://example.test' }],
+      rows.map((row, i) => (i === 0 ? { ...row, methods: [...row.methods, 'PUT'] } : row)),
+      rows.slice(1),
+    ];
+    for (const variant of variants) {
+      assert.deepEqual(codes(await checkGuardRows(guardWith(minified(JSON.stringify(match.compactRows(variant)))), ROOT)), ['guard/rows']);
+    }
+    const json = minified(JSON.stringify(match.compactRows(rows)));
+    assert.deepEqual(codes(await checkGuardRows(guardWith('null'), ROOT)), ['guard/rows']);
+    assert.deepEqual(codes(await checkGuardRows(guardWith(`[${json},${json}]`), ROOT)), ['guard/rows']);
   });
 });
