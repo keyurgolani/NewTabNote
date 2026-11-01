@@ -18,8 +18,15 @@ const CONFIGURED = { llmProvider: 'openai', llmApiKey: KEY, llmModel: 'gpt-4o-mi
 const CHOSEN_ON = {
   backgroundJobsOffOnce: true, autoTitleEnabled: true, autoTitleInterval: 30, insightsEnabled: true, insightsInterval: 720,
 };
-/** Settings as an earlier version's first run left them, with a provider set up since: both jobs on */
-const EARLIER = { ...CONFIGURED, autoTitleEnabled: true, autoTitleInterval: 15, insightsEnabled: true, insightsInterval: 360 };
+/**
+ * Settings as an earlier version's first run left them, with a provider set up since: both jobs
+ * on, and each last run two days back, so each job has a catch-up due at the next start
+ */
+const TWO_DAYS_AGO = Date.now() - 2 * 24 * 60 * 60 * 1000;
+const EARLIER = {
+  ...CONFIGURED, autoTitleEnabled: true, autoTitleInterval: 15, insightsEnabled: true, insightsInterval: 360,
+  lastAutoTitleRun: TWO_DAYS_AGO, lastInsightsRun: TWO_DAYS_AGO,
+};
 /** An untitled note long enough for both jobs to pick up */
 const UNTITLED_NOTE = { name: 'Untitled', blocks: [{ type: 'text', content: 'Ship the beta to testers on Friday, then read every reply before the next build.' }] };
 

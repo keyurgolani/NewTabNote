@@ -454,10 +454,15 @@ describe('a first run', () => {
 });
 
 describe('an install that ran an earlier version', () => {
-  /** Settings as an earlier version's first run left them, with a provider set up since: both jobs on */
+  /**
+   * Settings as an earlier version's first run left them, with a provider set up since: both jobs
+   * on, and each last run two days back, so each job has a catch-up due at the next start
+   */
+  const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
   const EARLIER = {
     ...CONFIGURED, hasCompletedOnboarding: true,
     autoTitleEnabled: true, autoTitleInterval: 15, insightsEnabled: true, insightsInterval: 360,
+    lastAutoTitleRun: twoDaysAgo, lastInsightsRun: twoDaysAgo,
   };
 
   /** A new tab's start as App runs it: the jobs' one-time switch-off, then each job's own setup */
@@ -481,6 +486,17 @@ describe('an install that ran an earlier version', () => {
     assert.equal(page.notes.autoTitleIntervalId, null, 'titles never started');
     assert.equal(page.notes.insightsIntervalId, null, 'insights never started');
     assert.equal(chats(page), 0, 'nothing went to the provider');
+  });
+
+  it('writes both switches before the marker, so a start cut off in between runs the switch-off again', async () => {
+    const chrome = storedSettings(EARLIER);
+    const page = await openPage({ chrome });
+    const from = chrome.writes().length;
+    await page.env.get('Onboarding').turnBackgroundJobsOffOnce();
+    await settle(60);
+
+    const order = writtenSince(page, from);
+    assert.deepEqual(order, ['setting_autoTitleEnabled', 'setting_insightsEnabled', 'setting_backgroundJobsOffOnce']);
   });
 
   it('turns them off only once: a job turned back on stays on at every later start', async () => {
