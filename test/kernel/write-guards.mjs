@@ -99,8 +99,7 @@ export const WRITE_GUARDS = Object.freeze({
     'NotesManager.runAutoTitle',
     'AIChatController.generateTitleForNewNote',
   ]),
-  // applyRemoteChanges sends it with the revision each change was made from, or null for none,
-  // which counts as 0
+  // applyRemoteChanges sends it with the revision each change was made from, or 0 for none
   applyRemoteContent: guarded('content', 'expectedRevision'),
 
   // Placement: where a note sits and how it's kept

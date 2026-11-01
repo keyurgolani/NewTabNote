@@ -4184,7 +4184,10 @@ export function runContractSuite(fixture) {
             assert.equal((await noteOf('n1'))?.trashed, true);
             return;
           }
-          assert.deepEqual(itemsOf(outcome), [['n1', 'conflict', 'revision-conflict']]);
+          // Both parts conflicted, and the outcome names both
+          assert.deepEqual(itemsOf(outcome), [['n1', 'conflict', 'remote-content-conflict-placement-conflict']]);
+          const [{ outcome: item }] = outcome.items;
+          assert.deepEqual(item.kind === 'conflict' && item.currentRevision, 2);
           assert.deepEqual(outcome.committedIds, []);
           assert.deepEqual(await storedNoteOf('n1'), before);
           assert.equal((await blocksOf('n1'))[0].content, 'Newest');
@@ -4313,7 +4316,7 @@ export function runContractSuite(fixture) {
         const kept = await keptConflicts();
         assert.deepEqual(
           kept.map(record => [record.id, record.noteId, record.scope, record.expected, record.current]),
-          [[`${command.commandId}:old:content`, 'old', 'content', null, 0]],
+          [[`${command.commandId}:old:content`, 'old', 'content', 0, 0]],
         );
         const mine = /** @type {any} */ (kept[0].command);
         assert.deepEqual(
@@ -4326,6 +4329,51 @@ export function runContractSuite(fixture) {
         ]);
         assert.deepEqual(itemsOf(again), [['old', 'committed', 'remote-content-unchanged']]);
         assert.equal((await keptConflicts()).length, 1);
+      });
+
+      it("a trash in a change that replaces a 1.4.x note's text is a conflict, said or not that it was made from version 0, so trash cleanup takes neither text (R131)", async () => {
+        const DAY = 24 * 60 * 60 * 1000;
+        for (const [noteId, base] of /** @type {Array<[string, Record<string, number>]>} */ ([
+          ['old', {}],
+          ['zero', { expectedRevision: 0, expectedPlacementVersion: 0 }],
+        ])) {
+          await seed('notes', [storageNote(noteId, 'Old', NOW)]);
+          await seed('blocks', [
+            { id: `${noteId}-block-0`, canvasId: noteId, type: 'text', content: 'Only copy', order: 0 },
+          ]);
+          const command = cmd('applyRemoteChanges', {
+            changes: [
+              {
+                note: remoteNote(noteId, { name: 'Old', trashed: true, trashedAt: NOW - 500 }),
+                blocks: [textBlock(noteId, 'Their text')],
+                ...base,
+              },
+            ],
+          });
+          const outcome = bulkOf(await kernel.execute(command));
+          assert.deepEqual(itemsOf(outcome), [
+            [noteId, 'committed', 'remote-content-replaced-legacy-placement-conflict'],
+          ]);
+          assert.deepEqual(
+            [Boolean((await noteOf(noteId))?.trashed), (await blocksOf(noteId)).map(block => block.content)],
+            [false, ['Their text']],
+          );
+          // Both texts are kept: the 1.4.x one in the content part's record, and the trash in the placement's
+          const kept = (await keptConflicts()).filter(record => record.noteId === noteId);
+          assert.deepEqual(
+            kept.map(record => [record.id, record.scope, record.expected, record.current]),
+            [
+              [`${command.commandId}:${noteId}:content`, 'content', 0, 0],
+              [`${command.commandId}:${noteId}:placement`, 'placement', 0, 1],
+            ],
+          );
+          assert.equal(/** @type {any} */ (kept[0].command).blocks[0].content, 'Only copy');
+        }
+        // Past the trash's days, cleanup finds nothing to delete, and the 1.4.x text stays
+        ctx.clock.advance(31 * DAY);
+        const cleaned = await run(cmd('runTrashCleanup', {}));
+        assert.deepEqual(cleaned.changedIds, []);
+        assert.equal(JSON.stringify(await keptConflicts()).includes('Only copy'), true);
       });
 
       it('a note that already has the remote title, blocks, and placement changes in nothing, whatever versions the change says, and keeps no conflict', async () => {

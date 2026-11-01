@@ -205,7 +205,7 @@ describe('updateSearchIndex', () => {
 });
 
 describe('applyRemoteContent', () => {
-  it("is the conflict, writing nothing, where there's no `conflicts` to keep the 1.4.x text a change that says no version would replace (R131)", async () => {
+  it("is the conflict, writing nothing, where there's no `conflicts` to keep the 1.4.x text a change made from version 0 would replace (R131)", async () => {
     /** @type {UseCaseContext} */
     const context = {
       adapter: createMemoryAdapter(),
@@ -220,7 +220,7 @@ describe('applyRemoteContent', () => {
       noteId: 'old',
       note: { id: 'old', name: 'Theirs' },
       blocks: [],
-      expectedRevision: null,
+      expectedRevision: 0,
     };
     const work = /** @type {Work} */ (remoteCommands.applyRemoteContent(command, context));
     const [unit] = work.effect.kind === 'units' ? work.effect.units : [];
