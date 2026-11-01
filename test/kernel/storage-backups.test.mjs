@@ -794,7 +794,7 @@ describe("what sync uploads, and the conflicts Export JSON keeps, on #17's adapt
     const state = await kernel.query({ type: 'getSyncData' });
     adapter.close();
     assert.equal(state.kind, 'ready', JSON.stringify(state));
-    const frozen = await storageOf(of, { tag: 'v1.4.1' });
+    const frozen = await release141(of);
     assert.deepEqual(
       { ...legacyEnv.plain(state.kind === 'ready' && state.data), exportedAt: 0 },
       { ...legacyEnv.plain(await frozen.exportAll()), exportedAt: 0 },
@@ -886,7 +886,7 @@ describe("what sync uploads, and the conflicts Export JSON keeps, on #17's adapt
     assert.equal(file.conflicts.length, 1);
     const there = profile();
     profiles.push(there);
-    const frozen = await storageOf(there, { tag: 'v1.4.1' });
+    const frozen = await release141(there);
     const result = await frozen.importData(structuredClone(file), 'merge');
     frozen.db.close();
     assert.deepEqual(
