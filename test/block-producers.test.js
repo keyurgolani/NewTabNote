@@ -11,7 +11,9 @@
 // JSON note import; AI chat's insert and new note; a block's inline AI action; templates, in
 // the editor and the kernel; the onboarding note; a block dropped on the sidebar; background
 // capture. Sync inbound has no live path, in 1.4.1 or now: SyncService._applyRemoteData skips
-// when Storage has no importAll (#17 PR 4b), which the last test holds.
+// when Storage has no importAll (#17 PR 4b), which the next-to-last test holds. The kernel's
+// applyRemoteChanges, which #19's sync will call, takes whole remote records under the opaque
+// rule, as the JSON import does, which the last test holds.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -530,5 +532,38 @@ describe('sync inbound (#14 slice 2)', () => {
     const env = createLegacyEnv();
     env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js');
     assert.equal(typeof env.get('Storage').importAll, 'undefined');
+  });
+
+  it("the kernel's applyRemoteChanges, which #19's sync will call (#17 PR 4b): every block is kept as the remote holds it, in each state decode reads", async () => {
+    const { createKernel } = await kernelModule('js/kernel/core/application/kernel.js');
+    const { createMemoryAdapter } = await kernelModule('js/kernel/core/memory/adapter.js');
+    const { createBaselinePolicy } = await kernelModule('js/kernel/core/ports/policy.js');
+    const { decodeBlock } = await kernelModule('js/kernel/core/blocks/index.js');
+    const { CALLERS, testClock, testIds } = await kernelModule('test/kernel/support.mjs');
+    const kernel = createKernel({
+      adapter: createMemoryAdapter(),
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+    });
+    const records = [
+      { id: 'x1', canvasId: 'r1', type: 'text', content: '<b>kept</b>', order: 0 },
+      { id: 'x2', canvasId: 'r1', type: 'text', content: 'v1', schemaVersion: 1, order: 1 },
+      { id: 'x3', canvasId: 'r1', type: 'gadget', content: 'unknown', order: 2 },
+      { id: 'x4', canvasId: 'r1', type: 'text', content: 'newer', schemaVersion: 7, order: 3 },
+      { id: 'x5', canvasId: 'r1', type: 'text', content: { not: 'text' }, order: 4 },
+      { id: 'x6', canvasId: 'r1', type: 'todo', content: 'x', checked: true, extra: { kept: 1 }, order: 5 },
+    ];
+    assert.deepEqual(records.map(r => decodeBlock(r).state), ['upcast', 'current', 'unknown', 'newer', 'invalid', 'upcast']);
+    const outcome = await kernel.execute({
+      type: 'applyRemoteChanges',
+      commandId: 'c1',
+      changes: [{ note: { id: 'r1', name: 'From afar' }, blocks: records }],
+    });
+    assert.equal(outcome.kind, 'bulk', JSON.stringify(outcome));
+    const state = await kernel.query({ type: 'getNoteBlocks', noteId: 'r1' });
+    const strip = ({ createdAt, updatedAt, ...rest }) => rest;
+    assert.deepEqual(plain(state.data.map(strip)), records.map(strip));
   });
 });
