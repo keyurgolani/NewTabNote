@@ -324,7 +324,8 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(entries.sidepanel.start.js, { raw: 112 * KIB, gzip: 40 * KIB });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     assert.deepEqual([BUDGETS.heap.limitMiB, BUDGETS.heap.tolerancePct], [4.45, 3]);
-    assert.deepEqual([BUDGETS.timing.mode, BUDGETS.heap.mode], ['report', 'report']);
+    // Timing gates the perf job since 14 valid CI runs; heap reports until the owner answers on its row
+    assert.deepEqual([BUDGETS.timing.mode, BUDGETS.heap.mode], ['gate', 'report']);
     assert.equal(BUDGETS.reference.packageDigest, '50d8ddc57945dc129ddabda2304f45b9354db79eff608017da49d5b845ab554d');
   });
 
@@ -339,6 +340,8 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
 });
 
 describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
+  // The shipped rows with both set to report, for the cases that read a summary without failing
+  const REPORTING = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'report' }, heap: { ...BUDGETS.heap, mode: 'report' } };
   const ratio = (median, extra = {}) => ({ median, q1: median - 0.01, q3: median + 0.01, values: Array(12).fill(median), ...extra });
   // The candidate's ratio to the first 1.4.0 copy alone is set apart from its ratio to both, so
   // a summary that read the first would show
@@ -366,15 +369,15 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
 
   it('says valid, pass or fail for timing and heap, and fails nothing while the rows report', () => {
     // Against the first copy alone the candidate is +25%: the summary reads both
-    const passing = gateReport(probe(1.01, 1.05, 4.4, { first: 1.25 }), BUDGETS);
+    const passing = gateReport(probe(1.01, 1.05, 4.4, { first: 1.25 }), REPORTING);
     assert.deepEqual(passing.verdicts, [{ profile: 'typical', valid: true, timing: 'pass', heap: 'pass', problems: [] }]);
     assert.equal(passing.failed, false);
     assert.match(passing.markdown, /\| typical \| 12 \| \+1\.0% .* \| yes \| \+5\.0% .* \| pass \| 4\.40 MiB \| pass \|/);
     // Against the first copy alone it's +1%: the summary reads both
-    const failing = gateReport(probe(1.01, 1.09, 4.7, { first: 1.01 }), BUDGETS);
+    const failing = gateReport(probe(1.01, 1.09, 4.7, { first: 1.01 }), REPORTING);
     assert.deepEqual(failing.verdicts, [{ profile: 'typical', valid: true, timing: 'fail', heap: 'fail', problems: [] }]);
     assert.equal(failing.failed, false, 'report-only rows fail nothing');
-    assert.deepEqual(gateReport(probe(1.09, 1.0, 4.4), BUDGETS).verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'pass', problems: [] });
+    assert.deepEqual(gateReport(probe(1.09, 1.0, 4.4), REPORTING).verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'pass', problems: [] });
   });
 
   it('calls a profile invalid when a round failed, the probe reported a problem, or rounds fall short', () => {
@@ -385,12 +388,28 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
       [{ rounds: 9 }, '9 rounds, fewer than the 12 build/budgets.json takes'],
     ];
     for (const [options, reason] of cases) {
-      const reported = gateReport(probe(1.01, 1.05, 4.4, options), BUDGETS);
+      const reported = gateReport(probe(1.01, 1.05, 4.4, options), REPORTING);
       assert.deepEqual(reported.verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'invalid', problems: [reason] }, reason);
       assert.equal(reported.failed, false, 'report mode fails nothing');
       assert.ok(reported.markdown.includes(`- typical: ${reason}`), reason);
       assert.equal(gateReport(probe(1.01, 1.05, 4.4, options), gated).failed, true, reason);
     }
+  });
+
+  it("fails the job on build/budgets.json's own rows: timing over its 7% fails, and heap over its row only reports", () => {
+    // Timing is a gate as shipped: a candidate 9% slower than both 1.4.0 runs fails the job
+    const slow = gateReport(probe(1.01, 1.09, 4.4), BUDGETS);
+    assert.equal(slow.verdicts[0].timing, 'fail');
+    assert.equal(slow.failed, true);
+    // An invalid run fails it too: a gate can't pass on a run it can't read
+    assert.equal(gateReport(probe(1.09, 1.0, 4.4), BUDGETS).failed, true);
+    // Heap reports: over its row, it's written as a fail and fails nothing
+    const heavy = gateReport(probe(1.01, 1.05, 4.7), BUDGETS);
+    assert.deepEqual([heavy.verdicts[0].timing, heavy.verdicts[0].heap, heavy.failed], ['pass', 'fail', false]);
+    // Within both rows, nothing fails
+    assert.equal(gateReport(probe(1.01, 1.05, 4.4), BUDGETS).failed, false);
+    // The same slow candidate with timing back on report passes the job
+    assert.equal(gateReport(probe(1.01, 1.09, 4.4), REPORTING).failed, false);
   });
 
   it('fails once a row is a gate', () => {
@@ -408,7 +427,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     const typical = empty.timing.profiles.typical;
     typical.packages.candidate = { ...typical.packages.candidate, interactionReadyMs: null, heapBytes: null };
     typical.ratios.candidate = { rounds: 0, interactionReady: null, heap: null, againstBoth: { rounds: 0, interactionReady: null, heap: null } };
-    const reported = gateReport(empty, BUDGETS);
+    const reported = gateReport(empty, REPORTING);
     assert.equal(reported.failed, false, 'report mode still summarizes');
     assert.equal(reported.verdicts[0].timing, 'invalid');
     assert.equal(reported.verdicts[0].heap, 'invalid');
@@ -419,13 +438,13 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     // 1.4.0 measured nothing either, and a run with no pair at all
     const none = probe(1.01, 1.05, 4.4);
     none.timing.profiles.typical.ratios = {};
-    const unpaired = gateReport(none, BUDGETS);
+    const unpaired = gateReport(none, REPORTING);
     assert.equal(unpaired.failed, false);
     assert.deepEqual(unpaired.verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'invalid', problems: ['the run has no 1.4.0 pair and candidate'] });
     assert.equal(gateReport(none, gated).failed, true);
   });
 
-  it("writes the summary when the probe exits 1, and stays out of pr-gate's needs while the rows report", () => {
+  it("writes the summary when the probe exits 1, and stays out of pr-gate's needs and the rulesets, so a gate row blocks no merge", () => {
     const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/perf.yml'), 'utf8');
     const step = name => workflow.slice(workflow.indexOf(`- name: ${name}`), workflow.indexOf('- name:', workflow.indexOf(`- name: ${name}`) + 1));
     // The runner's shell has -e: the probe's exit is caught with ||, not read after the command
@@ -439,6 +458,13 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.match(step('Summarize'), /node scripts\/perf\/gate-report\.js .* \| tee -a "\$GITHUB_STEP_SUMMARY"/);
     const gate = fs.readFileSync(path.join(ROOT, '.github/workflows/pr-checks.yml'), 'utf8');
     assert.match(gate, /needs: \[unit, typecheck, kernel, build, extension\]/, "timing blocks a merge only once pr-gate needs it, or a ruleset requires it: the owner's call");
+    assert.ok(!/uses: \.\/\.github\/workflows\/perf\.yml|workflow_run/.test(gate), "pr-gate doesn't call or wait on the perf workflow");
+    // Every ruleset that requires a check requires pr-gate alone, not perf
+    for (const name of fs.readdirSync(path.join(ROOT, '.github/rulesets'))) {
+      const ruleset = JSON.parse(fs.readFileSync(path.join(ROOT, '.github/rulesets', name), 'utf8'));
+      const contexts = (ruleset.rules || []).filter(rule => rule.type === 'required_status_checks').flatMap(rule => rule.parameters.required_status_checks.map(check => check.context));
+      assert.ok(contexts.every(context => context === 'pr-gate'), `${name} requires ${contexts.join(', ')}`);
+    }
   });
 
   it('lets npm run perf:probe --baseline read build/budgets.json', () => {
