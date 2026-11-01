@@ -2,11 +2,10 @@
  * Close-time drafts at a page's start (#33, the stack's close-time PR): the drafts in the page's
  * localStorage, read through the page's store (closeDraftStore, on the storage its root hands
  * in, so nothing here touches a browser API), each applied through the page's kernel
- * (applyCloseDrafts), and the command that applies one (applyCloseDraft). The new tab loads this
- * module at its start, and Popup and Side Panel only when their localStorage holds a draft or
- * 1.4.3's catch-up key (composition/close-drafts.js, the lead's option 1), through
- * close-drafts-chunk.js, the `close-drafts-chunk` chunk their budget rows name as lazy, so their
- * start loads none of it.
+ * (applyCloseDrafts), and the command that applies one (applyCloseDraft). Each page loads this
+ * module only when its localStorage gives it work, a draft or 1.4.3's catch-up key, and on the
+ * new tab an untold list too (composition/close-drafts.js, the lead's option 1), through
+ * close-drafts-chunk.js, the `close-drafts-chunk` chunk, so no page's start loads any of it.
  *
  * applyCloseDraft is one transaction over the notes and what they hold, as 1.4.3's applyOne is
  * on IndexedDB (the lead's Q3). Its unit reads the draft's note and versions, the stored copies

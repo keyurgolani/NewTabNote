@@ -148,7 +148,7 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     assert.equal(pages.build.modulePreload.polyfill, false);
   });
 
-  it("preloads nothing beside close-drafts-chunk, which Popup and Side Panel import on a start that finds a draft, and every other import's own list (#33, the lead's trim 2)", () => {
+  it("preloads nothing beside close-drafts-chunk, which the pages import on a start that finds a draft, and every other import's own list (#33, the lead's trim 2)", () => {
     const { resolveDependencies } = config.pagesConfig(passOptions()).build.modulePreload;
     const deps = ['assets/close-drafts-BkxcNLcj.js', 'assets/checks-RYHEq65f.js', 'assets/host-Bn7ueUNG.js'];
     for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/close-drafts-on-demand-q82KhsV5.js']) {

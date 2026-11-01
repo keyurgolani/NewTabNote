@@ -10,6 +10,9 @@
  * - CATCH_UP_KEY: what a 1.4.3 Popup or Side Panel start left for the next 1.4.3 new tab's
  *   catch-up, which the stack's first start reads and then removes (QA4)
  * - DRAFTS_LOCK: the Web Lock an apply holds, and every delete for good
+ *
+ * A draft's recovered note's id is here too (recoveredIdOf), so a page can tell which notes a
+ * draft is for without loading the rules (close-draft.js re-exports it).
  */
 
 export const DRAFT_PREFIX = 'ntn-close-draft:';
@@ -17,3 +20,11 @@ export const DRAFTS_LOCK = 'ntn-close-drafts';
 export const UNTOLD_KEY = 'ntn-recovered-untold';
 export const SAVED_UNTOLD_KEY = 'ntn-saved-untold';
 export const CATCH_UP_KEY = 'ntn-start-catch-up:notes';
+
+/**
+ * The id of a draft's recovered note, the same at every start, so rule 0 finds the one an
+ * earlier start made, a 1.4.3 start's included
+ * @param {{id: string}} draft
+ * @returns {string}
+ */
+export const recoveredIdOf = draft => `${draft.id}-recovered`;
