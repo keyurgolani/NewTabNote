@@ -513,7 +513,6 @@ describe('with Settings open, keys pressed outside the note leave it and what is
     });
     env.load(...FILES);
     env.global.navigator.platform = 'MacIntel';
-    await env.get('Storage').init();
     const documentClient = await startEditorClient(env);
     const doc = env.document;
     const at = { body: doc.body, headerButton: add(add(doc.body, 'header'), 'button', { id: 'settings-btn' }) };

@@ -49,7 +49,6 @@ async function noteWith(contents) {
   env.load(...FILES);
   // The editor's URL check, as a page has it
   env.global.URL = URL;
-  await env.get('Storage').init();
   await startEditorClient(env);
 
   const doc = env.document;
