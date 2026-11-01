@@ -98,6 +98,14 @@ export const snapshotCommands = {
         // The note as stored now, the editor's last save included, becomes a snapshot first, as
         // 1.4.x took one before it reverted
         const stored = inBlockOrder(await tx.getAllByIndex('blocks', 'canvasId', noteId));
+        // A block stored under another note stays that note's, so a snapshot that names one is
+        // refused rather than taking it (R131)
+        const own = new Set(stored.map(block => block.id));
+        for (const block of records) {
+          if (!own.has(block.id) && (await tx.getKey('blocks', block.id)) !== undefined) {
+            return rejected('validation', 'block-of-another-note');
+          }
+        }
         const title = typeof note.name === 'string' && note.name ? note.name : 'Untitled';
         const pre = snapshotRecord({
           id: preSnapshotId,

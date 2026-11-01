@@ -44,6 +44,10 @@ function spyTx(log, records) {
       log.push(`getAllKeys ${store}`);
       return Object.keys(records[store] || {}).sort();
     },
+    getKey: async (store, key) => {
+      log.push(`getKey ${store} ${key}`);
+      return records[store]?.[key] ? key : undefined;
+    },
     getAllByIndex: async (store, index, value) => {
       log.push(`getAllByIndex ${store} ${index}`);
       return all(store).filter(record => record[index] === value);
@@ -112,7 +116,7 @@ function unitAtATime(inner, between) {
 }
 
 describe('saveNoteContent', () => {
-  it('puts the blocks before it reads anything, in the task that runs it, so a page-hide flush stores them', async () => {
+  it("puts the blocks before it awaits anything, in the task that runs it, so a page-hide flush stores them, after only the reads of its blocks: the note's, which the change log takes its ops from, and each block's key, for a block another note holds (#17 PR 4c, R131)", async () => {
     /** @type {UseCaseContext} */
     const context = {
       adapter: createMemoryAdapter(),
@@ -128,13 +132,22 @@ describe('saveNoteContent', () => {
     /** @type {string[]} */
     const log = [];
     const running = unit.run(spyTx(log, { notes: { n1: { id: 'n1', name: 'Plan' } } }));
-    // Nothing is awaited before the puts: they're in the log as soon as the unit starts
-    assert.deepEqual(log, ['put blocks b1', 'put blocks b2', 'get notes n1']);
+    // Nothing is awaited before the puts: they're in the log as soon as the unit starts, after
+    // only the reads of the note's blocks and of each block's key, which go out first and
+    // aren't awaited (#17 PR 4c, R131)
+    assert.deepEqual(log, [
+      'getAllByIndex blocks canvasId',
+      'getKey blocks b1',
+      'getKey blocks b2',
+      'put blocks b1',
+      'put blocks b2',
+      'get notes n1',
+    ]);
     await running;
-    assert.deepEqual(log.slice(3), ['put notes n1']);
+    assert.deepEqual(log.slice(6), ['put notes n1']);
   });
 
-  it('with an expected revision, reads the note and checks its versions before it puts anything (#17 PR 2a)', async () => {
+  it('with an expected revision, reads the note and checks its versions before it puts anything, after the reads of its blocks (#17 PR 2a, 4c, R131)', async () => {
     /** @type {UseCaseContext} */
     const context = {
       adapter: createMemoryAdapter(),
@@ -155,7 +168,16 @@ describe('saveNoteContent', () => {
     /** @type {string[]} */
     const log = [];
     await unit.run(spyTx(log, { notes: { n1: { id: 'n1', name: 'Plan' } } }));
-    assert.deepEqual(log, ['get notes n1', 'versions notes n1', 'put blocks b1', 'put blocks b2', 'put notes n1']);
+    assert.deepEqual(log, [
+      'getAllByIndex blocks canvasId',
+      'getKey blocks b1',
+      'getKey blocks b2',
+      'get notes n1',
+      'versions notes n1',
+      'put blocks b1',
+      'put blocks b2',
+      'put notes n1',
+    ]);
   });
 });
 
@@ -355,7 +377,7 @@ describe('units an adapter runs again', () => {
     const { log } = await runUnits(work, { notes: { 'their-daily': today } });
     // A Daily Note no index names is found by a scan, and gets its key and its entry (#17 PR 3b),
     // each going by logical 3's kept answer while its batches run, which this one has none of
-    // (#17 PR 4a, F10)
+    // (#17 PR 4a, F10). The capture reads its block's id before it puts the block (R131).
     assert.deepEqual(log, [
       'dailyAnswer',
       `get dailyIndex ${day}`,
@@ -363,6 +385,7 @@ describe('units an adapter runs again', () => {
       'has dailyIndex',
       'put notes their-daily',
       `put dailyIndex ${day}`,
+      'get blocks k1',
       'put blocks k1',
     ]);
     assert.deepEqual(work.done().changedIds, ['their-daily']);

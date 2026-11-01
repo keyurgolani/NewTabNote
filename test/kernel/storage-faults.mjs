@@ -135,6 +135,7 @@ export function faultyFactory(real) {
         get: read('get'),
         getAll: read('getAll'),
         getAllKeys: read('getAllKeys'),
+        getKey: read('getKey'),
         openCursor: read('openCursor'),
       };
     };

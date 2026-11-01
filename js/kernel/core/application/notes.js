@@ -454,6 +454,10 @@ export const noteCommands = {
           return rejected('not-found', 'folder-not-found');
         }
         if (await tx.get('notes', noteId)) return rejected('validation', 'note-exists');
+        // A new note holds no block yet, so a block id that's stored is another note's, which
+        // a create never takes from it, whatever note the block names (R131)
+        const stored = await Promise.all(records.map(block => tx.getKey('blocks', block.id)));
+        if (stored.some(key => key !== undefined)) return rejected('validation', 'block-of-another-note');
         tx.put('notes', note);
         tx.put('searchIndex', newSearchEntry(note, now));
         for (const block of records) tx.put('blocks', block);
@@ -671,6 +675,15 @@ export const noteCommands = {
       async run(tx) {
         // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
         titleKept = false;
+        // The note's blocks as stored, read once ahead of the puts, so the change log's ops name
+        // only the blocks this save changed, where every save puts every block (#17 PR 4c), and
+        // whether each block it puts is stored at all, by its key alone, so a block another note
+        // holds is refused rather than taken from it (R131). Both are issued, not awaited, so
+        // the puts still go out before anything is awaited, and a failure of either is the
+        // transaction's, which the note's read below answers.
+        const own = tx.getAllByIndex('blocks', 'canvasId', noteId);
+        const stored = records.map(block => tx.getKey('blocks', block.id));
+        for (const read of [own, ...stored]) read.catch(() => undefined);
         // Without an expected revision, the block puts go out before anything is awaited, as in
         // Storage.saveNoteWithBlocks, so a page-hide flush still stores them if the page goes
         // before the read returns. With one, the revision is checked first, so a conflict
@@ -682,6 +695,13 @@ export const noteCommands = {
         if (!note) return noteNotFound();
         const stale = versionConflict(tx, noteId, { expectedRevision });
         if (stale) return stale;
+        // A block stored under another note stays that note's: the save is refused, and the
+        // puts that went out with it go with the transaction
+        const mine = new Set((await own).map(block => block.id));
+        const keys = await Promise.all(stored);
+        if (records.some((block, index) => keys[index] !== undefined && !mine.has(block.id))) {
+          return rejected('validation', 'block-of-another-note');
+        }
         if (checked) for (const block of records) tx.put('blocks', block);
         /** @type {NoteRecord} */
         const next = { ...note, updatedAt: now };
@@ -914,6 +934,12 @@ export const noteCommands = {
       {
         stores: ['blocks'],
         async run(tx) {
+          // A capture adds a block under an id of its own, so one that's stored is refused, as
+          // insertBlocks refuses it: today's Daily Note's own, or another note's, which a capture
+          // never takes (R131). The record says which note holds it, where its key alone wouldn't.
+          const stored = await tx.get('blocks', blockId);
+          if (stored && stored.canvasId !== dailyId) return rejected('validation', 'block-of-another-note');
+          if (stored) return rejected('validation', 'duplicate-block');
           // A new Daily Note starts with the Daily Note template's blocks, as in Storage.ensureDailyNote
           if (created) {
             const copies = await dailyTemplateBlocks(tx, templateId, {
