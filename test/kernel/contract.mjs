@@ -3732,6 +3732,8 @@ export function runContractSuite(fixture) {
 
       it('every catalog command is one this suite runs', () => {
         assert.deepEqual([...COMMAND_TYPES].sort(), [
+          // #33's two run on both of this suite's adapters in close-drafts.test.mjs and records-catch-up.test.mjs
+          'applyCloseDraft',
           'applyDerivedTitle',
           'applyRemoteChanges',
           'applyRemoteContent',
@@ -3739,6 +3741,7 @@ export function runContractSuite(fixture) {
           'archiveNote',
           'attachInsights',
           'captureToDailyNote',
+          'catchUpNoteRecords',
           'completeOnboarding',
           'convertNoteToTemplate',
           'convertTemplateToNote',
