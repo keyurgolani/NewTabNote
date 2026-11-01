@@ -18,7 +18,7 @@ import { createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
 import { CONSEQUENCE, INCIDENT, PAGE, REASON, REBUILD, RESOLVED } from '../../js/trust/ui/copy.js';
 import { attentionText, durationText, fill, fixedLine, problemsOf, runResult } from '../../js/trust/ui/model.js';
-import { mountRecoveryPage } from '../../js/trust/ui/view.js';
+import { FOLLOW_MS, mountRecoveryPage } from '../../js/trust/ui/view.js';
 import { PROVIDERS } from '../../js/trust/core/providers/catalog.js';
 import { REMEDIATIONS, searchEntryOf } from '../../js/trust/core/remediation/catalog.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
@@ -95,11 +95,11 @@ function pageDocument() {
  * meet one for real: a run that failed, or a check that couldn't run. An undefined entry is
  * the root's own answer, and a function is called with the root's call and answers what it
  * returns, as a client that stops waiting while the call goes on. The page waits 10 ms where it
- * would wait to read a run again.
+ * would wait to read a run again, and reads the time from `now` when one is given.
  * @param {RecoveryRoot} root
- * @param {{hash?: string, answers?: Record<string, unknown[]>}} [options]
+ * @param {{hash?: string, answers?: Record<string, unknown[]>, now?: () => number}} [options]
  */
-function openPage(root, { hash = '', answers = {} } = {}) {
+function openPage(root, { hash = '', answers = {}, now } = {}) {
   /** @type {string[]} */
   const calls = [];
   /**
@@ -131,6 +131,7 @@ function openPage(root, { hash = '', answers = {} } = {}) {
       reloads += 1;
     },
     wait: () => new Promise(resolve => setTimeout(resolve, 10)),
+    ...(now ? { now } : {}),
   });
   return { doc, calls, ready, location, reloads: () => reloads };
 }
@@ -140,6 +141,15 @@ const text = element => (element ? String(element.textContent).replace(/\s+/g, '
 
 /** @param {any} doc */
 const headline = doc => text(doc.getElementById('trust-h1'));
+
+/**
+ * That `actual` is `expected` itself. Elements are compared this way, not with assert.equal,
+ * which on a failure prints a diff of both elements' whole documents and can spin on it.
+ * @param {unknown} actual
+ * @param {unknown} expected
+ * @param {string} message - what a failure means
+ */
+const same = (actual, expected, message) => assert.ok(actual === expected, message);
 
 /** `words` as a pattern that matches them as they are */
 const escape = (/** @type {string} */ words) => words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -366,7 +376,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       // No raw error text: the words are the page's own
       assert.doesNotMatch(text(page.doc.getElementById('trust-main')), /open-failed|UnavailableError|storage/);
       const reload = page.doc.getElementById('trust-reload');
-      assert.equal(page.doc.activeElement, reload);
+      same(page.doc.activeElement, reload, "Reload doesn't have focus");
       reload.click();
       assert.equal(page.reloads(), 1);
       assert.deepEqual(page.calls, []);
@@ -392,7 +402,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       await page.ready;
       assert.equal(headline(page.doc), PAGE.outOfSpace);
       assert.equal(text(page.doc.getElementById('trust-main')), `${PAGE.outOfSpace}${PAGE.outOfSpaceBody}${PAGE.reloadKeeps}${PAGE.reload}`);
-      assert.equal(page.doc.activeElement, page.doc.getElementById('trust-reload'));
+      same(page.doc.activeElement, page.doc.getElementById('trust-reload'), "Reload doesn't have focus");
       assert.deepEqual(page.calls, []);
       assert.equal(await trustDatabaseMade(context), false);
     } finally {
@@ -453,7 +463,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       const impact = panel().querySelector('table.trust-impact');
       assert.deepEqual(impact.querySelectorAll('td').map(text), ['3', '0', '0']);
       // The panel's heading takes focus as it opens
-      assert.equal(page.doc.activeElement, panel().querySelector('h4'));
+      same(page.doc.activeElement, panel().querySelector('h4'), "the panel's heading doesn't have focus");
 
       control(page.doc, REBUILD.confirm, panel()).click();
       const fixed = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'resolved');
@@ -463,7 +473,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       // s5's line under the resolved title, and with nothing left open, nothing needs recovering
       assert.match(text(fixed()), /Fixed at \d{1,2}:\d{2} [AP]M, when a check passed after the rebuild\./);
       assert.equal(headline(page.doc), `${PAGE.recovery}: ${PAGE.nothingToRecover}`);
-      assert.equal(panel(), null);
+      same(panel(), null, 'the repair panel is still open');
       assert.deepEqual(await counts(tab.env.indexedDB), { notes: 3, entries: 3 });
       // The repair is listed, done and checked
       const runs = page.doc.querySelector('table.trust-runs');
@@ -550,7 +560,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       assert.match(text(panel()), /^Rebuild the search index\s*Failed to rebuild the search index: it stopped before it finished\. Tried at /);
       assert.match(text(panel()), new RegExp(escape(REBUILD.unchanged)));
       // The run the failure stood in for still waits for its confirmation, so it isn't listed
-      assert.equal(page.doc.querySelector('table.trust-runs'), null);
+      same(page.doc.querySelector('table.trust-runs'), null, 'the run is listed');
       // The steps say where it stopped, in words as well as shapes
       assert.deepEqual(panel().querySelector('ol.trust-steps').querySelectorAll('li').map((/** @type {any} */ li) => li.getAttribute('data-step')), ['done', 'failed', 'todo']);
       control(page.doc, REBUILD.tryAgain, panel()).click();
@@ -609,7 +619,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       assert.equal(headline(page.doc), PAGE.cantConfirm);
       assert.match(text(page.doc.getElementById('trust-main')), new RegExp(escape(PAGE.readFailed)));
       // Reload takes focus, as in the other error states
-      assert.equal(page.doc.activeElement, page.doc.getElementById('trust-reload'));
+      same(page.doc.activeElement, page.doc.getElementById('trust-reload'), "Reload doesn't have focus");
       // It stopped at the failed read: no check ran
       assert.equal(page.calls.includes('trust.verify'), false);
     } finally {
@@ -672,9 +682,9 @@ describe("recovery.html after #115's design review", () => {
   /**
    * The page at the Recovery Center on a profile with `count` notes whose index lost its entries,
    * and a search pipeline as `pipeline` gives it
-   * @param {{count?: number, stuck?: boolean, whole?: boolean, behindOnce?: boolean, answers?: Record<string, unknown[]>}} [options]
+   * @param {{count?: number, stuck?: boolean, whole?: boolean, behindOnce?: boolean, answers?: Record<string, unknown[]>, now?: () => number}} [options]
    */
-  async function recoveryOn({ count = 2, stuck = false, whole = false, behindOnce = false, answers = {} } = {}) {
+  async function recoveryOn({ count = 2, stuck = false, whole = false, behindOnce = false, answers = {}, now } = {}) {
     const tab = await profileWithStaleIndex(count);
     if (whole) {
       // Every entry as the new tab's indexer writes it
@@ -697,7 +707,7 @@ describe("recovery.html after #115's design review", () => {
       commitLog: /** @type {any} */ ({ head: async () => HEAD }),
     };
     const root = createRecoveryRoot({ host: hostOf(context, behindOnce ? once : searchPipeline(tab.env.indexedDB, { stuck })) });
-    const page = openPage(root, { hash: '#recovery', answers });
+    const page = openPage(root, { hash: '#recovery', answers, now });
     await page.ready;
     const card = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'open');
     await until(card, 'the lagging problem');
@@ -772,7 +782,7 @@ describe("recovery.html after #115's design review", () => {
       control(run.page.doc, REBUILD.action, run.card()).click();
       const fixed = () => run.page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'resolved');
       await until(fixed, 'Fixed just now');
-      assert.equal(run.panel(), null);
+      same(run.panel(), null, 'the repair panel is still open');
       const runs = run.page.doc.querySelector('table.trust-runs');
       assert.deepEqual(runs.querySelectorAll('td').slice(0, 2).map(text), [REBUILD.action, PAGE.nothingToDoRun]);
     } finally {
@@ -933,10 +943,123 @@ describe("recovery.html after #115's design review", () => {
       control(page.page.doc, REBUILD.confirm, page.panel()).click();
       await until(() => page.panel() && page.panel().getAttribute('data-state') === 'failed', 'the stand-in failure');
       control(page.page.doc, REBUILD.tryAgain, page.panel()).click();
-      // Its own run, which waits for a confirmation it never got: the page takes the preview again
-      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'awaiting', 'the preview again');
+      // Its own run waits for a confirmation the page can't send, so the page offers the preview again
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'preview-missed', 'Preview again');
+      assert.match(text(page.panel()), new RegExp(escape(REBUILD.previewMissed)));
       assert.doesNotMatch(text(page.page.doc.getElementById('trust-main')), new RegExp(escape(REASON['remediation-running'])));
+      assert.equal(page.page.calls.filter(call => call === 'recovery.run').length, 3);
+      control(page.page.doc, REBUILD.previewAgain, page.panel()).click();
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'awaiting', 'the preview again');
       assert.equal(page.page.calls.filter(call => call === 'recovery.run').length, 4);
+    } finally {
+      page.close();
+    }
+  });
+
+  it('knows its own run when Try again comes before the read after a failure lands', async () => {
+    // As above, with the read after the failure (trust.report's third call) 400 ms slow, as a
+    // busy machine's would be, and Try again pressed as soon as Failed shows
+    const failed = { kind: 'remediation', state: 'failed', outcome: 'apply-failed', runId: null };
+    const running = { kind: 'unavailable', cause: 'coordinator', code: 'remediation-running', retryable: true };
+    const slow = (/** @type {() => Promise<any>} */ call) => new Promise(resolve => setTimeout(resolve, 400)).then(call);
+    const page = await recoveryOn({ answers: { 'recovery.run': [undefined, failed, running], 'trust.report': [undefined, undefined, slow] } });
+    try {
+      control(page.page.doc, REBUILD.action, page.card()).click();
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'awaiting', 'the preview');
+      control(page.page.doc, REBUILD.confirm, page.panel()).click();
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'failed', 'the stand-in failure');
+      control(page.page.doc, REBUILD.tryAgain, page.panel()).click();
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'preview-missed', 'Preview again');
+      assert.doesNotMatch(text(page.page.doc.getElementById('trust-main')), new RegExp(escape(REASON['remediation-running'])));
+      // The slow read lands after, and leaves the panel as it is
+      await new Promise(resolve => setTimeout(resolve, 450));
+      assert.equal(page.panel().getAttribute('data-state'), 'preview-missed');
+    } finally {
+      page.close();
+    }
+  });
+
+  it('offers a preview it followed again, rather than starting another run that leaves one more waiting', async () => {
+    // The preview's call ends unknown while the preview runs on, as a client gives up at its deadline
+    const late = (/** @type {() => Promise<any>} */ call) => (call(), { kind: 'unknown', code: 'deadline-exceeded', commandId: 'x' });
+    const page = await recoveryOn({ answers: { 'recovery.run': [late, late, late] } });
+    try {
+      control(page.page.doc, REBUILD.action, page.card()).click();
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'preview-missed', 'Preview again');
+      assert.match(text(page.panel()), new RegExp(escape(REBUILD.previewMissed)));
+      assert.ok(control(page.page.doc, REBUILD.previewAgain, page.panel()));
+      assert.equal(page.page.calls.filter(call => call === 'recovery.run').length, 1);
+      const report = /** @type {any} */ (await page.root.trust.query({ type: 'trust.report' }));
+      assert.equal(report.kind, 'ready');
+      assert.equal(report.data.runs.filter((/** @type {any} */ run) => run.state === 'awaiting-confirmation').length, 1);
+    } finally {
+      page.close();
+    }
+  });
+
+  /**
+   * The page following a confirmation whose call ended unknown, while the report keeps that run
+   * running as a record that never ends would, on `now`
+   * @param {() => number} [now]
+   */
+  async function followingForever(now) {
+    const late = { kind: 'unknown', code: 'deadline-exceeded', commandId: 'x' };
+    /** @type {string | null} */
+    let runId = null;
+    const keepRunning = (/** @type {() => Promise<any>} */ call) =>
+      call().then((/** @type {any} */ answer) => {
+        if (answer.kind === 'ready' && runId) {
+          answer.data.runs = answer.data.runs.map((/** @type {any} */ run) => (run.id === runId ? { ...run, state: 'running', step: 'apply' } : run));
+        }
+        return answer;
+      });
+    const page = await recoveryOn({
+      now,
+      answers: {
+        'recovery.run': [(/** @type {() => Promise<any>} */ call) => call().then((/** @type {any} */ answer) => ((runId = answer.runId), answer)), late],
+        'trust.report': Array.from({ length: 400 }, (_, n) => (n < 2 ? undefined : keepRunning)),
+      },
+    });
+    control(page.page.doc, REBUILD.action, page.card()).click();
+    await until(() => page.panel() && page.panel().getAttribute('data-state') === 'awaiting', 'the preview');
+    control(page.page.doc, REBUILD.confirm, page.panel()).click();
+    await until(() => page.panel() && page.panel().getAttribute('data-state') === 'still-running', 'still running');
+    return page;
+  }
+
+  // These two have their own timeout: a page that follows a run for good and draws on every
+  // read never settles, so they fail on the timeout rather than run on
+  it("draws a run it follows again only when the run's record changes, so focus and what's open stay", { timeout: 10_000 }, async () => {
+    const page = await followingForever();
+    try {
+      const reads = () => page.page.calls.filter(call => call === 'trust.report').length;
+      // The first read finds the run's record, which the page draws once
+      const first = reads();
+      await until(() => reads() >= first + 2, 'the first reads of the run');
+      const heading = page.page.doc.getElementById('trust-h1');
+      const panel = page.panel();
+      const before = reads();
+      await until(() => reads() >= before + 5, 'five more reads of the run');
+      same(page.page.doc.getElementById('trust-h1'), heading, 'the page was drawn again');
+      same(page.panel(), panel, 'the panel was drawn again');
+      assert.equal(page.panel().getAttribute('data-state'), 'still-running');
+    } finally {
+      page.close();
+    }
+  });
+
+  it("says it can't tell whether the repair finished once it has followed it FOLLOW_MS, with Reload", { timeout: 10_000 }, async () => {
+    let clock = Date.now();
+    const page = await followingForever(() => clock);
+    try {
+      clock += FOLLOW_MS;
+      await until(() => page.panel() && page.panel().getAttribute('data-state') === 'untracked', "can't tell");
+      assert.match(text(page.panel()), new RegExp(escape(REBUILD.untracked)));
+      const reads = page.page.calls.filter(call => call === 'trust.report').length;
+      control(page.page.doc, PAGE.reload, page.panel()).click();
+      assert.equal(page.page.reloads(), 1);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assert.equal(page.page.calls.filter(call => call === 'trust.report').length, reads, 'it went on reading the run');
     } finally {
       page.close();
     }

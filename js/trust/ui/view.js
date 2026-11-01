@@ -65,7 +65,7 @@ import { FINISHED_RUN_STATES } from '../core/vocabulary.js';
 /**
  * One repair's panel, under its problem
  * @typedef {object} Flow
- * @property {'previewing' | 'awaiting' | 'running' | 'still-running' | 'checking' | 'still-there' | 'not-checked' | 'expired' | 'failed'} phase
+ * @property {'previewing' | 'awaiting' | 'running' | 'still-running' | 'checking' | 'still-there' | 'not-checked' | 'expired' | 'preview-missed' | 'untracked' | 'failed'} phase
  * @property {string | null} runId
  * @property {string | null} previewDigest
  * @property {{changes: Array<{target: string, creates: number, updates: number, deletes: number}>} | null} impact
@@ -86,6 +86,12 @@ const RECENT_RUNS = 8;
 
 /** How often a repair the page stopped waiting for reads its run's record, until it ends */
 const RUN_POLL_MS = 2000;
+
+/**
+ * How long the page follows a repair it stopped waiting for. Past this, it says it can't tell
+ * whether the repair finished, with Reload, rather than reading its record for good.
+ */
+export const FOLLOW_MS = 5 * 60 * 1000;
 
 /**
  * Draw recovery.html in `document` and run it on `root`
@@ -645,10 +651,18 @@ export function mountRecoveryPage({
       // The page stopped waiting for its answer; the run goes on, and the page reads its record
       busy = true;
       body = [h('p', { class: 'trust-result', role: 'status' }, glyph('checking'), h('span', {}, REBUILD.stillRunning)), steps(flow)];
-    } else if (flow.phase === 'expired') {
+    } else if (flow.phase === 'expired' || flow.phase === 'preview-missed') {
+      // A preview it can't confirm: one that expired, or one that finished after the page
+      // stopped waiting, so the page never got what it would confirm
       body = [
-        h('p', { class: 'trust-result', role: 'status' }, glyph('todo'), h('span', {}, REBUILD.previewExpired)),
+        h('p', { class: 'trust-result', role: 'status' }, glyph('todo'), h('span', {}, flow.phase === 'expired' ? REBUILD.previewExpired : REBUILD.previewMissed)),
         h('div', { class: 'trust-flow-actions' }, button(REBUILD.previewAgain, () => startRepair(problem), { primary: true })),
+      ];
+    } else if (flow.phase === 'untracked') {
+      // It followed the run as long as it would, and the run's record never ended
+      body = [
+        h('p', { class: 'trust-result', role: 'status' }, glyph('partial'), h('span', {}, REBUILD.untracked)),
+        h('div', { class: 'trust-flow-actions' }, button(PAGE.reload, () => reload(), { primary: true })),
       ];
     } else if (flow.phase === 'checking') {
       busy = true;
@@ -1015,6 +1029,9 @@ export function mountRecoveryPage({
     if (answer && answer.kind === 'remediation' && typeof answer.runId === 'string') state.ownRuns.add(answer.runId);
     if (answer && answer.kind === 'unknown') return followRun(problem, runId, askedAt);
     if (answer && answer.kind === 'unavailable' && answer.code === 'remediation-running') {
+      // The report can be a read behind this page's own runs, as when Try again comes before
+      // the read after a failure lands, so read it again before deciding whose run holds it
+      await refreshQuietly();
       const own = ownRunOf(problem);
       if (own) return followRun(problem, own.id, own.startedAt);
     }
@@ -1054,7 +1071,9 @@ export function mountRecoveryPage({
   }
 
   /**
-   * This page's own run of the repair for `problem` that hasn't ended, from the report, if any
+   * This page's own run of the repair for `problem` that hasn't ended, from the report, if any.
+   * It matches the problem's own incidents only, so a run this page started for the other index
+   * problem holds the same repair yet reads as another tab's until #22 gives each its own run.
    * @param {Problem} problem
    */
   function ownRunOf(problem) {
@@ -1070,7 +1089,8 @@ export function mountRecoveryPage({
 
   /**
    * A repair the page stopped waiting for: "Still running" until its run's record ends, read
-   * every RUN_POLL_MS, then what it ended as. `runId` is the run when the page knows it (a
+   * every RUN_POLL_MS, then what it ended as, or Preview again for a preview that ended
+   * waiting. Past FOLLOW_MS it says it can't tell. `runId` is the run when the page knows it (a
    * confirmation); without it (a preview), the run is the newest for the problem since `since`.
    * @param {Problem} problem
    * @param {string | null} runId
@@ -1080,24 +1100,47 @@ export function mountRecoveryPage({
     const incidentId = problem.incidents[0].id;
     setFlow(problem, { phase: 'still-running', ...(runId ? { runId } : {}) });
     live(REBUILD.stillRunning);
+    const started = now();
+    /** @type {string | null} the followed run's record as the page last drew it */
+    let drawn = null;
     for (;;) {
       await wait(RUN_POLL_MS);
       // Another action took the panel over, or the page left the Recovery Center's data
       const flow = state.flows.get(incidentId);
       if (!flow || flow.phase !== 'still-running') return;
-      await refreshQuietly();
-      if (state.phase !== 'ready' || !state.report) return;
+      if (now() - started >= FOLLOW_MS) {
+        setFlow(problem, { phase: 'untracked', at: now() });
+        live(REBUILD.untracked);
+        return;
+      }
+      // The run's record, read without drawing: the page draws again only when it changes, so
+      // focus, and an open "How this was checked", stay as they are while nothing happens
+      const report = await reportNow();
+      if (!report) {
+        await refreshQuietly();
+        if (state.phase !== 'ready') return;
+        continue;
+      }
       const ids = new Set(problem.incidents.map(incident => incident.id));
       const run = runId
-        ? state.report.runs.find(candidate => candidate.id === runId)
-        : state.report.runs
+        ? report.runs.find(candidate => candidate.id === runId)
+        : report.runs
             .filter(candidate => candidate.commandId === 'rebuild-index' && candidate.incidentId !== null && ids.has(candidate.incidentId) && candidate.startedAt >= since)
             .sort((a, b) => b.startedAt - a.startedAt)[0];
       if (!run) continue;
       state.ownRuns.add(run.id);
+      const record = JSON.stringify([run.id, run.state, run.step, run.outcome, run.updatedAt]);
+      if (record !== drawn) {
+        drawn = record;
+        state.report = report;
+        render();
+      }
       if (run.state === 'awaiting-confirmation') {
-        // A preview this page never got: take it again, which answers at once now
-        return startRepair(problem);
+        // A preview this page never got waits for a confirmation the page can't send without
+        // it, so the page offers the preview again rather than starting another run itself
+        setFlow(problem, { phase: 'preview-missed', at: now() });
+        live(REBUILD.previewMissed);
+        return;
       }
       if (!FINISHED_RUN_STATES.includes(/** @type {any} */ (run.state))) continue;
       if (run.state === 'succeeded' || (run.state === 'cancelled' && run.outcome === 'nothing-to-do')) return checkRepair(problem);
@@ -1245,6 +1288,19 @@ export function mountRecoveryPage({
     }
     state.dismissedHere.delete(problem.key);
     await refreshQuietly();
+  }
+
+  /**
+   * The report as it stands, read without drawing, or null when it can't be read
+   * @returns {Promise<TrustReport | null>}
+   */
+  async function reportNow() {
+    try {
+      const answer = await root.trust.query({ type: 'trust.report' });
+      return answer && (answer.kind === 'ready' || answer.kind === 'stale') ? answer.data : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Read again after an action, and draw what it shows, never losing the page to a read that failed */

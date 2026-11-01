@@ -231,7 +231,11 @@ export const REBUILD = Object.freeze({
   // The page stopped waiting for its answer, and the run goes on under its lock
   stillRunning: 'Still running. NewTabNote shows the result when it finishes.',
   previewExpired: 'The preview expired. Preview it again.',
+  // A preview that finished after the page stopped waiting, so the page never got it
+  previewMissed: 'The preview finished after this page stopped waiting for it. Preview it again.',
   previewAgain: 'Preview again',
+  // The page followed a run it stopped waiting for as long as it would (view.js's FOLLOW_MS)
+  untracked: "NewTabNote can't tell whether the repair finished. Reload the page to check.",
   failed: 'Failed to rebuild the search index: {reason}.',
   unchanged: "Your notes didn't change.",
   tryAgain: 'Try again',
