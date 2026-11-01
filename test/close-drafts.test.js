@@ -191,8 +191,8 @@ describe('the close-time draft applier: one test per path', () => {
     assert.deepEqual([after.notes.A.name, after.notes.A.titleManuallySet], ['A typed title', true]);
   });
 
-  it("takes back a block stored under no note, as 1.4.x's /template leaves them, and deletes one the draft deleted", async () => {
-    // selectTemplateItem puts each block's serialize(), which has no canvasId and no order
+  it('takes back a block stored under no note, and deletes one the draft deleted', async () => {
+    // Stored as Block.serialize() writes a block, with no canvasId and no order
     const tx = env.get('Storage').db.transaction(['elements'], 'readwrite');
     for (const row of [block('a1', 'A', 0, 'alpha'), block('a2', 'A', 1, 'alpha two')]) {
       const serialized = { ...row };

@@ -558,8 +558,8 @@ const CloseDrafts = (function initCloseDrafts() {
   }
 
   /**
-   * Whether a stored block is the note's own: under its ID, or under none, which no note shows
-   * (1.4.x's /template leaves a note's blocks so until its save lands)
+   * Whether a stored block is the note's own: under its ID, or under none, which no note shows,
+   * so the draft takes it back
    * @param {any} copy - the stored block, if any
    * @param {string} noteId
    * @returns {boolean}
