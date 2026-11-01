@@ -1890,6 +1890,44 @@ export function runContractSuite(fixture) {
         assert.deepEqual((await blocksOf(daily[0].id)).map(block => block.id).sort(), ['c0', 'c1', 'c2']);
       });
 
+      it("ten captures at once, from the worker and two pages, make one Daily Note with ten blocks, in the order they were made (#17's slice 3)", async () => {
+        const senders = { worker: ctx.kernel(CALLERS['worker-internal']), page: kernel, second: (await ctx.secondContext()).kernel() };
+        const from = /** @type {const} */ (['worker', 'page', 'second']);
+        // A capture takes its time as it starts, so the clock moves on once the capture before
+        // has read it, and none waits for another to commit. The blocks' ids sort apart from
+        // the order the captures were made in, so a note that kept them by id fails.
+        const { clock } = ctx;
+        const read = clock.now;
+        let reads = 0;
+        clock.now = () => {
+          reads += 1;
+          return read();
+        };
+        /** @type {string[]} */
+        const made = [];
+        /** @type {Array<Promise<Outcome>>} */
+        const sent = [];
+        try {
+          for (let i = 0; i < 10; i++) {
+            const blockId = `${from[i % 3]}-${i}`;
+            const before = reads;
+            sent.push(
+              senders[from[i % 3]].execute(cmd('captureToDailyNote', { noteId: `d${i}`, blockId, capture: page })),
+            );
+            for (let turn = 0; reads === before && turn < 1000; turn++) await Promise.resolve();
+            assert.ok(reads > before, `${blockId} read its time before the next was sent`);
+            made.push(blockId);
+            clock.advance();
+          }
+        } finally {
+          clock.now = read;
+        }
+        for (const outcome of await Promise.all(sent)) committedOf(outcome);
+        const daily = await dailyNotes();
+        assert.equal(daily.length, 1, JSON.stringify(daily.map(note => note.id)));
+        assert.deepEqual((await blocksOf(daily[0].id)).map(block => block.id), made);
+      });
+
       it(
         'below version 11, where there is no index, every lookup scans and a date still gets one Daily Note',
         { skip: fixture.startWithout ? false : 'only a database an older 1.x profile left can lack stores' },
@@ -2667,6 +2705,23 @@ export function runContractSuite(fixture) {
             command.type,
           );
         }
+      });
+
+      it("a trashed template restores as a template: kind template, lifecycle active, and listed with the templates (#17's slice 3)", async () => {
+        await createNote({ noteId: 't1', name: 'Weekly', blocks: someBlocks('t1', 1) });
+        await run(cmd('convertNoteToTemplate', { noteId: 't1' }));
+        await run(cmd('trashNote', { noteId: 't1' }));
+        assert.deepEqual(await groupOf('t1'), group(UNFILED, 'template', 'trashed'));
+        assert.deepEqual([await idsIn('templates'), await idsIn('trashed')], [[], ['t1']]);
+        await run(cmd('restoreNote', { noteId: 't1' }));
+        const restored = /** @type {NoteRecord} */ (await noteOf('t1'));
+        assert.deepEqual([restored.isTemplate, Boolean(restored.trashed)], [true, false]);
+        assert.deepEqual(await groupOf('t1'), group(UNFILED, 'template'));
+        assert.deepEqual(await groupOf('t1'), await placementOfFlags('t1'));
+        assert.deepEqual(
+          [await idsIn('templates'), await idsIn('active'), await idsIn('trashed')],
+          [['t1'], [], []],
+        );
       });
     });
 
