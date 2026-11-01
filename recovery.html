@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en" data-scheme="system">
+<head>
+  <meta charset="UTF-8">
+  <script vite-ignore src="js/network-guard.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recovery Center - NewTabNote</title>
+  <link rel="stylesheet" href="css/design-tokens.css">
+  <link rel="stylesheet" href="css/recovery.css">
+</head>
+<body class="trust-page">
+  <a class="trust-skip" href="#trust-main">Skip to main content</a>
+  <header class="trust-header">
+    <a class="trust-brand trust-home" href="newtab.html">
+      <img src="icons/icon48.png" alt="" width="24" height="24">
+      <span>NewTabNote</span>
+    </a>
+    <nav id="trust-views" class="trust-views" aria-label="Trust and recovery"></nav>
+    <a class="trust-linkbtn trust-home" href="newtab.html">Back to your notes</a>
+  </header>
+  <main id="trust-main" class="trust-main" tabindex="-1"></main>
+  <div id="trust-live" class="sr-only" aria-live="polite"></div>
+
+  <script type="module" src="js/recovery.js"></script>
+</body>
+</html>

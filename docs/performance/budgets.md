@@ -13,6 +13,9 @@
 | Side Panel | start JS, raw / gzip | 112 / 40 KiB | 106.9 / 30.6 KiB (5.1 / 9.4) |
 | Offscreen | start JS, raw / gzip | 29 / 9 KiB | 27.5 / 8.6 KiB (1.5 / 0.4) |
 | Offscreen | start HTML, raw / gzip | 1 / 1 KiB | 230 / 174 bytes (794 / 850 bytes) |
+| `recovery.html` | start JS, raw / gzip | 395 / 123 KiB | 375.6 / 117.3 KiB on #115 (19.4 / 5.7) |
+| `recovery.html` | start CSS, raw / gzip | 22.5 / 4.5 KiB | 21.1 / 4.3 KiB on #115 (1.4 / 0.2) |
+| `recovery.html` | start HTML, raw / gzip | 2 / 1 KiB | 1.5 / 0.6 KiB on #115 (0.5 / 0.4) |
 | New tab | interaction-ready against 1.4.0 | median ratio at most +7% | gates the `perf` job since 2026-10-31 |
 | New tab | heap at interaction-ready | 2.81 MiB, +3% (fails above 2.89) | 2.68 / 2.56 MiB on `typical` / `maximal`; gates the `perf` job since 2026-11-01 |
 
@@ -22,6 +25,7 @@
 - Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, and the service worker. Offscreen loads no stylesheet, so its CSS row is `null` too.
 - Offscreen's rows are today's size plus about 5%, set on 2026-11-01 from `7489d7b3`: start JS 28,150 / 8,818 bytes (the page's module and `js/network-guard.js`), and HTML 230 / 174. Its HTML row is 1 KiB, the smallest round row, since 5% of 230 bytes is 12. The workspace coordinator decided them for the owner, who can reverse it. The service worker's start is the whole of its one self-contained module, and its cold-start time is #35's.
 - The new tab's CSS row was first 100 KiB raw, sized from CSS CleanCSS minified, before #99 moved the build to lightningcss, which doesn't merge rules that aren't next to each other: the same sources minify about 5 KiB larger raw, while gzip went down. On 2026-10-31 the raw row went to 105 KiB, today's size plus about 5%, the rule the owner set for these rows: 102,274 bytes on `next` (126 under the old row), 103,744 with #27 slice 3b's failure and status states, and about 103,860 with #20 slice 4b's Settings section. The gzip row stays 19 KiB (16,672 bytes with 3b). The workspace coordinator decided it for the owner, who can reverse it. CSS beyond the row still needs the owner's call first.
+- `recovery.html`'s rows (#20 slice 4b) were set on 2026-11-01 by the same rule, today's size plus about 5%, from #115's strict build on `next` at `7489d7b`: start JS 384,641 / 120,126 bytes, start CSS 21,644 / 4,409, and start HTML 1,498 / 638. HTML takes the smallest round rows, since 5% of 1,498 bytes is 75. The workspace coordinator decided them for the owner, who can reverse it.
 
 ## The forbidden list
 
@@ -29,6 +33,7 @@
 
 - **New tab**: the four libraries and the trust code. That's `chart-library` (Chart.js), `search-library` (Fuse.js), `zip-library` (JSZip), `model-runtime` (transformers.js), and `trust` (`js/trust/**`). Slice 3 made all five lazy, so this is what today's new tab can be held to.
 - **Popup and Side Panel**: the full list. Both pass it today.
+- **`recovery.html`**: every category but `trust`, which is the page's own code. That's what its start held when its row was added, so anything that joins it later is a reviewed change. Its providers' checks load after it opens, so its row names their six chunks in `lazyChunks`.
 - **Moment** (`planned`): the full list. It switches on the day #2 builds a `moment` chunk: a built planned row fails until its numbers are set and `planned` is false, and from then on the full list holds on its start (`test/budgets.test.js`).
 
 Today's new tab still imports these modules of the full list at its start, through the workspace chunk:
@@ -58,6 +63,7 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 | --- | --- |
 | New tab | `@xenova/transformers`, `chart.js`, `fuse.js`, `jszip` (lazy, through the loader), `valibot` (lazy, in the trust chunk) |
 | Service worker | `valibot` |
+| `recovery.html` | `valibot` |
 | Popup, Side Panel, offscreen, Moment | none |
 
 ## How each gate runs

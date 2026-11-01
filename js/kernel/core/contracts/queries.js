@@ -114,6 +114,12 @@ const READERS = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup', 'sid
 const NEW_TAB = Object.freeze(/** @type {Surface[]} */ (['newtab']));
 
 /**
+ * The readers, and recovery.html, which reads only its theme (#20 slice 4b), through the
+ * settings client like the new tab, falling back to the system's when the read fails
+ */
+const PREFERENCE_READERS = Object.freeze(/** @type {Surface[]} */ ([...READERS, 'recovery']));
+
+/**
  * A version 1 entry
  * @param {string} module - the schema module's name under contracts/operations/
  * @param {EntityType[]} entityTypes
@@ -147,7 +153,7 @@ export const QUERIES = Object.freeze({
   getNotesByIds: entry('get-notes-by-ids', ['note'], NEW_TAB, MAX_MESSAGE_BYTES),
   listSearchEntries: entry('list-search-entries', [], NEW_TAB),
   listFolders: entry('list-folders', []),
-  getPreferences: entry('get-preferences', []),
+  getPreferences: entry('get-preferences', [], PREFERENCE_READERS),
   getWorkspaceSession: entry('get-workspace-session', []),
   // Only Popup has read it, and #4 replaces it
   getPopupInsightsEnabled: entry('get-popup-insights-enabled', [], Object.freeze(/** @type {Surface[]} */ (['popup']))),

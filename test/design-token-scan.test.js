@@ -42,7 +42,7 @@ describe('production matches the design token baseline', () => {
 
   it('scans the root pages, css/, and js/, and skips js/lib/, design/, test/, and the generated output', () => {
     const files = scanner.productionFiles(ROOT);
-    for (const file of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'css/editor.css', 'js/app.js', 'js/design/contrast.js']) {
+    for (const file of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'recovery.html', 'css/editor.css', 'css/recovery.css', 'js/app.js', 'js/trust/ui/view.js', 'js/design/contrast.js']) {
       assert.ok(files.includes(file), file);
     }
     for (const file of files) {

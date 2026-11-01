@@ -278,6 +278,32 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     );
   });
 
+  it('is reached statically from recovery.html, whose root serves the trust operations in the page, and from no other page (#20 slice 4b)', () => {
+    const graph = readScriptGraph(ROOT, { pages: ['offscreen.html', 'recovery.html'] });
+    assert.deepEqual(graph.problems, []);
+    for (const [page, modules] of graph.pageModules) {
+      if (page !== 'recovery.html') assert.deepEqual(modules.map(({ file }) => file).filter(isTrust), [], page);
+    }
+    const recovery = (graph.pageModules.get('recovery.html') || []).map(({ file }) => file);
+    // Its views, its root's use cases and pipeline, and NewTabNoteTrust's adapter, all up front
+    for (const file of [
+      'js/trust/ui/view.js',
+      'js/trust/core/use-cases.js',
+      'js/trust/core/remediation/pipeline.js',
+      'js/trust/core/router-rows.js',
+      'js/kernel/adapters/indexeddb/trust.js',
+    ]) {
+      assert.ok(recovery.includes(file), file);
+    }
+    assert.ok(recovery.includes('js/kernel/composition/recovery.js'));
+    // Its only import()s are the provider catalog's, each check loading as it first runs (#15)
+    const dynamic = dynamicImportsIn(recovery.map(file => path.join(ROOT, file)));
+    assert.ok(dynamic.length > 0);
+    for (const at of dynamic) assert.ok(at.startsWith(path.join(ROOT, 'js', 'trust', 'core', 'providers', 'catalog.js:')), at);
+    // And no classic script of any page is trust code
+    assert.deepEqual([...graph.classic].filter(isTrust), []);
+  });
+
   it('reaches the new tab only through import(), after its first failure', () => {
     const graph = readScriptGraph(ROOT, { pages: [] });
     // What the tab starts with: the boot root's own graph, and the workspace chunk's, which the

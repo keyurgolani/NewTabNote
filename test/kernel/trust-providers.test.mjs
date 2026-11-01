@@ -344,23 +344,31 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
     assert.equal(odd.receipt.status, 'unverified');
   });
 
-  it('contributions: degraded while one is unresolved or temporarily unavailable, and block types waits for #14', async () => {
+  it("contributions: degraded while one is unresolved or temporarily unavailable, and block types waits for #14; neither counts the other's", async () => {
     const thing = defineFamily({ id: BLOCK_FAMILY, apiVersion: 1, groups: ['text'], hosts: ['workspace'] });
-    const root = createRegistryRoot({ host: 'workspace' });
-    root.register(thing, [
+    const tool = defineFamily({ id: 'tool', apiVersion: 1, groups: ['text'], hosts: ['workspace'] });
+    const descriptors = [
       { id: 'paragraph', version: 1, apiVersion: 1, group: 'text', rank: 1, hosts: ['workspace'], label: 'Paragraph' },
       // A built-in with a field its family doesn't know resolves unresolved
       { id: 'broken', version: 1, apiVersion: 1, group: 'text', rank: 2, hosts: ['workspace'], label: 'Broken', bogus: true },
-    ]);
+    ];
+    const root = createRegistryRoot({ host: 'workspace' });
+    root.register(tool, descriptors);
+    root.register(thing, descriptors);
     const resolution = root.resolve();
     const context = { resolutions: () => [resolution] };
+    // The tool family's two, not the block family's, which Block types counts (#115's design review)
     const contributions = await checkOf('contributions', context);
     assert.deepEqual([contributions.receipt.status, contributions.receipt.evidence], ['degraded', { records: 2, count: 1 }]);
     assert.deepEqual(contributions.faults.map(fault => fault.faultCode), ['contribution-unavailable']);
     assert.equal((await checkOf('block-types', context)).receipt.status, 'degraded');
+    const blocksOnly = createRegistryRoot({ host: 'workspace' });
+    blocksOnly.register(thing, descriptors);
+    const none = await checkOf('contributions', { resolutions: () => [blocksOnly.resolve()] });
+    assert.deepEqual([none.receipt.status, none.receipt.evidence], ['not-configured', { records: 0 }]);
     // A probe that can't answer makes a contribution temporarily unavailable
     const fine = createRegistryRoot({ host: 'workspace' });
-    fine.register(thing, [
+    fine.register(tool, [
       { id: 'paragraph', version: 1, apiVersion: 1, group: 'text', rank: 1, hosts: ['workspace'], label: 'Paragraph' },
       {
         id: 'embed',
@@ -379,6 +387,9 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
     assert.equal(probed.receipt.status, 'degraded');
     const onlyFine = createRegistryRoot({ host: 'workspace' });
     onlyFine.register(thing, [
+      { id: 'paragraph', version: 1, apiVersion: 1, group: 'text', rank: 1, hosts: ['workspace'], label: 'Paragraph' },
+    ]);
+    onlyFine.register(tool, [
       { id: 'paragraph', version: 1, apiVersion: 1, group: 'text', rank: 1, hosts: ['workspace'], label: 'Paragraph' },
     ]);
     const healthy = { resolutions: () => [onlyFine.resolve()] };

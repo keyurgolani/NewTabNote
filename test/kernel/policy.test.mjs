@@ -42,7 +42,9 @@ const TODAY = {
   sidepanel: { commands: [], queries: READS },
   offscreen: { commands: [], queries: [] },
   'worker-internal': { commands: ['captureToDailyNote', 'runStartupMaintenance', 'runIntegrityCheck'], queries: [] },
-  recovery: { commands: [], queries: [] },
+  // recovery.html reads only its theme through the kernel (#20 slice 4b); its trust rows are
+  // its root's (test/kernel/recovery-surface.test.mjs)
+  recovery: { commands: [], queries: ['getPreferences'] },
 };
 
 describe('the baseline policy', () => {
