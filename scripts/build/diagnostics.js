@@ -57,6 +57,7 @@ const CODES = Object.freeze({
   'guard/not-installed': 'the built network guard doesn\'t wrap every network API it covers, throws, or lets a call to an unregistered destination go',
   'security/drift': 'the manifest, the CSP, the permissions, the offscreen reasons, the destinations, the ledger or a network source changed with no security/changes.json entry that records it, names what it changes, and says why',
   'security/csp-repeated': 'the extension pages\' CSP names a directive more than once, and Chromium enforces only the first copy',
+  'security/csp-characters': 'the extension pages\' CSP holds a character outside printable ASCII and ASCII whitespace, or a directive name Chromium doesn\'t read',
   'security/permissions': 'the manifest\'s permissions, host permissions or offscreen reasons and security/permissions.json differ, either way, an entry there lacks its issue, warning, request point or rationale, or a script creates the offscreen document with reasons that can\'t be read',
   'security/externally-connectable': 'the manifest has externally_connectable, which lets a web page or another extension open a channel to this one',
   'security/unsafe-inline': 'style-src allows \'unsafe-inline\' though #16\'s counts of style attributes and <style> blocks are zero',

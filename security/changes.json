@@ -9,7 +9,9 @@
       "files": [
         "js/kernel/composition/api-request.js",
         "js/kernel/composition/destination-match.js",
+        "js/kernel/composition/destination-rows.js",
         "js/kernel/composition/destinations.js",
+        "js/kernel/composition/network-guard-first.js",
         "js/kernel/composition/network-guard-install.js",
         "js/kernel/composition/network-guard.js",
         "js/kernel/composition/worker-network.js",
@@ -82,18 +84,20 @@
           "why": "Each reason is a capability the document is given, and security/permissions.json names each with its issue."
         },
         {
-          "change": "the destination registry, the network ledger, and the destination client, its rules, the network guard and its installer, the proxy policy, the worker's network module and the offscreen document recorded",
+          "change": "the destination registry, the network ledger, and the destination client, the rows it imports and its rules, the network guard, its installer and the module that installs it first, the proxy policy, the worker's network module and the offscreen document recorded",
           "why": "A change to where the extension may connect, or to the code that decides it, needs an entry that says why. The worker's network is a module of its own, which js/background.js installs in one call, so the rest of the worker changes with no entry."
         }
       ],
-      "digest": "76ce8efa2f656aedfc99d15a7a6fc3c1206cdf3a15db493a96434a22637c77d2",
+      "digest": "96fa9f4bf3d5ce6ebaa848d4a29bf26b7781ab995d1afb902df5caf08fc46938",
       "parts": {
         "js/kernel/composition/api-request.js": "14a5d618c896b2b736b15bfd50d13d30b9540b606cfbd0c20174a704e1076ff1",
         "js/kernel/composition/destination-match.js": "b9725f1088d5ab006ebc81166430724491aa06fa9690d15734fc48289dc553ba",
+        "js/kernel/composition/destination-rows.js": "8a189be1bfbd3a844c31573930a32808dc54bff57facb78647c61fd834c18abf",
         "js/kernel/composition/destinations.js": "c1bae4880b894e9dc0afaa646581810baf62cdc1c52f1467e4c4dda87d61a268",
+        "js/kernel/composition/network-guard-first.js": "500ba9d984b608382c3ba9cc3891e4b802979b59d53479ccbd489782e6f5fc03",
         "js/kernel/composition/network-guard-install.js": "12f36235675fc6b504753580d6a531ffc095cc73249deade8f1c5ac47a36cdff",
         "js/kernel/composition/network-guard.js": "e2551f1c510048483a61737fb5e90d7f1ac0b1f09550bab501dc55aabe5d1fd9",
-        "js/kernel/composition/worker-network.js": "cc85da6764f77ebe6dc45212305f70570c389dcc36d2459c69b29fb69091cd77",
+        "js/kernel/composition/worker-network.js": "5fad91aa69ee12a2b5442eb76d3933124a0201fee51bffce1b8d905a70720bdc",
         "js/offscreen.js": "20036820d166579fee96e3ea4d9ff531b150a587b23085f2800b8c48d60743e8",
         "manifest.json#content_security_policy": "a1b8f34e65bbcd66b6d5d03ad7eaffcb683901b61c3fa7d715599703c051b5b8",
         "manifest.json#externally_connectable": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",

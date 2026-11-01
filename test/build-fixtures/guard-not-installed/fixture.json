@@ -3,6 +3,7 @@
   "expect": [
     "guard/not-installed"
   ],
+  "securityEntry": true,
   "edits": [
     {
       "file": "js/kernel/composition/network-guard-first.js",

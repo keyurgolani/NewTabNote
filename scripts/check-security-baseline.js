@@ -29,24 +29,27 @@ const ROOT = path.join(__dirname, '..');
 const USAGE = 'usage: node scripts/check-security-baseline.js [<dir>] [--base <git ref>] [--history-only] [--print]';
 
 /**
- * security/changes.json at `ref`: its text, null when the ref has no such file, or why the ref
- * can't be read
+ * security/changes.json at `ref`: its text, null when the ref's tree has no such file, or why
+ * git couldn't read the ref or its tree, which is never taken for a missing file
  * @param {string} ref
  * @param {string} root
+ * @param {(args: string[]) => string} [git] - runs git in `root`, unless a test hands in another
  * @returns {{text: string | null} | {unreadable: string}}
  */
-function baseCopy(ref, root) {
-  const git = (/** @type {string[]} */ args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+function baseCopy(ref, root, git = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) {
   try {
     git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
   } catch {
     return { unreadable: `git can't resolve ${ref} to a commit; fetch it, or check out with enough history` };
   }
+  let listed;
   try {
-    git(['cat-file', '-e', `${ref}:${CHANGES_FILE}`]);
-  } catch {
-    return { text: null };
+    // Empty for a tree without the file; an error only when git can't read the tree
+    listed = git(['ls-tree', '--name-only', ref, '--', CHANGES_FILE]);
+  } catch (reason) {
+    return { unreadable: `git can't read ${ref}'s tree: ${reason instanceof Error ? reason.message : reason}` };
   }
+  if (!listed.split('\n').includes(CHANGES_FILE)) return { text: null };
   try {
     return { text: git(['show', `${ref}:${CHANGES_FILE}`]) };
   } catch (reason) {
@@ -108,7 +111,10 @@ function main(argv = process.argv.slice(2), { log = console.log, error = console
     const inputs = inputsFrom(dir, root);
     if (print) {
       log(JSON.stringify(recordOf(inputs), null, 2));
-      return 0;
+      if (problems.length === 0) return 0;
+      error(`check:security-baseline failed: ${plural(problems.length, 'problem')}`);
+      problems.forEach((found) => error(`  - ${format(found)}`));
+      return 1;
     }
     problems.push(...checkSecurityBaseline(inputs));
   }

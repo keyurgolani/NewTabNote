@@ -1,0 +1,14 @@
+{
+  "rule": "the extension pages' CSP separates a directive's name from its sources with a character Chromium doesn't read as whitespace",
+  "expect": [
+    "security/csp-characters",
+    "security/drift"
+  ],
+  "edits": [
+    {
+      "file": "manifest.json",
+      "replace": "form-action 'none'",
+      "with": "form-action\u00a0'none'"
+    }
+  ]
+}

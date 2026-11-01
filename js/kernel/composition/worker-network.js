@@ -61,19 +61,20 @@ function errorAnswer(error) {
 }
 
 /**
- * Install the worker's network on `runtime`. Never throws.
+ * Install the worker's network on chrome.runtime, which it reads itself: the runtime it listens
+ * on, and whose id it takes senders by, is never one its caller hands it. Never throws.
  * @param {object} [options]
  * @param {GuardHandle | null} [options.guard] - the worker's guard handle (network-guard-first.js)
  * @param {Events} [options.events] - the worker's failure events, which journal what was refused
  * @param {Record<string, OwnHandler>} [options.ownHandlers] - by message type, run for this
  *   extension's own senders only; one of MESSAGE_TYPES is left out
- * @param {WorkerRuntime} [options.runtime] - the runtime it listens on and whose id it takes
- *   senders by: chrome.runtime unless a test passes another. The proxy itself calls
- *   chrome.runtime and chrome.offscreen by name, so the build's closure check (#27) follows its
- *   paths to offscreen.html.
  * @param {boolean} [options.quiet] - log no handler it leaves out
  */
-export function installWorkerNetwork({ guard = null, events = { event() {} }, ownHandlers = {}, runtime = globalThis.chrome?.runtime, quiet = false } = {}) {
+export function installWorkerNetwork({ guard = null, events = { event() {} }, ownHandlers = {}, quiet = false } = {}) {
+  // chrome.runtime and chrome.offscreen by name, here and in the proxy, so the build's closure
+  // check (#27) follows its paths to offscreen.html
+  /** @type {WorkerRuntime | undefined} */
+  const runtime = globalThis.chrome?.runtime;
   // A registry the destination client found a problem with: the client refuses every request,
   // and so does the guard, which reports why once, and every refusal it held is journaled now
   try {
