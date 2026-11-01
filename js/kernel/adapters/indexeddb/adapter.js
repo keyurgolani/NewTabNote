@@ -45,6 +45,18 @@
  * aborted. The adapter can tell only by which comes first, so a unit that finishes before an
  * abort reaches it is answered as any other command, retry included.
  *
+ * A call whose transaction can't start on a closing or closed connection answers
+ * `reload-required`, as every call after it does (connection.js), and so does one IndexedDB
+ * fails in flight once the connection is gone or going, which runs no more. Chrome's forced
+ * close (the database deleted, or its storage failing) aborts each transaction open on the
+ * connection before the page hears of the close (e2e/connection-closing.spec.js), so a read, an
+ * export, an automatic backup, or a ledger or change-log read in flight then answers
+ * `transaction-failed`, on a connection that still reads as open, and the next call
+ * `reload-required`. A command's run again fails once the close has reached the page, as does
+ * any call that started in between, so each answers `reload-required`. A chrome.storage failure
+ * answers as it is. A call another context's upgrade lands on comes through, since that close
+ * waits for it, and answers as it ended.
+ *
  * Flags:
  * - atomicMultiStore: true, since a command is one transaction.
  * - revisions: true. Each note has a content revision, a placement version, and a source
@@ -485,7 +497,8 @@ export function createIndexedDbAdapter({
 
   /**
    * What a failure to start a transaction means: the connection closed under it (another
-   * context's upgrade, or Chrome), or its own failure
+   * context's upgrade, or Chrome), or its own failure. On a connection this adapter adopted, an
+   * InvalidStateError from transaction() can only mean it's closing or closed.
    * @param {unknown} error
    * @returns {UnavailableError}
    */
@@ -496,6 +509,60 @@ export function createIndexedDbAdapter({
     }
     return failureOf(error);
   };
+
+  /**
+   * Whether the connection is gone, or going. Chrome's forced close (the database deleted, or
+   * its storage failing) reaches the page only after Chrome has aborted each transaction open on
+   * the connection, so a failure from those aborts still finds it open, and one after finds it
+   * refusing a transaction. IndexedDB refuses a transaction on a closing connection with an
+   * InvalidStateError before it looks at the stores asked for, and one over no store with an
+   * InvalidAccessError, so asking for one over none tells which, and opens nothing
+   * (e2e/connection-closing.spec.js has both orders in Chromium).
+   * It asks only once the connection is open, which connection.js has it be only in the open's
+   * success, after any upgrade transaction on it has finished, so never while one is live,
+   * which IndexedDB refuses a transaction during too.
+   * @returns {boolean}
+   */
+  const going = () => {
+    if (connection.state() === 'gone') return true;
+    if (connection.state() !== 'open') return false;
+    try {
+      connection.database().transaction([], 'readonly');
+    } catch (error) {
+      if (nameOf(error) !== 'InvalidStateError') return false;
+      connection.lost();
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * Whether IndexedDB failed it: its failures are DOMExceptions, and chrome.storage's, and this
+   * adapter's own, aren't
+   * @param {unknown} error
+   */
+  const fromIndexedDb = error => typeof DOMException === 'function' && error instanceof DOMException;
+
+  /**
+   * What a call that failed in flight answers: for an IndexedDB failure on a connection that's
+   * gone or going, reload-required, as every call after it answers (connection.js), and
+   * otherwise what the failure means. Should IndexedDB ever answer the empty transaction in the
+   * other order, it answers as it did before going() asked.
+   * @param {unknown} error
+   * @returns {UnavailableError}
+   */
+  const failureIn = error =>
+    fromIndexedDb(error) && going() ? new UnavailableError('storage', 'reload-required', false) : failureOf(error);
+
+  /**
+   * The answer for a run whose transaction failed, and whether it may run once more: for an
+   * IndexedDB failure on a connection that's gone or going, reload-required, and no other run
+   * @param {unknown} cause
+   * @param {Write} write
+   * @returns {Attempt}
+   */
+  const failedRun = (cause, write) =>
+    fromIndexedDb(cause) && going() ? answered(unavailable('storage', 'reload-required', false)) : failed(cause, write);
 
   /**
    * The values IndexedDB's `settings` store holds for `keys`, records of `{key, value}`, as
@@ -528,7 +595,7 @@ export function createIndexedDbAdapter({
         if (record && record.value !== undefined) values[key] = record.value;
       }
     } catch (error) {
-      throw failureOf(error);
+      throw failureIn(error);
     }
     return values;
   };
@@ -661,7 +728,7 @@ export function createIndexedDbAdapter({
     // empty stores, and a write fails or is skipped as Storage's would
     if (!tx) {
       return running.then(first => {
-        if ('error' in first) return failed(first.error, NO_WRITE);
+        if ('error' in first) return failedRun(first.error, NO_WRITE);
         return answered(first.stop || work.done());
       });
     }
@@ -699,14 +766,14 @@ export function createIndexedDbAdapter({
       if ('end' in first) {
         return first.end.committed
           ? endedEarly()
-          : { ...failed(first.end.error || aborted(), write), transient: false };
+          : { ...failedRun(first.end.error || aborted(), write), transient: false };
       }
       if ('error' in first) {
         abort(open);
         const end = await ended;
         if (end.committed) return endedEarly();
         // Its own error says why the transaction aborted, when it aborted for one
-        return failed(end.error || first.error, write);
+        return failedRun(end.error || first.error, write);
       }
       if ('abort' in first) {
         abort(open);
@@ -716,7 +783,7 @@ export function createIndexedDbAdapter({
       }
       const end = await ended;
       if (end.committed) return answered(first.commit);
-      return failed(end.error || aborted(), write);
+      return failedRun(end.error || aborted(), write);
     });
   };
 
@@ -834,7 +901,7 @@ export function createIndexedDbAdapter({
       if ('refused' in prepared) return { outcome: prepared.refused, replayed: false };
       return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit]);
     } catch (error) {
-      const outcome = unavailableFrom(failureOf(error));
+      const outcome = unavailableFrom(failureIn(error));
       const name = nameOf(error);
       if (name !== undefined && STORAGE_EXCEPTIONS.includes(name)) outcome.exception = name;
       return { outcome, replayed: false };
@@ -911,7 +978,7 @@ export function createIndexedDbAdapter({
       try {
         return await body(view(db, tx, stores, false, createVersionTracker()));
       } catch (error) {
-        throw failureOf(error);
+        throw failureIn(error);
       }
     },
 
@@ -929,7 +996,7 @@ export function createIndexedDbAdapter({
       try {
         return await exportFile(await readExport(db), clock.now(), extra);
       } catch (error) {
-        throw failureOf(error);
+        throw failureIn(error);
       }
     },
 
@@ -952,11 +1019,17 @@ export function createIndexedDbAdapter({
       return values;
     },
 
-    ledger: createIndexedDbLedger({ database }),
+    ledger: createIndexedDbLedger({ database, failure: failureIn }),
     get commitLog() {
-      if (!commitLog) commitLog = createIndexedDbCommitLog({ database, keyRange: keyRange || globalThis.IDBKeyRange });
+      if (!commitLog) {
+        commitLog = createIndexedDbCommitLog({
+          database,
+          keyRange: keyRange || globalThis.IDBKeyRange,
+          failure: failureIn,
+        });
+      }
       return commitLog;
     },
-    sweepLedger: () => sweepLedger({ database, now: clock.now() }),
+    sweepLedger: () => sweepLedger({ database, now: clock.now(), failure: failureIn }),
   });
 }

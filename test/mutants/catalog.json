@@ -92,6 +92,26 @@
       "name": "a unit declared readonly can't write, even in a command another unit makes readwrite"
     },
     {
+      "id": "commit-wait-idb-read-on-closed-connection",
+      "behavior": "commit waits",
+      "protects": "A read that IndexedDB fails once Chrome's close of the connection has reached the page answers reload-required, as every call after it does, never a failure a resend could get past.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "    fromIndexedDb(error) && going() ? new UnavailableError('storage', 'reload-required', false) : failureOf(error);",
+      "replace": "    failureOf(error);",
+      "test": "test/kernel/storage-mid-close.test.mjs",
+      "name": "a read that starts once Chrome's aborts have reached the page, before its close does: reload-required"
+    },
+    {
+      "id": "commit-wait-idb-run-again-on-closed-connection",
+      "behavior": "commit waits",
+      "protects": "A command whose run again fails once Chrome's close of the connection has reached the page answers reload-required, never retries-exhausted, and runs no more.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "    fromIndexedDb(cause) && going() ? answered(unavailable('storage', 'reload-required', false)) : failed(cause, write);",
+      "replace": "    failed(cause, write);",
+      "test": "test/kernel/storage-mid-close.test.mjs",
+      "name": "Chrome closes it while a command commits: reload-required once its run again fails there, nothing written, and the next call the same"
+    },
+    {
       "id": "schema-codec-accepts-getter",
       "behavior": "schema fields",
       "protects": "The codec refuses a getter or setter, which could give JSON another value than the check saw.",
