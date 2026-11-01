@@ -435,6 +435,8 @@ describe('no shipped path reaches a conflict before #17 PR 4 (#17 PR 2a, plan se
     assert.deepEqual(shipped.map(([type]) => type).sort(), [
       'captureToDailyNote',
       'createNote',
+      // The worker's read-only check after an install or an update (#35 slice 1)
+      'runIntegrityCheck',
       'runStartupMaintenance',
     ]);
     for (const [type, entry] of shipped) {

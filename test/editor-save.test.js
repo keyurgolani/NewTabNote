@@ -6,6 +6,9 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument, makeEditor,
   runUntil, startEditorClient, startNewTabKernel, quietNavigation,
@@ -1139,9 +1142,14 @@ describe("the search index's and the embeddings' text, in the order a note's blo
     await notes.rebuildSearchIndex();
     await notes.updateNoteIndex('N');
 
-    // The indexer's own entries from what it was sent, by js/workers/indexer.js in a worker of its own
+    // The indexer's own entries from what it was sent, by js/workers/indexer.js in a worker of its own.
+    // It's a module worker whose first import is the network guard (#21 slice 1b), which
+    // test/network-guard.test.js covers, so the rest runs here as a script.
     const indexer = createLegacyEnv({ context: 'worker' });
-    indexer.load('js/workers/indexer.js');
+    const guardImport = "import '../kernel/composition/network-guard-first.js';\n";
+    const source = fs.readFileSync(path.join(__dirname, '../js/workers/indexer.js'), 'utf8');
+    assert.ok(source.includes(guardImport), 'the indexer imports the network guard first');
+    vm.runInContext(source.replace(guardImport, ''), indexer.context);
     const answers = [];
     indexer.global.postMessage = (message) => answers.push(plain(message));
     for (const message of sent) indexer.global.onmessage({ data: message });

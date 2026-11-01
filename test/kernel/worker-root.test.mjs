@@ -504,7 +504,7 @@ async function recording(body) {
   }
 }
 
-/** A worker client whose run took a v8 profile to 9, with that attempt's end and its record */
+/** A worker client whose run took a v8 profile to this build's version, with that attempt's end and its record */
 async function migratedWorker() {
   const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
   const worker = createWorkerClient(hostOf(of));
@@ -519,7 +519,7 @@ async function migratedWorker() {
 describe("the worker's integrity check once another context deleted the database", () => {
   it('warns and commits, as Storage.runIntegrityCheck does: no retry, no other attempt, and no database made', async () => {
     const { of, worker, first, record } = await migratedWorker();
-    assert.ok((await databasesOf(of)).includes('CanvasTabDB@9'));
+    assert.ok((await databasesOf(of)).includes(`CanvasTabDB@${DB_VERSION}`));
     await legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
     assert.ok(!(await databasesOf(of)).some(name => name.startsWith('CanvasTabDB@')), 'deleted');
 
@@ -555,6 +555,6 @@ describe("the worker's integrity check once another context deleted the database
     const outcome = await capture(worker, 'after');
     assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
     assert.notEqual(worker.migration.done, first, 'a new attempt');
-    assert.ok((await databasesOf(of)).includes('CanvasTabDB@9'), `made again: ${await databasesOf(of)}`);
+    assert.ok((await databasesOf(of)).includes(`CanvasTabDB@${DB_VERSION}`), `made again: ${await databasesOf(of)}`);
   });
 });
