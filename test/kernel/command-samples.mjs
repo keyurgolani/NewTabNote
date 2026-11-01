@@ -93,6 +93,8 @@ export const COMMAND_SAMPLES = {
       linkedNames: [],
     },
   },
+  // The worker's catch-up of the records 1.4.x left behind their blocks, over n1 and a note it has no record of
+  catchUpNoteRecords: { noteIds: ['n1', 'n-gone'] },
   captureToDailyNote: {
     noteId: 'd1',
     blockId: 'b9',
