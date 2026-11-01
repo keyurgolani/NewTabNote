@@ -53,12 +53,26 @@ async function profileAt8(env) {
 
 const codes = seen => seen.events.map(([code]) => code);
 
+/**
+ * Waits for the transforms that follow the worker's run (#17 PR 3a), then for what they
+ * journal: a drain can end between the run's end and their start
+ */
+async function transformed(worker) {
+  await worker.env.global.storageTransforms;
+  await worker.drain();
+}
+
 describe("the worker journals its migration run (js/background.js, #17's runner)", () => {
-  it("a 1.4.x database upgraded to this build's version journals storage.migration-completed, with no incident", async () => {
+  it("a 1.4.x database upgraded to this build's version journals storage.migration-completed, then the transforms' end, with no incident", async () => {
     const worker = await loadBackground({ setup: profileAt8 });
     await worker.drain();
+    await transformed(worker);
     const seen = await inspect(worker.indexedDB);
-    assert.deepEqual(seen.events, [['storage.migration-completed', { schemaVersion: THIS_VERSION, surface: 'worker-internal' }]]);
+    // The transforms run once the upgrade is in, and journal their end (#17 PR 3a)
+    assert.deepEqual(seen.events, [
+      ['storage.migration-completed', { schemaVersion: THIS_VERSION, surface: 'worker-internal' }],
+      ['storage.transforms-completed', { surface: 'worker-internal' }],
+    ]);
     assert.deepEqual(seen.incidents, []);
   });
 
@@ -100,10 +114,12 @@ describe("the worker journals its migration run (js/background.js, #17's runner)
       },
     });
     await worker.drain();
+    await transformed(worker);
     const seen = await inspect(worker.indexedDB);
     assert.deepEqual(seen.events, [
       ['storage.migration-blocked', { errorCode: 'blocked-upgrade', schemaVersion: THIS_VERSION, surface: 'worker-internal' }],
       ['storage.migration-completed', { schemaVersion: THIS_VERSION, surface: 'worker-internal' }],
+      ['storage.transforms-completed', { surface: 'worker-internal' }],
     ]);
     assert.ok(!codes(seen).includes('storage.open-failed'));
     assert.deepEqual(seen.incidents, []);
@@ -216,6 +232,12 @@ async function restarts(times, setup) {
       await new Promise(resolve => setImmediate(resolve));
       await new Promise(resolve => setTimeout(resolve, 30));
     }
+    // The transforms that follow a run, and what they journal (#17 PR 3a)
+    await env.global.storageTransforms;
+    for (let round = 0; round < 3; round += 1) {
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
   }
   return { seen: await inspect(factory), local: chrome.local };
 }
@@ -238,7 +260,7 @@ describe('the migration events across worker starts (#20 slice 4 prerequisites, 
     });
     assert.equal(local.storageUpgradeBlocked ?? null, null, "the start cleared the marker");
     assert.equal(local.setting_storageUpgrade.status, 'migrated');
-    assert.deepEqual(codes(seen), ['storage.migration-completed']);
+    assert.deepEqual(codes(seen), ['storage.migration-completed', 'storage.transforms-completed']);
   });
 
   it('a start whose upgrade is still blocked, behind the marker a stopped worker left, journals no second storage.migration-blocked and keeps the marker', async () => {

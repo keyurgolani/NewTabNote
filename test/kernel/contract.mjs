@@ -12,6 +12,7 @@ import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
+import { placementOf } from '../../js/product/placement.js';
 import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
@@ -92,6 +93,25 @@ const storageNote = (id, name, now) => ({
   viewport: { scale: 1, offsetX: 0, offsetY: 0 },
   settings: { gridType: 'dots', backgroundColor: '#fafafa' },
 });
+
+/**
+ * The placement, kind, and lifecycle the kernel writes beside a note's flags (#17 PR 3a,
+ * js/kernel/core/domain/placement.js)
+ * @param {Record<string, unknown>} placement
+ * @param {'note' | 'template'} [kind]
+ * @param {'active' | 'archived' | 'trashed'} [lifecycle]
+ */
+const group = (placement, kind = 'note', lifecycle = 'active') => ({ placement, kind, lifecycle });
+
+/** Projects' Unfiled, where a new note with no folder goes (#17 PR 3, Q3) */
+const UNFILED = Object.freeze({ kind: 'collection', folderId: null });
+
+/**
+ * The lifecycle #1's states give, trash before archive
+ * @param {{trashed: boolean, archived: boolean}} states
+ * @returns {'active' | 'archived' | 'trashed'}
+ */
+const lifecycleOfStates = states => (states.trashed ? 'trashed' : states.archived ? 'archived' : 'active');
 
 /** The preferences Storage.initializeDefaultSettings writes on first run (js/storage.js) */
 const STORAGE_DEFAULT_PREFERENCES = Object.freeze({
@@ -244,10 +264,10 @@ export function runContractSuite(fixture) {
       (await ctx.adapter.read([store], tx => tx.getAll(store))).map(record => record.id).sort();
 
     describe('notes', () => {
-      it('createNote stores the record Storage.createNote has always written, and a search entry', async () => {
+      it('createNote stores the record Storage.createNote has always written, its group in Unfiled beside it (#17 PR 3a), and a search entry', async () => {
         const outcome = await run(cmd('createNote', { noteId: 'n1' }));
         assert.deepEqual([outcome.code, outcome.changedIds], ['note-created', ['n1']]);
-        assert.deepEqual(await noteOf('n1'), storageNote('n1', 'Untitled', NOW));
+        assert.deepEqual(await noteOf('n1'), { ...storageNote('n1', 'Untitled', NOW), ...group(UNFILED) });
         assert.deepEqual(await searchEntryOf('n1'), { noteId: 'n1', name: 'Untitled', content: '', updatedAt: NOW });
       });
 
@@ -272,6 +292,7 @@ export function runContractSuite(fixture) {
           folderId: 'f1',
           pinned: true,
           titleManuallySet: true,
+          ...group({ kind: 'collection', folderId: 'f1' }),
         });
         assertRejected(
           await kernel.execute(cmd('createNote', { noteId: 'n2', pinned: /** @type {any} */ ('yes') })),
@@ -1539,6 +1560,7 @@ export function runContractSuite(fixture) {
           ...storageNote('d1', 'Daily Note - Oct 20, 2026', NOW),
           isDaily: true,
           dateStr: '2026-10-20',
+          ...group({ kind: 'daily', dateKey: '2026-10-20' }),
         });
         assert.deepEqual(await searchEntryOf('d1'), {
           noteId: 'd1',
@@ -2007,7 +2029,12 @@ export function runContractSuite(fixture) {
         ctx.clock.advance();
         const moved = await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }));
         assert.deepEqual([moved.code, moved.changedIds], ['note-moved', ['n1']]);
-        assert.deepEqual(await noteOf('n1'), { ...before, folderId: 'f1', updatedAt: NOW + 1000 });
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          folderId: 'f1',
+          updatedAt: NOW + 1000,
+          placement: { kind: 'collection', folderId: 'f1' },
+        });
         // Already there: it commits naming nothing, and writes nothing
         ctx.clock.advance();
         const again = await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }));
@@ -2025,7 +2052,7 @@ export function runContractSuite(fixture) {
         );
         assert.equal((await noteOf('n1'))?.folderId, 'f1');
         await run(cmd('moveNoteToFolder', { noteId: 'n1', folderId: null }));
-        assert.equal((await noteOf('n1'))?.folderId, null);
+        assert.deepEqual([(await noteOf('n1'))?.folderId, (await noteOf('n1'))?.placement], [null, UNFILED]);
         assert.equal((await blocksOf('n1')).length, 2);
       });
 
@@ -2046,11 +2073,23 @@ export function runContractSuite(fixture) {
         const blocks = await blocksOf('n1');
         ctx.clock.advance();
         assert.equal((await run(cmd('convertNoteToTemplate', { noteId: 'n1' }))).code, 'note-made-template');
-        assert.deepEqual(await noteOf('n1'), { ...before, isTemplate: true, folderId: null, updatedAt: NOW + 1000 });
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          isTemplate: true,
+          folderId: null,
+          updatedAt: NOW + 1000,
+          ...group(UNFILED, 'template'),
+        });
         assert.deepEqual([await idsIn('active'), await idsIn('templates')], [[], ['n1']]);
         ctx.clock.advance();
         assert.equal((await run(cmd('convertTemplateToNote', { noteId: 'n1' }))).code, 'template-made-note');
-        assert.deepEqual(await noteOf('n1'), { ...before, isTemplate: false, folderId: null, updatedAt: NOW + 2000 });
+        assert.deepEqual(await noteOf('n1'), {
+          ...before,
+          isTemplate: false,
+          folderId: null,
+          updatedAt: NOW + 2000,
+          ...group(UNFILED),
+        });
         assert.deepEqual([await idsIn('active'), await idsIn('templates')], [['n1'], []]);
         assert.deepEqual(await blocksOf('n1'), blocks);
         for (const type of /** @type {const} */ (['convertNoteToTemplate', 'convertTemplateToNote'])) {
@@ -2366,6 +2405,111 @@ export function runContractSuite(fixture) {
           assert.deepEqual([await noteOf('n1'), await tombstones()], [undefined, []]);
         },
       );
+    });
+
+    describe('placement, kind, and lifecycle beside the flags (#17 PR 3a)', () => {
+      /** @param {string} noteId */
+      const groupOf = async noteId => {
+        const note = await noteOf(noteId);
+        return note && { placement: note.placement, kind: note.kind, lifecycle: note.lifecycle };
+      };
+      /**
+       * The group #1's placementOf reads from the note's flags now, with the folders as committed
+       * @param {string} noteId
+       */
+      const placementOfFlags = async noteId => {
+        const note = /** @type {NoteRecord} */ (await noteOf(noteId));
+        const folders = await kernel.query({ type: 'listFolders' });
+        const live = folders.kind === 'ready' ? folders.data.map(folder => folder.id) : [];
+        const { placement, states } = placementOf(/** @type {any} */ (note), live);
+        return group(placement, states.template ? 'template' : 'note', lifecycleOfStates(states));
+      };
+
+      it("every command that sets a flag keeps the group in step, as #1's placementOf reads the flags", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        /** @type {Array<[Command, ReturnType<typeof group>]>} */
+        const steps = [
+          [cmd('setPinned', { noteId: 'n1', pinned: true }), group(UNFILED)],
+          [cmd('archiveNote', { noteId: 'n1' }), group(UNFILED, 'note', 'archived')],
+          [cmd('unarchiveNote', { noteId: 'n1' }), group(UNFILED)],
+          [cmd('moveNoteToFolder', { noteId: 'n1', folderId: 'f1' }), group({ kind: 'collection', folderId: 'f1' })],
+          [cmd('trashNote', { noteId: 'n1' }), group({ kind: 'collection', folderId: 'f1' }, 'note', 'trashed')],
+          [cmd('restoreNote', { noteId: 'n1' }), group({ kind: 'collection', folderId: 'f1' })],
+          [cmd('deleteFolder', { folderId: 'f1' }), group(UNFILED)],
+          [cmd('convertNoteToTemplate', { noteId: 'n1' }), group(UNFILED, 'template')],
+          [cmd('convertTemplateToNote', { noteId: 'n1' }), group(UNFILED)],
+        ];
+        for (const [command, expected] of steps) {
+          ctx.clock.advance();
+          await run(command);
+          assert.deepEqual(await groupOf('n1'), expected, command.type);
+          assert.deepEqual(
+            await groupOf('n1'),
+            await placementOfFlags('n1'),
+            `${command.type}, as placementOf reads it`,
+          );
+        }
+      });
+
+      it("a capture's new Daily Note is under its date, in a folder while one holds it, and under its date again once out", async () => {
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const capture = /** @type {const} */ ({ type: 'text', content: 'Hi' });
+        committedOf(await worker.execute(cmd('captureToDailyNote', { noteId: 'd1', blockId: 'c1', capture })));
+        const daily = { kind: 'daily', dateKey: '2026-10-20' };
+        assert.deepEqual(await groupOf('d1'), group(daily));
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        await run(cmd('moveNoteToFolder', { noteId: 'd1', folderId: 'f1' }));
+        assert.deepEqual(await groupOf('d1'), group({ kind: 'collection', folderId: 'f1' }));
+        await run(cmd('moveNoteToFolder', { noteId: 'd1', folderId: null }));
+        assert.deepEqual(await groupOf('d1'), group(daily));
+        assert.deepEqual(await groupOf('d1'), await placementOfFlags('d1'));
+        // ensureDailyNote finds that one, and makes none
+        await run(cmd('ensureDailyNote', { noteId: 'd2' }));
+        assert.equal(await noteOf('d2'), undefined);
+      });
+
+      it('a note the transform put in Inbox stays there through pins, archives, and the trash, and a move takes it to its folder, then to Unfiled, never back', async () => {
+        await seed('notes', [{ ...storageNote('inbox', 'Untitled', NOW), ...group({ kind: 'inbox' }) }]);
+        await run(cmd('saveNoteContent', { noteId: 'inbox', blocks: someBlocks('inbox', 1) }));
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        /** @type {Array<[Command, ReturnType<typeof group>]>} */
+        const steps = [
+          [cmd('renameNote', { noteId: 'inbox', name: 'Untitled 2' }), group({ kind: 'inbox' })],
+          [cmd('setPinned', { noteId: 'inbox', pinned: true }), group({ kind: 'inbox' })],
+          [cmd('archiveNote', { noteId: 'inbox' }), group({ kind: 'inbox' }, 'note', 'archived')],
+          [cmd('trashNote', { noteId: 'inbox' }), group({ kind: 'inbox' }, 'note', 'trashed')],
+          [cmd('restoreNote', { noteId: 'inbox' }), group({ kind: 'inbox' })],
+          [cmd('moveNoteToFolder', { noteId: 'inbox', folderId: 'f1' }), group({ kind: 'collection', folderId: 'f1' })],
+          [cmd('moveNoteToFolder', { noteId: 'inbox', folderId: null }), group(UNFILED)],
+        ];
+        for (const [command, expected] of steps) {
+          await run(command);
+          assert.deepEqual(await groupOf('inbox'), expected, command.type);
+        }
+      });
+
+      it('a 1.4.x note a command changes stays without the group, which the transform fills from its flags then', async () => {
+        await seed('notes', [storageNote('legacy', 'Plan', NOW)]);
+        await run(cmd('createFolder', { folderId: 'f1', name: 'Work', parentId: null }));
+        for (const command of [
+          cmd('setPinned', { noteId: 'legacy', pinned: true }),
+          cmd('archiveNote', { noteId: 'legacy' }),
+          cmd('moveNoteToFolder', { noteId: 'legacy', folderId: 'f1' }),
+          cmd('trashNote', { noteId: 'legacy' }),
+          cmd('restoreNote', { noteId: 'legacy' }),
+          cmd('deleteFolder', { folderId: 'f1' }),
+          cmd('convertNoteToTemplate', { noteId: 'legacy' }),
+        ]) {
+          await run(command);
+          const note = /** @type {NoteRecord} */ (await noteOf('legacy'));
+          assert.deepEqual(
+            ['placement', 'kind', 'lifecycle'].filter(field => field in note),
+            [],
+            command.type,
+          );
+        }
+      });
     });
 
     describe('preferences, session, and startup maintenance', () => {
@@ -2843,7 +2987,7 @@ export function runContractSuite(fixture) {
         assert.equal((await kernel.query({ type: 'listNotes', view: 'trashed' })).kind, 'empty');
       });
 
-      it("lists Popup's view by archivedAt and trashedAt, templates included, and Side Panel's with every note", async () => {
+      it("lists Popup's view without what's archived or trashed, by flag or time, templates included, and Side Panel's with every note", async () => {
         await createNote({ noteId: 'kept', name: 'Kept' });
         ctx.clock.advance();
         await createNote({ noteId: 'arch', name: 'Archived' });
@@ -2856,7 +3000,8 @@ export function runContractSuite(fixture) {
           { ...storageNote('template', 'Template', ctx.clock.now()), isTemplate: true },
           { ...storageNote('flags', 'Flags only', ctx.clock.advance()), archived: true, trashed: true },
         ]);
-        assert.deepEqual(await idsIn('popup'), ['flags', 'template', 'kept']);
+        // 1.4.x's Popup listed a note archived and trashed by flag alone (review R88's fix)
+        assert.deepEqual(await idsIn('popup'), ['template', 'kept']);
         assert.deepEqual(await idsIn('sidePanel'), ['flags', 'template', 'gone', 'arch', 'kept']);
         for (const caller of [CALLERS.popup, CALLERS.sidepanel]) {
           const state = await ctx.kernel(caller).query({ type: 'listNotes', view: 'popup' });

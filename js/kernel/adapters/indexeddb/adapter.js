@@ -66,6 +66,7 @@
 
 import { COMMANDS } from '../../core/contracts/commands.js';
 import { UnavailableError, committed, rejected, unavailable, unavailableFrom } from '../../core/contracts/outcomes.js';
+import { withoutPlacement } from '../../core/domain/placement.js';
 import { digestOf } from '../../core/memory/fingerprint.js';
 import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 import { systemClock } from '../../core/ports/runtime.js';
@@ -307,7 +308,12 @@ function view(db, tx, scope, writable, tracker) {
         return;
       }
       if (store === 'notes') {
-        tracker.putNote(objectStore, record);
+        // Below version 10, which 1.4.1 still opens and where only its flags would follow it, a
+        // note goes in without #17 PR 3's fields, as on the legacy adapter (review R88)
+        tracker.putNote(
+          objectStore,
+          db.objectStoreNames.contains(TOMBSTONES_STORE) ? record : withoutPlacement(record),
+        );
         return;
       }
       objectStore.put(record);

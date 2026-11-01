@@ -2456,6 +2456,8 @@ class DatabaseManager {
         local.archived = false;
         local.archivedAt = null;
         local.updatedAt = result.trashedAt;
+        // A lifecycle the kernel wrote beside the flags follows them (#17 PR 3a)
+        if (local.lifecycle !== undefined) local.lifecycle = 'trashed';
         noteStore.put(local);
         result.trashedIds.push(local.id);
       }
@@ -2479,8 +2481,13 @@ class DatabaseManager {
       }
     }
 
+    // The fields #17 PR 3 writes beside the flags (js/kernel/core/domain/placement.js's
+    // PLACEMENT_FIELDS), which a backup from this build or a later one carries: an import drops
+    // them, so the flags it sets are all a note says, and the kernel derives the rest from those.
+    const flagFields = ['placement', 'kind', 'lifecycle'];
     for (const packageNote of plan.notes) {
       const imported = { ...packageNote, id: plan.noteIds.get(packageNote.id), folderId: resolveFolder(packageNote.folderId) };
+      for (const field of flagFields) delete imported[field];
       // Imported notes start outside trash, so an import never queues anything for deletion.
       delete imported.trashed;
       delete imported.trashedAt;

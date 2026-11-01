@@ -16,7 +16,9 @@ import {
   UPGRADE_RECORD_KEY,
   createWorkerClient,
   journalPurge,
+  journalTransforms,
 } from '../../js/kernel/composition/background.js';
+import { createFailureEvents } from '../../js/kernel/composition/trust.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -29,11 +31,14 @@ import {
   openRecovery,
 } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
-import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
+import { DB_NAME, DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
-import { legacyEnv, profileWith, synthesized } from './migration-support.mjs';
+import { TRANSFORM_RETRY_AFTER_MS, TRANSFORM_STOP_KEY } from '../../js/kernel/adapters/indexeddb/transforms.js';
+import { withoutPlacement } from '../../js/kernel/core/domain/placement.js';
+import { ROOMY, legacyEnv, newProfile, profileWith, synthesized, transform } from './migration-support.mjs';
 import { recordsOf } from './storage-fixture.mjs';
 import { CALLERS } from './support.mjs';
+import { databaseOn, fakeKeyRange, openRecords, trustProfile } from './trust-support.mjs';
 
 /** @typedef {import('./migration-support.mjs').Profile} Profile */
 
@@ -712,9 +717,11 @@ describe('the worker purges what was deleted for good from the recovery points (
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     /** @type {Array<[string, unknown, unknown]>} */
     const journaled = [];
+    // The purge's, without the transforms' end, which the same events hear first (#20)
     const events = {
-      event: (/** @type {string} */ code, /** @type {unknown} */ fields, /** @type {any} */ failure) =>
-        void journaled.push([code, fields, failure ? failure.code : null]),
+      event: (/** @type {string} */ code, /** @type {unknown} */ fields, /** @type {any} */ failure) => {
+        if (code.startsWith('storage.purge-')) journaled.push([code, fields, failure ? failure.code : null]);
+      },
     };
     const worker = createWorkerClient({ ...hostOf(of), events });
     assert.equal(await worker.whenReady(), null);
@@ -763,5 +770,274 @@ describe('the worker purges what was deleted for good from the recovery points (
     assert.equal((await worker.migration.done).status, 'space-blocked');
     assert.equal(await worker.purge.request(), null);
     assert.equal(await recoveryExists(of), false);
+  });
+});
+
+describe("the worker's data transforms (#17 PR 3a)", () => {
+  /**
+   * The profile's `meta.schema` and whether every note has its group
+   * @param {Profile} of
+   */
+  const state = async of => {
+    const [schema] = (await recordsOf(of, 'meta')).filter(record => record.key === 'schema');
+    const notes = await recordsOf(of, 'canvases');
+    return { logicalVersion: schema.logicalVersion, grouped: notes.every(note => note.placement && note.lifecycle) };
+  };
+
+  it('at every start, once its run is in, runs the transforms the database still needs, then the purge, without holding the kernel up', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    // The logical version as each holder of the points lock lets it go: the run, then the
+    // transforms, then the purge, each after the one before
+    const manager = legacyEnv.createLockManager();
+    /** @type {number[]} */
+    const released = [];
+    const locks = {
+      request: (/** @type {string} */ name, /** @type {any} */ options, /** @type {() => Promise<any>} */ callback) =>
+        manager.request(name, options, async () => {
+          try {
+            return await callback();
+          } finally {
+            released.push((await state(of)).logicalVersion);
+          }
+        }),
+    };
+    const base = fakeTimers();
+    let kept = 0;
+    const timers = {
+      ...base,
+      setInterval: (/** @type {() => void} */ fn) => {
+        kept += 1;
+        return base.setInterval(fn);
+      },
+    };
+    const worker = createWorkerClient({ ...hostOf(of), locks, timers, keepAlive: async () => {} });
+    assert.equal(await worker.whenReady(), null);
+    assert.equal((await worker.transforms.done)?.status, 'transformed');
+    assert.equal((await worker.purge.done)?.status, 'nothing');
+    assert.deepEqual(released, [1, 2, 2]);
+    assert.deepEqual(await state(of), { logicalVersion: 2, grouped: true });
+    // The keepalive spans each: the run, the transforms, and the sweep
+    assert.equal(kept, 3);
+    await legacyEnv.waitFor(() => base.live.size === 0, { withinMs: 5000, message: 'the keepalive to stop' });
+    // The next start finds nothing to do
+    const next = createWorkerClient(hostOf(of));
+    assert.equal(await next.whenReady(), null);
+    assert.equal((await next.transforms.done)?.status, 'current');
+  });
+
+  it('on a database the run left below 10 it runs none, and reads nothing for them', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const worker = createWorkerClient(hostOf(of, { estimate: CRAMPED }));
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    assert.equal(await worker.whenReady(), null);
+    assert.equal(await worker.transforms.done, null);
+  });
+});
+
+/**
+ * @template T
+ * @param {IDBRequest<T>} request
+ * @returns {Promise<T>}
+ */
+const answer = request =>
+  new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+
+/**
+ * Runs `change` on CanvasTabDB's `names` in one readwrite transaction of the test's own
+ * @param {Profile} of
+ * @param {string[]} names
+ * @param {(stores: Record<string, IDBObjectStore>) => Promise<void>} change
+ */
+async function edit(of, names, change) {
+  const db = /** @type {IDBDatabase} */ (await answer(of.real.open(DB_NAME)));
+  try {
+    const tx = db.transaction(names, 'readwrite');
+    const ended = new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onabort = () => reject(tx.error);
+    });
+    await change(Object.fromEntries(names.map(name => [name, tx.objectStore(name)])));
+    await ended;
+  } finally {
+    db.close();
+  }
+}
+
+/** @param {Profile} of - the transforms' recorded stop, if there is one */
+const stopOf = async of => (await recordsOf(of, 'meta')).find(record => record.key === TRANSFORM_STOP_KEY);
+
+/**
+ * Moves the recorded stop back by TRANSFORM_RETRY_AFTER_MS, as half an hour passing would
+ * @param {Profile} of
+ */
+const ageStop = of =>
+  edit(of, ['meta'], async ({ meta }) => {
+    const stop = await answer(meta.get(TRANSFORM_STOP_KEY));
+    meta.put({ ...stop, at: stop.at - TRANSFORM_RETRY_AFTER_MS });
+  });
+
+// #20's journal pair for the transforms (#17 PR 3a, the lead's call): a stop is journaled once
+// per code, from the stop record the run found, and the end once the transforms reach this
+// build's logical version. Neither raises an incident in R1 (event-codes.js).
+describe("the worker journals the data transforms' stops, once per code, and their end (#17 PR 3a, #20)", () => {
+  /**
+   * The synthesized profile at this build's structural version, its logical version set back to
+   * 1 so every transform is still to run, and its notes without their group, whose first worker
+   * start's transforms stop short of space. `start` starts another worker on it and answers its
+   * transforms' outcome; every worker journals what the transforms do to `journaled`, as the
+   * code, the fields, and the failure's code.
+   */
+  const stoppedOnce = async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get(`v${DB_VERSION}.basic`)));
+    await edit(of, ['meta'], async ({ meta }) => {
+      meta.put({ ...(await answer(meta.get('schema'))), logicalVersion: 1 });
+    });
+    /** @type {Array<[string, unknown, string | null]>} */
+    const journaled = [];
+    const events = {
+      event: (/** @type {string} */ code, /** @type {unknown} */ fields, /** @type {any} */ failure) => {
+        if (code.startsWith('storage.transforms-')) journaled.push([code, fields, failure ? failure.code : null]);
+      },
+    };
+    /** @param {any} [estimate] */
+    const start = async (estimate = CRAMPED) => {
+      const worker = createWorkerClient({ ...hostOf(of, { estimate }), indexedDB: of.faults.factory, events });
+      assert.equal(await worker.whenReady(), null);
+      return worker.transforms.done;
+    };
+    const first = await start();
+    assert.deepEqual(
+      [first?.status, first?.failure, first?.backedOff],
+      ['space-blocked', { code: 'space-short' }, false],
+    );
+    return { of, journaled, start };
+  };
+
+  it('journals a stop once, and not at the starts in the next half hour, which back off on it', async () => {
+    const { journaled, start } = await stoppedOnce();
+    const soon = await start();
+    assert.deepEqual(journaled, [['storage.transforms-stopped', {}, 'space-short']]);
+    assert.deepEqual([soon?.status, soon?.backedOff], ['space-blocked', true]);
+  });
+
+  it("doesn't journal the same code at a retry half an hour on: the stop the run found recorded has it, so a start before journaled it", async () => {
+    const { of, journaled, start } = await stoppedOnce();
+    const stopped = await stopOf(of);
+    await ageStop(of);
+    const retried = await start();
+    assert.deepEqual(journaled, [['storage.transforms-stopped', {}, 'space-short']]);
+    assert.deepEqual(
+      [retried?.status, retried?.failure, retried?.backedOff, retried?.previous],
+      ['space-blocked', { code: 'space-short' }, false, { status: 'space-blocked', code: 'space-short' }],
+    );
+    assert.ok((await stopOf(of))?.at >= stopped.at, 'the retry read the stores and recorded its own stop');
+  });
+
+  it('journals a stop with a new code', async () => {
+    const { of, journaled, start } = await stoppedOnce();
+    await ageStop(of);
+    // Room for the point, until the disk refuses its copy
+    const aborted = of.faults.abortAfterNextWrite('rows', 'QuotaExceededError');
+    const refused = await start(ROOMY);
+    await aborted;
+    assert.deepEqual(journaled, [
+      ['storage.transforms-stopped', {}, 'space-short'],
+      ['storage.transforms-stopped', {}, 'quota'],
+    ]);
+    assert.deepEqual(
+      [refused?.status, refused?.failure, refused?.previous],
+      ['space-blocked', { code: 'quota' }, { status: 'space-blocked', code: 'space-short' }],
+    );
+  });
+
+  it("journals the end once the transforms reach this build's logical version, and nothing at the starts after it", async () => {
+    const { of, journaled, start } = await stoppedOnce();
+    await ageStop(of);
+    assert.equal((await start(ROOMY))?.status, 'transformed');
+    assert.equal((await start(ROOMY))?.status, 'current');
+    assert.deepEqual(journaled, [
+      ['storage.transforms-stopped', {}, 'space-short'],
+      ['storage.transforms-completed', {}, null],
+    ]);
+  });
+
+  it("journals no end on a database the run only made, where they had nothing to change, as the run's own end isn't journaled there", async () => {
+    const of = newProfile();
+    /** @type {string[]} */
+    const journaled = [];
+    const events = { event: (/** @type {string} */ code) => void journaled.push(code) };
+    const worker = createWorkerClient({ ...hostOf(of), events });
+    assert.equal(await worker.whenReady(), null);
+    assert.deepEqual([(await worker.migration.done).status, (await worker.migration.done).shape], ['migrated', 'none']);
+    assert.equal((await worker.transforms.done)?.status, 'transformed');
+    assert.equal((await worker.purge.done)?.status, 'nothing');
+    assert.deepEqual(journaled, []);
+  });
+
+  it('journals a stop after the end again, since the end takes the stop record with it', async () => {
+    const { of, journaled, start } = await stoppedOnce();
+    await ageStop(of);
+    assert.equal((await start(ROOMY))?.status, 'transformed');
+    assert.equal(await stopOf(of), undefined);
+    // As a later build's step would be: pending, with a note to fill, and no room for its point
+    await edit(of, ['meta', 'canvases'], async ({ meta, canvases }) => {
+      const schema = await answer(meta.get('schema'));
+      meta.put({ ...schema, logicalVersion: 1 });
+      const [note] = await answer(canvases.getAll());
+      canvases.put(withoutPlacement(note));
+    });
+    const again = await start();
+    assert.deepEqual(journaled, [
+      ['storage.transforms-stopped', {}, 'space-short'],
+      ['storage.transforms-completed', {}, null],
+      ['storage.transforms-stopped', {}, 'space-short'],
+    ]);
+    assert.deepEqual(
+      [again?.status, again?.failure, again?.backedOff, again?.previous],
+      ['space-blocked', { code: 'space-short' }, false, null],
+    );
+  });
+
+  it("journals the stop at a meta.schema they can't read with its code, which the registry lists (meta-unreadable)", async () => {
+    // A schema record without its logical version, which the run's own check refuses, so the
+    // transforms meet one only when it changed after the run
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get(`v${DB_VERSION}.basic`)));
+    await edit(of, ['meta'], async ({ meta }) => {
+      const schema = await answer(meta.get('schema'));
+      delete schema.logicalVersion;
+      meta.put(schema);
+    });
+    const ended = await transform(of);
+    assert.deepEqual([ended.status, ended.failure, ended.previous], ['failed', { code: 'meta-unreadable' }, null]);
+    // The worker's failure events, which keep a failure's code only when it's a registered one
+    const trust = trustProfile();
+    const events = createFailureEvents({
+      surface: 'worker-internal',
+      host: () => ({
+        indexedDB: trust.faults.factory,
+        keyRange: fakeKeyRange,
+        settings: trust.settings,
+        locks: trust.locks,
+        clock: { now: () => Date.now() },
+        ids: { next: () => webcrypto.randomUUID() },
+      }),
+    });
+    journalTransforms(events, ended);
+    await events.flush();
+    const store = databaseOn(trust);
+    try {
+      const { records } = await openRecords(store, trust);
+      assert.deepEqual(
+        (await records.events())
+          .filter(event => event.code.startsWith('storage.'))
+          .map(event => [event.code, event.fields]),
+        [['storage.transforms-stopped', { surface: 'worker-internal', errorCode: 'meta-unreadable' }]],
+      );
+    } finally {
+      store.close();
+    }
   });
 });

@@ -15,9 +15,11 @@
  * finished: `versioned`, with startup maintenance, when the database is at that version, and
  * `existing` when the run left it as it was (short of space, refused, or failed), so captures
  * keep working on the shape that's there. Once it's open at version 10, the worker sweeps the
- * adapter's ledger, at most once a day (ledger.js), and purges what was deleted for good from
- * the recovery points (purge.js, #17 PR 2b): at every start, and again when a page that deleted
- * something wakes it with `storage.purge`. PURGE_RECOVERY_POINTS turns the purge off.
+ * adapter's ledger, at most once a day (ledger.js), runs the data transforms its database
+ * still needs (transforms.js, #17 PR 3a) at every start, and purges what was deleted for good
+ * from the recovery points (purge.js, #17 PR 2b): at every start, after the transforms, and
+ * again when a page that deleted something wakes it with `storage.purge`.
+ * PURGE_RECOVERY_POINTS turns the purge off.
  * The run's outcome goes to chrome.storage.local (`setting_storageUpgrade`), which the new tab
  * reads for its space notice and Settings > Data & Backup.
  */
@@ -28,6 +30,7 @@ import { UPGRADE_BLOCKED_KEY } from '../adapters/indexeddb/health.js';
 import { startMigrations } from '../adapters/indexeddb/migrate.js';
 import { purgeRecoveryPoints } from '../adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../adapters/indexeddb/registry.js';
+import { runTransforms } from '../adapters/indexeddb/transforms.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { createRouter } from '../core/messaging/router.js';
@@ -42,6 +45,7 @@ import { hostTimers, randomIds } from './messaging.js';
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrationOutcome} MigrationOutcome */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrationRun} MigrationRun */
 /** @typedef {import('../adapters/indexeddb/purge.js').PurgeOutcome} PurgeOutcome */
+/** @typedef {import('../adapters/indexeddb/transforms.js').TransformOutcome} TransformOutcome */
 /** @typedef {import('../adapters/indexeddb/space.js').Estimate} Estimate */
 /** @typedef {import('../adapters/indexeddb/records.js').Digester} Digester */
 /** @typedef {import('../core/messaging/router.js').Router} Router */
@@ -79,12 +83,12 @@ import { hostTimers, randomIds } from './messaging.js';
  *   report that throws changes nothing the run does.
  * @property {boolean} [purgeRecoveryPoints] - PURGE_RECOVERY_POINTS unless a test says otherwise
  * @property {PurgeEvents | null} [events] - the worker's failure events (#20), which a stopped
- *   purge and its end go to
+ *   purge or stopped transforms, and their ends, go to
  */
 
 /**
- * Where the worker's purge journals a stop and its end: the worker's failure events
- * (composition/trust.js), best effort
+ * Where the worker's purge and its transforms journal a stop and its end: the worker's failure
+ * events (composition/trust.js), best effort
  * @typedef {{event: (code: string, fields?: Record<string, unknown>, failure?: unknown) => void}} PurgeEvents
  */
 
@@ -155,6 +159,34 @@ export function journalPurge(events, outcome) {
     }
   } catch {
     // Best effort: the purge never hears of the journal's
+  }
+}
+
+/**
+ * Journals what the data transforms stopped at and their end (#20): `storage.transforms-stopped`
+ * with the code of a run that stopped or failed, once per code. So not a run whose code the
+ * stop it found recorded has (`previous`), since a start before it journaled that code: a retry
+ * that stops the same way, or a run that backed off on that stop. And
+ * `storage.transforms-completed` once they reach this build's logical version, which takes the
+ * stop record with it, so a later stop is journaled again, but not on a database the run only
+ * made (`made`), where they had nothing to change, as the run's own end isn't journaled there
+ * (migrationEvents). Neither raises an incident in R1 (event-codes.js). Codes only.
+ * @param {PurgeEvents | null | undefined} events
+ * @param {TransformOutcome | null} ended
+ * @param {{made?: boolean}} [options] - `made`: the attempt before them made the database
+ */
+export function journalTransforms(events, ended, { made = false } = {}) {
+  if (!events || !ended) return;
+  try {
+    if (ended.status === 'transformed') {
+      if (!made) events.event('storage.transforms-completed', {});
+    } else if (ended.status === 'space-blocked' || ended.status === 'failed') {
+      const code = ended.failure ? ended.failure.code : null;
+      // The code goes as the failure's, so the journal keeps it only when it's a registered one
+      if (!ended.previous || ended.previous.code !== code) events.event('storage.transforms-stopped', {}, { code });
+    }
+  } catch {
+    // Best effort: the transforms never hear of the journal's
   }
 }
 
@@ -313,8 +345,15 @@ async function record(settings, outcome, stored, now, version, costly) {
  */
 
 /**
- * The worker's client, with the migration behind it and the purge after it
- * @typedef {Client & {migration: WorkerMigration, purge: WorkerPurge}} WorkerClient
+ * The worker's data transforms (transforms.js), as its client exposes them
+ * @typedef {object} WorkerTransforms
+ * @property {Promise<TransformOutcome | null>} done - the latest run's outcome, null while the
+ *   database isn't at this build's version
+ */
+
+/**
+ * The worker's client, with the migration behind it, and the transforms and the purge after it
+ * @typedef {Client & {migration: WorkerMigration, transforms: WorkerTransforms, purge: WorkerPurge}} WorkerClient
  */
 
 /**
@@ -547,14 +586,52 @@ export function createWorkerClient(host = workerHost()) {
     return running;
   };
 
+  /** @type {Promise<TransformOutcome | null>} */
+  let transformed = Promise.resolve(null);
+
   /**
-   * A sweep once the latest attempt is in, when it left the database at this build's version
-   * and the switch is on
+   * The transforms the database still needs (transforms.js), once the latest attempt is in and
+   * left it at this build's version. The kernel never waits for them: they run under the points
+   * lock, in batches a page's commit goes between. The keepalive spans them, and the journal
+   * hears what they stopped at and their end (journalTransforms).
+   * @returns {Promise<TransformOutcome | null>}
+   */
+  const requestTransforms = () => {
+    const next = done
+      .then(async attempt => {
+        if (attempt.status !== 'migrated' && attempt.status !== 'current') return null;
+        const ended = await runTransforms({
+          indexedDB: host.indexedDB,
+          keyRange: host.keyRange,
+          locks: host.locks,
+          estimate: host.estimate,
+          crypto: host.crypto,
+          clock: systemClock,
+          logger: storageLogger,
+        });
+        journalTransforms(host.events, ended, { made: attempt.shape === 'none' });
+        return ended;
+      })
+      .catch(error => {
+        storageLogger.warn('storage-transform-not-started', { code: failureOf(error).code });
+        return null;
+      });
+    transformed = next;
+    keepAliveUntil(next);
+    return next;
+  };
+
+  /**
+   * A sweep once the latest attempt and the transforms that followed it are in, when the attempt
+   * left the database at this build's version and the switch is on
    * @returns {Promise<PurgeOutcome | null>}
    */
   const requestPurge = () => {
-    const next = done
-      .then(ended => (purgeOn && (ended.status === 'migrated' || ended.status === 'current') ? sweepPoints() : null))
+    const before = transformed;
+    const next = Promise.all([done, before])
+      .then(([ended]) =>
+        purgeOn && (ended.status === 'migrated' || ended.status === 'current') ? sweepPoints() : null,
+      )
       .catch(error => {
         storageLogger.warn('storage-purge-not-started', { code: failureOf(error).code });
         return null;
@@ -600,9 +677,12 @@ export function createWorkerClient(host = workerHost()) {
       if (replaced) replaced.close();
       const built = kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
       sweepOnce(adapter, built);
-      // At every start, and after every later attempt: deletes the worker didn't hear of, or
-      // a sweep its stop cut off, are purged then
-      if (upgraded) requestPurge();
+      // At every start, and after every later attempt: the transforms a run cut off or never
+      // reached, then the deletes the worker didn't hear of, or a sweep its stop cut off
+      if (upgraded) {
+        requestTransforms();
+        requestPurge();
+      }
       return built;
     });
 
@@ -722,6 +802,11 @@ export function createWorkerClient(host = workerHost()) {
       request,
       blocked,
       running: () => settled < attempts,
+    }),
+    transforms: Object.freeze({
+      get done() {
+        return transformed;
+      },
     }),
     purge: Object.freeze({
       request: requestPurge,

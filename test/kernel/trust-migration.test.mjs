@@ -83,7 +83,8 @@ describe('the migration event codes (#20 slice 4 prerequisites, part 2)', () => 
       assert.equal(entry.incident, undefined, `${code} raises an incident`);
       assert.ok(entry.fields.includes('schemaVersion'));
     }
-    for (const code of ['migration-required', 'space-short', 'schema-mismatch', 'recovery-point-unverified', 'point-missing', 'locks-unavailable', 'unknown-shape']) {
+    // The run's codes, and the data transforms' own for a meta.schema they can't read (#17 PR 3a)
+    for (const code of ['migration-required', 'space-short', 'schema-mismatch', 'recovery-point-unverified', 'point-missing', 'locks-unavailable', 'unknown-shape', 'meta-unreadable']) {
       assert.ok(ERROR_CODES.includes(code), `${code} isn't a registered error code`);
     }
     for (const fault of MIGRATION_FAULTS) assert.ok(FAULT_CODES.includes(fault));
