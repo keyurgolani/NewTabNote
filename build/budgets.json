@@ -17,8 +17,8 @@
     "tolerancePct": 7,
     "profiles": ["typical", "maximal"],
     "rounds": 12,
-    "mode": "report",
-    "modeAbout": "report: CI's perf job measures it on every PR and every push to next and writes the numbers to its summary, failing no merge. It becomes gate after 10 CI runs if 1.4.0 against itself stayed within 7% on at least 9 and the invalid-run check would have passed; otherwise the timing gate becomes a release gate on ref-desktop, through the machine lock (docs/performance/budgets.md)."
+    "mode": "gate",
+    "modeAbout": "gate since 2026-10-31, under the rule it reported by until then: gate after 10 CI runs if 1.4.0 against itself stayed within 7% on at least 9 and the invalid-run check would have passed. The perf workflow ran on 14 pushes to next, f7a17e5e to 7489d7b3, and all 14 were valid: the worst 1.4.0-against-itself median was +2.6% on typical and -2.2% on maximal. A timing fail, or an invalid run, now fails CI's perf job. The perf job isn't in pr-gate's needs or any ruleset, so it blocks no merge; making it block one is the owner's call (docs/performance/budgets.md)."
   },
   "heap": {
     "entry": "newtab",
@@ -26,7 +26,7 @@
     "tolerancePct": 3,
     "profiles": ["typical", "maximal"],
     "mode": "report",
-    "modeAbout": "report, like timing: 4.45 MiB was measured on the Mac, and a Linux Chromium's heap can differ. It becomes gate once CI's runs sit within 3% of a stable value."
+    "modeAbout": "report: 4.45 MiB was measured on the Mac. CI's runs measure it on every PR and every push to next and write it to the summary, failing nothing. It stays report until the owner decides the row with CI's numbers."
   },
   "forbidden": {
     "chart-library": { "about": "Chart.js", "paths": ["js/lib/chart.js"] },

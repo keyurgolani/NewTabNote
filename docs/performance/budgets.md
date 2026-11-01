@@ -11,8 +11,8 @@
 | New tab | start HTML, raw / gzip | 72 / 12 KiB | 65.9 / 10.3 KiB (6.1 / 1.7) |
 | Popup | start JS, raw / gzip | 115 / 40 KiB | 95.5 / 25.9 KiB (19.5 / 14.1) |
 | Side Panel | start JS, raw / gzip | 112 / 40 KiB | 94.0 / 25.7 KiB (18.0 / 14.3) |
-| New tab | interaction-ready against 1.4.0 | median ratio at most +7% | reported, not gated yet |
-| New tab | heap at interaction-ready | 4.45 MiB, +3% (fails above 4.58) | reported, not gated yet |
+| New tab | interaction-ready against 1.4.0 | median ratio at most +7% | gates the `perf` job since 2026-10-31 |
+| New tab | heap at interaction-ready | 4.45 MiB, +3% (fails above 4.58) | reported, not gated |
 
 - **Start** is everything a page loads before it can run: the HTML, its module scripts with what they import, its module preloads, its stylesheets with the CSS its chunks inject, its classic scripts, and the fonts those stylesheets name. A loader chunk the page boots at its start counts as start too, with what it imports: a row's `startChunks` names it. Today that's the new tab's `workspace` chunk, which is still the whole tab until #2 builds Moment. Its root, boot guard and loader are 7.1 KiB; the workspace chunk and the host chunk it imports are the other 541.4. Counting the root alone, the 700 KiB row would check nothing. So every chunk the page's own start loads with `import()` has to be named in its row: in `startChunks` when it loads at boot, or in `lazyChunks` when it loads later. A chunk named in neither fails the build with `budget/entry`, and so does a name the build has no loader chunk for, or one nothing on the page's start loads. Emptying `startChunks`, or dropping a renamed chunk's name from it, fails rather than shrinking the row to the root. Taking the workspace out of start takes a reviewed row change that names it in `lazyChunks`, and `test/budgets.test.js` pins today's `startChunks: ["workspace"]`.
 - `npm run perf:probe`'s byte mode files every chunk behind an `import()` as lazy, the workspace too, so its start number for the new tab is the root's. The build's number, and `dist-report/chunk-graph.json`, are the start the row holds.
@@ -78,12 +78,12 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 - It runs `npm run perf:probe` with 1.4.0, 1.4.0 again and the candidate: 12 rounds each on `typical` and `maximal`, with `--baseline build/budgets.json`.
 - `scripts/perf/gate-report.js` writes the job summary, even when the probe exits 1 for an invalid run. For each profile it shows whether the run is valid, the candidate's median ratio to both 1.4.0 runs against the 7% row, its heap against 4.45 MiB plus 3%, and the absolute milliseconds beside them. A profile is invalid when 1.4.0 against itself is more than 7% off, when any round of any package failed, when the probe reported a problem (a fixture that isn't the recorded one, for one), or when it ran fewer than 12 rounds. A package that measured nothing, say because every candidate round failed, makes it invalid too, rather than stopping the summary. Then its timing and heap both say `invalid`, with the reasons listed.
 
-Both rows say `mode: report`, so nothing in the summary fails the job.
+Timing says `mode: gate`, and heap says `mode: report`. A timing fail, or a run the summary calls invalid, fails the `perf` job. Heap is written to the summary and fails nothing.
 
-- **Timing becomes a gate** after 10 CI runs, if 1.4.0 against itself stayed within 7% on at least 9 and the invalid-run check would have passed. If it didn't, the timing gate moves to a release gate on `ref-desktop` through the machine lock, which the lead approves before it's built.
-- **Heap becomes a gate** once CI's runs sit within its 3% of a stable value. 4.45 MiB was measured on the Mac, and a Linux Chromium's heap can differ.
+- **Timing became a gate** on 2026-10-31, under the rule it reported by until then: gate after 10 CI runs if 1.4.0 against itself stayed within 7% on at least 9 and the invalid-run check would have passed. The workflow had run on 14 pushes to `next`, `f7a17e5e` to `7489d7b3`, and all 14 were valid. The worst 1.4.0-against-itself median was +2.6% on `typical` and -2.2% on `maximal`, and the candidate was 43 to 53% faster than 1.4.0 on every run.
+- **Heap stays a report** until the owner decides its row with CI's numbers. 4.45 MiB was measured on the Mac.
 
-Either flip changes the row's `mode` to `gate` in its own reviewed PR, or in #27 slice 3b. From then on `gate-report.js` exits 1 on a fail or an invalid run, which fails the `perf` job. That alone blocks nothing: `perf` isn't a required check. Timing blocks a merge only once `pr-gate` needs it (a `perf` job in `.github/workflows/pr-checks.yml`, in `pr-gate`'s needs), or once a ruleset requires the `perf` check. Either is the owner's call, in the same PR as the flip.
+A flip changes the row's `mode` to `gate` in its own reviewed PR. From then on `gate-report.js` exits 1 on a fail or an invalid run, which fails the `perf` job. That alone blocks nothing: `perf` isn't a required check. `pr-gate` needs only `unit`, `typecheck`, `kernel`, `build` and `extension`, and the rulesets require only `pr-gate` (`test/budgets.test.js` holds both). Timing blocks a merge only once `pr-gate` needs it (a `perf` job in `.github/workflows/pr-checks.yml`, in `pr-gate`'s needs), or once a ruleset requires the `perf` check. Either is the owner's call, in the same PR as the flip.
 
 ## Changing a number
 
