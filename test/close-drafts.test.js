@@ -5,18 +5,26 @@
 // another writer saved that note after the draft's base, dropped when its edit is already in,
 // when it only deleted blocks of a note saved elsewhere, or when its note is gone, and kept when
 // its transaction fails. One applier runs at a time across pages, and a permanent delete clears
-// what a note left.
+// what a note left. The recovered note's words and placement are the Design gate's.
+
+// The recovered note's dates are local time, as 1.4.x's are; UTC here pins its strings
+process.env.TZ = 'UTC';
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, createLocalStorage, createLockManager, note, block, plain,
 } = require('./helpers/legacy-env');
+const SidebarUtils = require('../js/sidebar-utils.js');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/close-drafts.js', 'js/storage.js'];
 
 const T0 = 1700000000000;
 const EDITED_AT = Date.UTC(2026, 9, 31, 21, 41);
+/** The recovered note's title for a draft made at EDITED_AT, its date's spaces no-break */
+const RECOVERED_A = 'Recovered: Alpha plan (Oct\u00a031,\u00a09:41\u00a0PM)';
+/** The first block's first sentence for that draft */
+const CLOSED_A = 'These changes to “Alpha plan” are from a tab that closed on Oct 31, 2026 at 9:41 PM, before they were saved.';
 
 /** A profile with note A (blocks a1, a2) and note B (b1), at T0 */
 async function profile(env, { a = {}, records = {} } = {}) {
@@ -124,22 +132,22 @@ describe('the close-time draft applier: one test per path', () => {
     assert.equal(after.blocks.a1.content, 'saved in another tab');
     assert.equal(after.blocks.a2.content, 'alpha two', 'its deletes are only said, not done');
     const recovered = after.notes[recoveredId];
-    const time = new Date(EDITED_AT).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
-    assert.equal(recovered.name, `Recovered: Alpha plan (${time})`);
+    assert.equal(recovered.name, RECOVERED_A);
     assert.equal(recovered.titleManuallySet, true, 'set as a title, so auto-title leaves it');
     assert.equal(recovered.createdAt, original.createdAt - 1, 'beside the original by Created');
     assert.equal(recovered.updatedAt, original.updatedAt - 1, 'and by Recent');
     assert.equal(recovered.isDaily, false);
     assert.equal(recovered.isTemplate, false);
     const blocks = Object.values(after.blocks).filter((row) => row.canvasId === recoveredId).sort((x, y) => x.order - y.order);
-    assert.deepEqual(blocks.map((row) => [row.type, row.order]), [['callout', 0], ['text', 1]]);
-    assert.match(blocks[0].content, /^These changes to “Alpha plan” are from a tab that closed on /);
-    assert.match(blocks[0].content, /That tab also deleted a block\. It's still in “Alpha plan”\./);
-    assert.match(blocks[0].content, /Copy what you need into “Alpha plan”, then delete this note\.$/);
+    assert.deepEqual(blocks.map((row) => [row.type, row.order, row.calloutIcon]), [['callout', 0, 'ℹ️'], ['text', 1, '💡']]);
+    assert.equal(blocks[0].content, `${CLOSED_A} That note was saved elsewhere too, so NewTabNote kept the changes here and left it as it is.`
+      + ' Below are only the blocks that tab changed. That tab also deleted a block, which is still in that note.'
+      + ' Copy what you need into that note, then delete this one.');
     assert.equal(blocks[1].content, 'alpha, edited as the tab closed');
     assert.notEqual(blocks[1].id, 'a1', 'a copy under a new ID, so no block moves notes');
     assert.equal(recovered.preview, blocks[0].content.slice(0, 119).trimEnd() + '…', 'the list shows what the note is');
-    assert.equal(after.search[recoveredId].name, recovered.name);
+    assert.deepEqual(after.search[recoveredId], { noteId: recoveredId, name: recovered.name, content: '', updatedAt: recovered.updatedAt },
+      "Storage.createNote's entry, with the note's own time");
     assert.deepEqual(plain(env.get('CloseDrafts').takeUntold(env.global.localStorage)), [{ id: recoveredId, of: 'A' }],
       'the next new tab tells about it, by IDs only');
     assert.deepEqual(draftKeys(env), []);
@@ -388,13 +396,11 @@ describe('the close-time draft applier on a note in the Trash', () => {
     assert.deepEqual([recovered.trashed, recovered.trashedAt, recovered.archived, recovered.pinned], [true, T0 + 100, false, false],
       'in the Trash with the Trash\'s whole keeping time from this start');
     const first = Object.values(after.blocks).find((row) => row.canvasId === recoveredId && row.order === 0);
-    assert.match(first.content, /“Alpha plan” is in the Trash, so NewTabNote kept the changes here and put this note in the Trash too\./);
-    assert.match(first.content, /Restore this note to keep them\. Otherwise the Trash deletes it in 7 days\.$/);
+    assert.equal(first.content, `${CLOSED_A} That note is in the Trash, so NewTabNote kept the changes here and put this note in the Trash too.`
+      + ' Below are only the blocks that tab changed. Restore this note to keep them. Otherwise the Trash deletes it in 7 days.');
 
     const untold = plain(env.get('CloseDrafts').takeUntold(env.global.localStorage));
     assert.deepEqual(untold, [{ id: recoveredId, of: 'A' }]);
-    assert.equal(env.get('CloseDrafts').TEXT.toast([{ title: 'Alpha plan', trashed: true }]),
-      'Kept your changes to “Alpha plan” from a closed tab in a recovered note. Both are in the Trash.');
   });
 
   it('with the Trash set to keep notes until it\'s emptied, says only how to keep them', async () => {
@@ -404,7 +410,126 @@ describe('the close-time draft applier on a note in the Trash', () => {
     const result = await apply(env);
     const { recoveredId } = result.recovered[0];
     const first = Object.values((await stored(env)).blocks).find((row) => row.canvasId === recoveredId && row.order === 0);
-    assert.match(first.content, /Restore this note to keep them\.$/);
-    assert.doesNotMatch(first.content, /deletes it in/);
+    assert.equal(first.content, `${CLOSED_A} That note is in the Trash, so NewTabNote kept the changes here and put this note in the Trash too.`
+      + ' Below are only the blocks that tab changed. Restore this note to keep them.');
+  });
+});
+
+describe('the recovered note, as the Design gate approved it', () => {
+  const NOW = T0 + 100;
+
+  /**
+   * Note A with `a`'s fields, saved in another tab after the draft's base, and the note the
+   * draft (`fields`) is recovered as
+   */
+  async function recover({ a = {}, records = {}, ...fields } = {}) {
+    const env = await page({ profile: { a: { updatedAt: T0 + 5, ...a }, records } });
+    draftOfA(env, fields);
+    const result = await apply(env, { now: () => NOW });
+    assert.equal(result.recovered.length, 1);
+    const { recoveredId } = result.recovered[0];
+    const after = await stored(env);
+    const blocks = Object.values(after.blocks).filter((row) => row.canvasId === recoveredId).sort((x, y) => x.order - y.order);
+    return { env, recovered: after.notes[recoveredId], blocks, after };
+  }
+
+  const SAVED_ELSEWHERE = 'That note was saved elsewhere too, so NewTabNote kept the changes here and left it as it is.';
+  const ONLY_CHANGED = 'Below are only the blocks that tab changed.';
+  const COPY = 'Copy what you need into that note, then delete this one.';
+
+  it("its title is the original's and the edit's time, whose date wraps as one unit", async () => {
+    assert.equal((await recover()).recovered.name, 'Recovered: Alpha plan (Oct\u00a031,\u00a09:41\u00a0PM)');
+    const untitled = await recover({ a: { name: '' } });
+    assert.equal(untitled.recovered.name, 'Recovered: Untitled (Oct\u00a031,\u00a09:41\u00a0PM)', 'named as the list names it');
+    assert.equal(untitled.blocks[0].content.split('. ')[0], 'These changes to “Untitled” are from a tab that closed on Oct 31, 2026 at 9:41 PM, before they were saved');
+  });
+
+  it("sits in the original's folder while that folder exists, and in none once it's gone", async () => {
+    const folder = { id: 'F', name: 'Work', parentId: null, createdAt: T0, updatedAt: T0 };
+    assert.equal((await recover({ a: { folderId: 'F' }, records: { folders: [folder] } })).recovered.folderId, 'F');
+    assert.equal((await recover({ a: { folderId: 'F-deleted' } })).recovered.folderId, null);
+  });
+
+  it("has the original's pin, except a template's or a trashed note's", async () => {
+    assert.equal((await recover({ a: { pinned: true } })).recovered.pinned, true);
+    assert.equal((await recover({ a: { pinned: true, isTemplate: true } })).recovered.pinned, false);
+    assert.equal((await recover({ a: { pinned: true, trashed: true, trashedAt: T0 + 3 } })).recovered.pinned, false);
+  });
+
+  it("is archived with an archived original, its times and its archive time 1 ms before the original's", async () => {
+    const { recovered } = await recover({ a: { createdAt: T0 - 50, archived: true, archivedAt: T0 + 3 } });
+    assert.deepEqual([recovered.createdAt, recovered.updatedAt, recovered.archived, recovered.archivedAt], [T0 - 51, T0 + 4, true, T0 + 2]);
+    assert.equal(recovered.trashed, undefined);
+  });
+
+  it('goes in the Trash with a trashed original, from this start, and out of Archive', async () => {
+    const { recovered } = await recover({ a: { trashed: true, trashedAt: T0 + 3, archived: true, archivedAt: T0 + 2 } });
+    assert.deepEqual([recovered.trashed, recovered.trashedAt, recovered.archived, recovered.archivedAt], [true, NOW, false, null]);
+  });
+
+  it("a Daily Note's or a template's changes become a regular note, whose first block says which it was", async () => {
+    const daily = await recover({ a: { isDaily: true, dateStr: '2026-10-31' } });
+    assert.deepEqual([daily.recovered.isDaily, daily.recovered.dateStr, daily.recovered.isTemplate], [false, null, false]);
+    assert.equal(daily.blocks[0].content, `${CLOSED_A} That Daily Note was saved elsewhere too, so NewTabNote kept the changes here as a regular note`
+      + ` and left it as it is. ${ONLY_CHANGED} Copy what you need into that Daily Note, then delete this one.`);
+    const template = await recover({ a: { isTemplate: true } });
+    assert.deepEqual([template.recovered.isDaily, template.recovered.isTemplate], [false, false]);
+    assert.equal(template.blocks[0].content, `${CLOSED_A} That template was saved elsewhere too, so NewTabNote kept the changes here as a regular note`
+      + ` and left it as it is. ${ONLY_CHANGED} Copy what you need into that template, then delete this one.`);
+  });
+
+  it("keeps the original's viewport and grid, and makes its copies at this start", async () => {
+    const viewport = { scale: 1.5, offsetX: 10, offsetY: -20 };
+    const settings = { gridType: 'lines', backgroundColor: '#101010' };
+    const { recovered, blocks } = await recover({ a: { viewport, settings } });
+    assert.deepEqual([recovered.viewport, recovered.settings], [viewport, settings]);
+    assert.deepEqual(blocks.map((row) => [row.createdAt, row.updatedAt]), [[NOW, NOW], [NOW, NOW]]);
+  });
+
+  it('names the original once, and says what else that tab did: its deletes still there, and a new title', async () => {
+    const elements = [block('a1', 'A', 0, 'alpha'), block('a2', 'A', 1, 'alpha two'), block('a3', 'A', 2, 'alpha three')];
+    const { blocks } = await recover({
+      records: { elements }, deletedBlockIds: ['a2', 'a3', 'gone-since'], name: 'Alpha plan, renamed', titleOrigin: 'typed',
+    });
+    assert.equal(blocks[0].content, `${CLOSED_A} ${SAVED_ELSEWHERE} ${ONLY_CHANGED} That tab also deleted 2 blocks, which are still in that note.`
+      + ` That tab also renamed it “Alpha plan, renamed”. ${COPY}`);
+    const cleared = await recover({ name: '', titleOrigin: 'typed' });
+    assert.equal(cleared.blocks[0].content, `${CLOSED_A} ${SAVED_ELSEWHERE} ${ONLY_CHANGED} ${COPY}`, 'a cleared title is no new title');
+  });
+
+  it("escapes the first block's text, quotes too, and the list shows it as a save would", async () => {
+    const { recovered, blocks } = await recover({
+      a: { name: 'Q&A <b>"plan"</b>' },
+      blocks: [block('t1', 'A', 4, 'Book the room', { type: 'todo', checked: true }), block('t2', 'A', 5, 'Send the notes', { type: 'todo' })],
+    });
+    assert.equal(blocks[0].content.split('. ')[0],
+      'These changes to “Q&amp;A &lt;b&gt;&quot;plan&quot;&lt;/b&gt;” are from a tab that closed on Oct 31, 2026 at 9:41 PM, before they were saved');
+    assert.deepEqual(blocks.map((row) => [row.type, row.content]), [
+      ['callout', blocks[0].content], ['todo', 'Book the room'], ['todo', 'Send the notes'],
+    ]);
+    const meta = SidebarUtils.buildNoteSaveMetadata(blocks);
+    assert.deepEqual([recovered.preview, recovered.todoProgress], [meta.preview, meta.todoProgress]);
+    assert.deepEqual(recovered.todoProgress, { completed: 1, total: 2 });
+  });
+
+  it('a draft that renamed the note and only deleted blocks keeps the new title in a recovered note', async () => {
+    const { blocks } = await recover({ blocks: [], deletedBlockIds: ['a2'], name: 'Alpha plan, renamed', titleOrigin: 'typed' });
+    assert.deepEqual(blocks.map((row) => row.type), ['callout']);
+    assert.equal(blocks[0].content, `${CLOSED_A} ${SAVED_ELSEWHERE} ${ONLY_CHANGED} That tab also deleted a block, which is still in that note.`
+      + ` That tab also renamed it “Alpha plan, renamed”. ${COPY}`);
+  });
+
+  it('the toast says where both notes are, with the title cut at 40', () => {
+    const env = createLegacyEnv();
+    env.load('js/close-drafts.js');
+    const { TEXT } = env.get('CloseDrafts');
+    const told = (title, where = {}) => ({ title, archived: false, trashed: false, ...where });
+    const one = 'Kept your changes to “Alpha plan” from a closed tab in a recovered note.';
+    assert.equal(TEXT.toast([told('Alpha plan')]), one);
+    assert.equal(TEXT.toast([told('Alpha plan', { archived: true })]), `${one} Both are in Archive.`);
+    assert.equal(TEXT.toast([told('Alpha plan', { trashed: true })]), `${one} Both are in the Trash.`);
+    assert.equal(TEXT.toast([told('Alpha plan'), told('Bravo', { archived: true })]), 'Kept your changes from closed tabs in 2 recovered notes.');
+    assert.equal(TEXT.toast([told('Notes from the long planning meeting about the beta launch')]),
+      'Kept your changes to “Notes from the long planning meeting ab…” from a closed tab in a recovered note.');
   });
 });

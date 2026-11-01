@@ -405,6 +405,7 @@ class App {
   /**
    * The toast for the recovered notes no new tab has told about, whichever start made them:
    * this one, or a Popup or Side Panel start before it. It counts only notes that still exist.
+   * Text only, for 6 s, as import's summary shows; it never takes focus.
    * @returns {Promise<void>}
    */
   async tellRecoveredNotes() {
@@ -415,9 +416,13 @@ class App {
         const note = await appStorage().getNote(id);
         if (!note) continue;
         const original = await appStorage().getNote(of);
-        recovered.push({ title: (original && original.name) || 'Untitled', trashed: Boolean(note.trashed) });
+        recovered.push({
+          title: (original && original.name) || 'Untitled',
+          archived: Boolean(note.archived),
+          trashed: Boolean(note.trashed),
+        });
       }
-      if (recovered.length > 0) Utils.showToast(CloseDrafts.TEXT.toast(recovered), 'info', 10000);
+      if (recovered.length > 0) Utils.showToast(CloseDrafts.TEXT.toast(recovered), 'info', 6000);
     } catch (error) {
       console.error('The recovered notes could not be counted:', error);
     }

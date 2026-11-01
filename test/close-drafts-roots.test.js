@@ -2,11 +2,13 @@
 
 // 1.4.3 item 1 (#33): each root applies the close-time drafts at its start, before it reads a
 // note: the new tab, Popup and the Side Panel. Only the new tab tells about recovered notes,
-// its own and those a Popup or Side Panel start made before it, by their IDs, and it counts
-// only notes that still exist.
+// its own and those a Popup or Side Panel start made before it, by their IDs, in 1.4.x's
+// text-only toast, and it counts only notes that still exist.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, createLocalStorage, note, block, FakeDocument,
 } = require('./helpers/legacy-env');
@@ -47,7 +49,7 @@ async function startNewTab(shared) {
   env.document.stub(['app']);
   env.load(...APP_FILES);
   const toasts = [];
-  env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
+  env.get('Utils').showToast = (message, kind, duration) => toasts.push({ message, kind, duration });
   // Enough of the page for App.init to read the notes, which it does before it builds the editors
   env.global.Onboarding = { hasCompleted: async () => true };
   env.global.LLM = { init: async () => {} };
@@ -86,10 +88,32 @@ describe('the new tab applies the close-time drafts at its start', () => {
     const { app, toasts } = await startNewTab(shared);
     await app.tellRecoveredNotes();
     const told = toasts.filter((t) => t.message.startsWith('Kept your changes'));
-    assert.deepEqual(told.map((t) => t.message), ['Kept your changes to “Alpha plan” from a closed tab in a recovered note.']);
+    assert.deepEqual(told, [{ message: 'Kept your changes to “Alpha plan” from a closed tab in a recovered note.', kind: 'info', duration: 6000 }],
+      "1.4.x's text-only toast, for 6 s, as import's summary shows");
     assert.equal(shared.localStorage.getItem('ntn-close-drafts:recovered'), null, 'told once: the list is cleared');
     await app.tellRecoveredNotes();
     assert.equal(toasts.filter((t) => t.message.startsWith('Kept your changes')).length, 1);
+  });
+
+  it('says both notes are in Archive when the original was archived', async () => {
+    const shared = { indexedDB: undefined, localStorage: createLocalStorage() };
+    const seed = createLegacyEnv({ localStorage: shared.localStorage });
+    shared.indexedDB = seed.indexedDB;
+    await profile(seed.indexedDB, { updatedAt: T0 + 5, archived: true, archivedAt: T0 + 3 });
+    seed.load('js/close-drafts.js');
+    leaveDraft(seed);
+
+    const { app, toasts } = await startNewTab(shared);
+    await app.tellRecoveredNotes();
+    assert.deepEqual(toasts.filter((t) => t.message.startsWith('Kept your changes')).map((t) => t.message),
+      ['Kept your changes to “Alpha plan” from a closed tab in a recovered note. Both are in Archive.']);
+  });
+
+  it("has the toasts' live region on the page from the start, empty, so a screen reader reads the first toast", () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'newtab.html'), 'utf8');
+    const region = html.indexOf('<div class="toast-container" aria-live="polite" role="status"></div>');
+    assert.ok(region > 0, 'newtab.html has the empty region');
+    assert.ok(region < html.indexOf('<script'), 'before the scripts, so it is there before any toast');
   });
 });
 

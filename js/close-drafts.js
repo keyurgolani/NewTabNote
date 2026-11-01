@@ -87,20 +87,28 @@ const CloseDrafts = (function initCloseDrafts() {
    * @returns {string} `text` as a block's HTML content, which shows it as it is
    */
   function escapeHtml(text) {
-    return String(text).replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch]);
+    return String(text).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
   }
 
   // ─── The recovered note: its look, words and placement, in one place ───
   //
-  // Working text from R's Design gate mockup (artifacts/ntn-143-recovered-mockup), until the
-  // design director rules on it. Dates are en-US, as every date 1.4.x shows on a note.
+  // As the Design gate approved it: R's mockup with the design director's three edits (the
+  // toast is text only, the title's date wraps as one unit, and the first block names the
+  // original once). Dates are en-US, as every date 1.4.x shows on a note.
+
+  /** A new note's viewport and grid, as Storage.createNote gives them */
+  const VIEWPORT = Object.freeze({ scale: 1, offsetX: 0, offsetY: 0 });
+  const SETTINGS = Object.freeze({ gridType: 'dots', backgroundColor: '#fafafa' });
 
   /**
    * @param {number} at
-   * @returns {string} "Oct 31, 9:41 PM", as a block's metadata reads (blocks.js)
+   * @returns {string} "Oct 31, 9:41 PM", as a block's metadata reads (blocks.js), with no-break
+   *   spaces, so the title's date wraps as one unit
    */
   function shortTime(at) {
-    return new Date(at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+    return new Date(at)
+      .toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+      .replace(/\s/g, '\u00a0');
   }
 
   /**
@@ -135,7 +143,8 @@ const CloseDrafts = (function initCloseDrafts() {
   }
 
   /**
-   * The first block's words, which say what the recovered note is
+   * The first block's words, which say what the recovered note is. They name the original once,
+   * in the first sentence, and call it that note, that template or that Daily Note after it.
    * @param {any} original - the stored note
    * @param {CloseDraft} draft
    * @param {number} stillThere - how many of the blocks the draft deleted the original still has
@@ -143,74 +152,68 @@ const CloseDrafts = (function initCloseDrafts() {
    * @returns {string}
    */
   function explanation(original, draft, stillThere, trashDays) {
-    const title = `“${titleOf(original)}”`;
-    const sentences = [`These changes to ${title} are from a tab that closed on ${longTime(draft.at)}, before they were saved.`];
+    const sentences = [`These changes to “${titleOf(original)}” are from a tab that closed on ${longTime(draft.at)}, before they were saved.`];
+    let kind = 'note';
+    if (original.isTemplate) kind = 'template';
+    else if (original.isDaily) kind = 'Daily Note';
     if (original.trashed) {
-      sentences.push(`${title} is in the Trash, so NewTabNote kept the changes here and put this note in the Trash too.`);
-    } else if (original.isTemplate) {
-      sentences.push(`${title} was saved elsewhere too, so NewTabNote kept the changes here as a regular note and left the template as it is.`);
-    } else if (original.isDaily) {
-      sentences.push(`${title} was saved elsewhere too, so NewTabNote kept the changes here as a regular note and left it as it is.`);
+      sentences.push('That note is in the Trash, so NewTabNote kept the changes here and put this note in the Trash too.');
+    } else if (kind === 'note') {
+      sentences.push('That note was saved elsewhere too, so NewTabNote kept the changes here and left it as it is.');
     } else {
-      sentences.push(`${title} was saved elsewhere too, so NewTabNote kept the changes here and left it as it is.`);
+      sentences.push(`That ${kind} was saved elsewhere too, so NewTabNote kept the changes here as a regular note and left it as it is.`);
     }
     sentences.push('Below are only the blocks that tab changed.');
-    if (stillThere === 1) sentences.push(`That tab also deleted a block. It's still in ${title}.`);
-    else if (stillThere > 1) sentences.push(`That tab also deleted ${stillThere} blocks. They're still in ${title}.`);
-    if (typeof draft.name === 'string' && draft.name !== original.name) sentences.push(`That tab also renamed it “${draft.name}”.`);
+    if (stillThere === 1) sentences.push('That tab also deleted a block, which is still in that note.');
+    else if (stillThere > 1) sentences.push(`That tab also deleted ${stillThere} blocks, which are still in that note.`);
+    if (renamed(original, draft)) sentences.push(`That tab also renamed it “${draft.name}”.`);
     if (original.trashed) {
+      // The Trash's own keeping time from this start, in days: Settings offers 7 to 90, or Never
       sentences.push(trashDays > 0
-        ? `Restore this note to keep them. Otherwise the Trash deletes it in ${trashDays} ${trashDays === 1 ? 'day' : 'days'}.`
+        ? `Restore this note to keep them. Otherwise the Trash deletes it in ${trashDays} days.`
         : 'Restore this note to keep them.');
     } else {
-      sentences.push(`Copy what you need into ${title}, then delete this note.`);
+      sentences.push(`Copy what you need into that ${kind}, then delete this one.`);
     }
     return sentences.join(' ');
   }
 
   /**
-   * The note's preview and to-do progress from its blocks, as SidebarUtils'
-   * buildNoteSaveMetadata derives them, which Popup and the Side Panel don't load
-   * @param {Array<any>} blocks
+   * The recovered note's preview and to-do progress, as SidebarUtils' buildNoteSaveMetadata
+   * derives them from its blocks, which Popup and the Side Panel don't load. The preview is the
+   * first block's text: the callout's, escaped, so it holds no tag.
+   * @param {any} first - the callout
+   * @param {Array<any>} changed - the copies of the draft's blocks
    * @returns {{preview: string, todoProgress: ({completed: number, total: number}|null)}}
    */
-  function derived(blocks) {
-    let preview = '';
-    let completed = 0;
-    let total = 0;
-    for (const block of blocks) {
-      if (!preview) {
-        preview = String(block.content || '').replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>/g, ' ')
-          .replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
-      }
-      if (block.type === 'todo') {
-        total += 1;
-        if (block.checked) completed += 1;
-      }
-    }
+  function derived(first, changed) {
+    let preview = first.content.replace(/\s+/g, ' ').trim();
     if (preview.length > PREVIEW_LENGTH) preview = `${preview.slice(0, PREVIEW_LENGTH - 1).trimEnd()}…`;
-    return { preview, todoProgress: total > 0 ? { completed, total } : null };
+    const todos = changed.filter((block) => block.type === 'todo');
+    const completed = todos.filter((block) => block.checked).length;
+    return { preview, todoProgress: todos.length > 0 ? { completed, total: todos.length } : null };
   }
 
   /**
    * The recovered note for `draft`, whose note `original` another writer saved after the
    * draft's base: an ordinary note, as Storage.createNote makes one, which says what it is in its
-   * title and its first block, followed by the draft's blocks under new IDs. It sits beside the
-   * original: in its folder, with its pin, and with its times less 1 ms, so it sorts right under
-   * it by Recent and by Created. It's archived with an archived original, and in the Trash with
-   * a trashed one, on top, with the Trash's whole keeping time from this start. It's never a
-   * Daily Note or a template itself.
+   * title and its first block, followed by copies of the draft's blocks under new IDs, made at
+   * this start. It sits beside the original, with its viewport and grid: in its folder while that
+   * folder exists, with its pin, and with its times less 1 ms, so it sorts right under it by
+   * Recent and by Created. It's archived with an archived original, 1 ms before it, and in the
+   * Trash with a trashed one, unpinned and on top, with the Trash's whole keeping time from this
+   * start. It's never a Daily Note or a template itself, and a template's pin stays the
+   * template's.
    * @param {any} original - the stored note
    * @param {CloseDraft} draft
-   * @param {{now: number, stillThere: number, trashDays: number}} context
+   * @param {{now: number, stillThere: number, trashDays: number, inFolder: boolean}} context -
+   *   `inFolder`: whether the original's folder exists
    * @returns {{note: any, blocks: Array<any>}}
    */
-  function recoveredNote(original, draft, { now, stillThere, trashDays }) {
+  function recoveredNote(original, draft, { now, stillThere, trashDays, inFolder }) {
     const id = newId();
     const trashed = Boolean(original.trashed);
     const archived = !trashed && Boolean(original.archived);
-    const created = typeof original.createdAt === 'number' ? original.createdAt - 1 : now;
-    const updated = typeof original.updatedAt === 'number' ? original.updatedAt - 1 : now;
     const first = {
       id: newId(),
       type: 'callout',
@@ -226,13 +229,12 @@ const CloseDrafts = (function initCloseDrafts() {
     };
     const changed = [...draft.blocks]
       .sort((a, b) => (a.order || 0) - (b.order || 0))
-      .map((block, index) => ({ ...block, id: newId(), canvasId: id, order: index + 1 }));
-    const blocks = [first, ...changed];
+      .map((block, index) => ({ ...block, id: newId(), createdAt: now, updatedAt: now, canvasId: id, order: index + 1 }));
     const note = {
       id,
       name: `Recovered: ${titleOf(original)} (${shortTime(draft.at)})`,
-      createdAt: created,
-      updatedAt: updated,
+      createdAt: typeof original.createdAt === 'number' ? original.createdAt - 1 : now,
+      updatedAt: typeof original.updatedAt === 'number' ? original.updatedAt - 1 : now,
       archived,
       archivedAt: archived && typeof original.archivedAt === 'number' ? original.archivedAt - 1 : null,
       // Set as a title, so auto-title, which names only an untitled note, leaves it
@@ -240,17 +242,17 @@ const CloseDrafts = (function initCloseDrafts() {
       lastAutoTitleAt: null,
       insights: null,
       lastInsightsExtractedAt: null,
-      ...derived(blocks),
-      pinned: !trashed && Boolean(original.pinned),
+      ...derived(first, changed),
+      pinned: !trashed && !original.isTemplate && Boolean(original.pinned),
       isDaily: false,
       dateStr: null,
       isTemplate: false,
-      folderId: original.folderId || null,
-      viewport: { scale: 1, offsetX: 0, offsetY: 0 },
-      settings: { gridType: 'dots', backgroundColor: '#fafafa' },
+      folderId: inFolder ? original.folderId : null,
+      viewport: { ...(original.viewport || VIEWPORT) },
+      settings: { ...(original.settings || SETTINGS) },
     };
     if (trashed) Object.assign(note, { trashed: true, trashedAt: now });
-    return { note, blocks };
+    return { note, blocks: [first, ...changed] };
   }
 
   /**
@@ -261,18 +263,20 @@ const CloseDrafts = (function initCloseDrafts() {
     return title.length > 40 ? `${title.slice(0, 39).trimEnd()}…` : title;
   }
 
-  /** What the new tab says when its start made recovered notes */
+  /** What the new tab says when its start made recovered notes, in 1.4.x's text-only toast */
   const TEXT = Object.freeze({
     /**
-     * @param {Array<{title: string, trashed: boolean}>} recovered - each note's original's title
-     *   and whether both are in the Trash
+     * @param {Array<{title: string, archived: boolean, trashed: boolean}>} recovered - each
+     *   note's original's title, and whether both are in Archive or in the Trash
      * @returns {string}
      */
     toast(recovered) {
       if (recovered.length !== 1) return `Kept your changes from closed tabs in ${recovered.length} recovered notes.`;
-      const [{ title, trashed }] = recovered;
+      const [{ title, archived, trashed }] = recovered;
       const kept = `Kept your changes to “${toastTitle(title)}” from a closed tab in a recovered note.`;
-      return trashed ? `${kept} Both are in the Trash.` : kept;
+      if (trashed) return `${kept} Both are in the Trash.`;
+      if (archived) return `${kept} Both are in Archive.`;
+      return kept;
     },
   });
 
@@ -586,8 +590,10 @@ const CloseDrafts = (function initCloseDrafts() {
       const scope = ['canvases', 'elements'];
       const indexed = db.objectStoreNames.contains('search_index');
       const linked = db.objectStoreNames.contains('links');
+      const foldered = db.objectStoreNames.contains('folders');
       if (indexed) scope.push('search_index');
       if (linked) scope.push('links');
+      if (foldered) scope.push('folders');
       /** @type {{kind: 'saved'|'recovered'|'dropped'|'gone'|'kept', recoveredId?: string}} */
       let outcome = { kind: 'kept' };
       /** @type {IDBTransaction} */
@@ -624,7 +630,9 @@ const CloseDrafts = (function initCloseDrafts() {
         let original;
         /** @type {Array<any>} */
         let everyNote = [];
-        let waiting = 1 + ids.length + (linked ? 1 : 0);
+        /** @type {Set<unknown>} */
+        let folderIds = new Set();
+        let waiting = 1 + ids.length + (linked ? 1 : 0) + (foldered ? 1 : 0);
 
         const decide = () => {
           if (!original) {
@@ -645,10 +653,13 @@ const CloseDrafts = (function initCloseDrafts() {
               const copy = stored.get(id);
               return copy && copy.canvasId === draft.noteId;
             }).length;
-            const { note, blocks } = recoveredNote(original, draft, { now, stillThere, trashDays });
+            const inFolder = Boolean(original.folderId) && folderIds.has(original.folderId);
+            const { note, blocks } = recoveredNote(original, draft, { now, stillThere, trashDays, inFolder });
+            // With its own times set, as import's commit writes a note
             notes.add(note);
             for (const block of blocks) elements.add(block);
-            if (indexed) tx.objectStore('search_index').put({ noteId: note.id, name: note.name, content: '', updatedAt: now });
+            // The entry Storage.createNote gives a new note; the new tab's indexer fills it in
+            if (indexed) tx.objectStore('search_index').put({ noteId: note.id, name: note.name, content: '', updatedAt: note.updatedAt });
             outcome = { kind: 'recovered', recoveredId: note.id };
             return;
           }
@@ -700,6 +711,13 @@ const CloseDrafts = (function initCloseDrafts() {
           const all = notes.getAll();
           all.onsuccess = () => {
             everyNote = all.result;
+            arrived();
+          };
+        }
+        if (foldered) {
+          const keys = tx.objectStore('folders').getAllKeys();
+          keys.onsuccess = () => {
+            folderIds = new Set(keys.result);
             arrived();
           };
         }
