@@ -254,6 +254,9 @@ for (const width of WIDTHS) {
       expect(Math.abs((anyway.x + anyway.width) - (spacer.x + spacer.width)), "Reload anyway ends where the row's buttons do").toBeLessThanOrEqual(1);
       const room = await panel.locator('.part-state-text > span:last-child').evaluate((words) => words.getBoundingClientRect().width);
       expect(room, 'the words keep their room').toBeGreaterThanOrEqual(210);
+      // and keep to the row's top, level with Try again, so they don't drop as the row grows a line
+      const words = await states.boxOf(panel.locator('.part-state-text'));
+      expect(Math.abs(words.y - taken.y), `the words keep to the row's top: ${JSON.stringify({ taken, words })}`).toBeLessThanOrEqual(1);
       await expect(tryAgain).toBeFocused();
       // Its Try again, failing again, keeps every button where it is
       const buttons = [tryAgain, panel.locator('button.part-state-anyway')];

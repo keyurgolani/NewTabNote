@@ -476,7 +476,7 @@ const STATES = [
     },
   },
   {
-    name: 'u5-from-again', about: "u5 from the second failure's Reload, beside Try again: Try again in that Reload's place, its own place kept empty, and Reload anyway on a line of its own under them", build: () => missing('chart'),
+    name: 'u5-from-again', about: "u5 from the second failure's Reload, beside Try again: Try again in that Reload's place, its own place kept empty, and Reload anyway on a line of its own under them, with the words level with Try again", build: () => missing('chart'),
     reach: saveFailedFromAgain,
   },
   {

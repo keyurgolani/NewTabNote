@@ -643,6 +643,17 @@ describe("a part's panel and its buttons (css/editor.css)", () => {
     ]);
   });
 
+  it("keeps the words to the row's top, level with Try again, where Reload anyway takes a line of its own, so they don't drop as the row grows that line", () => {
+    const words = cssRules(/\.part-state-actions\.is-split\) > \.part-state-text$/).map(({ selectors, at, values }) => ({ selectors, at, values }));
+    assert.deepEqual(words, [
+      {
+        selectors: ['.part-state:not(.is-narrow):has(> .part-state-actions.is-split) > .part-state-text'],
+        at: ['@container (min-width: 470px)'],
+        values: { 'align-self': 'flex-start' },
+      },
+    ]);
+  });
+
   it('draws Reload anyway quiet, with no fill or border and the secondary label, still 44 px, and keeps an empty place empty', () => {
     const anyway = cssRules(/^\.part-state-anyway(:hover)?$/).map(({ selectors, values }) => ({ selectors, values }));
     assert.deepEqual(anyway, [
