@@ -14,6 +14,7 @@ require('./helpers/block-projections');
 const { createLegacyEnv } = require('./helpers/legacy-env');
 const legacy = require('./fixtures/legacy-text-paths.cjs');
 const { CASES } = require('./fixtures/blocks/corpus.cjs');
+const { linear } = require('./helpers/linear-time.js');
 
 const env = createLegacyEnv();
 env.load(
@@ -85,40 +86,6 @@ const seeded = (pieces, count) => {
  * @param {unknown[]} values
  */
 const differences = (fn, old, values) => values.filter(value => outcome(fn, value) !== outcome(old, value)).slice(0, 5);
-
-/**
- * The time of one call, in ms
- * @param {(value: string) => unknown} fn
- * @param {string} value
- */
-const timeOnce = (fn, value) => {
-  const start = performance.now();
-  fn(value);
-  return performance.now() - start;
-};
-
-/**
- * Whether `fn` grows linearly on inputs `make` builds: four times the input takes well under
- * the sixteen times a quadratic read would. The two sizes take turns, five calls each, and each
- * keeps its best, so a busy machine slows both alike. The measure runs up to three times, so one
- * stalled attempt doesn't decide it; a quadratic read misses every attempt.
- * @param {(value: string) => unknown} fn
- * @param {(n: number) => string} make
- */
-const linear = (fn, make) => {
-  const small = make(20_000);
-  const large = make(80_000);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let bestSmall = Number.POSITIVE_INFINITY;
-    let bestLarge = Number.POSITIVE_INFINITY;
-    for (let k = 0; k < 5; k++) {
-      bestSmall = Math.min(bestSmall, timeOnce(fn, small));
-      bestLarge = Math.min(bestLarge, timeOnce(fn, large));
-    }
-    if (bestLarge < Math.max(bestSmall * 8, 50)) return true;
-  }
-  return false;
-};
 
 const WIKI_PIECES = ['[', '[[', ']', ']]', '[[a]]', '[[ b ]]', 'x', ' ', '\n', '\t', ' ', '[[]]', ']]]', '[[[', 'a]b'];
 const MARKDOWN_PIECES = [
@@ -238,6 +205,14 @@ describe('the text paths read in linear time (#14)', () => {
     assert.ok(linear(read, n => `]${'[['.repeat(n / 2)}`));
   });
 
+  // The inputs above find no name; these find one in every few characters, one name again and
+  // again, and names all different
+  it('reads many wiki-link names in linear time', () => {
+    const read = globalThis.BlockProjections.wikiLinkNames;
+    assert.ok(linear(read, n => '[[a]] '.repeat(n / 6)));
+    assert.ok(linear(read, n => Array.from({ length: Math.floor(n / 8) }, (_, i) => `[[${i}]]`).join('')));
+  });
+
   it('renders Markdown in linear time', () => {
     const render = text => Utils.parseMarkdown(text);
     assert.ok(linear(render, n => '['.repeat(n)));
@@ -245,12 +220,22 @@ describe('the text paths read in linear time (#14)', () => {
     assert.ok(linear(render, n => '`x`     '.repeat(n / 8)));
     assert.ok(linear(render, n => `\`\`\`${'a'.repeat(n)}`));
     assert.ok(linear(render, n => '```a\n```\n'.repeat(n / 9)));
-    assert.ok(linear(render, n => '<li>'.repeat(n / 4)));
-    assert.ok(linear(render, n => '<oli>'.repeat(n / 5)));
-    assert.ok(linear(render, n => '<li>\n'.repeat(n / 5)));
+    // List items come only from list lines: plain text is escaped before the list step (#132)
+    assert.ok(linear(render, n => '- a\n'.repeat(n / 4)));
+    assert.ok(linear(render, n => '1. a\n'.repeat(n / 5)));
     assert.ok(linear(render, n => '|-|\n|-\n'.repeat(n / 7)));
     assert.ok(linear(render, n => '|a|\n'.repeat(n / 4)));
     assert.ok(linear(render, n => `|a|\n|${'-'.repeat(n)}`));
+  });
+
+  // Each of these grows a unit the renderer does work for once it's found: links, wiki links,
+  // a table's rows, and paragraphs
+  it('renders Markdown with many links, wiki links, table rows and paragraphs in linear time', () => {
+    const render = text => Utils.parseMarkdown(text);
+    assert.ok(linear(render, n => '[a](https://a.test) '.repeat(n / 21)));
+    assert.ok(linear(render, n => '[[a]] '.repeat(n / 6)));
+    assert.ok(linear(render, n => `|a|\n|-|\n${'|b|\n'.repeat(n / 4)}`));
+    assert.ok(linear(render, n => 'a\n\n'.repeat(n / 3)));
   });
 
   it("reads a rate limit's wait in linear time", () => {
@@ -271,5 +256,6 @@ describe('the text paths read in linear time (#14)', () => {
     assert.ok(linear(find, n => '```a\n'.repeat(n / 5)));
     assert.ok(linear(extract, n => `\`\`\`s${'`'.repeat(n)}!`));
     assert.ok(linear(extract, n => `\`\`\`${'a'.repeat(n)}\`\`\``));
+    assert.ok(linear(extract, n => `\`\`\`\nx\`\`\`${' '.repeat(n)}`));
   });
 });

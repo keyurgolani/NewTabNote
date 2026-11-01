@@ -13,37 +13,7 @@ import { escapeAttributeText, escapePlainText, isLinkHref, LINK_SCHEMES } from '
 import { textContent } from '../../js/kernel/core/blocks/html-text.js';
 import { ERROR_CODES } from '../../js/trust/core/codes.js';
 import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
-
-/**
- * How long one call takes, the fastest of three
- * @param {(value: string) => unknown} fn
- * @param {string} value
- */
-const timeOf = (fn, value) => {
-  let best = Number.POSITIVE_INFINITY;
-  for (let k = 0; k < 3; k++) {
-    const start = performance.now();
-    fn(value);
-    best = Math.min(best, performance.now() - start);
-  }
-  return best;
-};
-
-/**
- * Whether `fn` grows linearly on inputs `make` builds: four times the input takes well under
- * the sixteen times a quadratic read would. A busy machine can stall a measurement, so it
- * measures up to three times; a quadratic read grows too fast every time.
- * @param {(value: string) => unknown} fn
- * @param {(n: number) => string} make
- */
-const linear = (fn, make) => {
-  const small = make(20_000);
-  const large = make(80_000);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (timeOf(fn, large) < Math.max(timeOf(fn, small) * 8, 50)) return true;
-  }
-  return false;
-};
+import { linear } from '../helpers/linear-time.js';
 
 describe('the legacy rendering adapter (#14 slice 2)', () => {
   it("renders by assigning the markup as it is, and normalizes nothing", () => {
