@@ -10,22 +10,6 @@
       ]
     },
     {
-      "id": "KD-003",
-      "ownerIssue": 17,
-      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/storage.js#L1003-L1018",
-      "tests": [
-        "KD-003 createNote resolves only once its note is stored"
-      ]
-    },
-    {
-      "id": "KD-004",
-      "ownerIssue": 17,
-      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/storage.js#L1806-L1813",
-      "tests": [
-        "KD-004 saveElement resolves only once its block is stored"
-      ]
-    },
-    {
       "id": "KD-005",
       "ownerIssue": 18,
       "evidence": "https://github.com/keyurgolani/NewTabNote/blob/a37c1cdc4943b9adb6decbd961fbe5c483b4f34e/js/storage.js#L2182-L2192",
@@ -58,15 +42,6 @@
       "evidence": "https://github.com/keyurgolani/NewTabNote/blob/ddbc59a7c25523ed754ec39813c3c8204cb64e56/js/services/sync-service.js#L170-L171",
       "tests": [
         "KD-009 WebDAV connect stays disconnected when the server answers 403, 404, or 500"
-      ]
-    },
-    {
-      "id": "KD-010",
-      "ownerIssue": 17,
-      "evidence": "https://github.com/keyurgolani/NewTabNote/blob/e49e5436a60f61b56b3efeb721ed7b552b1deafb/js/storage.js#L1083-L1088",
-      "tests": [
-        "KD-010 a note whose name isn't text leaves the other notes' names for wiki-link autocomplete",
-        "KD-010 a note whose name isn't text doesn't stop another note's wiki links from saving"
       ]
     },
     {

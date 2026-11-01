@@ -9,7 +9,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, dumpDatabase, settingsOf, startEditorClient } = require('./helpers/legacy-env');
+const { createLegacyEnv, dumpDatabase, connectStorageSettings, settingsOf, startEditorClient } = require('./helpers/legacy-env');
 const { expectFailure } = require('./helpers/expect-failure');
 
 /** A synthetic secret, new each run */
@@ -47,6 +47,7 @@ test('Gemini requests carry the API key outside their URL', async () => {
   const key = canary('gemini');
   const env = createLegacyEnv();
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js');
+  await connectStorageSettings(env);
   const storage = settingsOf(env);
   // As Settings saves a Gemini key and model
   await storage.setSetting('llmProvider', 'gemini');

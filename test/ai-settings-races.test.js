@@ -7,7 +7,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, FakeDocument, settingsOf } = require('./helpers/legacy-env');
+const { createLegacyEnv, FakeDocument, connectStorageSettings, settingsOf } = require('./helpers/legacy-env');
 
 const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(2, 10)}`;
 
@@ -25,6 +25,7 @@ async function settingsPage(provider, { slow = [] } = {}) {
   const env = createLegacyEnv({ document: new FakeDocument() });
   env.global.ResizablePanel = class {};
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js', 'js/controllers/ai-chat-controller.js');
+  await connectStorageSettings(env);
   const storage = settingsOf(env);
   await storage.setSetting('llmProvider', provider);
   const llm = env.get('LLM');

@@ -10,9 +10,9 @@
  *   use that it doesn't define), called on the Storage global (bare, or through self,
  *   window, or globalThis), on this.storage, on a function or method that returns one of
  *   those (appStorage(), editorStorage(), this._getStorage()), or on a local bound to one;
- * - an add, put, delete, or clear on an object store, from an IndexedDB transaction or
- *   Storage.getStore(), and a readwrite transaction or getStore() whose own stores write
- *   nothing, which counts once by itself;
+ * - an add, put, delete, or clear on an object store, from an IndexedDB transaction, and a
+ *   readwrite transaction whose own stores write nothing, which counts once by itself
+ *   (Storage's transaction() and getStore() went with #17 PR 4b, so a call to either fails);
  * - a chrome.storage write: `<chrome>.storage.<area>.set|remove|clear(...)`, or the same on
  *   a const bound to `<chrome>.storage.<area>`;
  * - update or delete on a cursor, indexedDB.deleteDatabase, or indexedDB.open with a version;
@@ -51,39 +51,22 @@ const WRITE_COMMAND = 'npm run check:write-paths -- --write';
 
 /**
  * DatabaseManager methods that write to IndexedDB or chrome.storage.local. Each is one
- * DatabaseManager defines, as READS' are (collect() holds both to js/storage.js): #17 PR 4a
- * deleted the writers nothing called once the new tab wrote through #17's adapter.
+ * DatabaseManager defines, as READS' are (collect() holds both to js/storage.js). Since #17 PR
+ * 4b it's the shell the new tab's root connects to its kernel, under the names the holders and
+ * their handles call: each write is a command there (js/kernel/composition/storage-facade.js),
+ * or a setting through the holders' accessor (holder-settings.js).
  */
-const WRITES = new Set([
-  'init', 'checkAndRepairDatabase', 'initializeDefaultSettings',
-  '_writeMissingStoresCopy', '_writeMissingStoresCopyIfNone', '_writeRecoveryBackup', 'createAutoBackup',
-  'createNote', 'updateNote',
-  'archiveNote', 'unarchiveNote', 'trashNote', 'permanentlyDeleteNote',
-  'setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'updateNoteNameInSearchIndex',
-  'createFolder', 'deleteFolder',
-  'saveElement', 'deleteElements', 'deleteElementsByNote',
-  'deleteMediaByNote',
-  'setSetting',
-  'importData', '_commitImport', '_writeImport',
-  'saveVector',
-  'deleteSnapshotsByNote',
-]);
+const WRITES = new Set(['setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'saveVector', 'setSetting']);
 
-/** DatabaseManager methods that open a transaction, which writes only in 'readwrite' mode */
+/**
+ * Methods that open an IndexedDB transaction, which writes only in 'readwrite' mode.
+ * DatabaseManager has defined neither since #17 PR 4b, so a call to one on Storage fails.
+ */
 const MODE_WRITES = new Set(['transaction', 'getStore']);
 
-/** DatabaseManager methods that only read */
+/** DatabaseManager methods that write nothing: the shell's own, and the reads it answers */
 const READS = new Set([
-  'constructor', '_chromeApi', '_codedError', 'hasStore', '_sleep', 'withRetry', '_newerSchemaError',
-  '_throwIfCoreStoresMissing', '_openUnversioned', '_readOnDiskVersion', 'isPageContext',
-  '_readStoreForCopy', '_blobsToDataUrls', '_hasBlob', '_blobToDataUrl', 'getAutoBackups',
-  '_getAutoBackupKeys', '_getStorageValue', '_getAllNoteIds', 'validateDatabase', '_getAllKeys', '_countOrphanIndexKeys',
-  '_readAux', 'getTodayNote', 'getAllNotes', 'getNoteNames', 'getArchivedNotes', 'getTemplates', 'getSearchIndex',
-  'isNoteEmpty', 'isNoteUntitled', 'isEmptyTextBlock', 'getTrashedNotes', 'getElements', 'getNote',
-  'getAllFolders', 'getFolder', 'getBacklinks', 'getElementsByNote', 'getMedia', 'getSetting',
-  'readSetting', 'getAllSettings', 'exportAll', 'exportAllAsBlob', '_readExport', '_exportMediaRow',
-  '_getAllMedia', 'validateImport', '_dataUrlToBlob', 'getCustomThemes', 'getVector', 'getAllVectors',
-  'getSnapshots',
+  'constructor', 'connect', '_call', 'hasStore', 'getAllVectors', 'getAllNotes', 'listLinks', 'exportAll', 'getSetting',
 ]);
 
 /**
@@ -93,18 +76,8 @@ const READS = new Set([
 const UNDEFINED_WRITES = {
   importNote: "sync-service's remote-only merge calls it, so that path throws today (#19)",
   importAll: "sync-service's remote apply checks for it first, so that path never runs (#19)",
+  saveElement: "sync-service's remote-only merge calls it after importNote, which throws first (#19)",
 };
-
-/**
- * Reads a holder's handle answers that DatabaseManager doesn't define: the facade's queries
- * (js/kernel/composition/storage-facade.js), until js/storage.js is the facade's shell (#17 PR 4b)
- */
-const HANDLE_READS = {
-  listLinks: "GraphView's links, the listLinks query",
-};
-
-/** Write names too common to flag on receivers the scanner can't place */
-const GENERIC_WRITE_NAMES = new Set(['init']);
 
 /**
  * App's components: a write-named call on `this.<component>` is that component's own method.
@@ -203,32 +176,12 @@ const SYNC_KEYS = ['syncProvider', 'syncWebdavConfig', 'syncLastSyncAt'];
 /**
  * Which command each call becomes: the first rule whose fields all match. `file` and
  * `method` are exact or a RegExp on the File and Method cells, `op` is the method called
- * (exact or a list), `key` the setting key, chrome.storage key, or object store (exact, a
- * list, or a RegExp), and `fields` a field the call's update sets. A rule that names a file
- * or a method also names its ops, so a new call there fails until it's classified.
+ * (exact or a list), and `key` the setting key, chrome.storage key, or object store (exact,
+ * a list, or a RegExp). A rule that names a file or a method also names its ops, so a new call
+ * there fails until it's classified. The rules for the writers DatabaseManager lost went with
+ * them, in #17 PR 4a and 4b: a call to one fails the check as a method it doesn't define.
  */
 const RULES = [
-  // A new note and its first blocks are one intent, an imported one's included
-  { command: 'createNote', method: /\.(runOnboarding|createNoteFromAIResponse|_createNoteFromBlock|importNote)$/, op: ['createNote', 'saveElement'] },
-  { command: 'createNote', op: 'createNote' },
-  { command: 'convertNoteToTemplate', method: /\.convertNoteToTemplate$/, op: 'updateNote' },
-  { command: 'convertTemplateToNote', method: /\.convertTemplateToNote$/, op: 'updateNote' },
-  // The editor's save, the links and search-index name it refreshes, and template blocks inserted as an edit
-  { command: 'saveNoteContent', method: /^BlockEditor\.(_writeSaveState|_afterSaveWrite|selectTemplateItem)$/, op: ['updateNoteNameInSearchIndex', 'saveElement'] },
-  { command: 'restoreSnapshot', method: 'BlockEditor._revertToSnapshot', op: ['deleteElements', 'saveElement', 'updateNote'] },
-  { command: 'insertBlocks', method: /\.(appendAIResponseToNote|refreshNoteMetadataAfterInsert|_appendBlockToNote)$/, op: ['saveElement', 'updateNote'] },
-  // Titles the user asked for are renames; automatic ones yield to titleManuallySet
-  { command: 'renameNote', method: /\.(generateTitleForNote|applyGeneratedTitle)$/, op: 'updateNote' },
-  { command: 'applyDerivedTitle', method: /\.(runAutoTitle|generateTitleForNewNote)$/, op: 'updateNote' },
-  { command: 'attachInsights', op: 'updateNote', fields: 'insights' },
-  { command: 'setPinned', op: 'updateNote', fields: 'pinned' },
-  { command: 'moveNoteToFolder', op: 'updateNote', fields: 'folderId' },
-  { command: 'deleteFolder', op: 'deleteFolder' },
-  { command: 'createFolder', op: 'createFolder' },
-  { command: 'archiveNote', op: 'archiveNote' },
-  { command: 'unarchiveNote', op: 'unarchiveNote' },
-  { command: 'trashNote', op: 'trashNote' },
-  { command: 'deleteNotePermanently', op: 'permanentlyDeleteNote' },
   { command: 'recordJobRun', op: 'setSetting', key: ['lastAutoTitleRun', 'lastInsightsRun'] },
   // A running extraction, kept across reloads
   { command: 'setInsightsPending', op: 'setSetting', key: /^insightsExtracting_/ },
@@ -247,8 +200,6 @@ const RULES = [
   { command: 'recordExportNotice', op: 'setSetting', key: 'preMigrationNotice' },
   // The space-blocked notice's Not now and Done (#17 PR 1b)
   { command: 'snoozeSpaceNotice', op: 'setSetting', key: 'spaceNoticeSnoozedAt' },
-  { command: 'createAutoBackup', op: 'createAutoBackup' },
-  { command: 'importBackup', op: 'importData' },
   { command: 'setPreferences', op: 'setSetting', key: PREFERENCE_KEYS },
 ];
 
@@ -398,7 +349,7 @@ function describe(node) {
 
 /**
  * Scan one file's source for mutating persistence calls. Returns { hits, problems }: each
- * hit is { file, line, method, kind, op, key, fields, call, holder }, and each problem a
+ * hit is { file, line, method, kind, op, key, call, holder }, and each problem a
  * string. `members` (DatabaseManager's method names) sharpens the message for a method
  * nobody classified.
  */
@@ -505,8 +456,12 @@ function scanSource(file, text, { members = null } = {}) {
   }
 
   /** A transaction call: `<db>.transaction(...)` on anything, or Storage.getStore(...) */
-  const isTransaction = n => ts.isCallExpression(n) && ts.isPropertyAccessExpression(strip(n.expression))
+  const opensTransaction = n => ts.isCallExpression(n) && ts.isPropertyAccessExpression(strip(n.expression))
     && (strip(n.expression).name.text === 'transaction' || (strip(n.expression).name.text === 'getStore' && storageRoot(strip(n.expression).expression)));
+  /** A transaction() or getStore() on Storage that DatabaseManager doesn't define, as since #17 PR 4b */
+  const isUndefinedOpen = n => opensTransaction(n) && Boolean(members) && Boolean(storageRoot(strip(n.expression).expression))
+    && !members.has(strip(n.expression).name.text);
+  const isTransaction = n => opensTransaction(n) && !isUndefinedOpen(n);
 
   /** The object store an expression is, as {store, root, tx}, or null */
   function storeOf(node) {
@@ -522,7 +477,7 @@ function scanSource(file, text, { members = null } = {}) {
       const root = tx ? storageRoot(strip(tx.expression).expression) : null;
       return { store: constantString(n.arguments[0]) || '(store)', root, tx };
     }
-    if (callee.name.text === 'getStore' && storageRoot(callee.expression)) {
+    if (callee.name.text === 'getStore' && storageRoot(callee.expression) && !isUndefinedOpen(n)) {
       return { store: constantString(n.arguments[0]) || '(store)', root: storageRoot(callee.expression), tx: n };
     }
     return null;
@@ -595,27 +550,9 @@ function scanSource(file, text, { members = null } = {}) {
     return false;
   }
 
-  /** The fields an update call's record has set on it in the same function before the call */
-  function fieldsSet(call) {
-    const arg = call.arguments[0] && strip(call.arguments[0]);
-    if (!arg || !(ts.isIdentifier(arg) || ts.isPropertyAccessExpression(arg))) return [];
-    const target = arg.getText(sf);
-    const scope = nearestScope(call);
-    const fields = new Set();
-    (function walk(n) {
-      if (n !== scope && ts.isFunctionLike(n)) return;
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-        && ts.isPropertyAccessExpression(n.left) && strip(n.left.expression).getText(sf) === target && n.end <= call.getStart(sf)) {
-        fields.add(n.left.name.text);
-      }
-      ts.forEachChild(n, walk);
-    })(scope);
-    return [...fields].sort();
-  }
-
-  const add = (node, fields) => {
+  const add = (node, found) => {
     const { method, holder } = describe(node);
-    const hit = { file, line: lineOf(node), method, fields: [], ...fields, holder };
+    const hit = { file, line: lineOf(node), method, ...found, holder };
     hits.push(hit);
     return hit;
   };
@@ -623,7 +560,10 @@ function scanSource(file, text, { members = null } = {}) {
   // Every transaction first: a store write in a chain is visited before its transaction
   const transactions = new Map(); // call -> { readwrite, root, written }
   (function walk(n) {
-    if (isTransaction(n)) {
+    if (isUndefinedOpen(n)) {
+      const callee = strip(n.expression);
+      problem(n, `calls ${storageRoot(callee.expression)}.${callee.name.text}, which DatabaseManager doesn't define: fix the call`);
+    } else if (isTransaction(n)) {
       const callee = strip(n.expression);
       const mode = n.arguments[1];
       if (mode && constantString(mode) === null) {
@@ -647,18 +587,13 @@ function scanSource(file, text, { members = null } = {}) {
         // The pass above counts transactions
       } else if (root) {
         const shown = (args.length > 0 ? '…' : '');
-        if (Object.hasOwn(HANDLE_READS, op)) {
-          // A read, which the facade answers on the holder's handle
-        } else if (members && !members.has(op) && !Object.hasOwn(UNDEFINED_WRITES, op)) {
+        if (members && !members.has(op) && !Object.hasOwn(UNDEFINED_WRITES, op)) {
           // Whatever the lists say: they named the writers #17 PR 4a deleted until R88's read
           problem(n, `calls ${root}.${op}, which DatabaseManager doesn't define: fix the call, or list it in UNDEFINED_WRITES`);
         } else if (WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op)) {
           if (op === 'setSetting') {
             const key = keyText(args[0]);
             add(n, { kind: 'storage', op, key, call: `${root}.setSetting('${key}'${args.length > 1 ? ', …' : ''})` });
-          } else if (op === 'updateNote') {
-            const fields = fieldsSet(n);
-            add(n, { kind: 'storage', op, key: null, fields, call: `${root}.${op}(${fields.length > 0 ? `{${fields.join(', ')}}` : shown})` });
           } else {
             add(n, { kind: 'storage', op, key: null, call: `${root}.${op}(${shown})` });
           }
@@ -683,7 +618,7 @@ function scanSource(file, text, { members = null } = {}) {
       } else if (WEB_STORAGE_WRITES.has(op) && /^((window|self|globalThis)\.)?(localStorage|sessionStorage)$/.test(receiver.getText(sf))) {
         const key = constantString(args[0]);
         add(n, { kind: 'web storage', op, key, call: `${receiver.getText(sf)}.${op}(${key ? `'${key}'` : '…'})` });
-      } else if ((WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op)) && !GENERIC_WRITE_NAMES.has(op) && !knownOther(receiver)) {
+      } else if ((WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op)) && !knownOther(receiver)) {
         problem(n, `calls ${op}() on ${receiver.getText(sf).replace(/\s+/g, ' ').slice(0, 60)}, which the scanner can't place: reach Storage directly, or add the component to COMPONENTS`);
       }
     }
@@ -802,7 +737,7 @@ function statusOf(rule, hit) {
 /** The hit with its command and status, or with command null when no rule matches */
 function classify(hit) {
   const rule = RULES.find(r => matches(r.file, hit.file) && matches(r.method, hit.method) && matches(r.op, hit.op)
-    && matches(r.key, hit.key) && (r.fields === undefined || (hit.fields || []).includes(r.fields)));
+    && matches(r.key, hit.key));
   const { holder, ...row } = hit;
   if (!rule) return { ...row, command: null, status: null };
   return { ...row, command: rule.command, status: statusOf(rule, hit) };
@@ -825,9 +760,6 @@ function staleListings(members) {
       for (const op of list) {
         if (!members.has(op)) problems.push(`${name} in scripts/write-paths.js lists ${op}, which DatabaseManager doesn't define: drop it`);
       }
-    }
-    for (const op of Object.keys(HANDLE_READS)) {
-      if (members.has(op)) problems.push(`HANDLE_READS in scripts/write-paths.js lists ${op}, which DatabaseManager defines: move it to READS`);
     }
   }
   for (const rule of RULES) {
@@ -903,7 +835,7 @@ function renderDoc(rows) {
     '',
     '## Calls',
     '',
-    "Method is the class method or function the call sits in. After `>` comes the anonymous or nested function inside it, when where it sits says what it's for: a listener, a callback property such as `onResizeEnd`, or a menu item's `action`. An update's Call lists the fields it sets.",
+    "Method is the class method or function the call sits in. After `>` comes the anonymous or nested function inside it, when where it sits says what it's for: a listener, a callback property such as `onResizeEnd`, or a menu item's `action`.",
     '',
     '| File | Line | Method | Call | Command | Status |',
     '| --- | --- | --- | --- | --- | --- |',

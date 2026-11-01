@@ -13,11 +13,10 @@ import { validateBackup } from '../adapters/indexeddb/backups.js';
 import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { exportRawStores } from '../adapters/indexeddb/raw-export.js';
 import { createNoteList } from '../core/application/note-list.js';
-import { UnavailableError } from '../core/contracts/outcomes.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
-import { SYNC_SETTING_KEYS, createHolderSettings } from './holder-settings.js';
+import { PROVIDER_SETTING_KEYS, SYNC_SETTING_KEYS, createHolderSettings } from './holder-settings.js';
 import { chromeBackupSettings, chromeSettingsChanges, kernelClient, pageHost, wakeWorkerToPurge } from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
 import { createNoteRemoval } from './removal.js';
@@ -141,9 +140,9 @@ export function createPreUpdateCopy({
 /**
  * What the new tab's root runs on (#17 PR 4a): Popup's host, which is the page's IndexedDB,
  * chrome.storage.local, and its wait on the worker's run (Q12), with the page's Web Locks for
- * #33's copy, where it hears of settings changes, and js/storage.js's DatabaseManager, which
- * still opens beside the adapter until #17 PR 4b makes it the shell over the holders' facade.
- * Its chrome.storage.local has the remove the backup tasks prune with too (chromeBackupSettings).
+ * #33's copy, where it hears of settings changes, and js/storage.js's shell, the `Storage`
+ * global, which the root connects to the tab's kernel (connectNewTabStorage, #17 PR 4b). Its
+ * chrome.storage.local has the remove the backup tasks prune with too (chromeBackupSettings).
  * @typedef {PageHost & {locks: CopyLocks | null, changes: SettingsChanges, storage: LegacyStorage}} NewTabHost
  */
 
@@ -188,51 +187,16 @@ export function createNewTabAdapter(host) {
 }
 
 /**
- * Why the tab can't start when the holders' Storage didn't open after the adapter did, in the
- * words the legacy adapter gave Storage's refusals, so App shows the same guard or error state
- * @param {unknown} error - what Storage.open threw
- * @returns {UnavailableError}
- */
-function holdersFailure(error) {
-  const { code, name, message } = /** @type {{code?: unknown, name?: unknown, message?: unknown}} */ (error || {});
-  const thrown = { cause: error };
-  if (code === 'NEWER_SCHEMA') return new UnavailableError('newer-schema', 'version-too-new', false, thrown);
-  if (code === 'MISSING_CORE_STORES') return new UnavailableError('storage', 'missing-core-stores', false, thrown);
-  if (code === 'NO_DATABASE') return new UnavailableError('storage', 'no-database', true, thrown);
-  if (name === 'QuotaExceededError' || /quota/i.test(String(message))) {
-    return new UnavailableError('quota', 'quota', false, thrown);
-  }
-  return new UnavailableError('storage', 'open-failed', true, thrown);
-}
-
-/**
  * The new tab's kernel and its client, on `adapter` (createNewTabAdapter). It runs startup
  * maintenance before any command. Its connection closes when the worker upgrades the database,
  * so that upgrade never waits on this tab, and from then on every command answers
- * `reload-required`: the editor keeps its text and asks for a reload.
- *
- * js/storage.js's DatabaseManager still opens beside it, watching its connection, though the
- * holders #22 and #19 own go through the kernel since #17 PR 4b (createNewTabLegacyStores),
- * until 4b makes Storage the shell over their facade. Both open at once, so their waits on the
- * worker's run overlap, and the kernel is ready once both are. When the adapter's open fails,
- * its failure is the one the tab answers.
+ * `reload-required`: the editor keeps its text and asks for a reload. It's the tab's one
+ * connection to the database since #17 PR 4b, when js/storage.js stopped opening its own.
  * @param {IndexedDbAdapter} adapter
- * @param {Pick<NewTabHost, 'storage'>} host
  * @returns {Client}
  */
-export function createNewTabClient(adapter, host) {
-  /** @type {Promise<unknown>} */
-  const holders = Promise.resolve()
-    .then(() => host.storage.open({ watchConnection: true }))
-    .then(
-      () => null,
-      error => holdersFailure(error),
-    );
-  const ready = adapter.open().then(async () => {
-    const failure = await holders;
-    if (failure) throw failure;
-  });
-  return kernelClient({ adapter, surface: 'newtab', maintainOnOpen: true, ready });
+export function createNewTabClient(adapter) {
+  return kernelClient({ adapter, surface: 'newtab', maintainOnOpen: true, ready: adapter.open() });
 }
 
 /** The codes of a committed command that deleted notes or folders for good, leaving tombstones */
@@ -425,6 +389,28 @@ export function createNewTabLegacyStores(kernel, host, storageState) {
 }
 
 /**
+ * The settings the `Storage` global's shell reads and writes (js/storage.js): llm.js's
+ * provider settings, and the WebDAV config App's reconnect reads
+ */
+export const STORAGE_SHELL_SETTING_KEYS = Object.freeze([...PROVIDER_SETTING_KEYS, 'syncWebdavConfig']);
+
+/**
+ * Connects js/storage.js's shell, the `Storage` global llm.js and App's reconnect still call,
+ * to the tab's kernel (#17 PR 4b): the facade's calls, as the handles make them, and the
+ * settings of the holders that call the global, through their accessor (holder-settings.js).
+ * The root connects it before App starts, so no call reaches it unconnected.
+ * @param {Client} kernel
+ * @param {Pick<NewTabHost, 'settings' | 'storage'>} host
+ * @param {Pick<StorageState, 'openState' | 'missingStores'>} storageState - the tab's database, as its adapter opened it
+ */
+export function connectNewTabStorage(kernel, host, storageState) {
+  const facade = createStorageFacade(kernel, { openDatabase: storageState });
+  host.storage.connect(
+    Object.freeze({ ...facade, ...createHolderSettings(host.settings, STORAGE_SHELL_SETTING_KEYS) }),
+  );
+}
+
+/**
  * Start the new tab, as app.js's bootstrap did: App gets the tab's client, its document
  * client, its settings client, its AI port, its note list, its failure events, its
  * removeNotes, its database's state and recovery, its import's backup check, the narrow
@@ -443,12 +429,13 @@ export function startNewTab({ loader = null } = {}) {
     const page = /** @type {NewTabPage} */ (/** @type {unknown} */ (globalThis));
     const host = newTabHost();
     const adapter = createNewTabAdapter(host);
-    const kernel = withPurgeWake(createNewTabClient(adapter, host), () => wakeWorkerToPurge());
+    const kernel = withPurgeWake(createNewTabClient(adapter), () => wakeWorkerToPurge());
     const noteList = createNewTabNoteList(kernel);
     /** @type {NewTabApp | null} */
     let built = null;
     const storageState = createNewTabStorageState(adapter);
     const stores = createNewTabLegacyStores(kernel, host, storageState);
+    connectNewTabStorage(kernel, host, storageState);
     const events = createNewTabFailureEvents();
     const app = new page.App({
       kernel,

@@ -481,12 +481,16 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
 
 describe('startup maintenance on the IndexedDB adapter', () => {
   /**
-   * What Storage.initializeDefaultSettings writes on a first run, from production js/storage.js
+   * What Storage.initializeDefaultSettings writes on a first run, from the frozen v1.4.1, since
+   * js/storage.js's copy went with #17 PR 4b
    * @returns {Promise<Record<string, unknown>>}
    */
   const storageFirstRun = async () => {
-    const env = legacyEnv.createLegacyEnv({ context: 'page' });
-    env.load('js/utils.js', 'js/storage.js');
+    const env = legacyEnv.createLegacyEnv({ context: 'page', worker: false });
+    env.load(
+      'test/fixtures/storage/releases/v1.4.1/js/utils.js',
+      'test/fixtures/storage/releases/v1.4.1/js/storage.js',
+    );
     await env.get('Storage').initializeDefaultSettings();
     await legacyEnv.settle();
     return legacyEnv.plain(env.chrome.local);
@@ -690,8 +694,10 @@ describe('a page that finds no database, or an older one, waits on the worker fi
   });
 });
 
-it("this build's version is the registry's newest, schema.js's DB_VERSION, and Storage's dbVersion, all 11 (#17 PR 3b)", () => {
+it("this build's version is the registry's newest and schema.js's DB_VERSION, both 11, and the Storage global keeps no other (#17 PR 3b, PR 4b)", () => {
   const env = legacyEnv.createLegacyEnv({ context: 'page', worker: false });
   env.load('js/utils.js', 'js/storage.js');
-  assert.deepStrictEqual([LATEST_STRUCTURAL, DB_VERSION, env.get('Storage').dbVersion], [11, 11, 11]);
+  assert.deepStrictEqual([LATEST_STRUCTURAL, DB_VERSION], [11, 11]);
+  // js/storage.js kept its own dbVersion until #17 PR 4b made it a shell that opens no database
+  assert.equal('dbVersion' in env.get('Storage'), false);
 });

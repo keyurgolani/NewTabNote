@@ -21,13 +21,11 @@ import { randomIds } from './ids.js';
 /** @typedef {import('../core/ports/runtime.js').Logger} Logger */
 
 /**
- * js/storage.js's DatabaseManager, which the new tab's root opens beside #17's adapter for the
- * holders #22 and #19 own until #17 PR 4b makes it a facade (newtab.js). TypeScript reads the
+ * js/storage.js's shell, the `Storage` global llm.js and App's reconnect still call, which the
+ * new tab's root connects to the tab's kernel (#17 PR 4b, newtab.js). TypeScript reads the
  * legacy `Storage` global as the DOM's Storage, so the root reads it through this.
  * @typedef {object} LegacyStorage
- * @property {(options?: {watchConnection?: boolean}) => Promise<void>} open
- * @property {string} openState
- * @property {string[]} missingStores
+ * @property {(calls: Readonly<Record<string, (...args: any[]) => any>>) => void} connect
  */
 
 /**

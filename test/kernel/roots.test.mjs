@@ -1,9 +1,9 @@
 // What each composition root builds (#12, "Where the kernel runs"; #17 PR 1b): one kernel per
 // context, with its surface as the caller the policy checks. The worker's runs #17's migration
 // run first, then opens #17's adapter, and Popup's and Side Panel's open #17's adapter as it is.
-// So does the new tab's since #17 PR 4a, once the worker's run has had its 5 seconds, with
-// production js/storage.js open beside it for the holders #22 and #19 own, in
-// test/helpers/legacy-env.js. The worker's maintenance leaves out the integrity check, which
+// So does the new tab's since #17 PR 4a, once the worker's run has had its 5 seconds, its one
+// connection since #17 PR 4b, which connects production js/storage.js's shell to its kernel,
+// in test/helpers/legacy-env.js. The worker's maintenance leaves out the integrity check, which
 // it runs when asked (#35 slice 1).
 
 import { describe, it } from 'node:test';
@@ -15,6 +15,7 @@ import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
 import { PURGE_MESSAGE, waitForWorkerUpgrade, wakeWorkerToPurge } from '../../js/kernel/composition/host.js';
 import {
+  connectNewTabStorage,
   createNewTabAdapter,
   createNewTabClient,
   createNewTabLegacyStores,
@@ -49,13 +50,16 @@ const hostOf = context => ({
 });
 
 /**
- * The new tab's adapter and client, as its root builds them
+ * The new tab's adapter and client, as its root builds them, with the Storage global's shell
+ * connected to the client
  * @param {LegacyContext} context
  */
 const newTabOf = context => {
   const host = hostOf(context);
   const adapter = createNewTabAdapter(host);
-  return { adapter, client: createNewTabClient(adapter, host) };
+  const client = createNewTabClient(adapter);
+  connectNewTabStorage(client, host, createNewTabStorageState(adapter));
+  return { adapter, client };
 };
 
 /**
@@ -177,8 +181,8 @@ describe('each composition root', () => {
     const opened = newTabOf(next);
     assert.equal(await opened.client.whenReady(), null);
     assert.equal(opened.adapter.upgraded(), true);
-    // The holders' Storage opened it too
-    assert.equal(next.storage.db.version, DB_VERSION);
+    // Through its one connection: the Storage global's shell opens none (#17 PR 4b)
+    assert.equal('db' in next.storage, false);
     closeAll([fresh, next]);
   });
 
@@ -188,12 +192,6 @@ describe('each composition root', () => {
     const tab = legacyContext();
     const { adapter, client: newtab } = newTabOf(tab);
     assert.equal(await newtab.whenReady(), null);
-    // The holders' Storage watches its own
-    const db = /** @type {IDBDatabase} */ (tab.storage.db);
-    assert.deepEqual(
-      [db.onversionchange, db.onclose].map(handler => typeof handler === 'function'),
-      [true, true],
-    );
     const worker = createWorkerClient(workerHostOf(tab));
     assert.equal(await worker.whenReady(), null);
     const capture = (/** @type {string} */ id) =>
@@ -205,9 +203,9 @@ describe('each composition root', () => {
         capture: { type: 'text', content: id },
       });
     assert.equal((await capture('first')).kind, 'committed');
-    // A newer build's upgrade: neither of the new tab's connections blocks it, #17's adapter's or
-    // the holders' Storage's (#17 PR 4a), nor the worker's, and the worker's next open finds it
-    // too new
+    // A newer build's upgrade: the new tab's one connection doesn't block it, #17's adapter's,
+    // since the Storage global's shell opens none (#17 PR 4b), nor the worker's, and the
+    // worker's next open finds it too new
     const upgraded = await new Promise((resolve, reject) => {
       const request = tab.env.indexedDB.open('CanvasTabDB', DB_VERSION + 1);
       request.onsuccess = () => resolve(request.result);
@@ -215,7 +213,6 @@ describe('each composition root', () => {
       request.onblocked = () => reject(new Error('a connection the new tab or the worker held blocked the upgrade'));
     });
     /** @type {IDBDatabase} */ (upgraded).close();
-    assert.equal(tab.storage.openState, 'version-changed');
     assert.deepEqual([adapter.openState(), adapter.upgraded()], ['version-changed', false]);
     const reload = await newtab.execute({
       type: 'createNote',
@@ -324,6 +321,37 @@ describe('each composition root', () => {
       [stores.searchIndex.hasStore('vectors'), stores.searchIndex.hasStore('no-such-store')],
       [true, false],
     );
+    closeAll([tab]);
+  });
+
+  it("connects the Storage global's shell to the new tab's kernel, with only llm.js's and App's reconnect's settings, and before it does every call rejects (#17 PR 4b)", async () => {
+    const tab = legacyContext();
+    const shell = tab.storage;
+    // Unconnected, as on a page the root never started
+    await assert.rejects(shell.getSetting('llmProvider', 'none'), /until the new tab connects it/);
+    assert.equal(shell.hasStore('vectors'), false);
+    const { client } = newTabOf(tab);
+    assert.equal(await client.whenReady(), null);
+    // Its settings are where 1.4.x kept them, and it reaches no other holder's or the kernel's
+    await shell.setSetting('llmModel', 'gpt-4o');
+    assert.equal(tab.env.chrome.local.setting_llmModel, 'gpt-4o');
+    assert.equal(await shell.getSetting('llmProvider', 'none'), 'none');
+    tab.env.chrome.local.setting_syncWebdavConfig = { serverUrl: 'https://dav.example.test' };
+    assert.deepEqual(await shell.getSetting('syncWebdavConfig'), { serverUrl: 'https://dav.example.test' });
+    for (const key of ['theme', 'syncProvider', 'dailyNoteTemplate']) {
+      await assert.rejects(shell.setSetting(key, 'x'), TypeError, key);
+    }
+    // Its other calls are the facade's, on the kernel
+    const created = await client.execute({
+      type: 'createNote',
+      commandId: client.ids.next(),
+      noteId: client.ids.next(),
+      name: 'Shell',
+    });
+    assert.equal(created.kind, 'committed');
+    const listed = await client.query({ type: 'listNotes', view: 'withArchived' });
+    assert.deepEqual(await shell.getAllNotes(true), listed.kind === 'ready' ? listed.data : null);
+    assert.equal(shell.hasStore('vectors'), true);
     closeAll([tab]);
   });
 });

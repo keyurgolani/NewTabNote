@@ -10,13 +10,10 @@ import { createRequire } from 'node:module';
 
 import { SECRET_SETTING_KEYS, createLegacySecretReader } from '../../js/kernel/adapters/indexeddb/legacy-secrets.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
-import {
-  PROVIDER_SETTING_KEYS,
-  SYNC_SETTING_KEYS,
-  createHolderSettings,
-} from '../../js/kernel/composition/holder-settings.js';
+import { PROVIDER_SETTING_KEYS, SYNC_SETTING_KEYS } from '../../js/kernel/composition/holder-settings.js';
 import { kernelClient, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import {
+  connectNewTabStorage,
   createNewTabAdapter,
   createNewTabLegacyStores,
   createNewTabStorageState,
@@ -73,6 +70,10 @@ async function newTab({ omit = [] } = {}) {
     ),
   });
   const stores = createNewTabLegacyStores(spying, host, createNewTabStorageState(adapter));
+  // js/storage.js's shell, the Storage global llm.js calls, connected as the root connects it
+  env.load('js/storage.js');
+  const shell = env.get('Storage');
+  connectNewTabStorage(spying, { settings: host.settings, storage: shell }, createNewTabStorageState(adapter));
   /**
    * Sends a command on the tab's own client, as another part of the page does
    * @param {Record<string, unknown>} fields
@@ -98,7 +99,7 @@ async function newTab({ omit = [] } = {}) {
     assert.equal(state.kind, 'ready', JSON.stringify(state));
     return state.kind === 'ready' ? state.data : [];
   };
-  return { env, host, adapter, client, stores, sent, run, note, data, close: () => adapter.close() };
+  return { env, host, adapter, client, stores, shell, sent, run, note, data, close: () => adapter.close() };
 }
 
 /**
@@ -354,8 +355,8 @@ describe('the settings llm.js and sync keep outside the kernel (#17 PR 4b)', () 
     const tab = await newTab();
     const key = `sk-canary-${tab.client.ids.next()}`;
     const password = `pw-canary-${tab.client.ids.next()}`;
-    // llm.js's settings, as the shell over the facade gives Storage.getSetting and setSetting to LLMService
-    const provider = createHolderSettings(tab.host.settings, PROVIDER_SETTING_KEYS);
+    // llm.js's settings, through the Storage global's shell, as LLMService reads and writes them
+    const provider = tab.shell;
     const logged = captureConsole();
     try {
       await provider.setSetting('llmApiKey', key);

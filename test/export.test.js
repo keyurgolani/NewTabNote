@@ -45,7 +45,7 @@ async function sourceProfile() {
     },
   });
   env.load(...FILES);
-  // As the new tab's root starts the page, opening the holders' Storage beside #17's adapter
+  // As the new tab's root starts the page, with the Storage global's shell connected to its kernel
   await startNewTabKernel(env);
   return env;
 }
@@ -54,7 +54,7 @@ async function sourceProfile() {
 async function emptyProfile() {
   const env = createLegacyEnv();
   env.load(...FILES);
-  // As the new tab's root starts the page, opening the holders' Storage beside #17's adapter
+  // As the new tab's root starts the page, with the Storage global's shell connected to its kernel
   await startNewTabKernel(env);
   return env;
 }
