@@ -1,9 +1,13 @@
 // The read-only integrity check on #17's adapter (js/kernel/adapters/indexeddb/integrity.js),
-// held to 1.4.x's Storage.runIntegrityCheck, which the worker ran until #17 PR 1b put its
-// kernel on #17's adapter: on the same database, the two report the same, word for word, by
-// store, at version 8 and at 9 through the runner, with stores missing, with nothing to report,
-// and when a store can't be read. Both only report: nothing in the database changes.
+// held to frozen 1.4.1's, which its Storage.init ran at the end of each start: its
+// validateDatabase, and the line it printed of what that found or of what stopped it. Since
+// #17 PR 4a no test calls this build's Storage.validateDatabase, as none calls the other paths
+// 4a ported, since 4b makes js/storage.js a facade. On the same database, the two report the
+// same, word for word, by store, at version 8 and at this build's version through the runner,
+// with stores missing, with nothing to report, and when a store can't be read. Both only
+// report: nothing in the database changes.
 
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -52,24 +56,51 @@ const ORPHANED = Object.freeze({
 const merged = (a, b) =>
   Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].map(store => [store, [...(a[store] || []), ...(b[store] || [])]]));
 
+/** Frozen 1.4.1's Storage, and the Utils it ran on, from the release fixtures */
+const RELEASE_UTILS = 'test/fixtures/storage/releases/v1.4.1/js/utils.js';
+const RELEASE_STORAGE = 'test/fixtures/storage/releases/v1.4.1/js/storage.js';
+
 /**
- * What Storage.runIntegrityCheck says on `of`'s database, as a page opens it
+ * The end of frozen 1.4.1's Storage.init, its read-only integrity check, as it reads: its
+ * validateDatabase, and the line it printed of what that found or of what stopped it. Its init
+ * opens at 8 only, so the tests open the connection and run this part of it, which a database
+ * the runner took to this build's version can run too.
+ */
+const RELEASE_CHECK = (() => {
+  const source = readFileSync(new URL(`../../${RELEASE_STORAGE}`, import.meta.url), 'utf8');
+  const start = source.indexOf('    // Read-only integrity check: reports orphans, deletes nothing\n');
+  const end = source.indexOf('\n  }\n', start);
+  assert.ok(start > 0 && end > start, "1.4.1's init ends with its integrity check");
+  return source.slice(start, end);
+})();
+
+/**
+ * What frozen 1.4.1's startup integrity check says on `of`'s database, on a connection a page
+ * opened to it as it is
  * @param {Profile} of
+ * @param {{before?: (db: IDBDatabase) => Promise<void>}} [options] - runs on that connection
+ *   first
  * @returns {Promise<Said[]>}
  */
-async function storageSays(of) {
-  const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
-  env.load('js/utils.js', 'js/storage.js');
+async function storageSays(of, { before } = {}) {
+  const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome, worker: false });
+  env.load(RELEASE_UTILS, RELEASE_STORAGE);
   const storage = env.get('Storage');
-  await storage.openExisting();
-  const before = env.logs.length;
-  await storage.runIntegrityCheck();
-  storage.db.close();
-  return env.logs.slice(before).map((/** @type {{level: string, args: unknown[]}} */ log) => ({
-    level: log.level,
-    message: String(log.args[0]),
-    detail: log.level === 'warn' ? nameOf(log.args[1]) : legacyEnv.plain(log.args[1]),
-  }));
+  /** @type {IDBDatabase} */
+  const db = await legacyEnv.requestToPromise(of.real.open('CanvasTabDB'));
+  storage.db = db;
+  try {
+    if (before) await before(db);
+    const logged = env.logs.length;
+    await env.get(`(async function () {\n${RELEASE_CHECK}\n})`).call(storage);
+    return env.logs.slice(logged).map((/** @type {{level: string, args: unknown[]}} */ log) => ({
+      level: log.level,
+      message: String(log.args[0]),
+      detail: log.level === 'warn' ? nameOf(log.args[1]) : legacyEnv.plain(log.args[1]),
+    }));
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -101,15 +132,16 @@ async function adapterSays(of) {
 const nameOf = error => (error && typeof error === 'object' && 'name' in error ? String(error.name) : String(error));
 
 /**
- * A profile whose database holds `records`, at version 8, or at 9 through the runner
+ * A profile whose database holds `records`, at version 8, or at this build's version through
+ * the runner
  * @param {Record<string, unknown[]>} records
- * @param {{nine?: boolean, omit?: string[], extraStores?: Record<string, unknown>}} [options]
+ * @param {{migrated?: boolean, omit?: string[], extraStores?: Record<string, unknown>}} [options]
  * @returns {Promise<Profile>}
  */
-async function profileHolding(records, { nine = false, omit = [], extraStores = {} } = {}) {
+async function profileHolding(records, { migrated = false, omit = [], extraStores = {} } = {}) {
   const of = newProfile();
   await legacyEnv.createDatabase(of.real, { records, omit, extraStores });
-  if (nine) assert.equal((await run(of)).status, 'migrated');
+  if (migrated) assert.equal((await run(of)).status, 'migrated');
   return of;
 }
 
@@ -123,10 +155,10 @@ const REPORTED = Object.freeze({
   orphanedMedia: 2,
 });
 
-describe("#17's integrity check reports what Storage's reports (#17 PR 1b, #35 slice 1)", () => {
-  for (const nine of [false, true]) {
-    it(`counts the same orphans in every store, at version ${nine ? '9, through the runner' : 8}`, async () => {
-      const of = await profileHolding(merged(KEPT, ORPHANED), { nine });
+describe("#17's integrity check reports what frozen 1.4.1's reports (#17 PR 1b, #35 slice 1)", () => {
+  for (const migrated of [false, true]) {
+    it(`counts the same orphans in every store, at ${migrated ? "this build's version, through the runner" : 'version 8'}`, async () => {
+      const of = await profileHolding(merged(KEPT, ORPHANED), { migrated });
       const before = await legacyEnv.dumpDatabase(of.real);
       const fromStorage = await storageSays(of);
       assert.deepEqual(fromStorage, [
@@ -138,7 +170,7 @@ describe("#17's integrity check reports what Storage's reports (#17 PR 1b, #35 s
   }
 
   it('says nothing when nothing is orphaned, and only what a store has when others are missing', async () => {
-    const clean = await profileHolding(KEPT, { nine: true });
+    const clean = await profileHolding(KEPT, { migrated: true });
     assert.deepEqual(await storageSays(clean), []);
     assert.deepEqual(await adapterSays(clean), []);
 
@@ -157,19 +189,20 @@ describe("#17's integrity check reports what Storage's reports (#17 PR 1b, #35 s
     assert.deepEqual(await adapterSays(partial), fromStorage);
   });
 
-  it('warns and commits on a database another context deleted, as Storage does, and makes none', async () => {
-    const of = await profileHolding(merged(KEPT, ORPHANED), { nine: true });
+  it('warns and commits on a database another context deleted, as 1.4.1 does on a closed connection, and makes none', async () => {
+    const of = await profileHolding(merged(KEPT, ORPHANED), { migrated: true });
     const deleted = () => legacyEnv.requestToPromise(of.real.deleteDatabase('CanvasTabDB'));
 
-    const env = legacyEnv.createLegacyEnv({ context: 'page', indexedDB: of.real, chrome: of.chrome });
-    env.load('js/utils.js', 'js/storage.js');
-    const storage = env.get('Storage');
-    await storage.openExisting();
-    await deleted();
-    const before = env.logs.length;
-    await storage.runIntegrityCheck();
+    // 1.4.1's page never closed its connection on versionchange, so a delete waited for it: its
+    // check met the database gone only on a connection that had closed
+    const fromStorage = await storageSays(of, {
+      before: async db => {
+        db.close();
+        await deleted();
+      },
+    });
     assert.deepEqual(
-      env.logs.slice(before).map((/** @type {{level: string, args: unknown[]}} */ log) => [log.level, String(log.args[0])]),
+      fromStorage.map(({ level, message }) => [level, message]),
       [['warn', 'Integrity check encountered an error:']],
     );
 
@@ -196,7 +229,7 @@ describe("#17's integrity check reports what Storage's reports (#17 PR 1b, #35 s
     adapter.close();
   });
 
-  it("warns with what stopped it when a store can't be read, as Storage does, and still commits", async () => {
+  it("warns with what stopped it when a store can't be read, as 1.4.1 does, and still commits", async () => {
     // Blocks without the index both count them by
     const of = await profileHolding(merged(KEPT, ORPHANED), {
       extraStores: { elements: { keyPath: 'id', indexes: [['type', 'type']] } },
