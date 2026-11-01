@@ -129,6 +129,33 @@ const FENCE_PIECES = ['```', '`', '``', '\n', '\r', '\r\n', ' ', 'x', ' ', '\t
 const isDeclaredMarkdown = value =>
   typeof value === 'string' && (value.includes('$`') || (value.includes('\u0000') && /CODEBLOCK|INLINECODE/.test(value)));
 
+/** Markdown pieces whose text holds no markup */
+const PLAIN_MARKDOWN_PIECES = [
+  '```', '```js\n', '```\n', '`', '``', 'x', 'a b', ' ', '\n', '\n\n', '\t', '[[', ']]', '[', ']', '(', ')', '](', '[a](b)',
+  '[a](https://a.test/x)', '[m](mailto:a@b.test)', '[[n]]', '[[a b]]', '# ', '## ', '### ', '- ', '* ', '1. ', '> ', '---', '***',
+  '|', '|a|b|\n', '|-|:-:|\n', '**', '__', '*', '_', '- a\n', '1. a\n', '> q\n', '`a > b`', '"', "'", '>', 'Tom', 'x > y',
+];
+
+/**
+ * Whether `value`'s text holds markup, which the chat now shows as text (declared): a tag or
+ * a character reference, or a Markdown link to an address the link rule refuses
+ * @param {unknown} value
+ */
+const holdsMarkup = value => {
+  if (typeof value !== 'string') return false;
+  if (/[<&]/.test(value)) return true;
+  return [...value.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g)].some(([, , address]) => !env.global.BlockRendering.isLinkHref(address));
+};
+
+/** @type {Record<string, string>} */
+const SHOWN_THE_SAME = { '&gt;': '>', '&quot;': '"', '&#39;': "'" };
+
+/**
+ * `html` with the characters a text node shows the same, escaped or not, written as themselves
+ * @param {unknown} html
+ */
+const asShown = html => (typeof html === 'string' ? html.replace(/&gt;|&quot;|&#39;/g, entity => SHOWN_THE_SAME[entity]) : html);
+
 describe("the text paths give 1.4.x's output (#14)", () => {
   const corpus = corpusValues();
 
@@ -142,10 +169,20 @@ describe("the text paths give 1.4.x's output (#14)", () => {
     assert.equal(Utils.extractWikiLinks, undefined);
   });
 
-  it('AI chat renders Markdown as 1.4.x did', () => {
-    const values = [...corpus, ...seeded(MARKDOWN_PIECES, 20_000)].filter(value => !isDeclaredMarkdown(value));
-    assert.ok(values.length > 15_000);
-    assert.deepEqual(differences(text => Utils.parseMarkdown(text), text => OldUtils.parseMarkdown(text), values), []);
+  it('AI chat renders Markdown as 1.4.x did, where its text holds no markup', () => {
+    // 1.4.x let a link's address or a wiki link's name run into the HTML it had made; the chat
+    // shows that text as text now (declared)
+    const ranIntoHtml = value => {
+      try {
+        return /(?:href|data-note-name)="[^"]*</.test(OldUtils.parseMarkdown(value));
+      } catch {
+        return false;
+      }
+    };
+    const values = [...corpus, ...seeded(MARKDOWN_PIECES, 20_000), ...seeded(PLAIN_MARKDOWN_PIECES, 20_000)]
+      .filter(value => !isDeclaredMarkdown(value) && !holdsMarkup(value) && !ranIntoHtml(value));
+    assert.ok(values.length > 25_000);
+    assert.deepEqual(differences(text => asShown(Utils.parseMarkdown(text)), text => asShown(OldUtils.parseMarkdown(text)), values), []);
     assert.deepEqual(
       differences(html => Utils.convertWikiLinksToHtml(html), html => OldUtils.convertWikiLinksToHtml(html), [...corpus, ...seeded(WIKI_PIECES, 5000)]),
       [],

@@ -191,6 +191,39 @@ function wrapListRuns(text, open, close, wrap) {
 }
 
 /**
+ * `/\[\[([^\]]+)\]\]/g` replaced by `link(name)`, in one pass: from a `[[`, the name runs to
+ * the first `]`, which another `]` must follow, and is trimmed. A link that gives null leaves
+ * its text as it is.
+ * @param {string} text
+ * @param {(name: string) => string | null} link
+ * @returns {string}
+ */
+function replaceWikiLinks(text, link) {
+  const nextClose = forwardIndexOf(text, ']');
+  let out = '';
+  let from = 0;
+  for (let at = text.indexOf('[['); at !== -1; at = text.indexOf('[[', at + 1)) {
+    if (at < from) continue;
+    const close = nextClose(at + 2);
+    if (close === -1) break;
+    if (close === at + 2 || text[close + 1] !== ']') continue;
+    const made = link(text.slice(at + 2, close).trim());
+    if (made === null) continue;
+    out += text.slice(from, at) + made;
+    from = close + 2;
+    at = close + 1;
+  }
+  return out + text.slice(from);
+}
+
+/**
+ * A wiki link to the note named `name`, which is already escaped
+ * @param {string} name
+ * @returns {string}
+ */
+const wikiLinkHtml = name => `<a href="#" class="wiki-link" data-note-name="${name}">[[${name}]]</a>`;
+
+/**
  * Each of parseMarkdown's placeholders replaced by the code it stands for, in one pass, with
  * what 1.4.x's string replace of each one in turn gave: a placeholder's first appearance takes
  * its code, where `$$` reads as `$` and `$&` as the placeholder itself. The patterns that copy
@@ -1052,25 +1085,16 @@ const Utils = {
     if (!html) return '';
     // Anything but a string throws, as 1.4.x's replace did
     const text = html.replace(/(?:)/, '');
-    const nextClose = forwardIndexOf(text, ']');
-    let out = '';
-    let from = 0;
-    for (let at = text.indexOf('[['); at !== -1; at = text.indexOf('[[', at + 1)) {
-      if (at < from) continue;
-      const close = nextClose(at + 2);
-      if (close === -1) break;
-      if (close === at + 2 || text[close + 1] !== ']') continue;
-      const name = this.escapeHtml(text.slice(at + 2, close).trim());
-      out += `${text.slice(from, at)}<a href="#" class="wiki-link" data-note-name="${name}">[[${name}]]</a>`;
-      from = close + 2;
-      at = close + 1;
-    }
-    return out + text.slice(from);
+    return replaceWikiLinks(text, name => wikiLinkHtml(this.escapeHtml(name)));
   },
 
   /**
    * Parse markdown text to HTML
    * Supports: headers, bold, italic, code blocks, inline code, lists, blockquotes, links, hr, tables, paragraphs, and wikilinks
+   * Plain text is shown as text (#21): once the code is taken out, the rest is escaped before its
+   * Markdown is read, so the only markup is what the Markdown makes, and a link goes only where
+   * the link rule lets it (BlockRendering.isLinkHref). Where the text holds no markup, the HTML
+   * reads as 1.4.x's did.
    * @param {string} text - Markdown text to parse
    * @returns {string} - HTML string
    */
@@ -1098,8 +1122,13 @@ const Utils = {
       return `\x00INLINECODE${index}\x00`;
     });
 
-    // Wikilinks [[Note]]
-    result = this.convertWikiLinksToHtml(result);
+    // Plain text is shown as text: everything but the code taken out above, which is escaped
+    // as it's taken out
+    result = this.escapeHtml(result);
+
+    // Wikilinks [[Note]], whose names are escaped now. A name that runs into code's placeholder
+    // isn't one
+    result = replaceWikiLinks(result, name => (/\x00(?:CODEBLOCK|INLINECODE)\d/.test(name) ? null : wikiLinkHtml(name)));
 
     // Process block-level elements
 
@@ -1111,8 +1140,8 @@ const Utils = {
     // Horizontal rules (--- or ***)
     result = result.replace(/^(-{3,}|\*{3,})$/gm, '<hr>');
 
-    // Blockquotes (> quote)
-    result = result.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+    // Blockquotes (> quote), whose `>` is escaped now
+    result = result.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
     // Merge consecutive blockquotes
     result = result.replace(/<\/blockquote>\n<blockquote>/g, '\n');
 
@@ -1138,8 +1167,13 @@ const Utils = {
     result = result.replace(/<\/ul>\n<ul>/g, '\n');
     result = result.replace(/<\/ol>\n<ol>/g, '\n');
 
-    // Links [text](url)
-    result = replaceMarkdownLinks(result, (label, address) => `<a href="${address}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+    // Links [text](url), to an address the link rule lets a link go to; any other stays as text.
+    // The text is escaped, so a `<` or `"` in an address is from the HTML made above: an
+    // address that runs into it, or into code's placeholder, isn't one
+    const { isLinkHref } = globalThis.BlockRendering;
+    result = replaceMarkdownLinks(result, (label, address) => (isLinkHref(address) && !/[<"]|\x00(?:CODEBLOCK|INLINECODE)\d/.test(address)
+      ? `<a href="${address}" target="_blank" rel="noopener noreferrer">${label}</a>`
+      : `[${label}](${address})`));
 
     // Bold (**text** or __text__)
     result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');

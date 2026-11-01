@@ -1,12 +1,14 @@
 {
-  "about": "The raw markup sinks block code may have (#14 slice 2, the rendering boundary): each file and function with its count and kind, and the issue that removes it. Block code puts rich text into the DOM only through the trusted-rendering port (js/kernel/core/ports/rendering.js), whose legacy adapter's render is the one dynamic sink here besides packaged icons; every other row is packaged markup. test/render-sinks.test.js scans the files and directories in scope and fails on a sink no row covers, a count that changed, or a row whose sink is gone. A static sink assigns a string or a template with no substitutions; assigning the empty string isn't a sink.",
+  "about": "The raw markup sinks block code and the AI chat may have (#14 slice 2, the rendering boundary; #21 for the chat): each file and function with its count and kind, and the issue that removes it. Block code puts rich text into the DOM only through the trusted-rendering port (js/kernel/core/ports/rendering.js), whose legacy adapter's render is its one dynamic sink besides packaged icons. The AI chat renders every reply through AIChatController.replyHtml, which shows a reply's plain text as text before its Markdown is read (Utils.parseMarkdown) and runs sanitizeHtml after; its other sinks are packaged markup. test/render-sinks.test.js scans the files and directories in scope and fails on a sink no row covers, a count that changed, or a row whose sink is gone. A static sink assigns a string or a template with no substitutions, or such text joined with +; assigning the empty string isn't a sink.",
   "version": 1,
   "scope": [
     "js/blocks.js",
     "js/editor.js",
     "js/ui/formatting-toolbar.js",
     "js/blocks/",
-    "js/kernel/adapters/rendering/"
+    "js/kernel/adapters/rendering/",
+    "js/controllers/ai-chat-controller.js",
+    "js/stream-renderer.js"
   ],
   "sinks": [
     {
@@ -89,6 +91,168 @@
       "owner": 21,
       "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
       "note": "The version history panel's close icon"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "replyHtml",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 renders a reply through the inline schema's renderer",
+      "note": "A reply's sanitized HTML, parsed in an inert document so the link rule reads each link's address as parsed; its HTML is what the chat renders"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "_finalizeStreamedMessage",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 renders a reply through the inline schema's renderer",
+      "note": "A finished reply, as AIChatController.replyHtml renders it"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "addChatMessage",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 renders a reply through the inline schema's renderer",
+      "note": "A reply in the note chat, from the chat or its history, as AIChatController.replyHtml renders it"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "addGlobalChatMessage",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 renders a reply through the inline schema's renderer",
+      "note": "A reply in All Notes, from the chat or its history, as AIChatController.replyHtml renders it"
+    },
+    {
+      "file": "js/stream-renderer.js",
+      "function": "_commitBlock",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 renders a reply through the inline schema's renderer",
+      "note": "A streamed reply's finished block, from the parseBlock the chat gives it, which is AIChatController.replyHtml"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "_showRateLimitToast",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The rate-limit toast's icon and label, with the wait as the number the chat read"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "copyAIResponse",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The copy button's own icon, put back after its check mark"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "renderSmartInsights",
+      "kind": "dynamic",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "An action item's icon, one of three packaged SVGs"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "initMessageElement",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The stop button's icon"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "_showConnectionLostBanner",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The connection banner's icon and label"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "_showIncompleteResponse",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The incomplete-response notice's icon and label"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "_buildMessageActions",
+      "kind": "static",
+      "count": 3,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "A streamed reply's append, new note and copy icons"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "_buildSourceNotesEl",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The source notes badge's icon"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "addChatMessage",
+      "kind": "static",
+      "count": 3,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "A reply's append, new note and copy icons"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "addGlobalChatMessage",
+      "kind": "static",
+      "count": 3,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "A reply's source notes badge and its copy and new note icons"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "copyAIResponse",
+      "kind": "static",
+      "count": 1,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The copy button's check mark"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "loadAndPopulateModels",
+      "kind": "static",
+      "count": 2,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The model list's loading and failure options"
+    },
+    {
+      "file": "js/controllers/ai-chat-controller.js",
+      "function": "renderSmartInsights",
+      "kind": "static",
+      "count": 4,
+      "owner": 21,
+      "removeWhen": "#21 slice 2 puts packaged markup behind its Trusted Types policy",
+      "note": "The insights' empty messages and a related note's icon"
     }
   ]
 }
