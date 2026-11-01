@@ -99,20 +99,13 @@ test('Focus mode, turned on while the new tab starts, turns off with Escape once
 
 test('Import, clicked in the sidebar while the new tab starts, makes the note through the kernel', async ({ extension }) => {
   const page = await openHeld(extension);
-  // App's removed copy made the note with Storage.createNote; NotesManager's goes through the kernel
-  await page.evaluate(() => {
-    window.__ntnLegacyCreates = 0;
-    const createNote = Storage.createNote;
-    Storage.createNote = function countedCreateNote(...args) {
-      window.__ntnLegacyCreates += 1;
-      return createNote.apply(this, args);
-    };
-  });
+  // App's removed copy made the note with Storage.createNote, which the Storage global hasn't
+  // had since #17 PR 4b; NotesManager's goes through the kernel
+  expect(await page.evaluate(() => typeof Storage.createNote)).toBe('undefined');
   const chooser = page.waitForEvent('filechooser');
   await page.locator('#sidebar-import-note').click();
   await (await chooser).setFiles({ name: 'Window note.md', mimeType: 'text/markdown', buffer: Buffer.from('Imported while the new tab starts\n') });
   await expect(page.locator('.toast.success').last()).toHaveText('Note imported');
-  expect(await page.evaluate(() => window.__ntnLegacyCreates)).toBe(0);
 
   await release(page);
   await driver.waitForApp(page);

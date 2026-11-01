@@ -10,18 +10,19 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 /** Every note but templates and trash, as stored */
-function storedNotes(page) {
-  return page.evaluate(async () => (await Storage.getAllNotes(true)).map(note => ({
+async function storedNotes(page) {
+  return (await profileStore(page).getAllNotes(true)).map(note => ({
     id: note.id,
     name: note.name,
     folderId: note.folderId,
     pinned: Boolean(note.pinned),
     archived: Boolean(note.archived),
     dateStr: note.isDaily ? note.dateStr : null,
-  })));
+  }));
 }
 
 /**
@@ -88,7 +89,7 @@ async function startOn(extension, notes) {
 test('new notes from the sidebar, the header, the palette, and a folder show in the list with no reload', async ({ extension }) => {
   const page = await startOn(extension, [{ name: 'Alpha', blocks: [{ type: 'text', content: 'Alpha body' }] }]);
   // A folder made the 1.4.x way, then shown, before counting
-  const folderId = await page.evaluate(async () => (await Storage.createFolder('Work')).id);
+  const folderId = (await profileStore(page).createFolder('Work')).id;
   await page.evaluate(() => app.sidebarController.reloadLists());
   await countReloads(page);
 
@@ -205,9 +206,9 @@ test('an open note archives with what was typed in it, and comes back from the a
   await driver.openNoteMenu(page, 'Alpha');
   await page.locator('#ctx-archive-note').click();
 
-  const alphaId = await page.evaluate(async () => (await Storage.getAllNotes(true)).find(note => note.name === 'Alpha').id);
+  const alphaId = (await profileStore(page).getAllNotes(true)).find(note => note.name === 'Alpha').id;
   await expect.poll(async () => (await storedNotes(page)).find(note => note.id === alphaId).archived).toBe(true);
-  const kept = await page.evaluate(async id => (await Storage.getElementsByNote(id)).map(block => block.content), alphaId);
+  const kept = (await profileStore(page).getElementsByNote(alphaId)).map(block => block.content);
   expect(kept.join(' ')).toContain('typed before archiving');
   await expect(page.locator('#page-title')).not.toHaveText('Alpha');
   await expect(sidebarItem(page, 'Alpha')).toHaveCount(0);
@@ -247,11 +248,11 @@ test("a block dropped on a sidebar note goes after its last block, and one dropp
   ]);
   await driver.openNote(page, 'Alpha');
   await countReloads(page);
-  const betaId = await page.evaluate(async () => (await Storage.getAllNotes(true)).find(note => note.name === 'Beta').id);
+  const betaId = (await profileStore(page).getAllNotes(true)).find(note => note.name === 'Beta').id;
   await dropBlock(page, { name: 'Beta', text: 'Dropped on Beta' });
   await expect.poll(() => page.evaluate(() => window.__ntnToasts.map(toast => toast.text))).toContain('Block appended to note');
-  const betaBlocks = await page.evaluate(async id => (await Storage.getElementsByNote(id))
-    .sort((a, b) => a.order - b.order).map(block => block.content), betaId);
+  const betaBlocks = (await profileStore(page).getElementsByNote(betaId))
+    .sort((a, b) => a.order - b.order).map(block => block.content);
   expect(betaBlocks).toEqual(['Beta one', 'Beta two', 'Dropped on Beta']);
   // Beta reads as just changed, so it lists first
   await expect(page.locator('#sidebar-notes-list .sidebar-note-item .sidebar-note-name').first()).toHaveText('Beta');
@@ -319,7 +320,7 @@ test('a pin made mid-typing survives the save, and the sidebar shows it pinned w
 
   const betaId = await page.evaluate(() => app.editor.noteId);
   await expect.poll(async () => (await storedNotes(page)).find(note => note.id === betaId).pinned).toBe(true);
-  const kept = await page.evaluate(async id => (await Storage.getElementsByNote(id)).map(block => block.content), betaId);
+  const kept = (await profileStore(page).getElementsByNote(betaId)).map(block => block.content);
   expect(kept.join(' ')).toContain('before the pin and after');
   await expect(sidebarItem(page, 'Beta').locator('.sidebar-note-pin')).toHaveClass(/pinned/);
   await expect(page.locator('#sidebar-notes-list .sidebar-note-item .sidebar-note-name').first()).toHaveText('Beta');

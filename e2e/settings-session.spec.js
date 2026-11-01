@@ -6,6 +6,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 /** What chrome.storage.local holds under `keys` */
@@ -69,7 +70,7 @@ test('a theme saved in the Theme Builder applies, and comes back after a reload'
 
   await expect.poll(async () => (await stored(page, ['setting_theme'])).setting_theme).not.toBe('system');
   const themeId = (await stored(page, ['setting_theme'])).setting_theme;
-  const saved = await page.evaluate(async id => (await Storage.getCustomThemes()).find(theme => theme.id === id), themeId);
+  const saved = (await profileStore(page).getCustomThemes()).find(theme => theme.id === themeId);
   expect([saved.name, saved.properties['--bg-primary']]).toEqual(['Dusk', '#102030']);
 
   await driver.reload(page);
@@ -82,14 +83,14 @@ test('turning split view on or off is saved at once: a reload keeps it either wa
   await extension.seedOnboarded();
   const page = await driver.openNewTab(extension);
   await expect.poll(async () => (await stored(page, ['lastOpenedNoteId'])).lastOpenedNoteId || null).not.toBeNull();
-  const { leftId, rightId } = await page.evaluate(async () => {
-    const beta = await Storage.createNote('Beta');
+  const beta = await profileStore(page).createNote('Beta');
+  const { leftId, rightId } = await page.evaluate(async betaId => {
     await app.sidebarController.reloadLists();
-    await app.tabController.openNoteInNewTab(beta.id);
+    await app.tabController.openNoteInNewTab(betaId);
     // Nothing but the toggle: 1.4.x saved split view only with the next tab change
     await app.tabController.toggleSplitView();
     return { leftId: app.editor.noteId, rightId: app.secondaryEditor.noteId };
-  });
+  }, beta.id);
 
   await driver.reload(page);
   await expect.poll(() => page.evaluate(() => [app.editor.noteId, app.tabController.splitViewEnabled, app.secondaryEditor.noteId]))

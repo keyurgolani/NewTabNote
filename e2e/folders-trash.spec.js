@@ -7,6 +7,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -20,12 +21,15 @@ const folderHeader = (page, name) =>
   page.locator('#sidebar-notes-list .sidebar-folder-header').filter({ has: page.getByText(name, { exact: true }) });
 
 /** The stored note named `name`, whatever list it's in */
-const stored = (page, name) =>
-  page.evaluate(async n => {
-    const notes = [...(await Storage.getAllNotes(true)), ...(await Storage.getTrashedNotes()), ...(await Storage.getTemplates())];
-    const found = notes.find(note => note.name === n);
-    return found ? { id: found.id, folderId: found.folderId || null, updatedAt: found.updatedAt, isTemplate: Boolean(found.isTemplate), archived: Boolean(found.archived), trashed: Boolean(found.trashed) } : null;
-  }, name);
+const stored = async (page, name) => {
+  const store = profileStore(page);
+  const notes = [...(await store.getAllNotes(true)), ...(await store.getTrashedNotes()), ...(await store.getTemplates())];
+  const found = notes.find(note => note.name === name);
+  return found ? { id: found.id, folderId: found.folderId || null, updatedAt: found.updatedAt, isTemplate: Boolean(found.isTemplate), archived: Boolean(found.archived), trashed: Boolean(found.trashed) } : null;
+};
+
+/** The stored folders */
+const storedFolders = page => profileStore(page).getAllFolders();
 
 const toasts = page => page.locator('.toast-container .toast').allTextContents();
 
@@ -68,7 +72,7 @@ async function withFolder(extension) {
 async function dragBetaIntoWork(extension) {
   const page = await withFolder(extension);
   await noteItem(page, 'Beta').dragTo(folderHeader(page, 'Work'));
-  const folderId = await page.evaluate(async () => (await Storage.getAllFolders()).find(f => f.name === 'Work').id);
+  const folderId = (await storedFolders(page)).find(f => f.name === 'Work').id;
   await expect.poll(async () => (await stored(page, 'Beta')).folderId).toBe(folderId);
   return { page, folderId };
 }
@@ -94,7 +98,7 @@ test('dropping a note on the folder it is in writes nothing and says nothing', a
 test('dropping a note on a folder another tab deleted is refused, and the note stays where it was', async ({ extension }) => {
   const page = await withFolder(extension);
   // Deleted behind this tab's back, so its sidebar still shows it
-  await page.evaluate(async () => Storage.deleteFolder((await Storage.getAllFolders()).find(f => f.name === 'Work').id));
+  await profileStore(page).deleteFolder((await storedFolders(page)).find(f => f.name === 'Work').id);
   await noteItem(page, 'Alpha').dragTo(folderHeader(page, 'Work'));
   await expect(page.locator('.toast.error')).toHaveText(['Failed to move note: that folder no longer exists.']);
   expect((await stored(page, 'Alpha')).folderId).toBeNull();
@@ -129,18 +133,17 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
   await answerPrompt(page, 'Rename Folder', 'Plans');
   await expect(folderHeader(page, 'Plans')).toBeVisible();
   await folderHeader(page, 'Plans').dragTo(folderHeader(page, 'Work'));
-  const parentOf = name => page.evaluate(async n => {
-    const folders = await Storage.getAllFolders();
-    const folder = folders.find(f => f.name === n);
+  const parentOf = async name => {
+    const folders = await storedFolders(page);
+    const folder = folders.find(f => f.name === name);
     const parent = folders.find(f => f.id === folder.parentId);
     return parent ? parent.name : null;
-  }, name);
+  };
   await expect.poll(() => parentOf('Plans')).toBe('Work');
   // A move into its own folder, from this view, is refused by the sidebar and by the kernel
-  await page.evaluate(async () => {
-    const folders = await Storage.getAllFolders();
-    await app.sidebarController.moveFolder(folders.find(f => f.name === 'Work').id, folders.find(f => f.name === 'Plans').id);
-  });
+  const folders = await storedFolders(page);
+  await page.evaluate(([workId, plansId]) => app.sidebarController.moveFolder(workId, plansId),
+    [folders.find(f => f.name === 'Work').id, folders.find(f => f.name === 'Plans').id]);
   await expect(page.locator('.toast.error').last()).toHaveText("Failed to move folder: it can't go inside itself.");
   expect(await parentOf('Work')).toBeNull();
 
@@ -177,7 +180,7 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
   await folderHeader(page, 'Work').click({ button: 'right' });
   await page.locator('.context-menu-item', { hasText: 'Delete Folder' }).click();
   await confirm(page, 'Delete Folder');
-  await expect.poll(() => page.evaluate(async () => (await Storage.getAllFolders()).length)).toBe(0);
+  await expect.poll(async () => (await storedFolders(page)).length).toBe(0);
   expect((await stored(page, 'Gamma')).folderId).toBeNull();
   await expect(noteItem(page, 'Gamma')).toBeVisible();
 
@@ -189,13 +192,16 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
     await page.evaluate(() => app.shortcutsManager.toggleCommandPalette(false));
     return names;
   };
-  const select = names => page.evaluate(async list => {
-    const ids = [...(await Storage.getAllNotes(true)), ...(await Storage.getTrashedNotes())]
-      .filter(note => list.includes(note.name)).map(note => note.id);
-    app.sidebarController.enterSelectionMode();
-    for (const id of ids) app.sidebarController.selectedNoteIds.add(id);
-    app.sidebarController.updateSelectionUI();
-  }, names);
+  const select = async names => {
+    const store = profileStore(page);
+    const ids = [...(await store.getAllNotes(true)), ...(await store.getTrashedNotes())]
+      .filter(note => names.includes(note.name)).map(note => note.id);
+    await page.evaluate(list => {
+      app.sidebarController.enterSelectionMode();
+      for (const id of list) app.sidebarController.selectedNoteIds.add(id);
+      app.sidebarController.updateSelectionUI();
+    }, ids);
+  };
   await select(['Beta', 'Delta']);
   await page.locator('#bulk-archive-btn').click();
   await confirm(page, 'Confirm');
@@ -211,7 +217,7 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
   await page.evaluate(() => app.sidebarController.performBulkAction('restore'));
   await expect(page.locator('.toast.success').last()).toHaveText('1 note restored from Trash');
   expect(await paletteNames()).toContain('Gamma');
-  await page.evaluate(async () => Storage.trashNote((await Storage.getAllNotes()).find(note => note.name === 'Gamma').id));
+  await profileStore(page).trashNote((await profileStore(page).getAllNotes()).find(note => note.name === 'Gamma').id);
   await page.evaluate(() => app.sidebarController.reloadLists());
   await select(['Gamma']);
   const deleting = page.evaluate(() => app.sidebarController.performBulkAction('delete'));
@@ -232,7 +238,7 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
   expect(await stored(page, 'Alpha')).toBeNull();
 
   // A trash that fails to store leaves the panes and tabs as they were, and says so
-  await page.evaluate(async () => Storage.unarchiveNote((await Storage.getAllNotes(true)).find(note => note.name === 'Beta').id));
+  await profileStore(page).unarchiveNote((await profileStore(page).getAllNotes(true)).find(note => note.name === 'Beta').id);
   await page.evaluate(() => app.sidebarController.reloadLists());
   await driver.openNote(page, 'Beta');
   const panes = () => page.evaluate(() => ({
@@ -278,14 +284,13 @@ test('trash retention at startup deletes a note trashed long ago, once the tab h
     { name: 'Recent', blocks: [{ type: 'text', content: 'new' }] },
   ]);
   const page = await driver.openNewTab(extension);
-  await page.evaluate(async day => {
-    const notes = await Storage.getAllNotes();
-    const expired = notes.find(note => note.name === 'Expired');
-    const recent = notes.find(note => note.name === 'Recent');
-    await Storage.trashNote(expired.id);
-    await Storage.trashNote(recent.id);
-    await Storage.updateNote({ ...(await Storage.getNote(expired.id)), trashedAt: Date.now() - 40 * day });
-  }, DAY);
+  const store = profileStore(page);
+  const notes = await store.getAllNotes();
+  const expired = notes.find(note => note.name === 'Expired');
+  const recent = notes.find(note => note.name === 'Recent');
+  await store.trashNote(expired.id);
+  await store.trashNote(recent.id);
+  await store.updateNote({ ...(await store.getNote(expired.id)), trashedAt: Date.now() - 40 * DAY });
   await driver.reload(page);
   await expect.poll(() => stored(page, 'Expired')).toBeNull();
   expect((await stored(page, 'Recent')).trashed).toBe(true);
