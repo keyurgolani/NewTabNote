@@ -1243,6 +1243,9 @@ class DatabaseManager {
       if (cleared) CloseDrafts.putBack(drafts, cleared);
       throw error;
     }
+    // Only once it's gone does its ID leave the notes waiting for a new tab's catch-up, so a
+    // note whose delete failed still catches up at the next start
+    if (typeof StartCatchUp !== 'undefined') StartCatchUp.forget(StartCatchUp.pageStorage(), [id]);
   }
 
   /**

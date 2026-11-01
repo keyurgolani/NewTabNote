@@ -36,6 +36,7 @@ const JS_FILES = [
   'js/ui/graph-view.js',
   'js/ui/export-notice.js',
   'js/close-drafts.js',
+  'js/start-catch-up.js',
   'js/storage.js',
   'js/theme-engine.js',
   'js/virtual-scroller.js',
