@@ -1235,6 +1235,8 @@ class DatabaseManager {
     // Its close-time drafts go first (#33): the last edit of a note deleted for good isn't
     // kept anywhere, and no new tab tells about it as a recovered note
     if (typeof CloseDrafts !== 'undefined') CloseDrafts.clearNotes(CloseDrafts.pageStorage(), [id]);
+    // and its ID among the notes waiting for a new tab's catch-up
+    if (typeof StartCatchUp !== 'undefined') StartCatchUp.forget(StartCatchUp.pageStorage(), [id]);
     // Delete all elements for this note
     await this.deleteElementsByNote(id);
     // Delete all media for this note

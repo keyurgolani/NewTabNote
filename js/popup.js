@@ -384,7 +384,9 @@ async function init() {
     // The edits a closed tab left as close-time drafts, before the lists read the notes (#33).
     // A recovered note this makes is the next new tab's to tell about.
     if (typeof CloseDrafts !== 'undefined') {
-      await CloseDrafts.apply({ db: storage.db }).catch((error) => console.error('Close-time drafts were not applied:', error));
+      const applied = await CloseDrafts.apply({ db: storage.db }).catch((error) => console.error('Close-time drafts were not applied:', error));
+      // The notes those drafts named are the next new tab's to catch up (#33)
+      if (typeof StartCatchUp !== 'undefined') StartCatchUp.remember(applied);
     }
 
     let hasSummary = false;
