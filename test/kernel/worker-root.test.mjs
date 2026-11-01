@@ -16,7 +16,9 @@ import {
   UPGRADE_RECORD_KEY,
   createWorkerClient,
   journalPurge,
+  journalTransforms,
 } from '../../js/kernel/composition/background.js';
+import { createFailureEvents } from '../../js/kernel/composition/trust.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createKernel } from '../../js/kernel/core/application/kernel.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -33,9 +35,10 @@ import { DB_NAME, DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.j
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { TRANSFORM_RETRY_AFTER_MS, TRANSFORM_STOP_KEY } from '../../js/kernel/adapters/indexeddb/transforms.js';
 import { withoutPlacement } from '../../js/kernel/core/domain/placement.js';
-import { ROOMY, legacyEnv, newProfile, profileWith, synthesized } from './migration-support.mjs';
+import { ROOMY, legacyEnv, newProfile, profileWith, synthesized, transform } from './migration-support.mjs';
 import { recordsOf } from './storage-fixture.mjs';
 import { CALLERS } from './support.mjs';
+import { databaseOn, fakeKeyRange, openRecords, trustProfile } from './trust-support.mjs';
 
 /** @typedef {import('./migration-support.mjs').Profile} Profile */
 
@@ -996,5 +999,45 @@ describe("the worker journals the data transforms' stops, once per code, and the
       [again?.status, again?.failure, again?.backedOff, again?.previous],
       ['space-blocked', { code: 'space-short' }, false, null],
     );
+  });
+
+  it("journals the stop at a meta.schema they can't read with its code, which the registry lists (meta-unreadable)", async () => {
+    // A schema record without its logical version, which the run's own check refuses, so the
+    // transforms meet one only when it changed after the run
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get(`v${DB_VERSION}.basic`)));
+    await edit(of, ['meta'], async ({ meta }) => {
+      const schema = await answer(meta.get('schema'));
+      delete schema.logicalVersion;
+      meta.put(schema);
+    });
+    const ended = await transform(of);
+    assert.deepEqual([ended.status, ended.failure, ended.previous], ['failed', { code: 'meta-unreadable' }, null]);
+    // The worker's failure events, which keep a failure's code only when it's a registered one
+    const trust = trustProfile();
+    const events = createFailureEvents({
+      surface: 'worker-internal',
+      host: () => ({
+        indexedDB: trust.faults.factory,
+        keyRange: fakeKeyRange,
+        settings: trust.settings,
+        locks: trust.locks,
+        clock: { now: () => Date.now() },
+        ids: { next: () => webcrypto.randomUUID() },
+      }),
+    });
+    journalTransforms(events, ended);
+    await events.flush();
+    const store = databaseOn(trust);
+    try {
+      const { records } = await openRecords(store, trust);
+      assert.deepEqual(
+        (await records.events())
+          .filter(event => event.code.startsWith('storage.'))
+          .map(event => [event.code, event.fields]),
+        [['storage.transforms-stopped', { surface: 'worker-internal', errorCode: 'meta-unreadable' }]],
+      );
+    } finally {
+      store.close();
+    }
   });
 });
