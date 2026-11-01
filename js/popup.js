@@ -381,6 +381,11 @@ async function init() {
 
   try {
     await storage.init();
+    // The edits a closed tab left as close-time drafts, before the lists read the notes (#33).
+    // A recovered note this makes is the next new tab's to tell about.
+    if (typeof CloseDrafts !== 'undefined') {
+      await CloseDrafts.apply({ db: storage.db }).catch((error) => console.error('Close-time drafts were not applied:', error));
+    }
 
     let hasSummary = false;
     const insightsEnabled = await storage.getSetting('insightsEnabled', false);

@@ -14,6 +14,7 @@ New Tab Note is a browser extension that provides a rich note-taking experience 
 - **Settings and Preferences**: Stored in Chrome's local storage (`chrome.storage.local`)
 - **Media Files**: Images and attachments are stored locally in IndexedDB
 - **Backups**: Automatic backups and recovery copies are stored locally in `chrome.storage.local`
+- **The last edit of a closing tab**: When a tab closes before its last edit is saved, that edit is kept in the extension's own local storage (`localStorage`) on your device until NewTabNote next opens, which saves it into your notes and removes it. Deleting a note for good removes its kept edit too.
 
 ## Data We Do NOT Collect
 
