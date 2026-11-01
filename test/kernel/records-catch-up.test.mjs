@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
 import { RECORDS_CAUGHT_UP_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
-import { CATCH_UP_BYTES, CATCH_UP_NOTES } from '../../js/kernel/core/application/record-catch-up.js';
+import { CATCH_UP_BYTES, CATCH_UP_NOTES, recordCatchUpCommands } from '../../js/kernel/core/application/record-catch-up.js';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { inBlockOrder, noteSaveMetadata } from '../../js/kernel/core/domain/note.js';
@@ -382,5 +382,17 @@ describe("the worker's catch-up of 1.4.x's lagging records", () => {
       marks.slice(0, -1).map(mark => mark.after),
       [ids[0], ids[2], ids[ids.length - 1]],
     );
+  });
+});
+
+describe('catchUpNoteRecords, on its own', () => {
+  it("runs in the derived scope, a worker-internal derived command's, whose units write derived fields only (w04)", () => {
+    const work = /** @type {any} */ (
+      recordCatchUpCommands.catchUpNoteRecords(
+        /** @type {any} */ ({ type: 'catchUpNoteRecords', commandId: 'c1', noteIds: ['A'] }),
+        /** @type {any} */ ({}),
+      )
+    );
+    assert.equal(work.scope, 'derived');
   });
 });

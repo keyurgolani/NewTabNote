@@ -178,6 +178,18 @@ describe('the recovered note, as the Design gate approved it', () => {
     assert.ok(String(made.preview).endsWith('…'), 'cut as a save cuts it');
   });
 
+  it('the rename-only sentence shows the new name as text (v13)', () => {
+    const original = note('A', { name: 'Alpha plan' });
+    const name = 'Plan <b>v2</b> & "more"';
+    const made = recoveredNote(
+      /** @type {any} */ (original),
+      { blocks: [], deletedBlockIds: [], name },
+      /** @type {CloseDraft} */ ({ ...DRAFT, base: { revision: null, updatedAt: 1, issued: [] }, name }),
+      { now: AT + 1000, zone: 'UTC', trashDays: 30, inFolder: false, notes: /** @type {any} */ ([original]) },
+    );
+    assert.ok(String(made.blocks[0].content).includes('“Plan &lt;b&gt;v2&lt;/b&gt; &amp; &quot;more&quot;”'), String(made.blocks[0].content));
+  });
+
   it("a residue that's only a name keeps the typed name in a recovered note, under the original's title, in words of its own (V6)", () => {
     const renamedOnly = { blocks: [], name: 'Alpha plan, renamed' };
     const withDeletes = recover({ residue: { ...renamedOnly, deletedBlockIds: ['a2'] } });
