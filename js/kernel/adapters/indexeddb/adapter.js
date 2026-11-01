@@ -338,6 +338,10 @@ function view(db, tx, scope, writable, tracker) {
       const objectStore = handle(store);
       return sawAll(store, objectStore ? await result(objectStore.getAll()) : []);
     },
+    getAllKeys: async store => {
+      const objectStore = handle(store);
+      return objectStore ? /** @type {string[]} */ (await result(objectStore.getAllKeys())) : [];
+    },
     getAllByIndex: async (store, index, value) => {
       const objectStore = handle(store);
       const key = indexValue(value);
