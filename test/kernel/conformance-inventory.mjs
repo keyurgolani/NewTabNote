@@ -175,7 +175,7 @@ export const HELPERS = Object.freeze({
     'js/kernel/adapters/indexeddb/ledger.js',
   ],
   // The read-only integrity check, which test/kernel/storage-integrity.test.mjs also holds to
-  // Storage's
+  // frozen 1.4.1's
   'js/kernel/adapters/indexeddb/integrity.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/recovery-copies.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
