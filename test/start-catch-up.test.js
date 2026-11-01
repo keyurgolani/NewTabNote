@@ -549,12 +549,12 @@ describe('the full pass holds no store long, and runs in one tab at a time', () 
     assert.equal(elements.length, 1200);
     assert.ok(elements.every((id) => id.startsWith('L')), "only live notes' blocks are left");
     assert.equal(Object.keys(recordsOf(dump, 'vectors')).length, 700);
-    // 2,500 distinct note IDs over the blocks, 500 per read; 1,300 orphans, 50 per sweep
+    // 2,500 distinct note IDs over the blocks, 500 per read; 1,300 orphans, 10 per sweep
     const scans = seen.filter((t) => t.mode === 'readonly' && t.stores.join() === 'elements' && t.blockReads === 0);
     const sweeps = seen.filter((t) => t.mode === 'readwrite' && t.stores.includes('vectors'));
     assert.equal(scans.length, 6);
-    assert.equal(sweeps.length, 26);
-    assert.ok(sweeps.every((t) => t.blockReads <= 50));
+    assert.equal(sweeps.length, 130);
+    assert.ok(sweeps.every((t) => t.blockReads <= 10));
   });
 
   it('a new tab skips the pass while another holds it, and records nothing', CASE, async () => {
@@ -576,6 +576,31 @@ describe('the full pass holds no store long, and runs in one tab at a time', () 
     await Promise.all([holding, check]);
     assert.equal(skipped, true, 'it goes on without waiting for the other tab');
     assert.equal(await env.get('Storage').getSetting('recordsCheckedAt', null), null);
+    assert.equal(recordsOf(await dumpDatabase(shared.indexedDB), 'canvases').A.preview, 'old line');
+  });
+
+  it("a write that fails isn't a skipped note: the passed IDs wait for the next start, and the pass isn't recorded", CASE, async () => {
+    const { shared, seed } = sharedProfile();
+    await createDatabase(seed.indexedDB, { records: { canvases: [note('A', { preview: 'old line' })], elements: [block('a1', 'A', 0, 'new line')] } });
+    const env = newTabApp(shared);
+    const app = new (env.get('App'))();
+    await app.init();
+    const Storage = env.get('Storage');
+    const StartCatchUp = env.get('StartCatchUp');
+    StartCatchUp.remember({ saved: [], recovered: [], dropped: ['A'], gone: [], kept: [] }, shared.localStorage);
+    // Every rebuild's transaction fails to open; settings still save
+    const db = Storage.db;
+    Storage.db = through(db, {
+      transaction(stores, mode) {
+        if (mode === 'readwrite' && [].concat(stores).includes('elements')) throw new DOMException('test: no writes', 'UnknownError');
+        return db.transaction(stores, mode);
+      },
+    });
+    await app.catchUpAfterDrafts();
+    assert.deepEqual(JSON.parse(JSON.stringify(StartCatchUp.pending(shared.localStorage))), { dropped: ['A'], gone: [] });
+    await app.checkRecordsWeekly();
+    assert.equal(await Storage.getSetting('recordsCheckedAt', null), null);
+    Storage.db = db;
     assert.equal(recordsOf(await dumpDatabase(shared.indexedDB), 'canvases').A.preview, 'old line');
   });
 
