@@ -136,7 +136,9 @@ test('deleting a selection that holds cards asks first: Cancel keeps it and puts
   await question.locator('.confirm-dialog-cancel').click();
   await expect(question).toHaveCount(0);
   await expect(selected).toHaveCount(3);
-  // A card takes no focus, so it goes to the first selected block that does
+  // The last Cmd/Ctrl+click left focus in the 'extra' block, so Cancel puts it back there. A
+  // Cancel with focus outside the note, which goes to the first selected block that takes focus,
+  // is test/editor-safe-card.test.js's
   await expect(blockOf('opaque-blocks-extra').locator('.block-content')).toBeFocused();
 
   // Asked again from there, a yes deletes all three, and one Undo brings each back
