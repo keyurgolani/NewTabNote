@@ -17,6 +17,14 @@
  * editor's closing write (#33): the note's preview and to-do progress come from its blocks as
  * stored once the save's puts are in, in note order, and the save sends neither. Only `true` is
  * taken.
+ * `orders` are blocks the save moved and changed nothing else of: each one's new `order` goes on
+ * its record as stored, so another writer's newer text in it stays (#17, the per-pane save). A
+ * block it names that another note holds refuses the save, as a put does, and one no note holds
+ * is skipped. A block goes in once at most, in `blocks` or in `orders`. A save with `orders`
+ * carries only some of the note's blocks, so it takes `deriveFromStored: true`, and one without it
+ * is refused: its preview and to-do progress come from the blocks as stored, never from a page's
+ * copy of the rest. The field is additive, with nothing to upcast: no command is journaled yet
+ * (every catalog entry is `journaled: false`), so no stored entry carries a save at all.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';
@@ -24,6 +32,9 @@ import { blockInput } from '../entities.js';
 import { content, count, entityId, revision } from '../fields.js';
 import { commandPayload } from '../operation.js';
 import { outcomeSchema } from '../outcome-schemas.js';
+
+/** A block the save moves and leaves as it is otherwise, and the order it moves it to */
+const move = v.strictObject({ id: entityId('block'), order: count });
 
 export const payload = commandPayload('saveNoteContent', {
   noteId: entityId('note'),
@@ -35,6 +46,7 @@ export const payload = commandPayload('saveNoteContent', {
   linkedNames: v.optional(v.array(content(v.string()))),
   expectedRevision: v.optional(revision),
   deriveFromStored: v.optional(v.literal(true)),
+  orders: v.optional(v.array(move)),
 });
 
 export const result = outcomeSchema;

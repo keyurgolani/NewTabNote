@@ -567,6 +567,189 @@ export function runContractSuite(fixture) {
         }
       });
 
+      it("with orders, a block the save only moved takes its new order on its record as stored, another writer's newer text in it stays, and the derive reads the new order (#17, the per-pane save)", async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 3) });
+        // Another pane's newer text in the last block, which the saving pane's copy doesn't have
+        const newer = { ...someBlocks('n1', 3)[2], content: 'Newer, from another pane' };
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [newer], deriveFromStored: true }));
+        // The saving pane adds a block at the top, so the three below move down by one
+        const added = { id: 'n1-new', type: 'text', content: 'Added', canvasId: 'n1', order: 0 };
+        const orders = [0, 1, 2].map(index => ({ id: `n1-block-${index}`, order: index + 1 }));
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [added], orders, deriveFromStored: true }));
+        const rows = (await blocksOf('n1')).sort((a, b) => Number(a.order) - Number(b.order));
+        assert.deepEqual(
+          rows.map(block => [block.id, block.content, block.order]),
+          [
+            ['n1-new', 'Added', 0],
+            ['n1-block-0', 'Line 0', 1],
+            ['n1-block-1', 'Line 1', 2],
+            ['n1-block-2', 'Newer, from another pane', 3],
+          ],
+        );
+        assert.equal((await noteOf('n1'))?.preview, 'Added', 'from the blocks as stored, in their new order');
+      });
+
+      it('with orders, each block the save only moved keeps its record as stored, every field of it, with its order alone changed (#17, the per-pane save)', async () => {
+        // A checked to-do, an image, and a block with a field the editor doesn't write, each made at its own time
+        const blocks = [
+          { id: 'n1-todo', type: 'todo', content: 'Call', checked: true, canvasId: 'n1', order: 0, createdAt: 1000 },
+          {
+            id: 'n1-image',
+            type: 'image',
+            content: '',
+            imageUrl: 'https://example.test/a.png',
+            canvasId: 'n1',
+            order: 1,
+            createdAt: 1001,
+          },
+          {
+            id: 'n1-kept',
+            type: 'text',
+            content: 'Kept',
+            legacyField: 'kept',
+            canvasId: 'n1',
+            order: 2,
+            createdAt: 1002,
+          },
+        ];
+        await createNote({ noteId: 'n1', blocks });
+        const before = new Map((await blocksOf('n1')).map(block => [block.id, block]));
+        const added = { id: 'n1-new', type: 'text', content: 'Added', canvasId: 'n1', order: 0 };
+        const orders = blocks.map((block, index) => ({ id: block.id, order: index + 1 }));
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [added], orders, deriveFromStored: true }));
+        const after = new Map((await blocksOf('n1')).map(block => [block.id, block]));
+        for (const [index, block] of blocks.entries()) {
+          assert.deepEqual(after.get(block.id), { ...before.get(block.id), order: index + 1 }, block.id);
+        }
+      });
+
+      it("with orders alone, a save that only moves a block puts no block, and the derive reads the block's new order (#17, the per-pane save)", async () => {
+        // A pane's move with nothing else changed, as Alt+Down makes: the first block goes last
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        await run(
+          cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: [],
+            orders: [{ id: 'n1-block-0', order: 5 }],
+            deriveFromStored: true,
+          }),
+        );
+        const rows = (await blocksOf('n1')).sort((a, b) => Number(a.order) - Number(b.order));
+        assert.deepEqual(
+          rows.map(block => [block.id, block.content, block.order]),
+          [
+            ['n1-block-1', 'Line 1', 1],
+            ['n1-block-0', 'Line 0', 5],
+          ],
+        );
+        assert.equal((await noteOf('n1'))?.preview, 'Line 1', 'from the blocks as stored, in their new order');
+      });
+
+      it('with orders, a block another note holds refuses the save, and one no note holds is skipped (#17, the per-pane save)', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        await createNote({ noteId: 'n2', blocks: someBlocks('n2', 1) });
+        const typed = { ...someBlocks('n1', 2)[0], content: 'Typed' };
+        assertRejected(
+          await kernel.execute(
+            cmd('saveNoteContent', {
+              noteId: 'n1',
+              blocks: [typed],
+              orders: [{ id: 'n2-block-0', order: 5 }],
+              deriveFromStored: true,
+            }),
+          ),
+          'validation',
+          'block-of-another-note',
+        );
+        assert.deepEqual(
+          (await blocksOf('n2')).map(block => [block.id, block.order]),
+          [['n2-block-0', 0]],
+          "n2's block stays",
+        );
+        assert.equal(
+          (await blocksOf('n1')).find(block => block.id === 'n1-block-0')?.content,
+          'Line 0',
+          'nothing of the save went in',
+        );
+        const outcome = await run(
+          cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: [typed],
+            orders: [{ id: 'deleted-elsewhere', order: 1 }],
+            deriveFromStored: true,
+          }),
+        );
+        assert.equal(outcome.code, 'content-saved');
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => block.id).sort(),
+          ['n1-block-0', 'n1-block-1'],
+          'a block no note holds stays away',
+        );
+      });
+
+      it('refuses orders that are not a list of blocks and orders, or that name a block twice (#17)', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        for (const orders of [
+          { 'n1-block-0': 1 },
+          [{ id: 'n1-block-0' }],
+          [{ id: 'n1-block-0', order: -1 }],
+          [{ id: 'n1-block-0', order: 1.5 }],
+          [{ id: '', order: 1 }],
+        ]) {
+          assertRejected(
+            await kernel.execute(
+              cmd('saveNoteContent', {
+                noteId: 'n1',
+                blocks: [],
+                orders: /** @type {any} */ (orders),
+                deriveFromStored: true,
+              }),
+            ),
+            'validation',
+            'invalid-command',
+          );
+        }
+        const twice = [
+          {
+            blocks: [],
+            orders: [
+              { id: 'n1-block-0', order: 1 },
+              { id: 'n1-block-0', order: 2 },
+            ],
+          },
+          { blocks: [someBlocks('n1', 1)[0]], orders: [{ id: 'n1-block-0', order: 1 }] },
+        ];
+        for (const { blocks, orders } of twice) {
+          assertRejected(
+            await kernel.execute(cmd('saveNoteContent', { noteId: 'n1', blocks, orders, deriveFromStored: true })),
+            'validation',
+            'duplicate-block',
+          );
+        }
+      });
+
+      it("refuses orders without deriveFromStored, and writes nothing of the save: its preview would be the page's copy (#17)", async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        const blocksBefore = (await blocksOf('n1')).sort((a, b) => Number(a.order) - Number(b.order));
+        const noteBefore = await noteOf('n1');
+        const typed = { ...someBlocks('n1', 2)[0], content: 'Typed' };
+        assertRejected(
+          await kernel.execute(
+            cmd('saveNoteContent', {
+              noteId: 'n1',
+              blocks: [typed],
+              orders: [{ id: 'n1-block-1', order: 5 }],
+              preview: 'Typed',
+            }),
+          ),
+          'validation',
+          'invalid-command',
+        );
+        const blocksAfter = (await blocksOf('n1')).sort((a, b) => Number(a.order) - Number(b.order));
+        assert.deepEqual(blocksAfter, blocksBefore, 'no block put or moved');
+        assert.deepEqual(await noteOf('n1'), noteBefore, 'the note as it was');
+      });
+
       it('a save into a trashed note commits what was typed, and the note stays in the trash (#33)', async () => {
         // Another tab's pane can stay on a note trashed elsewhere, and its typing isn't lost
         await createNote({ noteId: 'n1', name: 'Plan' });
