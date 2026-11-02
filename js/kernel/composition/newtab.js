@@ -49,6 +49,16 @@ import { startIndexer } from './workers.js';
 /** @typedef {import('./removal.js').RemovalPorts} RemovalPorts */
 /** @typedef {import('./storage-facade.js').StorageFacade} StorageFacade */
 /** @typedef {import('./close-drafts.js').Applier} Applier */
+/**
+ * The new tab's applier: the one every page has, and the toasts' reads, which a test's applier
+ * may leave out, and then the new tab tells nothing
+ * @typedef {Applier & Partial<Pick<typeof import('../core/application/close-drafts.js'), 'untoldToasts'>>} NewTabApplier
+ */
+/**
+ * The new tab's client: the one applyingCloseDrafts answers, and the toasts for what its apply
+ * took from the untold lists, none when there was nothing to tell
+ * @typedef {ReturnType<typeof applyingCloseDrafts> & {closeDraftToasts: () => Promise<string[]>}} NewTabPageClient
+ */
 /** @typedef {import('../core/application/close-drafts.js').DraftStorage} DraftStorage */
 /** @typedef {import('../core/application/close-drafts.js').DraftLocks} DraftLocks */
 /** @typedef {import('../core/application/close-drafts.js').DraftStore} DraftStore */
@@ -429,8 +439,9 @@ export function withCloseDraftClears(client, { storage, locks, load, logger = cl
 
 /**
  * The close-time drafts' applier, the `close-drafts-chunk` chunk, which the new tab imports only
- * when its localStorage gives it work, as Popup and Side Panel do (close-drafts.js)
- * @returns {Promise<Applier>}
+ * when its localStorage gives it work, as Popup and Side Panel do (close-drafts.js), with the
+ * reads its toasts make
+ * @returns {Promise<NewTabApplier>}
  */
 const loadCloseDrafts = () => import('../core/application/close-drafts-chunk.js');
 
@@ -442,11 +453,13 @@ const loadCloseDrafts = () => import('../core/application/close-drafts-chunk.js'
  * so the note list's first read and App's start come after them (#33). Like Popup and Side Panel,
  * the new tab loads the applier only when its localStorage holds a draft, 1.4.3's catch-up key
  * or an untold list, which it reads for its toasts (holdsNewTabWork), so its start loads none of
- * it (#147's heap, the lead's call).
+ * it (#147's heap, the lead's call). Its apply also takes both untold lists, under the drafts'
+ * lock, so of two new tabs starting together one tells each entry (Q-B7), and
+ * `closeDraftToasts` answers the toasts for what they held once the apply is done (V3).
  * @param {IndexedDbAdapter} adapter
- * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<Applier>}} [page]
+ * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<NewTabApplier>}} [page]
  *   the page's drafts and its wake, from its globals, and the applier's load
- * @returns {ReturnType<typeof applyingCloseDrafts>}
+ * @returns {NewTabPageClient}
  */
 export function createNewTabPageClient(
   adapter,
@@ -457,7 +470,37 @@ export function createNewTabPageClient(
     locks: drafts.locks,
     load,
   });
-  return applyingCloseDrafts(client, drafts, { load, holds: holdsNewTabWork });
+  /** @type {NewTabApplier | null} The applier the apply loaded, which the toasts' reads come from */
+  let loaded = null;
+  /** @returns {Promise<Applier>} the applier, its apply taking the untold lists too */
+  const telling = async () => {
+    const applier = await load();
+    loaded = applier;
+    return {
+      ...applier,
+      applyCloseDrafts: options => applier.applyCloseDrafts({ ...options, tell: true }),
+    };
+  };
+  const page = applyingCloseDrafts(client, drafts, { load: telling, holds: holdsNewTabWork });
+  return Object.freeze({
+    ...page,
+    async closeDraftToasts() {
+      const result = await page.applied();
+      const untoldToasts = loaded && loaded.untoldToasts;
+      if (!result || !result.told || !untoldToasts) return [];
+      /** @param {string} noteId */
+      const noteOf = async noteId => {
+        const state = await client.query({ type: 'getNote', noteId });
+        return state.kind === 'ready' ? state.data.note : null;
+      };
+      try {
+        return await untoldToasts({ noteOf, told: result.told });
+      } catch (error) {
+        clearLogger.warn('close-draft-toasts-not-read', { error });
+        return [];
+      }
+    },
+  });
 }
 
 /**

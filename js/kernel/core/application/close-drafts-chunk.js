@@ -8,4 +8,4 @@
  * new tab's is in the workspace chunk.
  */
 
-export { applyCloseDrafts, closeDraftCommands, closeDraftStore } from './close-drafts.js';
+export { applyCloseDrafts, closeDraftCommands, closeDraftStore, untoldToasts } from './close-drafts.js';
