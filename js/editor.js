@@ -121,7 +121,7 @@ let closeDraftsBound = false;
  * the same note as the page's own, committed or not (#33): each one's place in the page's save
  * order, the title it carried, the digest of each block it sent, as the note stores it, and once
  * it commits, the revision it committed at and whether its title was stored (committedPageSave)
- * @type {Map<string, Array<{seq: number, name: (string|undefined), blocks: Map<string, string>, committed?: {revision: number, named: boolean}}>>}
+ * @type {Map<string, Array<{seq: number, name: (string|undefined), blocks: Map<string, string>, orders?: Map<string, number>, moved?: Set<string>, committed?: {revision: number, named: boolean}}>>}
  */
 const pageSaves = new Map();
 
@@ -201,6 +201,18 @@ function committedPageSave(noteId, seq, revision, named) {
   else pageSaves.set(noteId, kept);
 }
 
+/**
+ * A base's revision after one of its editor's own commits of the note: the commit's, when it's
+ * the one right after the base's, so nothing else committed in between, and unknown otherwise.
+ * Each content commit moves a note's revision by one (#17, the per-pane save).
+ * @param {number|null} base
+ * @param {unknown} committedAt - the revision the commit's outcome gave
+ * @returns {number|null}
+ */
+function nextRevision(base, committedAt) {
+  return typeof base === 'number' && typeof committedAt === 'number' && committedAt === base + 1 ? committedAt : null;
+}
+
 /** How long an "insights are being extracted" mark is trusted before the editor clears it */
 const INSIGHTS_PENDING_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -216,11 +228,11 @@ const INSIGHTS_PENDING_TIMEOUT_MS = 5 * 60 * 1000;
  * @property {EditorTitle|null} title - The title set since the note's last save, taken with the blocks
  * @property {boolean} written - True once this state's transaction has been opened
  * @property {boolean} isRetry - The retry after a failed save; failing again shows the error toast
- * @property {{seq: number, name: (string|undefined), blocks: Map<string, string>}} [issued] - What it
- *   sent, as the page's issued saves hold it, once its transaction opened on a page that keeps
- *   close-time drafts (#33)
- * @property {boolean} [partial] - It sent only the blocks changed since the last save its editor
- *   saw commit: the page's closing write (#33)
+ * @property {{seq: number, name: (string|undefined), blocks: Map<string, string>, orders: Map<string, number>, moved: Set<string>}} [issued] -
+ *   What it sent, as the page's issued saves hold it, once its transaction opened on a page that
+ *   keeps close-time drafts (#33): each block's digest and order, and the blocks it only moved
+ * @property {boolean} [partial] - It sent only what its editor changed since the last save it saw
+ *   commit, as every save of an editor holding the note's base does (#17, the per-pane save)
  * @property {number|null} [committedRevision] - The content revision its committed outcome gave
  */
 
@@ -4369,15 +4381,16 @@ class BlockEditor {
     /** @type {HTMLElement|null} The notice that says so, with Reload */
     this._reloadNotice = null;
     /**
-     * Each note's base for a close-time draft (#33): what this editor last saw commit of it (its
-     * saves, AI chat's inserts and its reverts), or its load. `stored` is each block's digest as
-     * the note stores it, and `sent` the editor's own serialization's, for a block whose stored
-     * shape differs (a 1.4.x record, a capture), which is what tells a block this editor
-     * changed. `revision` is the content revision, null when it isn't known, `updatedAt` the
-     * stored stamp as last read, which the editor's own saves never move (QA1), `name` the name,
-     * and `seq` the base's place in the page's save order. Kept for the loaded note and for each
-     * note with a save in flight or waiting to retry, on a page that keeps drafts.
-     * @type {Map<string, {seq: number, revision: (number|null), updatedAt: (number|null), name: (string|undefined), stored: Map<string, string>, sent: Map<string, string>}>}
+     * Each note's base (#33, #17): what this editor last saw commit of it (its saves, AI chat's
+     * inserts and its reverts), or its load, which tells a close-time draft and each save what
+     * this editor changed. `stored` is each block's digest as the note stores it, `orders` its
+     * order as stored, and `sent` the editor's own serialization's digest at that order, for a
+     * block whose stored shape differs (a 1.4.x record, a capture). `revision` is the content
+     * revision, null when it isn't known, `updatedAt` the stored stamp as last read, which the
+     * editor's own saves never move (QA1), `name` the name, and `seq` the base's place in the
+     * page's save order. Kept for the loaded note and for each note with a save in flight or
+     * waiting to retry, on a page that keeps drafts.
+     * @type {Map<string, {seq: number, revision: (number|null), updatedAt: (number|null), name: (string|undefined), stored: Map<string, string>, sent: Map<string, string>, orders: Map<string, number>}>}
      */
     this._seen = new Map();
     /**
@@ -4446,13 +4459,15 @@ class BlockEditor {
     return this.documentClient.deleteBlocks(noteId, blockIds).then((outcome) => {
       if (outcome.kind === 'committed') {
         // They're gone as stored, so a close-time draft no longer lists them (#33). The base's
-        // revision stays: this delete need not be the only commit since it.
+        // revision moves only to the delete's own, one past it, since nothing else committed then
         const seen = this._seen.get(noteId);
         if (seen) {
           for (const id of blockIds) {
             seen.stored.delete(id);
             seen.sent.delete(id);
+            seen.orders.delete(id);
           }
+          if (seen.revision !== null && outcome.revision !== seen.revision) seen.revision = nextRevision(seen.revision, outcome.revision);
         }
         return;
       }
@@ -4533,27 +4548,53 @@ class BlockEditor {
 
   /**
    * A base's digests of the loaded note, whose blocks the editor shows as `records` stores them:
-   * each block's as stored, and the editor's own serialization's where the two differ
+   * each block's as stored and its order as stored, and the editor's own serialization's digest
+   * at that order where the two differ
    * @param {string} noteId
    * @param {Array<Object>} records - the note's blocks as stored
-   * @returns {{stored: Map<string, string>, sent: Map<string, string>}}
+   * @returns {{stored: Map<string, string>, sent: Map<string, string>, orders: Map<string, number>}}
    */
   _baseDigests(noteId, records) {
     const drafts = this._drafts();
     const stored = new Map(records.map((record) => [record.id, drafts.digest(record, noteId)]));
+    /** @type {Map<string, number>} */
+    const orders = new Map();
+    for (const record of records) if (typeof record.order === 'number') orders.set(record.id, record.order);
     const sent = new Map();
     for (const block of this._serializedBlocks(noteId)) {
-      const digest = drafts.digest(block, noteId);
+      const at = orders.get(block.id);
+      const digest = drafts.digest(at === undefined ? block : { ...block, order: at }, noteId);
       if (stored.get(block.id) !== digest) sent.set(block.id, digest);
     }
-    return { stored, sent };
+    return { stored, sent, orders };
+  }
+
+  /**
+   * How a block of the loaded note stands against the note's base (#17, the per-pane save):
+   * 'put' when its fields differ from the base's at the order the base has it at, or the base
+   * has no such block, 'move' when only its order differs, and null when neither
+   * @param {{stored: Map<string, string>, sent: Map<string, string>, orders: Map<string, number>}} seen
+   * @param {Object} block - serialized, as a save writes it
+   * @param {string} noteId
+   * @returns {'put'|'move'|null}
+   */
+  _changeOf(seen, block, noteId) {
+    const was = seen.sent.has(block.id) ? seen.sent.get(block.id) : seen.stored.get(block.id);
+    if (was === undefined) return 'put';
+    const at = seen.orders.get(block.id);
+    const atBase = at === undefined || at === block.order ? block : { ...block, order: at };
+    if (this._drafts().digest(atBase, noteId) !== was) return 'put';
+    return at !== undefined && at !== block.order ? 'move' : null;
   }
 
   /**
    * A save of `state` committed: what it sent is what's stored now, as far as this editor knows.
-   * A whole save's revision becomes the base's. After a save of some blocks, or one the
-   * connection's close cut short (`'stored'`), the revision isn't known, so a draft goes by its
-   * digests. Only a newer save than the base moves it.
+   * A whole save's revision becomes the base's. A save of what the editor changed keeps the
+   * revision known only when it committed right after the base's, so nothing else did in
+   * between (nextRevision). One the connection's close cut short (`'stored'`) has no revision,
+   * so a draft goes by its digests. A block it only moved and that's stored in a shape the
+   * editor doesn't write keeps its stored digest, which the move changed in a way the editor
+   * can't tell, and its own serialization's moves. Only a newer save than the base moves it.
    * @param {EditorSaveState} state
    * @param {number|null} revision - the outcome's, null when it gives none
    * @param {{nameKnown?: boolean}} [options] - nameKnown false: the save's generated title was
@@ -4566,13 +4607,20 @@ class BlockEditor {
     if (!seen || !issued || issued.seq <= seen.seq) return;
     if (state.partial) {
       for (const [id, digest] of issued.blocks) {
-        seen.stored.set(id, digest);
-        seen.sent.delete(id);
+        if (issued.moved.has(id) && seen.sent.has(id)) {
+          seen.sent.set(id, digest);
+        } else {
+          seen.stored.set(id, digest);
+          seen.sent.delete(id);
+        }
+        const order = issued.orders.get(id);
+        if (order !== undefined) seen.orders.set(id, order);
       }
-      seen.revision = null;
+      seen.revision = nextRevision(seen.revision, revision);
     } else {
       seen.stored = new Map(issued.blocks);
       seen.sent = new Map();
+      seen.orders = new Map(issued.orders);
       seen.revision = revision;
     }
     if (!nameKnown) seen.name = undefined;
@@ -4590,8 +4638,9 @@ class BlockEditor {
    * and so does the stored digest of a moved block stored in another shape, which the editor
    * can't tell: only its own serialization's moves. The base waits for this editor's saves that
    * were writing, so their commits come first, and keeps its place in the page's save order, so
-   * the saves issued since still count as the page's own. The revision isn't known after it, so
-   * a draft goes by its digests.
+   * the saves issued since still count as the page's own. Its revision stays known only when
+   * the insert committed right after the base's (nextRevision); otherwise a draft goes by its
+   * digests.
    * @param {string} noteId
    * @param {Array<Object>} inserted - the blocks as insertBlocks takes them
    * @param {number} at - where the editor placed them
@@ -4608,18 +4657,24 @@ class BlockEditor {
     const stored = new Map();
     /** @type {Map<string, string>} */
     const sent = new Map();
+    /** @type {Map<string, number>} */
+    const orders = new Map();
     inserted.forEach((data, offset) => {
-      const asStored = drafts.digest({ ...data, order: at + offset }, noteId);
-      const own = drafts.digest(after[at + offset], noteId);
+      const order = at + offset;
+      const asStored = drafts.digest({ ...data, order }, noteId);
+      const own = drafts.digest(after[order], noteId);
       stored.set(data.id, asStored);
+      orders.set(data.id, order);
       if (own !== asStored) sent.set(data.id, own);
     });
-    before.slice(at).forEach((block, offset) => {
-      const was = seen.sent.has(block.id) ? seen.sent.get(block.id) : seen.stored.get(block.id);
-      if (was !== drafts.digest(block, noteId)) return;
-      const moved = drafts.digest(after[at + inserted.length + offset], noteId);
-      (seen.sent.has(block.id) ? sent : stored).set(block.id, moved);
-    });
+    // The insert moves down each stored block at or past its place, by as many as it puts
+    for (const block of before.slice(at)) {
+      const was = seen.orders.get(block.id);
+      if (was === undefined || was < at || this._changeOf(seen, block, noteId) === 'put') continue;
+      const order = was + inserted.length;
+      (seen.sent.has(block.id) ? sent : stored).set(block.id, drafts.digest({ ...block, order }, noteId));
+      orders.set(block.id, order);
+    }
     const seq = ++pageSeq;
     const writing = Array.from(this._inFlightSaves).filter(({ state }) => state.written).map((entry) => entry.promise);
     const settled = writing.length > 0 ? Promise.all([inserting, ...writing]).then(([outcome]) => outcome) : inserting;
@@ -4631,7 +4686,8 @@ class BlockEditor {
         if (!sent.has(id)) base.sent.delete(id);
       }
       for (const [id, digest] of sent) base.sent.set(id, digest);
-      base.revision = null;
+      for (const [id, order] of orders) base.orders.set(id, order);
+      base.revision = nextRevision(base.revision, /** @type {{revision?: number}} */ (outcome).revision);
     }, () => {});
   }
 
@@ -4655,20 +4711,47 @@ class BlockEditor {
   }
 
   /**
-   * `blocks` less the ones that are as this editor last saw them commit: what a close-time draft
-   * holds, and what a closing write puts (#33). All of them when it holds no base of the note.
+   * `blocks` less the ones that are as this editor last saw them commit, moved ones included:
+   * what a close-time draft holds (#33). All of them when it holds no base of the note.
    * @param {string} noteId
    * @param {Array<Object>} blocks - serialized, as a save writes them
    * @returns {Array<Object>}
    */
   _changedSinceCommit(noteId, blocks) {
-    const drafts = this._drafts();
-    const seen = drafts ? this._seen.get(noteId) : null;
+    const seen = this._drafts() ? this._seen.get(noteId) : null;
     if (!seen || !Array.isArray(blocks)) return blocks;
-    return blocks.filter((block) => {
-      const was = seen.sent.has(block.id) ? seen.sent.get(block.id) : seen.stored.get(block.id);
-      return was !== drafts.digest(block, noteId);
-    });
+    return blocks.filter((block) => this._changeOf(seen, block, noteId) !== null);
+  }
+
+  /**
+   * What a save of `state` puts and moves, against its note's base (#17, the per-pane save):
+   * each block whose fields changed since, or that the base has none of, whole; each block that
+   * only moved, by its new order; and each block a save of this editor still in flight sent,
+   * again in the form it went in, so a later save never leaves an earlier one's text standing
+   * when it's back to the base's
+   * @param {EditorSaveState} state
+   * @returns {{put: Array<Object>, moves: Array<{id: string, order: number}>}}
+   */
+  _saveChanges(state) {
+    const seen = this._seen.get(state.noteId);
+    /** @type {Map<string, 'put'|'move'>} What this editor's saves in flight sent of the note, and how */
+    const inFlight = new Map();
+    for (const { state: other } of this._inFlightSaves) {
+      if (other === state || other.noteId !== state.noteId || !other.written || !other.issued) continue;
+      for (const id of other.issued.blocks.keys()) {
+        if (inFlight.get(id) !== 'put') inFlight.set(id, other.issued.moved.has(id) ? 'move' : 'put');
+      }
+    }
+    const put = [];
+    const moves = [];
+    for (const block of state.blocks) {
+      const own = this._changeOf(seen, block, state.noteId);
+      const before = inFlight.get(block.id);
+      const change = own === 'put' || before === 'put' ? 'put' : own || before || null;
+      if (change === 'put') put.push(block);
+      else if (change === 'move') moves.push({ id: block.id, order: block.order });
+    }
+    return { put, moves };
   }
 
   /**
@@ -5055,35 +5138,42 @@ class BlockEditor {
    *   note-and-blocks transaction had opened, and a closing connection lets it finish, but the
    *   search entry and links that follow it couldn't be written. Rejects when the save failed
    *   otherwise.
-   * @param {boolean} [closing] - the page's own close: the save puts only the blocks changed
-   *   since the last save its editor saw commit, and takes the id of the close-time draft its
-   *   editor wrote for the same edit as its commandId (#33)
+   * @param {boolean} [closing] - the page's own close: the save takes the id of the close-time
+   *   draft its editor wrote for the same edit as its commandId (#33)
    */
   _writeSaveState(state, meta, closing = false) {
     state.written = true;
     if ((this._writtenSeq.get(state.noteId) || 0) < state.seq) {
       this._writtenSeq.set(state.noteId, state.seq);
     }
-    // A closing write puts only the blocks this editor changed since the last save it saw
-    // commit, so its copy of a block another pane saved since never goes over that save, and the
-    // note's preview and to-do progress come from its blocks as stored (#33, #144). It goes when
-    // it puts no block too, so the record catches up after a delete, as a whole save would.
-    state.partial = closing && Boolean(this._drafts()) && this._seen.has(state.noteId);
+    // A save puts only what this editor changed since the last save it saw commit, and a block
+    // it only moved goes by its order, so its copy of a block another pane or tab saved since
+    // never goes over that save, and the note's preview and to-do progress come from its blocks
+    // as stored (#33, #144, #17). It goes when it puts nothing too, so a title saves and the
+    // record catches up after a delete. An editor with no base of the note saves the whole note.
+    state.partial = Boolean(this._drafts()) && this._seen.has(state.noteId);
+    const changes = state.partial ? this._saveChanges(state) : { put: state.blocks, moves: [] };
     const save = {
       noteId: state.noteId,
-      blocks: state.partial ? this._changedSinceCommit(state.noteId, state.blocks) : state.blocks,
+      blocks: changes.put,
       ...(state.partial ? { deriveFromStored: true } : { preview: meta.preview, todoProgress: meta.todoProgress }),
+      ...(changes.moves.length > 0 ? { orders: changes.moves } : {}),
       linkedNames: globalThis.BlockProjections.wikiLinkNames(meta.text),
     };
     if (state.title) Object.assign(save, { name: state.title.name, titleOrigin: state.title.origin });
     // What it sends, among the page's issued saves, so a close-time draft of the note from any of
-    // the page's editors counts it as the page's own, committed or not (#33)
+    // the page's editors counts it as the page's own, committed or not (#33): each block it puts
+    // or moves by its digest as it will be stored, and its order
     const drafts = this._drafts();
     if (drafts) {
+      const byId = new Map(state.blocks.map((block) => [block.id, block]));
+      const sent = [...changes.put, ...changes.moves.map((move) => byId.get(move.id))];
       state.issued = {
         seq: ++pageSeq,
         name: state.title ? state.title.name : undefined,
-        blocks: new Map(save.blocks.map((block) => [block.id, drafts.digest(block, state.noteId)])),
+        blocks: new Map(sent.map((block) => [block.id, drafts.digest(block, state.noteId)])),
+        orders: new Map(sent.map((block) => [block.id, block.order])),
+        moved: new Set(changes.moves.map((move) => move.id)),
       };
       pageSaves.set(state.noteId, [...(pageSaves.get(state.noteId) || []), state.issued]);
     }
@@ -5273,9 +5363,8 @@ class BlockEditor {
    * pages don't run rAF and closing pages don't wait, so the metadata is
    * computed here and the transactions open before this returns.
    * Writes nothing when nothing is pending.
-   * @param {{closing?: boolean}} [options] - closing: the page's own close, whose saves put only
-   *   the blocks changed since the last save their editor saw commit, and take the ids of the
-   *   close-time drafts written for them (#33)
+   * @param {{closing?: boolean}} [options] - closing: the page's own close, whose saves take the
+   *   ids of the close-time drafts written for them (#33)
    * @returns {void}
    */
   _writePendingNow({ closing = false } = {}) {
@@ -5540,6 +5629,7 @@ class BlockEditor {
         name: note.name,
         stored: new Map(),
         sent: new Map(),
+        orders: new Map(),
       });
     }
     // Undo history points at the old IDs, and the blocks render again under the new ones

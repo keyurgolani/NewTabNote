@@ -867,7 +867,7 @@ describe("the saves a page keeps while one pane saves a note another holds idle 
     }
     const held = env.get('pageSaves').get('A') || [];
     // Read into this realm's array: the page's list is made in its own
-    assert.deepEqual(Array.from(held, (save) => save.blocks.size), [2], `the newest of the ${ROUNDS}, with its 2 blocks`);
+    assert.deepEqual(Array.from(held, (save) => save.blocks.size), [1], `the newest of the ${ROUNDS}, with the one block it changed`);
     watchSaves(env, { hold: closingSave });
     type(main, 'alpha, from the main pane at the end', 0);
     closePage(env);
