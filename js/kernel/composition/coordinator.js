@@ -7,8 +7,9 @@
  * start, a page's hello on #13's port, a capture), and builds the worker's kernel then.
  *
  * Each welcome says what it can do (#13, "Handshake and compatibility"). A hello while it's
- * starting waits for the start, WELCOME_WAIT_MS at most, and its welcome says `starting` only
- * when the start takes longer. Then it's `ready`, or degraded and why: the open's code
+ * starting waits for the start, WELCOME_WAIT_MS at most. When the start takes longer, its
+ * welcome says `migrating` while the run upgrades the database (#35 slice 2), and `starting`
+ * otherwise. Once the start is in, it's `ready`, or degraded and why: the open's code
  * (`newer-schema`, `missing-core-stores`), else `storage-unavailable`, and
  * `coordinator-unavailable` when the kernel couldn't be built at all, which every command then
  * answers too. A start writes first-run settings only; the read-only integrity check runs
