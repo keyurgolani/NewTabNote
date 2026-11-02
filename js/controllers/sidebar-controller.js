@@ -1250,6 +1250,8 @@ class SidebarController {
       const name = document.createElement('span');
       name.className = 'folder-name';
       name.textContent = folder.name;
+      // One space between the folder icon and the name, as 1.4.5 drew them
+      header.appendChild(document.createTextNode(' '));
       header.appendChild(name);
 
       /** @param {boolean} collapsed */
