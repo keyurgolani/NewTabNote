@@ -15,7 +15,7 @@ const {
 
 const FILES = [
   'js/utils.js', 'js/core/storage-error.js', 'js/ui/confirm-dialog.js', 'js/shortcut-utils.js', 'js/storage.js', 'js/sidebar-utils.js',
-  'js/blocks.js', 'js/editor.js',
+  'js/blocks.js', 'js/ai-response-utils.js', 'js/editor.js',
 ];
 const OPTIONS = { timeout: 30_000 };
 
@@ -224,6 +224,19 @@ describe('a conversion that removes structure asks first (#14 slice 3)', () => {
     press(doc, 'Cancel');
   });
 
+  it('Cancel puts focus back where it was, so typing goes on in the block', OPTIONS, async () => {
+    const { env, editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), TOGGLE]);
+    editor.isCaretAtStart = () => true;
+    doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 1 });
+    const heading = contentEl(editor, 'g1');
+    heading.focus();
+    editor.onBlockKeyDown({ key: 'Backspace', target: heading, preventDefault() {} });
+    assert.ok(doc.activeElement !== heading, 'the question takes focus');
+    press(doc, 'Cancel');
+    await runUntil(env, Promise.resolve());
+    assert.ok(doc.activeElement === heading, 'focus is back in the toggle');
+  });
+
   it('the Alt+1 shortcut on a table asks first', OPTIONS, async () => {
     const { editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), TABLE]);
     const cell = editor.container.querySelector('[data-id="t1"]').querySelector('td');
@@ -254,6 +267,21 @@ describe("Delete at a block's end leaves a following toggle's hidden content alo
     assert.equal((await stored(env)).g1.children, 'Inside <i>it</i>');
   });
 
+  it("a text block holding a field its type doesn't own stays as it is, after the caret or before it", OPTIONS, async () => {
+    const carrying = { ...block('x2', 'N', 1, 'Next'), futureField: 'kept' };
+    const { env, editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), carrying]);
+    doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 1 });
+    editor.isCaretAtEnd = () => true;
+    editor.onBlockKeyDown({ key: 'Delete', target: contentEl(editor, 'a1'), preventDefault() {} });
+    assert.deepEqual(editor.blocks.map(b => [b.id, b.content]), [['a1', 'Before'], ['x2', 'Next']], 'Delete');
+    editor.isCaretAtEnd = () => false;
+    editor.isCaretAtStart = () => true;
+    editor.onBlockKeyDown({ key: 'Backspace', target: contentEl(editor, 'x2'), preventDefault() {} });
+    assert.deepEqual(editor.blocks.map(b => [b.id, b.content]), [['a1', 'Before'], ['x2', 'Next']], 'Backspace');
+    await runUntil(env, editor.save());
+    assert.equal((await stored(env)).x2.futureField, 'kept');
+  });
+
   it('a toggle with nothing hidden still merges into the block before it, as before', OPTIONS, async () => {
     const { editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), { ...TOGGLE, children: '' }]);
     editor.isCaretAtEnd = () => true;
@@ -261,5 +289,36 @@ describe("Delete at a block's end leaves a following toggle's hidden content alo
     editor.onBlockKeyDown({ key: 'Delete', target: contentEl(editor, 'a1'), preventDefault() {} });
     assert.deepEqual(typesOf(editor), ['text']);
     assert.equal(editor.blocks[0].content, 'BeforeHeading');
+  });
+});
+
+describe("a paste never puts a block's new type over what it holds (#14 slice 3)", () => {
+  const paste = (editor, id, text) => {
+    // No caret in the fake window, so a re-render keeps none
+    editor.doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
+    editor.onPaste({ target: contentEl(editor, id), clipboardData: { items: [], getData: () => text }, preventDefault() {} });
+  };
+  // An empty text block that holds an image, which turning it into another type would remove
+  const HOLDER = { ...block('p1', 'N', 0, ''), imageUrl: 'data:image/png;base64,iVBORw0KGgo=' };
+
+  it('fenced code pasted into it goes into a code block after it', OPTIONS, async () => {
+    const { editor } = await openNote([HOLDER]);
+    paste(editor, 'p1', '```\nconst a = 1;\n```');
+    assert.deepEqual(typesOf(editor), ['text', 'code']);
+    assert.deepEqual([editor.blocks[0].content, editor.blocks[0].imageUrl], ['', HOLDER.imageUrl]);
+  });
+
+  it('Markdown pasted into it goes into blocks after it', OPTIONS, async () => {
+    const { editor } = await openNote([HOLDER]);
+    paste(editor, 'p1', '# Heading\n\nSome text');
+    assert.deepEqual(typesOf(editor), ['text', 'h1', 'text']);
+    assert.deepEqual([editor.blocks[0].content, editor.blocks[0].imageUrl], ['', HOLDER.imageUrl]);
+  });
+
+  it('into an empty text block holding nothing else, it still turns that block, as before', OPTIONS, async () => {
+    const { editor } = await openNote([block('p2', 'N', 0, '')]);
+    paste(editor, 'p2', '# Heading\n\nSome text');
+    assert.deepEqual(typesOf(editor), ['h1', 'text']);
+    assert.equal(editor.blocks[0].id, 'p2');
   });
 });
