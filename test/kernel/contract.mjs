@@ -11,6 +11,7 @@ import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
+import { noteSaveMetadata } from '../../js/kernel/core/domain/note.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { placementOf } from '../../js/product/placement.js';
 import { CALLERS, NOW } from './support.mjs';
@@ -506,6 +507,64 @@ export function runContractSuite(fixture) {
           updatedAt: NOW + 1000,
         });
         assert.deepEqual(await blocksOf('n1'), someBlocks('n1', 2));
+      });
+
+      it("with deriveFromStored, a save of some of the note's blocks gives the record the preview and to-do progress a whole save of them gives (#33)", async () => {
+        // The editor's closing write carries only the blocks its pane changed since the last save
+        // it saw commit (the stack's close-time PR), so the record comes from the blocks as stored
+        /** @param {string} noteId */
+        const stored = noteId => [
+          { id: `${noteId}-b0`, type: 'text', content: '', canvasId: noteId, order: 0 },
+          { id: `${noteId}-b1`, type: 'todo', content: 'First', checked: false, canvasId: noteId, order: 1 },
+          { id: `${noteId}-b2`, type: 'todo', content: 'Second', checked: false, canvasId: noteId, order: 2 },
+        ];
+        await createNote({ noteId: 'n1', blocks: stored('n1') });
+        await createNote({ noteId: 'n2', blocks: stored('n2') });
+        /** @param {string} noteId */
+        const done = noteId => ({ ...stored(noteId)[1], content: 'First, done', checked: true });
+        // n1: only the changed block, with the record derived from what's stored once it's in
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [done('n1')], deriveFromStored: true }));
+        // n2: the whole note, with the preview and to-do progress a whole save carries, as the
+        // editor's SidebarUtils.buildNoteSaveMetadata makes them (legacy-parity.test.mjs)
+        const whole = [stored('n2')[0], done('n2'), stored('n2')[2]];
+        await run(cmd('saveNoteContent', { noteId: 'n2', blocks: whole, ...noteSaveMetadata(whole) }));
+        const [partial, full] = [await noteOf('n1'), await noteOf('n2')];
+        assert.deepEqual([partial?.preview, partial?.todoProgress], ['First, done', { completed: 1, total: 2 }]);
+        assert.deepEqual([partial?.preview, partial?.todoProgress], [full?.preview, full?.todoProgress]);
+        assert.deepEqual(
+          (await blocksOf('n1')).map(block => [block.id, block.content]),
+          [
+            ['n1-b0', ''],
+            ['n1-b1', 'First, done'],
+            ['n1-b2', 'Second'],
+          ],
+        );
+      });
+
+      it('with deriveFromStored and no block, the record catches up with a delete that committed alone (#33)', async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: someBlocks('n1', 2), preview: 'Line 0' }));
+        await run(cmd('deleteBlocks', { noteId: 'n1', blockIds: ['n1-block-0'] }));
+        assert.equal((await noteOf('n1'))?.preview, 'Line 0', 'a delete writes no record');
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [], deriveFromStored: true }));
+        assert.equal((await noteOf('n1'))?.preview, 'Line 1');
+      });
+
+      it('refuses a deriveFromStored that is not true', async () => {
+        await createNote({ noteId: 'n1' });
+        for (const deriveFromStored of [false, 'yes', 1]) {
+          assertRejected(
+            await kernel.execute(
+              cmd('saveNoteContent', {
+                noteId: 'n1',
+                blocks: someBlocks('n1', 1),
+                deriveFromStored: /** @type {any} */ (deriveFromStored),
+              }),
+            ),
+            'validation',
+            'invalid-command',
+          );
+        }
       });
 
       it('a save into a trashed note commits what was typed, and the note stays in the trash (#33)', async () => {
