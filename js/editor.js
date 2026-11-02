@@ -1291,20 +1291,27 @@ class BlockEditor {
     const index = this.blocks.findIndex((b) => b.id === blockId);
     if (index === -1) return;
 
-    // Don't delete if it's the only block
+    // The note's last block goes, and a new empty text block takes its place, rather than the
+    // block being retyped, which would drop what its type held (#14 slice 3, the opaque rule)
     if (this.blocks.length === 1) {
-      // Just clear it
-      const beforeSnapshot = this.snapshotBlock(this.blocks[0]);
-      this.blocks[0].content = '';
-      this.blocks[0].type = 'text';
+      const gone = this.blocks[0];
+      const goneSnapshot = this.snapshotBlock(gone);
+      goneSnapshot.order = 0;
+      const fresh = this.createBlock('text');
+      const freshSnapshot = this.snapshotBlock(fresh);
+      freshSnapshot.order = 0;
       this.pushUndo({
-        type: 'content',
-        blockId: this.blocks[0].id,
-        before: beforeSnapshot,
-        after: this.snapshotBlock(this.blocks[0]),
+        type: 'group',
+        entries: [
+          { type: 'delete', blockId: gone.id, before: goneSnapshot, after: null },
+          { type: 'add', blockId: fresh.id, before: null, after: freshSnapshot },
+        ],
       });
-      this.rerenderBlock(this.blocks[0]);
-      this.focusBlock(this.blocks[0].id);
+      this.blocks = [fresh];
+      this._deleteStoredBlocks([gone.id]);
+      this.renderBlocks();
+      this.focusBlock(fresh.id);
+      this.scheduleSave();
       return;
     }
 
@@ -2635,12 +2642,14 @@ class BlockEditor {
 
   /**
    * @typedef {Object} UndoEntry
-   * @property {'add'|'delete'|'move'|'convert'|'content'} type
-   * @property {string} blockId
-   * @property {Object} before - Snapshot before the operation
-   * @property {Object} after - Snapshot after the operation
+   * @property {'add'|'delete'|'move'|'convert'|'content'|'group'} type
+   * @property {string} [blockId]
+   * @property {Object} [before] - Snapshot before the operation
+   * @property {Object} [after] - Snapshot after the operation
    * @property {number} [fromIndex] - For move operations
    * @property {number} [toIndex] - For move operations
+   * @property {Array<UndoEntry>} [entries] - A group's entries, one action's steps in the order
+   *   they ran, which undo in the reverse order (#14 slice 3)
    */
 
   /**
@@ -2692,9 +2701,27 @@ class BlockEditor {
    * @param {boolean} reverse
    */
   _applyUndoEntry(entry, reverse) {
+    this._applyUndoStep(entry, reverse);
+    this.renderBlocks();
+    this.scheduleSave();
+  }
+
+  /**
+   * An entry's change to the blocks, with no render or save. A group's entries apply in the order
+   * they ran and undo in the reverse order, so one action that took several steps, a Turn into
+   * that adds a block or the last block's delete, undoes in one (#14 slice 3).
+   * @param {UndoEntry} entry
+   * @param {boolean} reverse
+   */
+  _applyUndoStep(entry, reverse) {
     const snapshot = reverse ? entry.before : entry.after;
 
     switch (entry.type) {
+      case 'group': {
+        const steps = reverse ? [...entry.entries].reverse() : entry.entries;
+        for (const step of steps) this._applyUndoStep(step, reverse);
+        break;
+      }
       case 'add': {
         if (reverse) {
           // Undo add → remove the block
@@ -2742,18 +2769,16 @@ class BlockEditor {
       }
       case 'convert':
       case 'content': {
-        const block = this.getBlockById(entry.blockId);
-        if (block && snapshot) {
-          // Restore block properties from snapshot
-          Object.assign(block, snapshot);
-          block.id = entry.blockId; // Ensure ID stays consistent
+        const index = this.blocks.findIndex(b => b.id === entry.blockId);
+        if (index !== -1 && snapshot) {
+          // A block made from the snapshot takes the old one's place: the snapshot holds every
+          // field the block held, those this class doesn't model too, which decode reads again
+          // rather than copying them onto the old block (#14 slice 3)
+          this.blocks[index] = Block.deserialize({ ...snapshot, id: entry.blockId });
         }
         break;
       }
     }
-
-    this.renderBlocks();
-    this.scheduleSave();
   }
 
   /**
