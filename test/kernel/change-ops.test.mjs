@@ -401,6 +401,44 @@ for (const make of WORLDS) {
       }
     });
 
+    it('a save with orders takes moveBlock for each block it moved, and nothing for one it skipped (#17, the per-pane save)', async () => {
+      const world = await make();
+      try {
+        await threeBlocks(world);
+        // A block added at the top, the three below moved down by one, and a block no note holds
+        const added = { id: 'b0', type: 'text', content: 'Added', order: 0 };
+        const orders = [
+          { id: 'b1', order: 1 },
+          { id: 'b2', order: 2 },
+          { id: 'b3', order: 3 },
+          { id: 'deleted-elsewhere', order: 4 },
+        ];
+        const saved = await world.run('saveNoteContent', {
+          noteId: 'n1',
+          blocks: [added],
+          orders,
+          deriveFromStored: true,
+        });
+        const rows = await rowsOf(world, saved);
+        assert.deepEqual(
+          rows.map(([type, id]) => [type, id]),
+          [['note', 'n1']],
+        );
+        // The note's own op says what its derived fields did; the blocks' ops are the move's
+        assert.deepEqual(
+          rows[0][2].filter(op => op.op !== 'updateNote'),
+          [
+            { op: 'insertBlock', blockId: 'b0' },
+            { op: 'moveBlock', blockId: 'b1' },
+            { op: 'moveBlock', blockId: 'b2' },
+            { op: 'moveBlock', blockId: 'b3' },
+          ],
+        );
+      } finally {
+        await world.close();
+      }
+    });
+
     it('insertBlocks inserts its blocks and moves the ones it shifts, and deleteBlocks deletes each it found', async () => {
       const world = await make();
       try {
