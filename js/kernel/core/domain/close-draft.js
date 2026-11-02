@@ -15,11 +15,14 @@
  * - `base.revision` is the content revision the page last saw commit, null from 1.4.x.
  *   `base.updatedAt` and `base.issued` are 1.4.3's: the record's `updatedAt` then, and the
  *   stamps the page's saves made since. The stack's writer leaves `issued` empty (QA1).
- * - A stack draft has `base.blocks`: each block of the note as the page last saw it commit, by
- *   its digest as stored (blockDigest). `base.name` is the name then, and `base.issuedSaves`
- *   what each save the page issued since wrote, its blocks by digest and its name, so a save
- *   that committed after the page last heard is still the page's own. `page` names the page
- *   load that wrote the draft.
+ * - A stack draft has `base.blocks`: each block the draft names, its blocks and its deletes, as
+ *   the page last saw it commit, by its digest as stored (blockDigest). Those are the only
+ *   blocks the rules read the base for, so a big note's draft stays small. `base.name` is the
+ *   name then, and `base.issuedSaves` what each save the page issued since wrote, the blocks the
+ *   draft names by digest and its name, so a save that committed after the page last heard is
+ *   still the page's own. One more entry, with no name, holds the page's own serialization of a
+ *   block stored in a shape the page doesn't write, which is that block as another tab's save
+ *   stores it unchanged. `page` names the page load that wrote the draft.
  *
  * Each draft goes by these rules, in this order (decide):
  * 0. Its recovered note is stored already: an earlier start made it, and its page went before
@@ -45,14 +48,16 @@
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
+import { CLOSE_DRAFT_VERSION, blockDigest, digest, fingerprint } from './close-draft-format.js';
 import { recoveredIdOf } from './close-draft-keys.js';
 
 /** @typedef {import('./note.js').NoteRecord} NoteRecord */
 /** @typedef {import('./note.js').BlockRecord} BlockRecord */
 /** @typedef {import('../ports/repository.js').Versions} Versions */
 
-/** The format both 1.4.3 and the stack write */
-export const CLOSE_DRAFT_VERSION = 1;
+// The version and the digest live apart from the rules (close-draft-format.js), so the new tab's
+// writer holds them at its start without loading these
+export { CLOSE_DRAFT_VERSION, blockDigest, digest, fingerprint };
 
 /**
  * What the page last saw commit, and what it issued since
@@ -99,50 +104,6 @@ export const CLOSE_DRAFT_VERSION = 1;
  * @typedef {{kind: 'recovered-before'} | {kind: 'gone'} | {kind: 'dropped', residue: Residue}
  *   | {kind: 'recover', residue: Residue} | {kind: 'save', residue: Residue}} Decision
  */
-
-/** A block's times, which change on every edit, so content first leaves them out */
-const TIMES = Object.freeze(['createdAt', 'updatedAt']);
-
-/**
- * A block's fields but its times, as a stable string, as 1.4.3 compares them
- * @param {Record<string, unknown>} block
- * @returns {string}
- */
-export function fingerprint(block) {
-  const fields = Object.keys(block)
-    .filter(key => !TIMES.includes(key))
-    .sort();
-  return JSON.stringify(fields.map(key => [key, block[key]]));
-}
-
-/**
- * A short digest of a block's fingerprint, 1.4.3's 53-bit cyrb53, so a draft names a block as
- * the page saw it without holding a second copy of the note's text or images
- * @param {Record<string, unknown>} block
- * @returns {string}
- */
-export function digest(block) {
-  const text = fingerprint(block);
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
-    h1 = Math.imul(h1 ^ code, 2654435761);
-    h2 = Math.imul(h2 ^ code, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
-}
-
-/**
- * The digest of `block` as note `noteId` stores it, which is what a stack draft's base and
- * issued saves hold, so the applier compares it with the stored copy's own
- * @param {Record<string, unknown>} block
- * @param {string} noteId
- * @returns {string}
- */
-export const blockDigest = (block, noteId) => digest({ ...block, canvasId: noteId });
 
 // The id of a draft's recovered note lives beside the keys (close-draft-keys.js), so a page can
 // tell which notes a draft is for without loading these rules

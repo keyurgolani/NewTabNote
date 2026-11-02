@@ -1261,6 +1261,9 @@
   <input type="file" id="image-input" accept="image/*" class="hidden">
   <input type="file" id="file-input" class="hidden">
 
+  <!-- The toasts' live region (Utils.showToast), empty from the start, so a screen reader reads the first toast too, and not atomic, so it reads each toast once -->
+  <div class="toast-container" aria-live="polite" aria-atomic="false" role="status"></div>
+
   <script vite-ignore src="js/entries/boot-guard.js"></script>
   <script type="module" src="js/entries/newtab.js"></script>
 </body>

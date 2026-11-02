@@ -391,7 +391,7 @@ describe('the close-time drafts at each start', () => {
         assert.deepEqual([keysOf(tab), counts.locks], [[], 1]);
       }
       if (kind === 'catch-up') assert.deepEqual([keysOf(tab), counts.locks], [[], 0], "the key read and removed, and no draft, so no lock");
-      if (kind === 'untold') assert.deepEqual([keysOf(tab), counts.locks], [[UNTOLD_KEY], 0], 'the list waits for the toast, and no draft, so no lock');
+      if (kind === 'untold') assert.deepEqual([keysOf(tab), counts.locks], [[], 1], 'the list taken for the toast, under the lock (Q-B7)');
     }
   });
 
@@ -976,4 +976,91 @@ describe("the applier's rules on 1.4.3's drafts", () => {
     assert.deepEqual(result.saved, ['A']);
     assert.deepEqual(draftKeys(tab), [], 'the two that no start could apply went with the one applied');
   });
+});
+
+describe("the new tab's toasts, from the untold lists (V3, Q-B6, Q-B7)", () => {
+  const RECOVERED = 'Kept your changes to “Alpha plan” from a closed tab in a recovered note.';
+  const IN_TRASH = "Saved your changes to “Charlie” from a closed tab. It's in the Trash.";
+
+  /**
+   * A, B, a recovered note R of A, and C in the Trash, with both lists naming them, as an apply
+   * fills them; then `extra`, each command run in turn before the lists are written
+   * @param {Array<Record<string, unknown>>} [extra]
+   */
+  async function told(extra = []) {
+    const made = await profileWithA([
+      { type: 'createNote', noteId: 'R', name: 'Recovered: Alpha plan', blocks: [block('r1', 'R', 0, 'kept')] },
+      { type: 'createNote', noteId: 'C', name: 'Charlie', blocks: [block('c1', 'C', 0, 'charlie')] },
+      { type: 'trashNote', noteId: 'C' },
+      ...extra,
+    ]);
+    const storage = made.tab.env.global.localStorage;
+    storage.setItem(UNTOLD_KEY, JSON.stringify([{ id: 'R', of: 'A' }]));
+    storage.setItem(SAVED_UNTOLD_KEY, JSON.stringify([{ id: 'C' }]));
+    return made;
+  }
+
+  it('the new tab takes both lists under the lock, a list alone included, and tells them, the recovered note first', async () => {
+    const { tab } = await told();
+    const { counts, load, drafts } = counted(tab);
+    const page = newTabOn(tab, drafts, load);
+    assert.equal(await page.whenReady(), null);
+    assert.deepEqual(await page.closeDraftToasts(), [RECOVERED, IN_TRASH]);
+    assert.deepEqual(counts, { loads: 1, locks: 1 });
+    assert.deepEqual(keysOf(tab), [], 'both lists are taken');
+    assert.deepEqual(await page.closeDraftToasts(), [RECOVERED, IN_TRASH], 'the same answer, from the one apply');
+  });
+
+  it('two new tabs starting together tell each entry once', async () => {
+    const { tab } = await told();
+    const one = newTabOn(tab, draftsOf(tab), LOAD);
+    const two = newTabOn(tab, draftsOf(tab), LOAD);
+    const [first, second] = await Promise.all([one.closeDraftToasts(), two.closeDraftToasts()]);
+    assert.deepEqual([...first, ...second], [RECOVERED, IN_TRASH]);
+  });
+
+  it('tells nothing of an entry whose note went, a note that left the Trash, or a recovered note whose original went, and still takes them', async () => {
+    const { tab, client, run } = await told([{ type: 'restoreNote', noteId: 'C' }]);
+    const storage = tab.env.global.localStorage;
+    await run({ type: 'trashNote', commandId: client.ids.next(), noteId: 'B' });
+    await run({ type: 'deleteNotePermanently', commandId: client.ids.next(), noteId: 'B' });
+    storage.setItem(UNTOLD_KEY, JSON.stringify([{ id: 'R', of: 'B' }, { id: 'gone', of: 'A' }]));
+    storage.setItem(SAVED_UNTOLD_KEY, JSON.stringify([{ id: 'C' }, { id: 'B' }]));
+    assert.ok(!(await noteOf(client, 'C')).note.trashed, 'C is back in Notes');
+    const page = newTabOn(tab, draftsOf(tab), LOAD);
+    assert.deepEqual(await page.closeDraftToasts(), []);
+    assert.deepEqual(keysOf(tab), []);
+  });
+
+  it('says both are in the Trash only when both are, and counts more than one of each', async () => {
+    const { tab, client, run } = await told([
+      { type: 'createNote', noteId: 'R2', name: 'Recovered: Bravo', blocks: [block('r2', 'R2', 0, 'kept')] },
+      { type: 'createNote', noteId: 'D', name: 'Delta', blocks: [block('d1', 'D', 0, 'delta')] },
+      { type: 'trashNote', noteId: 'D' },
+    ]);
+    const storage = tab.env.global.localStorage;
+    storage.setItem(UNTOLD_KEY, JSON.stringify([{ id: 'R', of: 'A' }, { id: 'R2', of: 'B' }]));
+    storage.setItem(SAVED_UNTOLD_KEY, JSON.stringify([{ id: 'C' }, { id: 'D' }]));
+    assert.deepEqual(await newTabOn(tab, draftsOf(tab), LOAD).closeDraftToasts(), [
+      'Kept your changes from closed tabs in 2 recovered notes.',
+      'Saved your changes from closed tabs to 2 notes in the Trash.',
+    ]);
+    await run({ type: 'trashNote', commandId: client.ids.next(), noteId: 'R' });
+    storage.setItem(UNTOLD_KEY, JSON.stringify([{ id: 'R', of: 'A' }]));
+    assert.deepEqual(await newTabOn(tab, draftsOf(tab), LOAD).closeDraftToasts(), [RECOVERED], 'the recovered note alone is in the Trash');
+    await run({ type: 'trashNote', commandId: client.ids.next(), noteId: 'A' });
+    storage.setItem(UNTOLD_KEY, JSON.stringify([{ id: 'R', of: 'A' }]));
+    assert.deepEqual(await newTabOn(tab, draftsOf(tab), LOAD).closeDraftToasts(), [`${RECOVERED} Both are in the Trash.`]);
+  });
+
+  for (const [page, create] of PAGES) {
+    it(`${page}'s start leaves the lists for the new tab`, async () => {
+      const { tab } = await told();
+      write(tab, draftOfA());
+      const client = create(pageHostOf(tab), draftsOf(tab), LOAD);
+      assert.equal(await client.whenReady(), null);
+      assert.deepEqual(listOf(tab, UNTOLD_KEY), [{ id: 'R', of: 'A' }]);
+      assert.deepEqual(listOf(tab, SAVED_UNTOLD_KEY), [{ id: 'C' }]);
+    });
+  }
 });

@@ -196,7 +196,10 @@ describe("the stack's first start after the update, on what 1.4.3 left", () => {
       { drafts: { storage: env.global.localStorage, locks: env.global.navigator.locks }, wake: () => {} },
     );
 
-  /** Each draft as the stack applies it: A's and C's saved, B's already recovered by 1.4.3 */
+  /**
+   * Each draft as the stack applies it: A's and C's saved, B's already recovered by 1.4.3, and the
+   * untold list the new tab took for its toast (Q-B7)
+   */
   const appliedOf = (recoveredId) => ({
     ...NOTHING,
     saved: ['A', 'C'],
@@ -204,9 +207,13 @@ describe("the stack's first start after the update, on what 1.4.3 left", () => {
     recovered: [{ noteId: 'B', recoveredId }],
     caughtUp: [],
     catchUp: { dropped: ['A'], gone: ['Z'] },
+    told: { recovered: [{ id: recoveredId, of: 'B' }], savedInTrash: [] },
   });
 
-  /** What every run leaves: the edits in, one recovered note, told once, and nothing in localStorage */
+  /**
+   * What every run leaves: the edits in, one recovered note, its untold entry taken by the new tab
+   * that tells it, and nothing in localStorage
+   */
   async function assertApplied({ env, release, recoveredId }) {
     const after = await stored(env);
     assert.equal(after.blocks.a1.content, 'alpha, edited');
@@ -218,7 +225,7 @@ describe("the stack's first start after the update, on what 1.4.3 left", () => {
       [recoveredId],
       "one recovered note of B's draft, 1.4.3's",
     );
-    assert.deepEqual(JSON.parse(release.storage.getItem(UNTOLD)), [{ id: recoveredId, of: 'B' }]);
+    assert.equal(release.storage.getItem(UNTOLD), null, 'taken by the new tab for its toast (Q-B7)');
     assert.deepEqual(draftKeys(release), []);
     assert.equal(release.storage.getItem(CATCH_UP), null);
   }

@@ -2247,7 +2247,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
         // The insert's transaction opens now, and the editor takes the blocks in the same task,
         // so a save from here on writes every block where the insert puts it
         const inserting = this.documentClient.insertBlocks(noteId, blocks, atOrder);
-        const takeBack = editor.noteId === noteId ? editor.placeInsertedBlocks(noteId, blocks, atOrder) : () => {};
+        const takeBack = editor.noteId === noteId ? editor.placeInsertedBlocks(noteId, blocks, atOrder, inserting) : () => {};
         const outcome = await inserting;
         if (outcome.kind !== 'committed') {
           takeBack();

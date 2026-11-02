@@ -473,6 +473,8 @@ class App {
       // A start that restored no saved tab rendered no list yet, so 1.4.x showed the badge's
       // count over an empty list until something refreshed it
       if (!this.sidebarController.listRendered) await this.sidebarController.renderNotesList();
+      // What came of the edits closing tabs left, once the list has drawn (#33)
+      await this.tellCloseDrafts();
 
       // Defer non-critical initialization until after first render (Req 27.1)
       const deferWork = async () => {
@@ -496,6 +498,22 @@ class App {
       } else {
         this.showErrorState(error);
       }
+    }
+  }
+
+  /**
+   * The toasts for what the closing tabs' drafts came to (#33): the recovered notes no new tab
+   * told about yet, whichever start made them, and the notes in the Trash a draft was saved into
+   * (V3), from the root's client, which took them at this start. Text only, for 6 s, as import's
+   * summary shows. Nothing takes focus.
+   * @returns {Promise<void>}
+   */
+  async tellCloseDrafts() {
+    if (!this.kernel || typeof this.kernel.closeDraftToasts !== 'function') return;
+    try {
+      for (const text of await this.kernel.closeDraftToasts()) Utils.showToast(text, 'info', 6000);
+    } catch (error) {
+      this.logger.error('App', "The closed tabs' changes could not be told", error);
     }
   }
 

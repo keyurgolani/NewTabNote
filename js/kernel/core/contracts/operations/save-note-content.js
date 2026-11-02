@@ -13,6 +13,10 @@
  * the note had, as 1.4.x's save replaced them after the note was stored. Note fields and
  * blocks commit together on every adapter. `expectedRevision`, on an adapter with revisions,
  * makes a save over a newer write a conflict.
+ * `deriveFromStored: true` is for a save that carries only some of the note's blocks, the
+ * editor's closing write (#33): the note's preview and to-do progress come from its blocks as
+ * stored once the save's puts are in, in note order, and the save sends neither. Only `true` is
+ * taken.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';
@@ -30,6 +34,7 @@ export const payload = commandPayload('saveNoteContent', {
   titleOrigin: v.optional(v.picklist(['typed', 'generated'])),
   linkedNames: v.optional(v.array(content(v.string()))),
   expectedRevision: v.optional(revision),
+  deriveFromStored: v.optional(v.literal(true)),
 });
 
 export const result = outcomeSchema;

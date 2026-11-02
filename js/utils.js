@@ -802,6 +802,8 @@ const Utils = {
       container = document.createElement('div');
       container.className = 'toast-container';
       container.setAttribute('aria-live', 'polite');
+      // Not atomic, so a screen reader reads each toast once, not every toast still showing
+      container.setAttribute('aria-atomic', 'false');
       container.setAttribute('role', 'status');
       document.body.appendChild(container);
     }

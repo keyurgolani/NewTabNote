@@ -140,15 +140,44 @@ function failWritesOf(env, noteId, times) {
   const real = client.saveContent;
   const attempts = [];
   let left = times;
-  client.saveContent = (save) => {
+  client.saveContent = (save, options) => {
     attempts.push(save.noteId);
     if (save.noteId === noteId && left > 0) {
       left -= 1;
       return Promise.resolve({ kind: 'unavailable', cause: 'quota', code: 'quota', retryable: false });
     }
-    return real(save);
+    return real(save, options);
   };
   return attempts;
+}
+
+/**
+ * The page's saves from now on, in order: each one's note, the commandId it was given, its
+ * blocks' ids, and whether the record's preview and to-do progress come from the stored blocks
+ */
+function watchSaves(env) {
+  const client = env.documentClient;
+  const real = client.saveContent;
+  const saves = [];
+  client.saveContent = (save, options) => {
+    saves.push({
+      noteId: save.noteId,
+      commandId: options && options.commandId,
+      blocks: save.blocks.map((b) => b.id),
+      deriveFromStored: save.deriveFromStored === true,
+    });
+    return real(save, options);
+  };
+  return saves;
+}
+
+/** The close-time drafts in the page's localStorage (#33), oldest first */
+function draftsOf(env) {
+  const storage = env.global.localStorage;
+  return Array.from({ length: storage.length }, (_, index) => storage.key(index))
+    .filter((key) => key.startsWith('ntn-close-draft:'))
+    .map((key) => JSON.parse(storage.getItem(key)))
+    .sort((a, b) => a.at - b.at);
 }
 
 /** Record save status text and toasts. */
@@ -422,6 +451,46 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'alpha in main' });
   });
 
+  it("closing the whole tab writes the pop-out's pending edit at the page's own close, under its draft's id, and the pop-out's close after it writes nothing more (#33)", async () => {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    type(pip, 'charlie in the pop-out');
+    const saves = watchSaves(env);
+    const opened = spyTransactions();
+    // The page's pagehide fires first, then the pop-out's
+    env.window.fire('pagehide', { persisted: false });
+    assert.equal(writesOf(opened).length, 1, "the pop-out's closing write, opened before the handler returned");
+    const [draft] = draftsOf(env);
+    assert.deepEqual(saves, [{ noteId: 'C', commandId: draft.id, blocks: ['c1'], deriveFromStored: true }]);
+    pipWindow.fire('pagehide');
+    assert.equal(writesOf(opened).length, 1, "the pop-out's own close finds it written");
+    await settle();
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
+  });
+
+  it("a page hidden into the back/forward cache leaves the pop-out's edit to its own save (#33)", async () => {
+    const { pip } = await openPiP(env, 'C');
+    type(pip, 'charlie in the pop-out');
+    const opened = spyTransactions();
+    env.window.fire('pagehide', { persisted: true });
+    assert.equal(writesOf(opened).length, 0);
+    assert.notEqual(pip.saveTimeout, null, "the pop-out's debounce runs on");
+  });
+
+  it("a pop-out adds one listener on the page while it's open and none once it's closed, so the page's own close writes nothing for it (#33)", async () => {
+    const listening = () => (env.window.listeners.pagehide || []).length;
+    const before = listening();
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    assert.equal(listening(), before + 1, "the pop-out's editor listens for the page's close");
+    type(pip, 'charlie in the pop-out');
+    pipWindow.fire('pagehide');
+    await settle();
+    assert.equal(listening(), before, 'its listener went with the pop-out');
+    const opened = spyTransactions();
+    env.window.fire('pagehide', { persisted: false });
+    assert.equal(writesOf(opened).length, 0);
+    assert.deepEqual((await elementsById(env)).c1, { canvasId: 'C', content: 'charlie in the pop-out' });
+  });
+
   it('switching panes: each editor keeps its own pending edit on its own note', async () => {
     const secondary = makeEditor(env);
     await secondary.loadNote('B');
@@ -440,6 +509,120 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
     assert.deepEqual(rows.a1, { canvasId: 'A', content: 'left pane' });
     assert.deepEqual(rows.b1, { canvasId: 'B', content: 'right pane' });
     assert.deepEqual(rows.c1, { canvasId: 'C', content: 'charlie' });
+  });
+});
+
+describe('BlockEditor closing writes beside another pane on the same note (#33)', () => {
+  /** A page with notes A (a1) and C (c1, c2), its editors with the page's draft writer */
+  async function setupTwoBlocks() {
+    const env = createLegacyEnv();
+    await createDatabase(env.indexedDB, {
+      records: {
+        canvases: [note('A'), note('C', { name: 'Charlie' })],
+        elements: [block('a1', 'A', 0, 'alpha'), block('c1', 'C', 0, 'charlie'), block('c2', 'C', 1, 'charlie two')],
+      },
+    });
+    env.load(...FILES);
+    await startEditorClient(env);
+    return env;
+  }
+
+  /** A pop-out on C whose frames run with the page's */
+  async function popOut(env) {
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    pipWindow.requestAnimationFrame = (fn) => env.global.requestAnimationFrame(fn);
+    return { pip, pipWindow };
+  }
+
+  /** C's blocks as stored, in order, as `id=content` */
+  async function blocksOfC(env) {
+    const rows = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
+      .filter((row) => row.canvasId === 'C')
+      .sort((a, b) => a.order - b.order);
+    return rows.map((row) => `${row.id}=${row.content}`).join(' | ');
+  }
+
+  /** The whole tab closes: the page's pagehide, then the pop-out's, and what they wrote commits */
+  async function closeTab(env, pipWindow) {
+    env.window.fire('pagehide', { persisted: false });
+    pipWindow.fire('pagehide');
+    await settle();
+  }
+
+  it("the pop-out's closing write puts only the blocks it changed since its last save, so a block the main pane saved after that stays", async () => {
+    const env = await setupTwoBlocks();
+    const main = makeEditor(env);
+    await main.loadNote('C');
+    const { pip, pipWindow } = await popOut(env);
+    type(pip, 'pop-out, saved first');
+    await runUntil(env, pip.flushSave());
+    type(main, 'main pane, saved after', 1);
+    await runUntil(env, main.flushSave());
+    pip._titleSet('Charlie, renamed in the pop-out', 'typed');
+    type(pip, 'pop-out, typed as the tab closed');
+    await closeTab(env, pipWindow);
+    assert.equal(await blocksOfC(env), 'c1=pop-out, typed as the tab closed | c2=main pane, saved after');
+    const stored = recordsOf(await dumpDatabase(env.indexedDB), 'canvases').C;
+    assert.equal(stored.name, 'Charlie, renamed in the pop-out', 'its title too');
+    assert.equal(stored.preview, 'pop-out, typed as the tab closed', 'the preview from the blocks as stored');
+  });
+
+  it("the main pane's closing write puts only the blocks it changed, so a block the pop-out saved after it loaded stays, and the preview is the stored blocks'", async () => {
+    const env = await setupTwoBlocks();
+    const main = makeEditor(env);
+    await main.loadNote('C');
+    const { pip, pipWindow } = await popOut(env);
+    type(pip, 'pop-out, saved');
+    await runUntil(env, pip.flushSave());
+    type(main, 'main pane, typed as the tab closed', 1);
+    await closeTab(env, pipWindow);
+    assert.equal(await blocksOfC(env), 'c1=pop-out, saved | c2=main pane, typed as the tab closed');
+    const stored = recordsOf(await dumpDatabase(env.indexedDB), 'canvases').C;
+    assert.equal(stored.preview, 'pop-out, saved', "from the first block as stored, not the main pane's copy of it");
+  });
+
+  it('a pop-out that only loaded the note puts only what it changed since, so a block the main pane saved after it loaded stays', async () => {
+    const env = await setupTwoBlocks();
+    const main = makeEditor(env);
+    await main.loadNote('C');
+    const { pip, pipWindow } = await popOut(env);
+    type(main, 'main pane, saved after the pop-out loaded', 1);
+    await runUntil(env, main.flushSave());
+    type(pip, 'pop-out, typed as the tab closed');
+    await closeTab(env, pipWindow);
+    assert.equal(await blocksOfC(env), 'c1=pop-out, typed as the tab closed | c2=main pane, saved after the pop-out loaded');
+  });
+
+  it("a closed pop-out's editor leaves the page's editors once its close save commits, so four opens and closes leave the main pane alone", async () => {
+    const env = await setupTwoBlocks();
+    const main = makeEditor(env);
+    await main.loadNote('A');
+    const editors = () => env.get('pageEditors').size;
+    assert.equal(editors(), 1);
+    for (let n = 1; n <= 4; n += 1) {
+      const { pip, pipWindow } = await popOut(env);
+      assert.equal(editors(), 2, `open ${n}`);
+      type(pip, `pop-out ${n}`);
+      pipWindow.fire('pagehide');
+      await runUntil(env, settle());
+      assert.equal(editors(), 1, `close ${n}`);
+    }
+  });
+
+  it("a closed pop-out whose close save failed stays among the page's editors, which saveOpenEditors doesn't ask, and the page's own close still writes its draft", async () => {
+    const env = await setupTwoBlocks();
+    const main = makeEditor(env);
+    await main.loadNote('A');
+    const { pip, pipWindow } = await popOut(env);
+    failWritesOf(env, 'C', 1);
+    type(pip, 'pop-out, its save fails');
+    pipWindow.fire('pagehide');
+    await settle();
+    assert.equal(env.get('pageEditors').size, 2);
+    // A part's Reload asks the open editors, and the tab controller dropped the pop-out at its close
+    assert.equal(await runUntil(env, main.flushSave({ quiet: true })), true);
+    env.window.fire('pagehide', { persisted: false });
+    assert.deepEqual(draftsOf(env).map((draft) => draft.noteId), ['C']);
   });
 });
 

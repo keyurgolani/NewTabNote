@@ -23,6 +23,7 @@ import {
   recoveredIdOf,
 } from '../core/domain/close-draft-keys.js';
 import { systemClock } from '../core/ports/runtime.js';
+import { closeDraftWriter } from './close-draft-writer.js';
 import { applyingCloseDrafts, holdsKeys, pageDrafts } from './close-drafts.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
@@ -48,6 +49,16 @@ import { startIndexer } from './workers.js';
 /** @typedef {import('./removal.js').RemovalPorts} RemovalPorts */
 /** @typedef {import('./storage-facade.js').StorageFacade} StorageFacade */
 /** @typedef {import('./close-drafts.js').Applier} Applier */
+/**
+ * The new tab's applier: the one every page has, and the toasts' reads, which a test's applier
+ * may leave out, and then the new tab tells nothing
+ * @typedef {Applier & Partial<Pick<typeof import('../core/application/close-drafts.js'), 'untoldToasts'>>} NewTabApplier
+ */
+/**
+ * The new tab's client: the one applyingCloseDrafts answers, and the toasts for what its apply
+ * took from the untold lists, none when there was nothing to tell
+ * @typedef {ReturnType<typeof applyingCloseDrafts> & {closeDraftToasts: () => Promise<string[]>}} NewTabPageClient
+ */
 /** @typedef {import('../core/application/close-drafts.js').DraftStorage} DraftStorage */
 /** @typedef {import('../core/application/close-drafts.js').DraftLocks} DraftLocks */
 /** @typedef {import('../core/application/close-drafts.js').DraftStore} DraftStore */
@@ -428,8 +439,9 @@ export function withCloseDraftClears(client, { storage, locks, load, logger = cl
 
 /**
  * The close-time drafts' applier, the `close-drafts-chunk` chunk, which the new tab imports only
- * when its localStorage gives it work, as Popup and Side Panel do (close-drafts.js)
- * @returns {Promise<Applier>}
+ * when its localStorage gives it work, as Popup and Side Panel do (close-drafts.js), with the
+ * reads its toasts make
+ * @returns {Promise<NewTabApplier>}
  */
 const loadCloseDrafts = () => import('../core/application/close-drafts-chunk.js');
 
@@ -441,11 +453,13 @@ const loadCloseDrafts = () => import('../core/application/close-drafts-chunk.js'
  * so the note list's first read and App's start come after them (#33). Like Popup and Side Panel,
  * the new tab loads the applier only when its localStorage holds a draft, 1.4.3's catch-up key
  * or an untold list, which it reads for its toasts (holdsNewTabWork), so its start loads none of
- * it (#147's heap, the lead's call).
+ * it (#147's heap, the lead's call). Its apply also takes both untold lists, under the drafts'
+ * lock, so of two new tabs starting together one tells each entry (Q-B7), and
+ * `closeDraftToasts` answers the toasts for what they held once the apply is done (V3).
  * @param {IndexedDbAdapter} adapter
- * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<Applier>}} [page]
+ * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<NewTabApplier>}} [page]
  *   the page's drafts and its wake, from its globals, and the applier's load
- * @returns {ReturnType<typeof applyingCloseDrafts>}
+ * @returns {NewTabPageClient}
  */
 export function createNewTabPageClient(
   adapter,
@@ -456,21 +470,55 @@ export function createNewTabPageClient(
     locks: drafts.locks,
     load,
   });
-  return applyingCloseDrafts(client, drafts, { load, holds: holdsNewTabWork });
+  /** @type {NewTabApplier | null} The applier the apply loaded, which the toasts' reads come from */
+  let loaded = null;
+  /** @returns {Promise<Applier>} the applier, its apply taking the untold lists too */
+  const telling = async () => {
+    const applier = await load();
+    loaded = applier;
+    return {
+      ...applier,
+      applyCloseDrafts: options => applier.applyCloseDrafts({ ...options, tell: true }),
+    };
+  };
+  const page = applyingCloseDrafts(client, drafts, { load: telling, holds: holdsNewTabWork });
+  return Object.freeze({
+    ...page,
+    async closeDraftToasts() {
+      const result = await page.applied();
+      const untoldToasts = loaded && loaded.untoldToasts;
+      if (!result || !result.told || !untoldToasts) return [];
+      /** @param {string} noteId */
+      const noteOf = async noteId => {
+        const state = await client.query({ type: 'getNote', noteId });
+        return state.kind === 'ready' ? state.data.note : null;
+      };
+      try {
+        return await untoldToasts({ noteOf, told: result.told });
+      } catch (error) {
+        clearLogger.warn('close-draft-toasts-not-read', { error });
+        return [];
+      }
+    },
+  });
 }
 
 /**
  * The document client the new tab's editors read and write through, on `kernel`. Before the
  * adapter's connection closes for another context's upgrade, it has them write what they have
- * pending, so typing from the last half second isn't lost.
+ * pending, so typing from the last half second isn't lost. At the page's own close, they write
+ * each edit they haven't seen commit as a close-time draft, through the writer on the page's
+ * localStorage (close-draft-writer.js, #33), which the next start applies.
  * @param {Client} kernel
  * @param {Pick<IndexedDbAdapter, 'beforeClose' | 'openState'>} adapter - the one the kernel was built on
+ * @param {{storage?: DraftStorage | undefined}} [page] - the page's localStorage, from its globals
  * @returns {DocumentClient}
  */
-export function createNewTabDocumentClient(kernel, adapter) {
+export function createNewTabDocumentClient(kernel, adapter, { storage = pageDrafts().storage } = {}) {
   return createDocumentClient(kernel, {
     beforeConnectionCloses: flush => adapter.beforeClose(flush),
     connectionOpen: () => adapter.openState() === 'open',
+    closeDrafts: closeDraftWriter({ storage, newId: () => kernel.ids.next() }),
   });
 }
 

@@ -44,7 +44,7 @@
 import { isId, isRecord } from '../contracts/checks.js';
 import { committed, rejected } from '../contracts/outcomes.js';
 import { CATCH_UP_KEY, DRAFTS_LOCK, DRAFT_PREFIX, SAVED_UNTOLD_KEY, UNTOLD_KEY } from '../domain/close-draft-keys.js';
-import { decide, isCloseDraft, recoveredIdOf } from '../domain/close-draft.js';
+import { decide, isCloseDraft, recoveredIdOf, titleOf } from '../domain/close-draft.js';
 import {
   inBlockOrder,
   linkTargets,
@@ -52,7 +52,7 @@ import {
   noteSaveMetadata,
   trashRetentionDays,
 } from '../domain/note.js';
-import { recoveredNote } from '../domain/recovered-note.js';
+import { TEXT, recoveredNote } from '../domain/recovered-note.js';
 import { zoneOf } from '../ports/runtime.js';
 import { unitsWork } from './work.js';
 
@@ -257,6 +257,14 @@ export const closeDraftCommands = {
  *   of them is, and their untold entries, as a note's, its recovered note's, or its original's
  * @property {() => void} clearAll - every draft and list here, and 1.4.3's catch-up key, for a Reset
  * @property {() => unknown} takeCatchUp - 1.4.3's catch-up key's value, read, then removed
+ * @property {() => boolean} hasUntold - whether either untold list is stored
+ * @property {() => Told} takeUntold - both untold lists' entries, read, then removed
+ */
+
+/**
+ * What the untold lists held for the new tab's toasts: each recovered note no new tab told about
+ * yet, with its original, and each note in the Trash a draft was saved into (V3)
+ * @typedef {{recovered: Array<{id: string, of: string}>, savedInTrash: Array<{id: string}>}} Told
  */
 
 /**
@@ -373,6 +381,24 @@ export function closeDraftStore(storage) {
       remove(CATCH_UP_KEY);
       return value;
     },
+    hasUntold() {
+      try {
+        const store = /** @type {DraftStorage} */ (storage);
+        return store.getItem(UNTOLD_KEY) !== null || store.getItem(SAVED_UNTOLD_KEY) !== null;
+      } catch {
+        return false;
+      }
+    },
+    takeUntold() {
+      /** @type {Told} */
+      const told = {
+        recovered: /** @type {Array<{id: string, of: string}>} */ (entries(UNTOLD_KEY, ['id', 'of'])),
+        savedInTrash: /** @type {Array<{id: string}>} */ (entries(SAVED_UNTOLD_KEY, ['id'])),
+      };
+      remove(UNTOLD_KEY);
+      remove(SAVED_UNTOLD_KEY);
+      return told;
+    },
   });
 }
 
@@ -387,6 +413,8 @@ export function closeDraftStore(storage) {
  * @property {string[]} gone - deleted for good since
  * @property {string[]} kept - not applied at this start, so the draft stays for the next
  * @property {unknown} catchUp - what 1.4.3's catch-up key held, null when it held nothing
+ * @property {Told} [told] - the new tab's apply alone (`tell`): what the untold lists held, which
+ *   it took, so this tab tells it and no other does
  */
 
 /** @returns {ApplyResult} */
@@ -407,15 +435,17 @@ const nothingApplied = () => ({
  * commit stays for the next start: storage that was unavailable, a connection the worker's
  * upgrade closed, or a refusal, which is logged by its code, never the draft. Each recovered
  * note goes on the list the next new tab's toast tells, whichever page made it, and each note in
- * the Trash a draft was saved into on its own list (V3).
- * @param {{client: DraftClient, store: DraftStore, locks?: DraftLocks | null, logger?: {warn: (event: string, detail: Record<string, unknown>) => void}}} options
+ * the Trash a draft was saved into on its own list (V3). With `tell`, the new tab's, it then
+ * takes both lists, still under the lock, so of two new tabs starting together only one tells
+ * each entry (Q-B7), and it takes the lock for a list alone too.
+ * @param {{client: DraftClient, store: DraftStore, locks?: DraftLocks | null, logger?: {warn: (event: string, detail: Record<string, unknown>) => void}, tell?: boolean}} options
  * @returns {Promise<ApplyResult>}
  */
-export async function applyCloseDrafts({ client, store, locks = null, logger }) {
+export async function applyCloseDrafts({ client, store, locks = null, logger, tell = false }) {
   const result = nothingApplied();
   result.catchUp = store.takeCatchUp();
-  // Nearly every start: no draft, so no lock and no command
-  if (!store.has()) return result;
+  // Nearly every start: no draft and nothing to tell, so no lock and no command
+  if (!store.has() && !(tell && store.hasUntold())) return result;
   const run = async () => {
     for (const { key, draft } of store.list()) {
       // A delete for good may have cleared it since the list, and then the delete wins
@@ -442,8 +472,45 @@ export async function applyCloseDrafts({ client, store, locks = null, logger }) 
       else result.dropped.push(noteId);
       store.remove(key);
     }
+    if (tell) result.told = store.takeUntold();
     return result;
   };
   return locks ? locks.request(DRAFTS_LOCK, { mode: 'exclusive' }, run) : run();
+}
+
+/**
+ * The new tab's toasts for what `told` holds (V3, R0's tellRecoveredNotes): the recovered-note
+ * toast first, then the Trash one, each only when it counts a note. A recovered note counts
+ * while it and its original both exist, and the toast says both are in Archive or the Trash only
+ * when both are. A note a draft was saved into counts while it's in the Trash, so one deleted for
+ * good since (#147's D2), or no longer in the Trash, shows nothing (Q-B6). The new tab's root
+ * reads each note (`noteOf`), so this chunk, which Popup and Side Panel load too, sends nothing
+ * their tables don't hold.
+ * @param {{noteOf: (noteId: string) => Promise<NoteRecord | null>, told: Told}} options
+ * @returns {Promise<string[]>} each toast's words, in order
+ */
+export async function untoldToasts({ noteOf, told }) {
+  /** @type {Array<{title: string, archived: boolean, trashed: boolean}>} */
+  const recovered = [];
+  for (const { id, of } of told.recovered) {
+    const note = await noteOf(id);
+    const original = note ? await noteOf(of) : null;
+    if (!note || !original) continue;
+    recovered.push({
+      title: titleOf(original),
+      archived: Boolean(note.archived && original.archived),
+      trashed: Boolean(note.trashed && original.trashed),
+    });
+  }
+  /** @type {string[]} */
+  const inTrash = [];
+  for (const { id } of told.savedInTrash) {
+    const note = await noteOf(id);
+    if (note && note.trashed) inTrash.push(titleOf(note));
+  }
+  return [
+    ...(recovered.length > 0 ? [TEXT.recovered(recovered)] : []),
+    ...(inTrash.length > 0 ? [TEXT.savedInTrash(inTrash)] : []),
+  ];
 }
 

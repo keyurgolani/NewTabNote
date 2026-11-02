@@ -1919,11 +1919,11 @@ body.focus-mode .block:focus-within {
   background: var(--text-muted);
 }
 
-/* Toast */
+/* Toast: above the AI chat's button and clear of its input row, in every state (V4) */
 .toast-container {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  bottom: 92px;
+  right: 24px;
   z-index: 2000;
 }
 

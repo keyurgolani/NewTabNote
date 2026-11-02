@@ -43,9 +43,15 @@ import { systemClock, zoneOf } from '../core/ports/runtime.js';
 
 /**
  * @typedef {object} DocumentClient
- * @property {(noteId: string) => Promise<{note: NoteRecord, blocks: BlockRecord[]} | null>} openNote
- *   The note and its blocks in note order, or null when the note isn't stored
- * @property {(save: Fields<'saveNoteContent'>) => Promise<Outcome>} saveContent
+ * @property {(noteId: string) => Promise<{note: NoteRecord, blocks: BlockRecord[], revision: number | null} | null>} openNote
+ *   The note, its blocks in note order, and its content revision as getNote read it (null on an
+ *   adapter that gives none), or null when the note isn't stored
+ * @property {(save: Fields<'saveNoteContent'>, options?: {commandId?: string}) => Promise<Outcome>} saveContent
+ *   A save, under `commandId` when the editor gives one: its closing save shares its id with
+ *   the close-time draft it wrote for the same edit (#33)
+ * @property {import('./close-draft-writer.js').CloseDraftWriter | null} closeDrafts
+ *   Where the editors write their close-time drafts at the page's own close (#33), or null on a
+ *   page that keeps none
  * @property {(noteId: string, blockIds: string[]) => Promise<Outcome>} deleteBlocks
  * @property {(note: Fields<'createNote'>) => Promise<Outcome>} createNote
  *   A new note, under the id in `noteId` (newId), with its first blocks, in one unit
@@ -125,9 +131,11 @@ import { systemClock, zoneOf } from '../core/ports/runtime.js';
  *   connectionOpen?: DocumentClient['connectionOpen'],
  *   now?: () => number,
  *   zone?: () => string,
+ *   closeDrafts?: DocumentClient['closeDrafts'],
  * }} [connection] What the page's connection runs before it closes for another context's
- *   upgrade, and whether it's open, and the page's clock and zone, which decide today's Daily
- *   Note: the zone the page's kernel keys it in, the host's unless a test names another
+ *   upgrade, and whether it's open, the page's clock and zone, which decide today's Daily
+ *   Note: the zone the page's kernel keys it in, the host's unless a test names another, and
+ *   the page's close-time draft writer, none unless its root gives one
  * @returns {DocumentClient}
  */
 export function createDocumentClient(
@@ -137,6 +145,7 @@ export function createDocumentClient(
     connectionOpen = () => true,
     now = () => Date.now(),
     zone = () => zoneOf(systemClock),
+    closeDrafts = null,
   } = {},
 ) {
   /**
@@ -161,10 +170,12 @@ export function createDocumentClient(
     async openNote(noteId) {
       const found = await read({ type: 'getNote', noteId }, null);
       if (!found) return null;
-      return { note: found.note, blocks: await read({ type: 'getNoteBlocks', noteId }, []) };
+      const revision = typeof found.revision === 'number' ? found.revision : null;
+      return { note: found.note, blocks: await read({ type: 'getNoteBlocks', noteId }, []), revision };
     },
 
-    saveContent: save => client.execute({ ...save, type: 'saveNoteContent', commandId: client.ids.next() }),
+    saveContent: (save, { commandId } = {}) =>
+      client.execute({ ...save, type: 'saveNoteContent', commandId: commandId || client.ids.next() }),
 
     deleteBlocks: (noteId, blockIds) =>
       client.execute({ type: 'deleteBlocks', commandId: client.ids.next(), noteId, blockIds }),
@@ -319,5 +330,7 @@ export function createDocumentClient(
     beforeConnectionCloses,
 
     connectionOpen,
+
+    closeDrafts,
   });
 }

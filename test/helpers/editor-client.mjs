@@ -5,6 +5,7 @@
 // 4b). test/helpers/legacy-env.js loads it into the page with test/helpers/page-module.js, so
 // the kernel runs in the page as it does in Chrome.
 
+import { closeDraftWriter } from '../../js/kernel/composition/close-draft-writer.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { chromeSettingsChanges, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import {
@@ -85,7 +86,13 @@ export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pa
   }
   return {
     kernel: client,
-    documentClient: createDocumentClient(client, { ...(pageNow ? { now: pageNow } : {}), zone: zoneNow }),
+    // Its editors write their close-time drafts to the page's localStorage, as the new tab's
+    // root has them do (newtab.js, createNewTabDocumentClient, #33)
+    documentClient: createDocumentClient(client, {
+      ...(pageNow ? { now: pageNow } : {}),
+      zone: zoneNow,
+      closeDrafts: closeDraftWriter({ storage: /** @type {any} */ (globalThis).localStorage, newId: () => client.ids.next() }),
+    }),
     noteList,
     removalFor: ports => createNoteRemoval(client, { ...ports, settled: () => noteList.settled() }),
     // It hears of settings changes as the new tab's does, from chrome.storage.onChanged (#17 PR 4a)

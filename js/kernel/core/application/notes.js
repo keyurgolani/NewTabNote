@@ -659,11 +659,13 @@ export const noteCommands = {
       titleOrigin = 'typed',
       linkedNames,
       expectedRevision,
+      deriveFromStored,
     } = command;
     if (!isId(noteId) || !isOptionalString(preview) || !isOptionalString(name)) return invalid();
     if (titleOrigin !== 'typed' && titleOrigin !== 'generated') return invalid();
     if (linkedNames !== undefined && !isStringList(linkedNames)) return invalid();
     if (!isOptionalVersion(expectedRevision)) return invalid();
+    if (deriveFromStored !== undefined && deriveFromStored !== true) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     const now = clock.now();
@@ -685,9 +687,11 @@ export const noteCommands = {
         const stored = records.map(block => tx.getKey('blocks', block.id));
         for (const read of [own, ...stored]) read.catch(() => undefined);
         // Without an expected revision, the block puts go out before anything is awaited, as in
-        // Storage.saveNoteWithBlocks, so a page-hide flush still stores them if the page goes
-        // before the read returns. With one, the revision is checked first, so a conflict
-        // writes nothing of the save (ports/repository.js, WriteScope).
+        // Storage.saveNoteWithBlocks. That doesn't keep them when the page goes: Chrome aborts a
+        // transaction a closing page hasn't committed, puts and all, which is why a closing page
+        // also writes a close-time draft (#33). With an
+        // expected revision, the revision is checked first, so a conflict writes nothing of the
+        // save (ports/repository.js, WriteScope).
         const checked = expectedRevision !== undefined;
         if (!checked) for (const block of records) tx.put('blocks', block);
         const note = await tx.get('notes', noteId);
@@ -705,8 +709,19 @@ export const noteCommands = {
         if (checked) for (const block of records) tx.put('blocks', block);
         /** @type {NoteRecord} */
         const next = { ...note, updatedAt: now };
-        if (preview !== undefined) next.preview = preview;
-        if (todoProgress !== undefined) next.todoProgress = todoProgress;
+        if (deriveFromStored) {
+          // A save of only some of the note's blocks (the editor's closing write, #33): its preview
+          // and to-do progress come from the note's blocks once its puts are in, in note order, as
+          // insertBlocks derives them, not from a page whose copy of the rest may be stale
+          const putIds = new Set(records.map(block => block.id));
+          const after = [...(await own).filter(block => !putIds.has(block.id)), ...records];
+          const derived = noteSaveMetadata(inBlockOrder(after));
+          next.preview = derived.preview;
+          next.todoProgress = derived.todoProgress;
+        } else {
+          if (preview !== undefined) next.preview = preview;
+          if (todoProgress !== undefined) next.todoProgress = todoProgress;
+        }
         // A title goes in with the blocks, as 1.4.x's editor save wrote it: a typed one marked as
         // set by hand, as the editor marked it when the user typed it, and one the AI made with
         // the time it was made, as BlockEditor.setTitleProgrammatically stamped it. A generated
