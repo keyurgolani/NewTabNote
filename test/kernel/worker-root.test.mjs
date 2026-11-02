@@ -176,6 +176,67 @@ describe("the worker's composition root", () => {
   });
 });
 
+describe("what the coordinator reads while the run upgrades (#35 slice 2)", () => {
+  /**
+   * A space estimate the test lets answer: the run asks it right after it measures the stores
+   * for its point, and waits there until `release`
+   */
+  const heldEstimate = () => {
+    /** @type {() => void} */
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    const asked = { count: 0 };
+    return {
+      estimate: async () => {
+        asked.count++;
+        await gate;
+        return ROOMY();
+      },
+      asked,
+      release: () => release(),
+    };
+  };
+
+  it("migration.upgrading() is true while the run upgrades a 1.4.x database, and false once the attempt is in", async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const held = heldEstimate();
+    const worker = createWorkerClient(hostOf(of, { estimate: held.estimate }));
+    await legacyEnv.waitFor(() => held.asked.count > 0, { withinMs: 10_000, message: 'the space check' });
+    assert.equal(worker.migration.upgrading(), true);
+    assert.equal(worker.migration.blocked(), false);
+    held.release();
+    assert.equal((await worker.migration.done).status, 'migrated');
+    assert.equal(worker.migration.upgrading(), false);
+    assert.equal(await worker.whenReady(), null);
+  });
+
+  it("is false for a database at this build's version, and for a newer one the run refuses while it makes its point", async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    await createWorkerClient(hostOf(of)).migration.done;
+    const current = createWorkerClient(hostOf(of));
+    /** @type {Set<boolean>} */
+    const seen = new Set([current.migration.upgrading()]);
+    const sample = setInterval(() => seen.add(current.migration.upgrading()), 1);
+    try {
+      assert.equal((await current.migration.done).status, 'current');
+    } finally {
+      clearInterval(sample);
+    }
+    seen.add(current.migration.upgrading());
+    assert.deepEqual([...seen], [false]);
+
+    const newer = await profileWith(/** @type {any} */ (FIXTURES.get('v9.newer')));
+    const held = heldEstimate();
+    const refused = createWorkerClient(hostOf(newer, { estimate: held.estimate }));
+    await legacyEnv.waitFor(() => held.asked.count > 0, { withinMs: 10_000, message: "the newer database's point" });
+    assert.equal(refused.migration.upgrading(), false);
+    held.release();
+    assert.equal((await refused.migration.done).status, 'refused');
+  });
+});
+
 describe('a run that stands is one this build ran', () => {
   it('an update tries at once, past a run of the build before that stopped short of space', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));

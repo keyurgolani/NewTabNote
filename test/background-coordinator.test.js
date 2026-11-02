@@ -242,6 +242,55 @@ describe("the coordinator's welcome", () => {
   });
 });
 
+describe("the coordinator while its run upgrades a 1.4.x database (#35 slice 2)", () => {
+  it('welcomes a hello as migrating while the run upgrades: at the cap for the hello that starts it, at once after, and ready once the run is in', async () => {
+    /** @type {() => void} */
+    let release = () => {};
+    const roomy = new Promise((resolve) => {
+      release = () => resolve({ quota: 10 * 1024 ** 3, usage: 1024 ** 2 });
+    });
+    const asked = { count: 0 };
+    const worker = await loadBackground({
+      start: false,
+      setup: async (env) => {
+        await createDatabase(env.indexedDB, { records: { canvases: [note('n1')] } });
+        // The run asks it right after it measures the stores for its point, and waits there
+        env.global.navigator.storage = {
+          estimate: () => {
+            asked.count++;
+            return roomy;
+          },
+        };
+      },
+    });
+    const first = pagePort();
+    await worker.dispatch('runtime.onConnect', first.port);
+    first.hello('session-1');
+    await worker.drain();
+    assert.equal(asked.count, 1, 'the run reached its space check');
+    assert.deepEqual(first.received, [], 'its welcome is held');
+    worker.env.clock.tick(limits.WELCOME_WAIT_MS);
+    await worker.drain();
+    const held = first.received.find((frame) => frame.frame === 'welcome');
+    assert.deepEqual(held && [held.status, held.reason], ['degraded', 'migrating']);
+    // A hello during the run isn't held: the coordinator isn't starting, it's migrating
+    assert.deepEqual(await welcomeOf(worker, 'session-2'), { status: 'degraded', reason: 'migrating' });
+    release();
+    // The run checks its point with Web Crypto, which drain() doesn't wait for, so from here
+    // this waits in real time, as the blocked upgrade's cases do
+    const upgrade = await worker.env.global.storageUpgrade;
+    assert.equal(upgrade && upgrade.status, 'migrated');
+    const after = pagePort();
+    await worker.dispatch('runtime.onConnect', after.port);
+    after.hello('session-3');
+    const welcome = await waitFor(() => after.received.find((frame) => frame.frame === 'welcome'), {
+      withinMs: 10_000,
+      message: 'the welcome once the run is in',
+    });
+    assert.deepEqual([welcome.status, welcome.reason], ['ready', undefined]);
+  });
+});
+
 describe("the coordinator's health (system.coordinatorHealth)", () => {
   it("answers a page with what its welcome says, when its start began, and the commands it ran by outcome", async () => {
     const worker = await loadBackground();
@@ -268,6 +317,7 @@ describe("the coordinator's health (system.coordinatorHealth)", () => {
       coordinatorId: welcome.coordinatorId,
       commands: [{ outcome: 'committed', count: 1 }],
       oldestOrphanedEntryAt: null,
+      migration: null,
     });
   });
 });
