@@ -246,7 +246,9 @@ for (const [refused, what] of [['read', "can't read whether the switch-off ran"]
     await page.waitForFunction(() => window.__ntnAppInit !== undefined, null, { timeout: 30_000 });
     await page.evaluate(() => window.__ntnAppInit);
     await expect(page.locator('#app h2', { hasText: 'Failed to initialize' }), 'the error state').toBeVisible();
-    expect(await page.evaluate(() => Boolean(window.app && window.app.notesManager)), 'a NotesManager').toBe(false);
+    // The sidebar's controller is the first one App builds, so neither it nor the NotesManager means none
+    expect(await page.evaluate(() => [Boolean(window.app && window.app.sidebarController), Boolean(window.app && window.app.notesManager)]), 'the first controller, and a NotesManager')
+      .toEqual([false, false]);
     await page.waitForTimeout(3000);
     expect(toProvider(await requests.stop()), 'requests to the provider').toEqual([]);
     expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled', 'backgroundJobsOffOnce']), 'both jobs as stored, and no marker')
