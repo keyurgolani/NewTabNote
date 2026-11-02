@@ -4,8 +4,9 @@
 // editor keeps what decode found: a block this build doesn't fully read (from a newer version,
 // of a type it doesn't have, or with stored data it can't read) is written back as it was
 // loaded, and a known block keeps every field its type doesn't own, through saves, undo and
-// redo, a delete and its undo, and Export JSON and Import. Every known block a save writes says
-// its version, and a load writes nothing. Elements are compared by small fields, never whole.
+// redo, a delete and its undo, Export JSON and Import, version history and Save as a new note.
+// Every known block a save writes says its version, and a load writes nothing. Elements are
+// compared by small fields, never whole.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -55,6 +56,19 @@ const stored = async env => recordsOf(await dumpDatabase(env.indexedDB), 'elemen
 
 /** A block without the fields an import gives anew: its id, note and times */
 const withoutNewFields = ({ id, canvasId, createdAt, updatedAt, ...rest }) => rest;
+
+/** A block without the fields Save as a new note gives anew: its id and note */
+const withoutIds = ({ id, canvasId, ...rest }) => rest;
+
+/**
+ * A block as a snapshot holds it: a known one as it serializes, without the note and the place
+ * a save gives it, and every other one as it was loaded
+ */
+const inSnapshotAs = record => {
+  if (!KNOWN.has(record.id)) return record;
+  const { canvasId, order, ...rest } = savedAs(record);
+  return rest;
+};
 
 /** Each stored block of `noteId`, in note order, without the fields an import gives anew */
 async function storedOf(env, noteId) {
@@ -170,6 +184,42 @@ describe('the opaque rule in load and save (#14 slice 3)', () => {
     await runUntil(env, editor.loadNote(copyId));
     await runUntil(env, editor.save());
     assert.deepEqual(await storedOf(env, copyId), EXPECTED);
+  });
+
+  it('a snapshot holds every block as a save stores it, and a revert to it after they were deleted brings each back so', OPTIONS, async () => {
+    const { env, editor } = await openNote(OPAQUE);
+    Object.assign(editor, { focusBlock() {} });
+    editor._snapshotDirty = true;
+    await runUntil(env, editor._autoSnapshot());
+    const [summary] = await env.documentClient.snapshots('N');
+    const snap = await editor._readSnapshot(summary.id);
+    const inSnap = Object.fromEntries(snap.blocks.map(record => [record.id, record]));
+    for (const record of OPAQUE) assert.deepEqual(plain(inSnap[record.id]), plain(inSnapshotAs(record)), `${record.id} in the snapshot`);
+
+    // Every block but the first and the last goes, with a yes to the question, and the revert's
+    env.global.confirmDialog = async () => true;
+    editor.selectedBlockIds = new Set(OPAQUE.slice(1, -1).map(record => record.id));
+    await editor.deleteSelectedBlocks();
+    await runUntil(env, editor.save());
+    assert.deepEqual(Object.keys(await stored(env)).sort(), ['o1', 'o7'], 'deleted');
+
+    await runUntil(env, editor._runRevert(summary));
+    await runUntil(env, editor.save());
+    const after = await stored(env);
+    for (const record of OPAQUE) assert.deepEqual(plain(after[record.id]), plain(savedAs(record)), `${record.id} after the revert`);
+  });
+
+  it('Save as a new note stores every block as a save stores it, each under a new id in the new note', OPTIONS, async () => {
+    const { env, editor } = await openNote(OPAQUE);
+    Object.assign(editor, { focusBlock() {} });
+    await runUntil(env, editor._saveAsNewNote());
+    assert.notEqual(editor.noteId, 'N');
+    const copy = Object.values(await stored(env)).filter(record => record.canvasId === editor.noteId).sort((a, b) => a.order - b.order);
+    assert.equal(copy.length, OPAQUE.length);
+    OPAQUE.forEach((record, i) => {
+      assert.ok(!OPAQUE.some(original => original.id === copy[i].id), `${record.id} under a new id`);
+      assert.deepEqual(plain(withoutIds(copy[i])), plain(withoutIds(savedAs(record))), record.id);
+    });
   });
 });
 
