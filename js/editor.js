@@ -574,6 +574,8 @@ class BlockEditor {
     this.noteId = null;
     this.noteData = null;
     this.blocks = [];
+    // Its close-time draft base goes with it, and the page's saves kept for it alone (R160's S1)
+    this._forgetIdleBases();
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this._contentUndoPending = {};
@@ -4400,13 +4402,7 @@ class BlockEditor {
    */
   _rememberLoaded(records, revision, seq) {
     if (!this._drafts()) return;
-    const holding = new Set([this.noteId, ...this._retryCopies.keys()]);
-    for (const { state } of this._inFlightSaves) holding.add(state.noteId);
-    for (const noteId of [...this._seen.keys()]) {
-      if (holding.has(noteId)) continue;
-      this._seen.delete(noteId);
-      prunePageSaves(noteId);
-    }
+    this._forgetIdleBases();
     const noteId = this.noteId;
     this._seen.set(noteId, {
       seq,
@@ -4416,6 +4412,22 @@ class BlockEditor {
       ...this._baseDigests(noteId, records),
     });
     prunePageSaves(noteId);
+  }
+
+  /**
+   * Forget the base of each note this editor doesn't show and has no save of in flight or
+   * waiting to retry, and the page's saves kept for it alone (#33)
+   * @returns {void}
+   */
+  _forgetIdleBases() {
+    const holding = new Set(this._retryCopies.keys());
+    if (this.noteId) holding.add(this.noteId);
+    for (const { state } of this._inFlightSaves) holding.add(state.noteId);
+    for (const noteId of [...this._seen.keys()]) {
+      if (holding.has(noteId)) continue;
+      this._seen.delete(noteId);
+      prunePageSaves(noteId);
+    }
   }
 
   /**

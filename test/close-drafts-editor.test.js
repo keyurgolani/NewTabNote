@@ -782,6 +782,27 @@ describe("two tabs, and a block stored in a shape the editor doesn't write (R160
   });
 });
 
+describe("the saves a page keeps for a pane that no longer shows the note (R160's S1)", () => {
+  it('split view showed B on the right, then closed keeping B on the left: none of the 40 saves the left pane makes of B is kept for the right one', async () => {
+    const env = await setup();
+    const main = makeEditor(env);
+    await main.loadNote('A');
+    const secondary = makeEditor(env);
+    await secondary.loadNote('B');
+    // Split view closes with the right pane's note kept: the right pane shows no note, the left one B
+    assert.equal(await runUntil(env, secondary.unload()), true);
+    assert.equal(secondary._seen.size, 0, 'the right pane holds no base');
+    await main.loadNote('B');
+    const ROUNDS = 40;
+    for (let round = 1; round <= ROUNDS; round += 1) {
+      type(main, `bravo, round ${round}`, 0);
+      assert.equal(await runUntil(env, main.flushSave()), true);
+    }
+    const held = env.get('pageSaves').get('B') || [];
+    assert.equal(held.length, 0, `the page kept ${held.length} of ${ROUNDS} saves of B`);
+  });
+});
+
 describe('the writer and saveOpenEditors (#129)', () => {
   it('a reload forced past a failed save, the edit unstored, brings the edit back at the next start', async () => {
     const env = await setup();
