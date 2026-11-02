@@ -738,11 +738,17 @@ describe("a note opened with no blocks, which the editor shows with one empty bl
 });
 
 describe("two tabs, and a block stored in a shape the editor doesn't write (R160's N1)", () => {
-  /** Note D, whose d1 holds a field the editor's serialize() leaves out, as a 1.4.x record or a capture can, open in two tabs */
+  /**
+   * Note D, open in two tabs, whose d1 is stored as a capture is: its text and its source, with
+   * none of the fields every block has that the editor's serialize() fills in (indentLevel,
+   * checked, imageUrl, calloutIcon). A field the record holds beyond those, its source here, the
+   * editor writes back as loaded since #14 slice 3, so only a filled-in field tells its copy apart.
+   */
   async function twoTabsOnD() {
+    const capture = { id: 'd1', canvasId: 'D', order: 0, type: 'text', content: 'delta', source: 'https://example.test/', createdAt: 1700000000000, updatedAt: 1700000000000 };
     const env = await setup({
       notes: [note('D', { name: 'Delta' })],
-      blocks: [block('d1', 'D', 0, 'delta', { legacyField: 'kept' }), block('d2', 'D', 1, 'delta two')],
+      blocks: [capture, block('d2', 'D', 1, 'delta two')],
     });
     const closing = makeEditor(env);
     await closing.loadNote('D');
@@ -757,7 +763,9 @@ describe("two tabs, and a block stored in a shape the editor doesn't write (R160
     // The other tab edits d2, and its whole save puts d1 back as the editor writes it
     type(otherEditor, 'delta two, from the other tab', 1);
     assert.equal(await runUntil(other, otherEditor.flushSave()), true);
-    assert.equal((await storedRows(env)).blocks.d1.legacyField, undefined, 'd1 is stored as the editor writes it now');
+    const resaved = (await storedRows(env)).blocks.d1;
+    assert.equal(resaved.indentLevel, 0, 'd1 is stored as the editor writes it now, with the fields it fills in');
+    assert.equal(resaved.source, 'https://example.test/', 'and with its source as loaded');
     watchSaves(env, { hold: closingSave });
     type(closing, 'delta, from the closing tab', 0);
     closePage(env);
