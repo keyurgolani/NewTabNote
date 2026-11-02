@@ -1395,13 +1395,13 @@ class BlockEditor {
 
   /**
    * Whether `block`'s text is all it holds, so a merge that takes its text and deletes it loses
-   * nothing (#14 slice 3): turning it into text would remove and move nothing, and it carries no
-   * field its type doesn't own
+   * nothing (#14 slice 3): turning it into text would remove and move nothing, it carries no
+   * field its type doesn't own, and its imageUrl holds no image
    * @param {Block} block
    * @returns {boolean}
    */
   _holdsOnlyText(block) {
-    if (block.kept) return false;
+    if (block.kept || globalThis.BlockProjections.holdsImage(block.imageUrl)) return false;
     const asText = this._conversionOf(block, 'text');
     return asText !== null && asText.removes.length === 0 && asText.after.length === 0;
   }
@@ -1528,8 +1528,7 @@ class BlockEditor {
     const noteId = this.noteId;
     const focused = this.doc.activeElement;
     if (!(await this._confirmTurn([conversion], newType))) {
-      // Cancel puts the caret back in the block it was in, so typing goes on there
-      if (focused && this.container.contains(focused) && typeof focused.focus === 'function') focused.focus();
+      this._focusAfterCancel(focused, [blockId]);
       return false;
     }
     // The note and the block it asked about are still the ones on screen
@@ -1569,6 +1568,30 @@ class BlockEditor {
     this.renderBlocks();
     this.scheduleSave();
     return true;
+  }
+
+  /**
+   * Put focus back after a question's Cancel (#14 slice 3): where it was in this note, so typing
+   * goes on there, or else, when the question came from outside the note (a block's menu, a
+   * selection), in the first of `blockIds` that takes it, its text or a table's first cell. A
+   * card takes none.
+   * @param {Element | null} focused - what had focus when the question opened
+   * @param {string[]} blockIds - the blocks the question was about, in note order
+   */
+  _focusAfterCancel(focused, blockIds) {
+    const back = /** @type {HTMLElement | null} */ (focused);
+    if (back && this.container.contains(back) && typeof back.focus === 'function') {
+      back.focus();
+      return;
+    }
+    for (const id of blockIds) {
+      const el = this.getBlockElement(id);
+      const target = /** @type {HTMLElement | null} */ (el ? el.querySelector('.block-content, td, th') : null);
+      if (target) {
+        target.focus();
+        return;
+      }
+    }
   }
 
   /**
@@ -2259,6 +2282,10 @@ class BlockEditor {
 
     const block = this.getBlockById(blockEl.dataset.id);
     if (!block) return;
+
+    // With blocks selected, Backspace and Delete delete the selection (onGlobalKeyDown, Req
+    // 13.4), so the block they're pressed in leaves them alone (#14 slice 3)
+    if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds && this.selectedBlockIds.size > 0) return;
 
     const content = blockEl.querySelector('.block-content');
 
@@ -5128,7 +5155,12 @@ class BlockEditor {
     const safe = selected.filter(b => b.safeState()).length;
     if (safe > 0) {
       const noteId = this.noteId;
-      if (!(await this._confirmDeleteUnseen(selected.length, safe))) return;
+      const focused = this.doc.activeElement;
+      if (!(await this._confirmDeleteUnseen(selected.length, safe))) {
+        // The selection stays, for another try
+        this._focusAfterCancel(focused, selected.map(b => b.id));
+        return;
+      }
       // The note it asked about is still the one on screen
       if (noteId !== this.noteId) return;
       for (const id of idsToDelete) if (!this.getBlockById(id)) idsToDelete.delete(id);
@@ -5255,9 +5287,11 @@ class BlockEditor {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         submenu.remove();
-        // One question for all of them, and one undo entry (#14 slice 3); the selection stays
-        // until it's answered
-        this.turnSelectionInto([...this.selectedBlockIds], type).then(() => this.clearBlockSelection());
+        // One question for all of them, and one undo entry (#14 slice 3); only a turn clears the
+        // selection, so Cancel keeps it
+        this.turnSelectionInto([...this.selectedBlockIds], type).then(turned => {
+          if (turned) this.clearBlockSelection();
+        });
       });
 
       submenu.appendChild(item);
