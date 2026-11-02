@@ -5099,7 +5099,7 @@ class BlockEditor {
   /**
    * Delete all selected blocks (Req 13.4). A selection holding a block this build can't show asks
    * first, since nobody can see what such a block holds (#14 slice 3); the rest delete at once,
-   * as before.
+   * as before. One Undo brings them all back, each where it was.
    * @returns {Promise<void>}
    */
   async deleteSelectedBlocks() {
@@ -5120,24 +5120,30 @@ class BlockEditor {
     // Find the index of the first selected block for focus after deletion
     const firstSelectedIdx = this.blocks.findIndex(b => idsToDelete.has(b.id));
 
-    // Record undo entries and delete
-    idsToDelete.forEach(id => {
-      const idx = this.blocks.findIndex(b => b.id === id);
-      if (idx !== -1) {
-        const snapshot = this.snapshotBlock(this.blocks[idx]);
-        snapshot.order = idx;
-        this.pushUndo({ type: 'delete', blockId: id, before: snapshot, after: null });
-      }
-    });
+    // One undo entry for the whole delete (#14 slice 3), its blocks recorded last first, so
+    // undo puts each back where it was, first first
+    /** @type {Array<UndoEntry>} */
+    const entries = [];
+    for (let idx = this.blocks.length - 1; idx >= 0; idx--) {
+      const block = this.blocks[idx];
+      if (!idsToDelete.has(block.id)) continue;
+      const snapshot = this.snapshotBlock(block);
+      snapshot.order = idx;
+      entries.push({ type: 'delete', blockId: block.id, before: snapshot, after: null });
+    }
 
     this.blocks = this.blocks.filter(b => !idsToDelete.has(b.id));
     this._deleteStoredBlocks([...idsToDelete]);
 
-    // Ensure at least one block remains
+    // Ensure at least one block remains, which the same undo takes away again
     if (this.blocks.length === 0) {
       const block = this.createBlock('text');
       this.blocks.push(block);
+      const after = this.snapshotBlock(block);
+      after.order = 0;
+      entries.push({ type: 'add', blockId: block.id, before: null, after });
     }
+    if (entries.length > 0) this.pushUndo(entries.length === 1 ? entries[0] : { type: 'group', entries });
 
     this.clearBlockSelection();
     this.renderBlocks();
