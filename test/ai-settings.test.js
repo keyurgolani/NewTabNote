@@ -435,9 +435,17 @@ describe('an install that ran an earlier version', () => {
   it("when it can't write the switch-off, the command doesn't commit and the switch-off rejects, with both jobs as stored, and the next try turns both off", STEP, async () => {
     const page = await openPage({ chrome: storedSettings(EARLIER) });
     page.chrome.failNextSet();
-    await assert.rejects(() => page.env.settingsClient.turnOffBackgroundJobs(), 'the command does not commit');
+    await assert.rejects(
+      () => page.env.settingsClient.turnOffBackgroundJobs(),
+      (error) => /didn't save turnOffBackgroundJobs/.test(error.message),
+      'the command does not commit',
+    );
     page.chrome.failNextSet();
-    await assert.rejects(() => page.Onboarding.turnBackgroundJobsOffOnce(page.env.settingsClient), 'the switch-off rejects');
+    await assert.rejects(
+      () => page.Onboarding.turnBackgroundJobsOffOnce(page.env.settingsClient),
+      (error) => /didn't save turnOffBackgroundJobs/.test(error.message),
+      'the switch-off rejects with the failed write',
+    );
     await settle(60);
 
     assert.equal(page.chrome.local.setting_autoTitleEnabled, true, 'titles are as stored');
