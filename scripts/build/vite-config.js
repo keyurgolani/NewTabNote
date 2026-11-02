@@ -100,6 +100,7 @@ const STATIC_FILES = Object.freeze([
   'THIRD_PARTY_NOTICES',
   'js/lib/valibot/LICENSE.md',
   'icons/icon16.png',
+  'icons/icon32.png',
   'icons/icon48.png',
   'icons/icon128.png',
 ]);
