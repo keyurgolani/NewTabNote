@@ -135,7 +135,9 @@ import { createScopeCheck } from './scope.js';
  * @property {() => unknown} [settled]
  *   Starts the coordinator, and returns what settles once its start has, a promise or nothing.
  *   A hello welcomed into this major while `status` says degraded `starting` calls it, and its
- *   welcome waits for it, for WELCOME_WAIT_MS at most. Without it, every welcome goes at once.
+ *   welcome waits for it, for WELCOME_WAIT_MS at most. It's called once for each hello held,
+ *   so it must be safe to call again: coordinator.start() shares its first start. Without it,
+ *   every welcome goes at once.
  * @property {SessionHooks} [sessions]
  * @property {Logger} [logger]
  */
