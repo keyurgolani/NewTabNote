@@ -1086,7 +1086,8 @@ body.focus-mode .block:focus-within {
   color: var(--text-muted);
 }
 
-/* Slash Menu */
+/* The slash, link and template menus, in either pane: fixed to the window, where
+   BlockEditor._placeMenu puts them */
 .slash-menu {
   position: fixed;
   background: var(--bg-primary);
@@ -5094,12 +5095,6 @@ body.focus-mode .block:focus-within {
 
 .editor-pane.hidden {
   display: none;
-}
-
-/* Floating menus inside panes */
-.editor-pane .slash-menu {
-  position: absolute;
-  z-index: 1000;
 }
 
 /* Shortcuts Modal Styles */
