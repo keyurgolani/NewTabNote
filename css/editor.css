@@ -409,6 +409,15 @@ body.focus-mode .block:focus-within {
   /* Needed for virtual scroller children positioning */
 }
 
+/* Sidebar folders: a collapsed folder hides what it holds, and its arrow turns */
+.sidebar-folder.collapsed > .sidebar-folder-contents {
+  display: none;
+}
+
+.sidebar-folder.collapsed > .sidebar-folder-header .folder-arrow {
+  transform: rotate(-90deg);
+}
+
 /* Virtual Scroller */
 .virtual-scroller-wrapper {
   transition: height 0.2s ease-out;
