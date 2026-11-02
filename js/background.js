@@ -265,8 +265,9 @@ chrome.runtime.onInstalled.addListener((details) => {
     contexts: ['selection']
   });
 
-  // The menus first, then storage: first-run settings, and after an install or an update the
-  // read-only integrity check (#35)
+  // The menus first, then storage: the run's pending steps, first-run settings, and after an
+  // install or an update the read-only integrity check, once the transforms and the catch-up
+  // are in (#35 slices 1 and 2)
   coordinator.installed(details && details.reason);
 });
 

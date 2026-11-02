@@ -341,6 +341,9 @@ async function record(settings, outcome, stored, now, version, costly) {
  *   that read the stores
  * @property {() => boolean} blocked - whether the run's upgrade waits on another connection now
  * @property {() => boolean} running - whether an attempt is in progress, which the keepalive spans
+ * @property {() => boolean} upgrading
+ *   Whether the latest attempt's run is upgrading the database that was there, blocked or
+ *   not, which #35's coordinator says `migrating` for (slice 2)
  */
 
 /**
@@ -898,6 +901,7 @@ export function createWorkerClient(host = workerHost()) {
       request,
       blocked,
       running: () => settled < attempts,
+      upgrading: () => run !== null && run.upgrading(),
     }),
     transforms: Object.freeze({
       get done() {

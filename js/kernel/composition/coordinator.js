@@ -53,8 +53,15 @@ import { randomIds } from './messaging.js';
 
 /**
  * What a kernel with #17's migration run behind it adds (./background.js's worker client): the
- * latest attempt's end, which the coordinator waits on while the run's upgrade is blocked
- * @typedef {{migration?: {readonly done: Promise<unknown>}}} WithMigration
+ * latest attempt's end, which the coordinator waits on while the run's upgrade is blocked,
+ * whether the run is upgrading now and whether that upgrade is blocked, which its
+ * `migrating` reads (#35 slice 2), and the transforms and the catch-up the attempt starts,
+ * which the integrity check after an install or an update waits for
+ * @typedef {{
+ *   migration?: {readonly done: Promise<unknown>, upgrading?: () => boolean, blocked?: () => boolean},
+ *   transforms?: {readonly done: Promise<unknown>},
+ *   recordsCatchUp?: {readonly done: Promise<unknown>},
+ * }} WithMigration
  */
 
 /**
@@ -71,16 +78,17 @@ import { randomIds } from './messaging.js';
  *   The kernel the worker's own handlers run commands on, which counts each outcome by kind
  * @property {(reason: unknown) => Promise<void>} installed
  *   Starts it for an onInstalled event, and after an install or an update runs the read-only
- *   integrity check once: when the start opens, or while the upgrade is blocked, once the
- *   run's end lets it open
+ *   integrity check once, after the transforms and the catch-up the start set off: when the
+ *   start opens, or while the upgrade is blocked, once the run's end lets it open
  */
 
 /** The reason a welcome gives, and the code every command answers, when the kernel can't be built */
 const UNAVAILABLE = 'coordinator-unavailable';
 
 /**
- * The reason a welcome gives while an older build's open page blocks the run's upgrade (#17 PR
- * 1b), a migration and not a failure, which #20's `coordinator` provider shows as unverified
+ * The reason a welcome gives while the run upgrades the database, and while an older build's
+ * open page blocks that upgrade (#17 PR 1b, #35 slice 2): a migration and not a failure,
+ * which #20's `coordinator` provider shows as unverified
  */
 const MIGRATING = 'migrating';
 
@@ -199,6 +207,7 @@ export function unavailableCoordinator(instanceId) {
       startedAt: null,
       commands: [],
       oldestOrphanedEntryAt: null,
+      migration: null,
     }),
     client: () => client,
     installed: start,
@@ -260,11 +269,20 @@ export function createCoordinator({
   };
 
   /**
-   * The read-only integrity check, on `checking`
+   * The read-only integrity check, on `checking`, once the transforms and the catch-up its
+   * attempt started are in (#35 slice 2), so it reads what they leave
    * @param {Client} checking
    * @returns {Promise<void>}
    */
   const check = async checking => {
+    const { transforms, recordsCatchUp } = /** @type {WithMigration} */ (/** @type {unknown} */ (checking));
+    for (const step of [transforms, recordsCatchUp]) {
+      try {
+        if (step) await step.done;
+      } catch {
+        // A step that failed journals itself, and the check goes on
+      }
+    }
     try {
       await checking.execute({ type: 'runIntegrityCheck', commandId: checking.ids.next() });
     } catch {
@@ -353,9 +371,25 @@ export function createCoordinator({
     return started;
   };
 
+  /**
+   * What the structural run is doing while the coordinator says `migrating` (#35 slice 2):
+   * `running` while it upgrades, `blocked` while an older build's open page holds that
+   * upgrade, and null otherwise
+   * @returns {'running' | 'blocked' | null}
+   */
+  const migrationNow = () => {
+    const run = kernel ? /** @type {WithMigration} */ (/** @type {unknown} */ (kernel)).migration : undefined;
+    if (state === 'degraded' && reason === MIGRATING) {
+      return run && typeof run.blocked === 'function' && !run.blocked() ? 'running' : 'blocked';
+    }
+    if (state === 'starting' && run && typeof run.upgrading === 'function' && run.upgrading()) return 'running';
+    return null;
+  };
+
   /** @returns {CoordinatorStatus} */
   const status = () => {
     if (state === 'ready') return { status: 'ready' };
+    if (migrationNow() !== null) return { status: 'degraded', reason: MIGRATING };
     return { status: 'degraded', reason: state === 'idle' || state === 'starting' ? 'starting' : reason };
   };
 
@@ -373,6 +407,7 @@ export function createCoordinator({
       })),
       // Until #35's journal (slice 3) there are no journal entries to replay
       oldestOrphanedEntryAt: null,
+      migration: migrationNow(),
     }),
     client: () => kernel || unbuilt,
     async installed(installReason) {

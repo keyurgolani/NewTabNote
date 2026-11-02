@@ -92,6 +92,8 @@ export const ERROR_CODES = Object.freeze([
   'version-too-new',
   'write-in-readonly-transaction',
   'write-outside-scope',
+  // #35's coordinator: its run upgrading the database, which the `coordinator` provider reads
+  'migration-running',
   // #17's recovery points (recovery-points.js): a database it refuses, and why a point failed
   // re-verification
   'recovery-unavailable',
