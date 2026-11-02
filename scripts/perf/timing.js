@@ -11,10 +11,15 @@
  *   the editor's text (interaction-ready). The page's own `ntn:interaction-ready` mark is read
  *   too, where the package has one (1.4.0 doesn't).
  * - The driver waits for an editable block in the editor, focuses it, and types one key, so
- *   the time includes how long the driver took to see the editor (`driverMs`, reported). A key
- *   that hasn't echoed after RETYPE_MS (something else took focus, as the 1.4.0 walkthrough does
- *   when it opens) is typed again, after focusing the block again; the run reports how many it
- *   took (`keyTries`).
+ *   the time includes how long the driver took to see the editor (`driverMs`, reported). The
+ *   key is typed again, after focusing the block again, only on the page's own word, once it
+ *   has handled the key: its keydown went outside the editor (something else took focus, as the
+ *   1.4.0 walkthrough does when it opens), or the editor didn't take it in within RETYPE_MS of
+ *   its keydown, or took it in and didn't echo it within LANDED_MS. The run reports how many
+ *   it took (`keyTries`), and for each retype the rule that fired, the element that had the
+ *   keydown, and its times (`retypes`). Timed from the outside, a page too busy to answer in RETYPE_MS looked
+ *   like one that lost the key, and the second key, a second edit, made a second save that
+ *   moved the heap reading by about 0.05 MiB on the stack.
  * - CPU throttling (4x, CDP Emulation.setCPUThrottlingRate) starts once the harness sees the
  *   page, 10 to 27 ms after its document exists in the baseline's runs, the same for every
  *   package, since Playwright can't throttle a page before it has one; `throttledAtMs` says
@@ -44,11 +49,23 @@ const TIMEOUT_MS = 60_000;
 const EDITOR = '#editor-container #blocks-container .block-content[contenteditable="true"]';
 const KEY = 'q';
 /**
- * How long a typed key may take to echo before the driver focuses the block and types again.
- * Short, so a key the page's focus change swallowed costs little; a slow echo of the first key
+ * How long after a key's keydown, on the page's clock, the editor may take before it takes the
+ * key in (its input event) or echoes it, before the driver focuses the block and types again.
+ * Short, so a key a not-yet-ready editor dropped costs little; a slow echo of the first key
  * still counts, at the time it lands.
  */
 const RETYPE_MS = 50;
+/**
+ * How long a key the editor took in may go without its echo before the driver types again. The
+ * echo comes within a few ms of the input on every package this measures, so this only bounds
+ * an editor that drops a key it took.
+ */
+const LANDED_MS = 1000;
+/**
+ * How long the driver waits for the page to say what became of a key. A page busy with its
+ * start answers late but answers; a key that never reached the page at all is typed again.
+ */
+const KEY_WAIT_MS = 5000;
 const MAX_TRIES = 200;
 const MARK = 'ntn:interaction-ready';
 /**
@@ -90,7 +107,40 @@ function probeInit({ editor, key }) {
       probe.savedAt = last;
       return true;
     },
-    /** Focuses the first editable block, caret at its end, and starts watching it */
+    /**
+     * What became of the key this try typed, from the page's own events: when the try began
+     * (focus), when its keydown came, what had it and whether that was the editor, and when the
+     * editor took it in
+     */
+    landing: null,
+    /**
+     * What became of the key, once the page has handled it: `{state: 'echoed'}`; `elsewhere`, a
+     * keydown outside the editor; `lost`, a keydown in the editor that it didn't take in or echo
+     * within `retypeMs`, or took in without an echo within `landedMs`; or null while the page
+     * hasn't had the key yet, or the echo is still due. A retype's answer says which rule fired,
+     * what had the keydown, and its times in ms from the try's focus, on the page's clock.
+     */
+    keyState(retypeMs, landedMs) {
+      if (probe.echoedAt !== null) return { state: 'echoed' };
+      const landing = probe.landing;
+      if (landing === null || landing.keydownAt === null) return null;
+      const now = performance.now();
+      const since = at => (at === null ? null : Math.round((at - landing.focusedAt) * 10) / 10);
+      const said = (state, rule) => ({
+        state,
+        rule,
+        target: landing.target,
+        keydownMs: since(landing.keydownAt),
+        inputMs: since(landing.inputAt),
+        decidedMs: since(now),
+      });
+      if (!landing.inEditor) return said('elsewhere', 'its keydown went outside the editor');
+      if (landing.inputAt !== null) {
+        return now - landing.inputAt >= landedMs ? said('lost', `no echo ${landedMs} ms after the editor took it in`) : null;
+      }
+      return now - landing.keydownAt >= retypeMs ? said('lost', `the editor didn't take it in or echo it ${retypeMs} ms after its keydown`) : null;
+    },
+    /** Focuses the first editable block, caret at its end, and starts watching it and the next key */
     focus() {
       const element = document.querySelector(editor);
       if (!element) return false;
@@ -105,6 +155,7 @@ function probeInit({ editor, key }) {
       }
       const before = count(element);
       probe.target = element;
+      probe.landing = { focusedAt: performance.now(), keydownAt: null, target: null, inEditor: false, inputAt: null };
       new MutationObserver((_, observer) => {
         if (probe.echoedAt === null && count(element) > before) {
           probe.echoedAt = performance.now();
@@ -115,6 +166,34 @@ function probeInit({ editor, key }) {
     },
   };
   Object.defineProperty(window, '__ntnProbe', { value: probe });
+  // The key's keydown and the editor's input, the first of each since the last focus(): times,
+  // and the keydown's element by its tag, id and first class, never its text
+  const inEditor = target => probe.target !== null && target instanceof Node && probe.target.contains(target);
+  const named = target => {
+    if (!(target instanceof Element)) return target instanceof Node ? target.nodeName : String(target);
+    const first = target.classList.length > 0 ? `.${target.classList[0]}` : '';
+    return `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ''}${first}`.slice(0, 80);
+  };
+  window.addEventListener(
+    'keydown',
+    event => {
+      const landing = probe.landing;
+      if (landing === null || landing.keydownAt !== null || event.key !== key) return;
+      landing.keydownAt = performance.now();
+      landing.target = named(event.target);
+      landing.inEditor = inEditor(event.target);
+    },
+    true,
+  );
+  document.addEventListener(
+    'input',
+    event => {
+      const landing = probe.landing;
+      if (landing === null || landing.keydownAt === null || landing.inputAt !== null) return;
+      if (inEditor(event.target)) landing.inputAt = performance.now();
+    },
+    true,
+  );
   const transaction = IDBDatabase.prototype.transaction;
   IDBDatabase.prototype.transaction = function (...args) {
     const made = transaction.apply(this, args);
@@ -133,7 +212,7 @@ function probeInit({ editor, key }) {
 
 /**
  * @param {{dist: string, fixture: object | null, chromium?: any, page?: string}} options
- * @returns {Promise<{interactionReadyMs: number, markMs: number | null, heapBytes: number, saveMs: number | null, driverMs: number, throttledAtMs: number, documentAtMs: number, domContentLoadedMs: number | null, browser: string, keyTries: number}>}
+ * @returns {Promise<{interactionReadyMs: number, markMs: number | null, heapBytes: number, saveMs: number | null, driverMs: number, throttledAtMs: number, documentAtMs: number, domContentLoadedMs: number | null, browser: string, keyTries: number, retypes: Array<{try: number, state: string, rule: string, target?: string | null, keydownMs?: number | null, inputMs?: number | null, decidedMs?: number | null}>}>}
  */
 async function installCold({ dist, fixture, chromium, page: file = 'newtab.html' }) {
   const extension = await launchExtension({ dist, network: 'offline', ...(chromium ? { chromium } : {}) });
@@ -164,17 +243,30 @@ async function installCold({ dist, fixture, chromium, page: file = 'newtab.html'
       { polling: 10, timeout: TIMEOUT_MS },
     );
     // Something on the page may take focus after the driver gave it to the block (the 1.4.0
-    // walkthrough focuses its button as it opens), so a key that doesn't echo is typed again
+    // walkthrough focuses its button as it opens), so a key that went elsewhere, or that the
+    // editor lost, is typed again. The page says which, once it has handled the key: a page busy
+    // with its start answers late, and a late answer is no reason to type a second key. Each
+    // retype's reason goes in the run's `retypes`.
     let tries = 0;
+    /** @type {Array<{try: number, state: string, rule: string, target?: string | null, keydownMs?: number | null, inputMs?: number | null, decidedMs?: number | null}>} */
+    const retypes = [];
     for (;;) {
       tries++;
       await page.evaluate(() => window.__ntnProbe.focus());
       await page.keyboard.type(KEY);
-      const echoed = await page
-        .waitForFunction(() => window.__ntnProbe.echoedAt !== null, null, { polling: 10, timeout: RETYPE_MS })
-        .then(() => true, () => false);
-      if (echoed) break;
-      if (tries >= MAX_TRIES) throw new Error(`no key echoed in the editor after ${tries} tries`);
+      const said = await page
+        .waitForFunction(
+          ({ retypeMs, landedMs }) => window.__ntnProbe.keyState(retypeMs, landedMs),
+          { retypeMs: RETYPE_MS, landedMs: LANDED_MS },
+          { polling: 10, timeout: KEY_WAIT_MS },
+        )
+        .then(
+          handle => handle.jsonValue(),
+          () => ({ state: 'unseen', rule: `the page said nothing of the key in ${KEY_WAIT_MS} ms` }),
+        );
+      if (said.state === 'echoed') break;
+      retypes.push({ try: tries, ...said });
+      if (tries >= MAX_TRIES) throw new Error(`no key echoed in the editor after ${tries} tries (the last ${said.state}: ${said.rule})`);
     }
 
     // The heap once the save the key set off, and the writes it set off in turn, have
@@ -209,6 +301,7 @@ async function installCold({ dist, fixture, chromium, page: file = 'newtab.html'
       domContentLoadedMs: read.domContentLoaded === null ? null : since(read.domContentLoaded),
       browser: (/Chrome\/([\d.]+)/.exec(agent) || [null, 'unknown'])[1],
       keyTries: tries,
+      retypes,
     };
   } finally {
     await extension.close();
