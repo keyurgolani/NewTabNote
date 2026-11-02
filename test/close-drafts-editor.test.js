@@ -735,6 +735,26 @@ describe("a note opened with no blocks, which the editor shows with one empty bl
     const rows = Object.values((await storedRows(typed)).blocks).filter((row) => row.canvasId === 'E');
     assert.deepEqual(rows.map((row) => row.content), ['the first words of E']);
   });
+
+  it("typed into after another tab saved the note, the closing save lost: the edit goes into the note beside the other tab's, with no recovered note", async () => {
+    const env = await setup({ notes: [note('E', { name: 'Untitled' })] });
+    const closing = makeEditor(env);
+    await closing.loadNote('E');
+    const other = await secondTab(env);
+    const otherEditor = makeEditor(other);
+    await otherEditor.loadNote('E');
+    // The other tab types into the empty block it shows, so the note's revision moves past the closing tab's base
+    type(otherEditor, 'from the other tab');
+    assert.equal(await runUntil(other, otherEditor.flushSave()), true);
+    watchSaves(env, { hold: closingSave });
+    type(closing, 'from the closing tab');
+    closePage(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['E']);
+    assert.deepEqual(await recoveredNames(env), [], 'the empty block the closing tab showed was never stored, so no other writer changed it');
+    const rows = Object.values((await storedRows(env)).blocks).filter((row) => row.canvasId === 'E');
+    assert.deepEqual(rows.map((row) => row.content).sort(), ['from the closing tab', 'from the other tab']);
+  });
 });
 
 describe("two tabs, and a block stored in a shape the editor doesn't write (R160's N1)", () => {
