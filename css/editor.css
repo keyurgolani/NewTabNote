@@ -1120,8 +1120,24 @@ body.focus-mode .block:focus-within {
 }
 
 .slash-menu-item:hover,
-.slash-menu-item.active {
+.slash-menu-item.active,
+.slash-menu-item[aria-selected="true"] {
   background: var(--bg-hover);
+}
+
+/* Where the slash and link menus say which item the arrow keys picked: for screen readers, not shown */
+.menu-pick-live {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .slash-menu-item-icon {
