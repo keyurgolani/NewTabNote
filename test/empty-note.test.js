@@ -197,6 +197,7 @@ describe("the kernel's empty-note check, which reads a block it can't read as em
     ['an empty text block from a newer version', { ...block('n1', 'N', 0, ''), schemaVersion: 2 }],
     ["an empty text block whose stored field isn't its kind", { ...block('n1', 'N', 0, ''), indentLevel: 'deep' }],
     ['a block with no type', typeless],
+    ['an empty text block holding an image', { ...block('n1', 'N', 0, ''), imageUrl: 'data:image/png;base64,iVBORw0KGgo=' }],
   ]) {
     it(`trashing an untitled note whose only block is ${what} moves it to trash, and the export notice counts it`, { timeout: 30_000 }, async () => {
       const env = await kernelWith([record]);
