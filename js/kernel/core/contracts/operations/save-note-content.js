@@ -20,8 +20,11 @@
  * `orders` are blocks the save moved and changed nothing else of: each one's new `order` goes on
  * its record as stored, so another writer's newer text in it stays (#17, the per-pane save). A
  * block it names that another note holds refuses the save, as a put does, and one no note holds
- * is skipped. A block goes in once at most, in `blocks` or in `orders`. Older entries carry no
- * `orders`, so the field is additive, with nothing to upcast.
+ * is skipped. A block goes in once at most, in `blocks` or in `orders`. A save with `orders`
+ * carries only some of the note's blocks, so it takes `deriveFromStored: true`, and one without it
+ * is refused: its preview and to-do progress come from the blocks as stored, never from a page's
+ * copy of the rest. Older entries carry no `orders`, so the field is additive, with nothing to
+ * upcast.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';

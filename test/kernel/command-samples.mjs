@@ -38,6 +38,7 @@ export const COMMAND_SAMPLES = {
     titleOrigin: 'typed',
     linkedNames: ['Plan 3', 'Elsewhere'],
     expectedRevision: 1,
+    deriveFromStored: true,
     orders: [{ id: 'never-saved', order: 1 }],
   },
   deleteBlocks: { noteId: 'n1', blockIds: ['b1', 'never-saved'] },

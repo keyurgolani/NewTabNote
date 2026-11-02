@@ -633,6 +633,28 @@ export function runContractSuite(fixture) {
         }
       });
 
+      it("refuses orders without deriveFromStored, and writes nothing of the save: its preview would be the page's copy (#17)", async () => {
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        const blocksBefore = (await blocksOf('n1')).sort((a, b) => Number(a.order) - Number(b.order));
+        const noteBefore = await noteOf('n1');
+        const typed = { ...someBlocks('n1', 2)[0], content: 'Typed' };
+        assertRejected(
+          await kernel.execute(
+            cmd('saveNoteContent', {
+              noteId: 'n1',
+              blocks: [typed],
+              orders: [{ id: 'n1-block-1', order: 5 }],
+              preview: 'Typed',
+            }),
+          ),
+          'validation',
+          'invalid-command',
+        );
+        const blocksAfter = (await blocksOf('n1')).sort((a, b) => Number(a.order) - Number(b.order));
+        assert.deepEqual(blocksAfter, blocksBefore, 'no block put or moved');
+        assert.deepEqual(await noteOf('n1'), noteBefore, 'the note as it was');
+      });
+
       it('a save into a trashed note commits what was typed, and the note stays in the trash (#33)', async () => {
         // Another tab's pane can stay on a note trashed elsewhere, and its typing isn't lost
         await createNote({ noteId: 'n1', name: 'Plan' });
