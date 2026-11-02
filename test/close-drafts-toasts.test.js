@@ -96,10 +96,24 @@ describe("the new tab's toasts for the closing tabs' drafts (V3)", () => {
 });
 
 describe("the toasts' live region and place (V2, V4)", () => {
-  it('is on the new tab from the start, empty, polite and a status', () => {
+  it('is on the new tab from the start, empty, polite, a status, and not atomic, so each toast is read once', () => {
     const html = fs.readFileSync(path.join(ROOT, 'newtab.html'), 'utf8');
     const regions = html.match(/<div class="toast-container"[^>]*>[^<]*<\/div>/g) || [];
-    assert.deepEqual(regions, ['<div class="toast-container" aria-live="polite" role="status"></div>']);
+    assert.deepEqual(regions, ['<div class="toast-container" aria-live="polite" aria-atomic="false" role="status"></div>']);
+  });
+
+  it('a page without the region gets one from the first toast, as the new tab has it', () => {
+    const env = createLegacyEnv();
+    env.load('js/utils.js');
+    env.get('Utils').showToast('Kept', 'info', 6000);
+    const regions = env.document.querySelectorAll('.toast-container');
+    assert.equal(regions.length, 1);
+    const [region] = regions;
+    assert.deepEqual(
+      ['aria-live', 'aria-atomic', 'role'].map((name) => region.getAttribute(name)),
+      ['polite', 'false', 'status'],
+    );
+    assert.equal(region.children[0].textContent, 'Kept');
   });
 
   it('a toast goes into that region, and makes none of its own', async () => {
