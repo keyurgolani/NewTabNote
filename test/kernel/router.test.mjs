@@ -96,7 +96,9 @@ describe('the router: handshake (#13, "Handshake and compatibility")', () => {
     ]);
     assert.equal(check(welcomeSchema, peer.frames[0]).ok, true);
 
-    // #35 answers before its start-up maintenance, and says why it's degraded
+    // #35 says why it's degraded. A first hello in this major, while the coordinator is
+    // starting, waits for its start for WELCOME_WAIT_MS at most, and is welcomed `starting`
+    // past the cap (the cases below). In any other state, as here, it's welcomed at once
     const degraded = rawConnection(
       makeRouter({ status: () => ({ status: 'degraded', reason: 'migrating' }) }),
       'popup',
@@ -824,17 +826,56 @@ describe("the router: a hello while #35's coordinator is starting waits for its 
     assert.deepEqual(coordinator.heard, ['opened popup']);
   });
 
-  it('gives a connection that closes during the wait no welcome, and opens no session for it', async () => {
+  it('gives a connection that closes during the wait no welcome, clears its cap at once, and counts and opens nothing for it', async () => {
     const coordinator = startingCoordinator();
     const peer = rawConnection(coordinator.router, 'sidepanel');
     peer.send(hello('sidepanel'));
     await settle();
+    assert.equal(coordinator.scheduler.waiting, 1);
     peer.close();
     await settle();
+    assert.equal(coordinator.scheduler.waiting, 0, 'the close cleared the cap');
     coordinator.finish();
     await settle();
     assert.deepEqual(peer.frames, []);
     assert.deepEqual(coordinator.heard, []);
+    // A handshake is a welcome sent, so a hello that never got one isn't counted
+    assert.deepEqual([coordinator.router.health().handshakes, coordinator.router.health().connections], [0, 0]);
+  });
+
+  it("ends every held connection on the router's close(), with no welcome after and no cap left", async () => {
+    const coordinator = startingCoordinator();
+    const popup = rawConnection(coordinator.router, 'popup');
+    const newtab = rawConnection(coordinator.router, 'newtab');
+    popup.send(hello('popup', 'popup-session'));
+    newtab.send(hello('newtab', 'newtab-session'));
+    await settle();
+    assert.equal(coordinator.scheduler.waiting, 2);
+    coordinator.router.close();
+    await settle();
+    assert.equal(coordinator.scheduler.waiting, 0);
+    coordinator.finish();
+    await coordinator.scheduler.advance(WAIT_MS);
+    assert.deepEqual([popup.frames, newtab.frames, popup.closed, newtab.closed], [[], [], true, true]);
+    assert.deepEqual(coordinator.heard, []);
+  });
+
+  it('welcomes a hello at once when its start rejects, saying what the coordinator says then, with its cap cleared and a warning', async () => {
+    const scheduler = testScheduler();
+    /** @type {string[]} */
+    const warnings = [];
+    const router = makeRouter({
+      ...scheduler,
+      status: () => /** @type {const} */ ({ status: 'degraded', reason: 'starting' }),
+      settled: () => Promise.reject(new Error('test: the start rejected')),
+      logger: { warn: (/** @type {string} */ event) => warnings.push(event) },
+    });
+    const peer = rawConnection(router, 'popup');
+    peer.send(hello('popup'));
+    await settle();
+    assert.deepEqual(welcomes(peer.frames), [['degraded', 'starting']]);
+    assert.equal(scheduler.waiting, 0);
+    assert.deepEqual(warnings, ['router-start-failed']);
   });
 });
 

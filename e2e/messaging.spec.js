@@ -89,6 +89,9 @@ function timedWelcome(surface) {
 
 test("a hello that wakes a worker Chrome stopped is welcomed once the coordinator's start it sets off is done, as ready (#35)", async ({ extension }, testInfo) => {
   await extension.seedOnboarded();
+  // The worker the stop ends: the harness gives each worker global it hooks an id of its own
+  const instance = () => extension.worker.evaluate(() => self.__ntnHarness.instance);
+  const before = await instance();
   const blank = await extension.context.newPage();
   const cdp = await extension.context.newCDPSession(blank);
   await cdp.send('ServiceWorker.enable');
@@ -101,6 +104,8 @@ test("a hello that wakes a worker Chrome stopped is welcomed once the coordinato
   const page = await extension.context.newPage();
   await page.goto(extension.url('offscreen.html'));
   const cold = await page.evaluate(timedWelcome, 'offscreen');
+  // The hello reached a worker the stop had ended, so its coordinator was cold
+  expect(await instance(), 'the worker restarted').not.toBe(before);
   // The next hello finds it started
   const warm = await page.evaluate(timedWelcome, 'offscreen');
   await page.close();
