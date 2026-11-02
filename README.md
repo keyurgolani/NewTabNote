@@ -12,26 +12,26 @@
 
 ### 📝 Advanced Block-Based Editor
 ![Slash command block menu](docs/screenshots/02-slash-menu.png)
-- **18+ Block Types**: Structured content with headings, tables, code blocks, math equations (LaTeX), and more.
+- **18 Block Types**: Structured content with headings, tables, code blocks, math equations, and more.
 - **Slash Commands**: Type `/` to instantly access any block type.
-- **Markdown Support**: Use familiar shortcuts like `#`, `-`, `>`, and `` ``` `` for lightning-fast writing.
+- **Markdown Support**: Paste Markdown headings, lists, and quotes (`#`, `-`, `>`), and they turn into blocks.
 - **Drag & Drop**: Effortlessly reorder your thoughts with a simple handle.
 
 ### 🤖 Your Personal AI Assistant
 - **Smart Summarization**: Get the gist of long notes in seconds.
 - **Content Expansion**: Let AI help you flesh out ideas and add detail.
-- **Auto-Titling**: Never see "Untitled" again—AI generates relevant titles based on your content.
+- **Auto-Titling**: Turn it on in Settings, and AI names your untitled notes from what they say.
 - **Multi-Provider Support**: Connect to OpenAI (GPT-4o), Anthropic (Claude 3.5), Google Gemini, or even local models via Ollama.
 
 ### 📂 Professional Organization
 - **Unlimited Notes & Folders**: Organize your life without limits.
-- **Fuzzy Search**: Find any note instantly by searching titles or content.
+- **Fuzzy Search**: Find notes by title, even with a typo, or by the first few words of their text.
 - **Tabbed Interface**: Work on multiple notes simultaneously with a familiar tabbed view.
 - **Daily Notes**: One-click access to your daily journal or scratchpad.
 
 ### 🔒 Privacy & Performance First
 - **100% Local Storage**: Your data stays in your browser (IndexedDB). No servers, no tracking.
-- **Offline Ready**: Works perfectly without an internet connection (except AI features).
+- **Offline Ready**: Your notes and the editor work without an internet connection. AI features, bookmark icons, videos and images from the web need one, and so does semantic search the first time it downloads its model.
 - **Export/Import**: Full control over your data with JSON and Markdown export options.
 
 ---
@@ -146,11 +146,11 @@ npm run check:dist
 
 ## 🔒 Privacy
 - All notes are stored locally in your browser's IndexedDB.
-- No data is sent to any server except when using AI features.
-- AI requests go directly to your configured provider with your API key.
+- AI requests go directly to your configured provider with your API key, when you use an AI feature or while a background job you turned on runs.
 - API keys are stored locally and never transmitted elsewhere.
+- Bookmark icons come from Google's favicon service, which receives the bookmarked site's domain. Videos and images from web addresses load from their own sites, and semantic search downloads its model the first time it runs.
 
-For complete details, see our [Privacy Policy](PRIVACY_POLICY.md).
+Every request the extension can make, and when, is in our [Privacy Policy](PRIVACY_POLICY.md).
 
 ---
 
