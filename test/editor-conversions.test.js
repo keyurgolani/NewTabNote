@@ -237,6 +237,49 @@ describe('a conversion that removes structure asks first (#14 slice 3)', () => {
     assert.ok(doc.activeElement === heading, 'focus is back in the toggle');
   });
 
+  it("Cancel with focus outside the note, as the block menu leaves it, puts focus in the block: its text, or a table's first cell", OPTIONS, async () => {
+    const { env, editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), TOGGLE, { ...TABLE, order: 2 }]);
+    for (const [id, target, into] of [['g1', 'h1', () => contentEl(editor, 'g1')], ['t1', 'text', () => editor.container.querySelector('[data-id="t1"]').querySelector('td, th')]]) {
+      doc.body.focus();
+      const turning = editor.turnInto(id, target);
+      press(doc, 'Cancel');
+      await runUntil(env, turning);
+      assert.ok(doc.activeElement === into(), `focus is in ${id}`);
+    }
+  });
+
+  it("Cancel on a selection's Turn into keeps the selection, and a yes clears it", OPTIONS, async () => {
+    const { env, editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), TABLE, { ...IMAGE, order: 2 }]);
+    delete editor.clearBlockSelection;
+    const anchor = doc.body.appendChild(doc.createElement('button'));
+    const choose = () => {
+      editor.showSelectionTurnIntoMenu(anchor);
+      doc.querySelector('.turn-into-menu').querySelectorAll('.context-menu-item').find(item => item.textContent === 'TText').click();
+    };
+    editor.selectedBlockIds = new Set(['t1', 'm1']);
+    choose();
+    press(doc, 'Cancel');
+    await runUntil(env, Promise.resolve());
+    assert.deepEqual([...editor.selectedBlockIds], ['t1', 'm1'], 'kept after Cancel');
+    choose();
+    press(doc, 'Turn into Text');
+    await runUntil(env, Promise.resolve());
+    assert.equal(editor.selectedBlockIds.size, 0, 'cleared after a yes');
+    assert.deepEqual(typesOf(editor), ['text', 'text', 'text']);
+  });
+
+  it('with blocks selected, Backspace and Delete in a block are the selection\'s, and the block leaves them alone', OPTIONS, async () => {
+    const { editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), TOGGLE, block('a3', 'N', 2, 'After')]);
+    doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 1 });
+    editor.isCaretAtStart = () => true;
+    editor.isCaretAtEnd = () => true;
+    editor.selectedBlockIds = new Set(['a3']);
+    editor.onBlockKeyDown({ key: 'Backspace', target: contentEl(editor, 'g1'), preventDefault() {} });
+    editor.onBlockKeyDown({ key: 'Delete', target: contentEl(editor, 'a1'), preventDefault() {} });
+    assert.ok(overlay(doc) === null, 'no Turn into question');
+    assert.deepEqual(editor.blocks.map(b => [b.id, b.type, b.content]), [['a1', 'text', 'Before'], ['g1', 'toggle', 'Heading'], ['a3', 'text', 'After']]);
+  });
+
   it('the Alt+1 shortcut on a table asks first', OPTIONS, async () => {
     const { editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), TABLE]);
     const cell = editor.container.querySelector('[data-id="t1"]').querySelector('td');
@@ -280,6 +323,21 @@ describe("Delete at a block's end leaves a following toggle's hidden content alo
     assert.deepEqual(editor.blocks.map(b => [b.id, b.content]), [['a1', 'Before'], ['x2', 'Next']], 'Backspace');
     await runUntil(env, editor.save());
     assert.equal((await stored(env)).x2.futureField, 'kept');
+  });
+
+  it('a text block whose imageUrl holds an image stays as it is, after the caret or before it', OPTIONS, async () => {
+    const holder = { ...block('x2', 'N', 1, 'Next'), imageUrl: 'data:image/png;base64,iVBORw0KGgo=' };
+    const { env, editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), holder]);
+    doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 1 });
+    editor.isCaretAtEnd = () => true;
+    editor.onBlockKeyDown({ key: 'Delete', target: contentEl(editor, 'a1'), preventDefault() {} });
+    assert.deepEqual(editor.blocks.map(b => [b.id, b.content]), [['a1', 'Before'], ['x2', 'Next']], 'Delete');
+    editor.isCaretAtEnd = () => false;
+    editor.isCaretAtStart = () => true;
+    editor.onBlockKeyDown({ key: 'Backspace', target: contentEl(editor, 'x2'), preventDefault() {} });
+    assert.deepEqual(editor.blocks.map(b => [b.id, b.content]), [['a1', 'Before'], ['x2', 'Next']], 'Backspace');
+    await runUntil(env, editor.save());
+    assert.equal((await stored(env)).x2.imageUrl, holder.imageUrl);
   });
 
   it('a toggle with nothing hidden still merges into the block before it, as before', OPTIONS, async () => {

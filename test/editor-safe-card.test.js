@@ -237,6 +237,21 @@ describe('deleting a selection that holds a card asks first (#14 slice 3)', () =
     assert.equal(after.a3.content, 'After');
   });
 
+  it('Cancel puts focus back where it was in the note, or in the first selected block that takes it, and keeps the selection', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    delete editor.clearBlockSelection;
+    const text = id => elementOf(editor, id).querySelector('.block-content');
+    for (const [from, to] of [[() => text('a1'), () => text('a1')], [() => env.document.body, () => text('a3')]]) {
+      editor.selectedBlockIds = new Set(['k1', 'a3']);
+      from().focus();
+      const deleting = editor.deleteSelectedBlocks();
+      press(env, 'Cancel');
+      await runUntil(env, deleting);
+      assert.ok(env.document.activeElement === to(), 'focus');
+      assert.deepEqual([...editor.selectedBlockIds], ['k1', 'a3'], 'the selection stays');
+    }
+  });
+
   it("deletes a selection with no card in it without asking, as before", OPTIONS, async () => {
     const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), block('a2', 'N', 1, 'Gone')]);
     editor.selectedBlockIds = new Set(['a2']);

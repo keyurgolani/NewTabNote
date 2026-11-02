@@ -44,7 +44,8 @@ const text = (content, fields = {}) => ({
 
 /**
  * What the empty-note check means, read through the built-ins' catalog: a block holds nothing
- * only when it decodes as a known text block with no field its type doesn't own and blank text
+ * only when it decodes as a known text block with no field its type doesn't own, no image in
+ * its imageUrl, and blank text
  * @param {unknown} record
  */
 function meaningfulByCatalog(record) {
@@ -52,6 +53,9 @@ function meaningfulByCatalog(record) {
   if (decoded.state !== 'current' && decoded.state !== 'upcast') return true;
   if (Object.keys(decoded.extra).length > 0) return true;
   if (decoded.type !== 'text') return true;
+  // An image in its imageUrl: an address, or a data URL with something after its comma
+  const image = decoded.block.imageUrl;
+  if (typeof image === 'string' && image.trim() !== '' && !/^data:[^,]*,$/i.test(image.trim())) return true;
   return !isBlankText(decoded.block.content);
 }
 
@@ -122,6 +126,16 @@ describe('isMeaningful, the empty-note check (#14 slice 3)', () => {
     }
     // A field named __proto__, as JSON.parse makes one, is a field like any other
     assert.equal(isMeaningful({ ...text(''), ...JSON.parse('{"__proto__": "kept"}') }), true, '__proto__');
+  });
+
+  it('counts a block whose imageUrl holds an image as something: an address, or a data URL with data in it', { timeout: 30_000 }, () => {
+    for (const imageUrl of ['data:image/png;base64,iVBORw0KGgo=', 'https://example.test/i.png', 'blob:chrome-extension://x/1', 'images/a.png']) {
+      assert.equal(isMeaningful(text('', { imageUrl })), true, imageUrl);
+    }
+    // No image in it: none, an empty string, white space, or a data URL with nothing after its comma
+    for (const imageUrl of [null, undefined, '', '  ', 'data:,', 'data:image/png;base64,', ' data:image/png, ']) {
+      assert.equal(isMeaningful(text('', { imageUrl })), false, String(imageUrl));
+    }
   });
 
   it("reads every record as the built-ins' catalog does: the corpus, each model's examples, and every storage fixture", { timeout: 60_000 }, () => {
