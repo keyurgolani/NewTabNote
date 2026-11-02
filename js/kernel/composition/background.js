@@ -32,6 +32,7 @@ import { purgeRecoveryPoints } from '../adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../adapters/indexeddb/registry.js';
 import { runTransforms } from '../adapters/indexeddb/transforms.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
+import { WORKER_HANDLERS } from '../core/application/handlers-worker.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
@@ -675,7 +676,12 @@ export function createWorkerClient(host = workerHost()) {
         requireCore: true,
       });
       if (replaced) replaced.close();
-      const built = kernelClient({ adapter, surface: 'worker-internal', maintainOnOpen: upgraded });
+      const built = kernelClient({
+        adapter,
+        surface: 'worker-internal',
+        handlers: WORKER_HANDLERS,
+        maintainOnOpen: upgraded,
+      });
       sweepOnce(adapter, built);
       // At every start, and after every later attempt: the transforms a run cut off or never
       // reached, then the deletes the worker didn't hear of, or a sweep its stop cut off

@@ -9,6 +9,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 /** A new tab on an onboarded profile with the notes `names`, listed */
@@ -44,12 +45,12 @@ test('moving the only note to trash opens a new note, and the sidebar marks it a
 test('a bulk trash of every note opens a new note, and the sidebar marks it active', async ({ extension }) => {
   const page = await withNotes(extension, ['Alpha', 'Beta']);
   await driver.openNote(page, 'Beta');
-  await page.evaluate(async () => {
-    const ids = (await Storage.getAllNotes()).map(note => note.id);
+  const ids = (await profileStore(page).getAllNotes()).map(note => note.id);
+  await page.evaluate(list => {
     app.sidebarController.enterSelectionMode();
-    for (const id of ids) app.sidebarController.selectedNoteIds.add(id);
+    for (const id of list) app.sidebarController.selectedNoteIds.add(id);
     app.sidebarController.updateSelectionUI();
-  });
+  }, ids);
   await page.locator('#bulk-delete-btn').click();
   await page.getByRole('dialog', { name: 'Confirm' }).locator('.confirm-dialog-confirm').click();
   await expect(page.locator('.toast.success').last()).toHaveText('2 notes moved to Trash');

@@ -9,7 +9,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv, dumpDatabase } = require('./helpers/legacy-env');
+const { createLegacyEnv, dumpDatabase, connectStorageSettings, settingsOf, startEditorClient } = require('./helpers/legacy-env');
 const { expectFailure } = require('./helpers/expect-failure');
 
 /** A synthetic secret, new each run */
@@ -18,12 +18,12 @@ const canary = (slot) => `ntn-canary-${slot}-${Math.random().toString(16).slice(
 expectFailure('KD-006 connecting WebDAV stores no plaintext copy of the password', async () => {
   const env = createLegacyEnv();
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/core/logger.js', 'js/services/sync-service.js');
-  const storage = env.get('Storage');
-  await storage.init();
+  // Sync's handle as the new tab's root gives it, whose settings are where 1.4.x kept them (#17 PR 4b)
+  await startEditorClient(env);
   // The server answers the connection check
   env.global.fetch = async () => ({ status: 200, ok: true });
   const SyncService = env.get('SyncService');
-  const service = new SyncService({ storage, logger: env.get('createLogger("error")') });
+  const service = new SyncService({ storage: env.stores.sync, logger: env.get('createLogger("error")') });
   await service.init();
 
   const password = canary('webdav');
@@ -47,8 +47,8 @@ test('Gemini requests carry the API key outside their URL', async () => {
   const key = canary('gemini');
   const env = createLegacyEnv();
   env.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/llm.js');
-  const storage = env.get('Storage');
-  await storage.init();
+  await connectStorageSettings(env);
+  const storage = settingsOf(env);
   // As Settings saves a Gemini key and model
   await storage.setSetting('llmProvider', 'gemini');
   await storage.setSetting('llmApiKey', key);

@@ -1,21 +1,24 @@
 // The document client a test page's editors read and write through: a new tab's kernel on #17's
-// adapter, opened as js/kernel/composition/newtab.js's root opens it since #17 PR 4a, over the
-// page's database, which the test's own Storage has already opened, since the test started
-// Storage itself. test/helpers/legacy-env.js loads it into the page with
-// test/helpers/page-module.js, so the kernel runs in the page as it does in Chrome.
+// adapter, opened as js/kernel/composition/newtab.js's root opens it since #17 PR 4a, once the
+// worker's run has had its turn, as the root waits on it (legacy-env answers it). The narrow
+// handles NotesManager, GraphView and SyncService take are the root's, on the same kernel (#17 PR
+// 4b). test/helpers/legacy-env.js loads it into the page with test/helpers/page-module.js, so
+// the kernel runs in the page as it does in Chrome.
 
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
-import { chromeSettingsChanges } from '../../js/kernel/composition/host.js';
+import { chromeSettingsChanges, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import {
+  connectNewTabStorage,
   createNewTabAdapter,
   createNewTabBackupCheck,
+  createNewTabLegacyStores,
   createNewTabNoteList,
   createNewTabRecovery,
   createNewTabStorageState,
 } from '../../js/kernel/composition/newtab.js';
 import { createNoteRemoval } from '../../js/kernel/composition/removal.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from '../kernel/test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
 
@@ -40,16 +43,17 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  *   storageState: import('../../js/kernel/composition/newtab.js').StorageState,
  *   recovery: import('../../js/kernel/composition/newtab.js').Recovery,
  *   validateBackup: import('../../js/kernel/composition/newtab.js').ValidateBackup,
+ *   stores: import('../../js/kernel/composition/newtab.js').LegacyStores,
  * }}
  *   `removalFor` makes the page's removeNotes, with the pane moves and announce the test's
  *   page has, settled by its note list
  */
 export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pageNow, zone }) {
-  // The worker's wait is over: the test's Storage waited on it as it opened
+  // The page waits on the worker's run first, as the new tab's root does
   const adapter = createNewTabAdapter({
     indexedDB: globalThis.indexedDB,
     settings,
-    awaitUpgrade: async () => {},
+    awaitUpgrade: () => waitForWorkerUpgrade({ runtime: /** @type {any} */ (globalThis).chrome?.runtime }),
     locks: /** @type {any} */ (globalThis.navigator?.locks || null),
   });
   const zoneNow = zone ? () => zone : systemClock.zone;
@@ -74,6 +78,11 @@ export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pa
     return kernel.query(query);
   };
   const noteList = createNewTabNoteList({ ...client, query: listQuery });
+  // js/storage.js's shell, on a page that loads it, connected as the root connects it (#17 PR 4b)
+  const shell = /** @type {any} */ (globalThis).Storage;
+  if (shell && typeof shell.connect === 'function') {
+    connectNewTabStorage(client, { settings, storage: shell }, createNewTabStorageState(adapter));
+  }
   return {
     kernel: client,
     documentClient: createDocumentClient(client, { ...(pageNow ? { now: pageNow } : {}), zone: zoneNow }),
@@ -86,6 +95,8 @@ export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pa
     // The raw export over the page's IndexedDB, as the root's (raw-export.js)
     recovery: createNewTabRecovery({ indexedDB: globalThis.indexedDB }),
     validateBackup: createNewTabBackupCheck(),
+    // The narrow handles the root gives NotesManager, GraphView and SyncService (#17 PR 4b)
+    stores: createNewTabLegacyStores(client, { settings }, createNewTabStorageState(adapter)),
   };
 }
 

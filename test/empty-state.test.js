@@ -53,7 +53,7 @@ async function pageOn(open) {
   app.followEmptyState();
 
   const notes = Object.assign(wire(new (env.get('NotesManager'))({
-    storage: env.get('Storage'), domRefs: null, logger: null, llm: null, documentClient: env.documentClient, settings: env.settingsClient,
+    storage: env.stores.searchIndex, domRefs: null, logger: null, llm: null, documentClient: env.documentClient, settings: env.settingsClient,
   })), { removal });
   const sidebar = Object.assign(wire(new (env.get('SidebarController'))({
     settings: env.settingsClient, storageState: env.storageState, domRefs: null, logger: null,

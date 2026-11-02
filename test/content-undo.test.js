@@ -28,7 +28,6 @@ async function editorOnAlpha() {
     },
   });
   env.load(...FILES);
-  await env.get('Storage').init();
   const documentClient = await startEditorClient(env);
   const doc = env.document;
   const editor = Object.create(env.get('BlockEditor').prototype);

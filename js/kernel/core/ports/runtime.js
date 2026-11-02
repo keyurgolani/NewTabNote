@@ -20,7 +20,9 @@
 
 /**
  * Never given a command payload: a detail holds codes, aggregates, ids, and errors only.
- * @typedef {{warn(event: string, detail: Record<string, unknown>): void}} Logger
+ * `error` reports what a page sent that its kernel can't run (kernel.js, handler-missing); a
+ * logger without it takes that as a warning.
+ * @typedef {{warn(event: string, detail: Record<string, unknown>): void, error?(event: string, detail: Record<string, unknown>): void}} Logger
  */
 
 /**
@@ -46,4 +48,4 @@ export const zoneOf = clock => (typeof clock.zone === 'function' && clock.zone()
 export const legacyIds = Object.freeze({ next: () => `${Date.now()}-${Math.random().toString(36).slice(2, 11)}` });
 
 /** @type {Logger} */
-export const silentLogger = Object.freeze({ warn: () => {} });
+export const silentLogger = Object.freeze({ warn: () => {}, error: () => {} });

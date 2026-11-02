@@ -6,7 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import {
   COMMAND_DEADLINE_MS,
   DEADLINE_GRACE_MS,

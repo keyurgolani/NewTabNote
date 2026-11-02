@@ -380,6 +380,12 @@ describe('the contract schema lint (#13, AC5)', () => {
       savePromptTemplates: ['templates'],
       saveTheme: ['name'],
       importBackup: ['backup'],
+      // #22's search entries hold a note's name and text, and an embedding is made from them
+      updateSearchIndex: ['entries.[]'],
+      saveVector: ['vector'],
+      // Another profile's note, whole, and its blocks
+      applyRemoteChanges: ['changes.[].blocks.[]', 'changes.[].note'],
+      applyRemoteContent: ['blocks.[]', 'note'],
       // A whole block is content, since any of its fields can hold what the user wrote
       blockInput: ['(root)'],
       blockRecord: ['(root)'],
@@ -391,6 +397,7 @@ describe('the contract schema lint (#13, AC5)', () => {
       snapshotRecord: ['blocks', 'title'],
       // A custom theme's name, and AI chat's conversations and prompt templates as they're read back
       themeRecord: ['name'],
+      vectorRecord: ['vector'],
       workspaceDataValues: ['aiChatHistory', 'aiPromptTemplates', 'globalChatHistory', 'globalChatMessages', 'noteChatMessages'],
       workspaceSession: ['openTabs.[]'],
     });

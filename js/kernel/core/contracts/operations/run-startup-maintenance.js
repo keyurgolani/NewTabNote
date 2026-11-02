@@ -1,6 +1,7 @@
 /**
- * runStartupMaintenance, catalog version 1: default settings and the read-only integrity check,
- * which the new tab and the service worker run as they start.
+ * runStartupMaintenance, catalog version 1: default settings where none are stored, which the
+ * new tab and the service worker run as they start. The read-only integrity check it also ran
+ * went with #17 PR 4a.
  */
 
 import { commandPayload } from '../operation.js';

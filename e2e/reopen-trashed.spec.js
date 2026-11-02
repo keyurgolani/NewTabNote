@@ -7,6 +7,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 /** Export JSON with one note and one block, as 1.4.1 writes it */
@@ -59,7 +60,7 @@ test('after Replace all and a reload, the new tab opens the imported note, not t
 
   await expect(page.locator('#page-title')).toHaveText('Imported note');
   await expect(page.locator('#note-tabs .note-tab-name')).toHaveText(['Imported note']);
-  expect(await page.evaluate(async () => (await Storage.getTrashedNotes()).map(note => note.name))).toEqual(['Old note']);
+  expect((await profileStore(page).getTrashedNotes()).map(note => note.name)).toEqual(['Old note']);
 
   await page.reload();
   await expect(page.locator('#page-title')).toHaveText('Imported note');
@@ -73,16 +74,17 @@ test('at startup, a saved tab and last-opened note in trash stay closed', async 
   const page = await openFirstNewTab(extension);
 
   // What 1.4.0 leaves behind after Replace all, or after trashing the note in the last tab
-  await page.evaluate(async () => {
-    const keep = await Storage.createNote('Keep me');
-    const gone = await Storage.createNote('In trash');
-    await Storage.trashNote(gone.id);
+  const store = profileStore(page);
+  const keep = await store.createNote('Keep me');
+  const gone = await store.createNote('In trash');
+  await store.trashNote(gone.id);
+  await page.evaluate(async ({ keepId, goneId }) => {
     await chrome.storage.local.set({
-      setting_openTabs: [{ noteId: gone.id, name: 'In trash' }, { noteId: keep.id, name: 'Keep me' }],
+      setting_openTabs: [{ noteId: goneId, name: 'In trash' }, { noteId: keepId, name: 'Keep me' }],
       setting_activeTabIndex: 0,
-      lastOpenedNoteId: gone.id,
+      lastOpenedNoteId: goneId,
     });
-  });
+  }, { keepId: keep.id, goneId: gone.id });
 
   await page.reload();
   await expect(page.locator('#page-title')).toHaveText('Keep me');

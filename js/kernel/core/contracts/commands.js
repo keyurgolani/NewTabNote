@@ -65,6 +65,11 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/snooze-space-notice.js').SnoozeSpaceNotice} SnoozeSpaceNotice */
 /** @typedef {import('./operations/create-auto-backup.js').CreateAutoBackup} CreateAutoBackup */
 /** @typedef {import('./operations/import-backup.js').ImportBackup} ImportBackup */
+/** @typedef {import('./operations/update-search-index.js').UpdateSearchIndex} UpdateSearchIndex */
+/** @typedef {import('./operations/save-vector.js').SaveVector} SaveVector */
+/** @typedef {import('./operations/apply-remote-changes.js').ApplyRemoteChanges} ApplyRemoteChanges */
+/** @typedef {import('./operations/apply-remote-content.js').ApplyRemoteContent} ApplyRemoteContent */
+/** @typedef {import('./operations/apply-remote-placement.js').ApplyRemotePlacement} ApplyRemotePlacement */
 
 /** @typedef {RunBulkAction['action']} BulkAction */
 
@@ -75,7 +80,8 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | ConvertNoteToTemplate | ConvertTemplateToNote | DeleteNotePermanently | EmptyTrash | RunTrashCleanup
  *   | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance | RunIntegrityCheck | SetInsightsPending | RecordJobRun
  *   | SaveSnapshot | RestoreSnapshot | InsertBlocks | SaveChatHistory | SavePromptTemplates | SaveTheme
- *   | CompleteOnboarding | RecordBackup | RecordExportNotice | SnoozeSpaceNotice | CreateAutoBackup | ImportBackup} Command
+ *   | CompleteOnboarding | RecordBackup | RecordExportNotice | SnoozeSpaceNotice | CreateAutoBackup | ImportBackup
+ *   | UpdateSearchIndex | SaveVector | ApplyRemoteChanges | ApplyRemoteContent | ApplyRemotePlacement} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -89,9 +95,12 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  * What the commit feed names a commit by. `job` is the jobs' own bookkeeping, and `snapshot` a
  * note's version history, neither of which changes a note, so a note list ignores both, as it
  * does AI chat's `chat`, a custom `theme`, `onboarding`, and the `backup` bookkeeping. An
- * import is `note`: it adds notes and folders, and trashes notes.
+ * import is `note`: it adds notes and folders, and trashes notes. `index` is #22's search
+ * entries and embeddings, which change no note either: the note list reads the entries again
+ * when the indexer says it wrote them (NotesManager.searchEntriesWritten), so its sidebar
+ * doesn't render again for each of the indexer's writes.
  * @typedef {'note' | 'folder' | 'preferences' | 'session' | 'job' | 'snapshot' | 'system' | 'chat' | 'theme'
- *   | 'onboarding' | 'backup'} Aggregate
+ *   | 'onboarding' | 'backup' | 'index'} Aggregate
  */
 
 /**
@@ -226,6 +235,21 @@ export const COMMANDS = Object.freeze({
   // The legacy backup tasks, until #18's engine
   createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], { entityTypes: [] }),
   importBackup: entry('import-backup', 'note', ['newtab'], { entityTypes: [], maxBytes: LARGE }),
+  // #22's indexer and embeddings, which run in the new tab (#17 PR 4b)
+  updateSearchIndex: entry('update-search-index', 'index', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
+  saveVector: entry('save-vector', 'index', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
+  // Another profile's notes, for #19's sync, which runs in the new tab (#17 PR 4b). The bulk
+  // command sends its two parts for each note, and nothing sends any of them before #19.
+  applyRemoteChanges: entry('apply-remote-changes', 'note', ['newtab'], {
+    entityTypes: ['note', 'block', 'folder'],
+    maxBytes: LARGE,
+    bulk: true,
+  }),
+  applyRemoteContent: entry('apply-remote-content', 'note', ['newtab'], {
+    entityTypes: ['note', 'block', 'folder'],
+    maxBytes: LARGE,
+  }),
+  applyRemotePlacement: entry('apply-remote-placement', 'note', ['newtab'], { entityTypes: ['note', 'folder'] }),
 });
 
 /** @type {readonly CommandType[]} */

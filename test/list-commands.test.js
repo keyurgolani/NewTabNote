@@ -57,8 +57,8 @@ async function openPage({ kernelNow, pageNow, zone } = {}) {
     settings: env.settingsClient,
     storageState: env.storageState,
   }));
-  // The search index and vectors still go through the page's Storage (#22)
-  const notes = page.wire(new (env.get('NotesManager'))({ ...deps, storage: page.Storage, llm: null }));
+  // The search index and vectors go through the handle App gives NotesManager (#22, #17 PR 4b)
+  const notes = page.wire(new (env.get('NotesManager'))({ ...deps, storage: page.stores.searchIndex, llm: null }));
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => { toasts.push({ message, kind }); };
   const reloads = { sidebar: 0, page: () => page.refreshes, list: () => listQueries.filter((type) => type === 'getNoteList').length };
@@ -66,7 +66,8 @@ async function openPage({ kernelNow, pageNow, zone } = {}) {
   await sidebar.renderNotesList();
   // From here on, a full read of the lists is a reload, however it was asked for
   listQueries.length = 0;
-  return { env, page, sidebar, notes, toasts, reloads, Storage: page.Storage };
+  // Another tab's writes, and reads of the records, through the frozen 1.4.1 Storage
+  return { env, page, sidebar, notes, toasts, reloads, release: page.release };
 }
 
 const stored = async (env) => {
@@ -173,8 +174,8 @@ describe('pinning the open note while it saves (L2)', () => {
 
 describe("the sidebar's new notes and Daily Notes", () => {
   it('two Daily Note clicks at once make one Daily Note, with the template, and open it', async () => {
-    const { env, page, sidebar, reloads, Storage } = await openPage();
-    await Storage.setSetting('dailyNoteTemplate', 'TPL');
+    const { env, page, sidebar, reloads } = await openPage();
+    await env.chrome.api.storage.local.set({ setting_dailyNoteTemplate: 'TPL' });
     const ids = await runUntil(env, Promise.all([sidebar.ensureDailyNote(), sidebar.ensureDailyNote()]));
     assert.equal(ids[0], ids[1], 'both name one note');
     const { notes, elements, search } = await stored(env);
@@ -258,10 +259,10 @@ describe("the sidebar's new notes and Daily Notes", () => {
   });
 
   it("a block dropped on a sidebar note goes after its last block with insertBlocks, and the note's other fields stay", async () => {
-    const { env, page, sidebar, toasts, reloads, Storage } = await openPage();
+    const { env, page, sidebar, toasts, reloads, release } = await openPage();
     // Another write to C's record after this tab last read it, and a second block
-    await Storage.updateNote({ ...(await Storage.getNote('C')), pinned: true, folderId: 'F' });
-    await Storage.saveElement({ id: 'c2', canvasId: 'C', type: 'text', content: 'Gamma second', order: 4 });
+    await release.updateNote({ ...(await release.getNote('C')), pinned: true, folderId: 'F' });
+    await release.saveElement({ id: 'c2', canvasId: 'C', type: 'text', content: 'Gamma second', order: 4 });
     await runUntil(env, sidebar._appendBlockToNote('C', 'todo', 'Dropped task'));
     const { notes, elements } = await stored(env);
     const blocks = elements.filter((el) => el.canvasId === 'C').sort((a, b) => a.order - b.order);
@@ -297,9 +298,9 @@ describe("the sidebar's new notes and Daily Notes", () => {
   });
 
   it('Add Note to Folder into a folder deleted meanwhile makes no note and says the folder is gone', async () => {
-    const { env, page, sidebar, toasts, Storage } = await openPage();
+    const { env, page, sidebar, toasts, release } = await openPage();
     const folder = page.noteList.folders()[0];
-    await Storage.deleteFolder(folder.id);
+    await release.deleteFolder(folder.id);
     env.global.console = { ...console, error: () => {} };
     await sidebar.showFolderContextMenu({ clientX: 0, clientY: 0 }, folder);
     env.document.querySelectorAll('.context-menu-item')[2].click();
@@ -357,10 +358,10 @@ describe("the calendar's today and its dots (#17 PR 3b)", () => {
 
 describe('archive and unarchive through the kernel', () => {
   it("archiving the open note keeps #46's order: its pane moves off and saves first, then the write, then the other tabs hear", async () => {
-    const { env, page, notes, toasts, reloads, Storage } = await openPage();
+    const { env, page, notes, toasts, reloads, release } = await openPage();
     await page.tabs.openNoteInNewTab('B');
     const order = [];
-    const archived = async (noteId) => Boolean((await Storage.getNote(noteId)).archived);
+    const archived = async (noteId) => Boolean((await release.getNote(noteId)).archived);
     // removeNotes as App wires it, with each step recorded and whether the write had landed by then
     notes.removal = env.removalFor({
       leave: async (ids) => {
@@ -386,9 +387,9 @@ describe('archive and unarchive through the kernel', () => {
   });
 
   it('archive writes the placement fields and nothing else, so a field set meanwhile stays', async () => {
-    const { env, notes, Storage } = await openPage();
+    const { env, notes, release } = await openPage();
     // Another write to C's record after this tab last read it
-    await Storage.updateNote({ ...(await Storage.getNote('C')), preview: 'set elsewhere', pinned: true });
+    await release.updateNote({ ...(await release.getNote('C')), preview: 'set elsewhere', pinned: true });
     await runUntil(env, notes.archiveNote('C'));
     await runUntil(env, notes.unarchiveNote('C'));
     const { notes: records } = await stored(env);
@@ -406,12 +407,12 @@ describe('archive and unarchive through the kernel', () => {
   });
 
   it("archive or unarchive of a note deleted in another tab says it was deleted, and the other tabs aren't told", async () => {
-    const { env, page, notes, toasts, Storage } = await openPage();
+    const { env, page, notes, toasts, release } = await openPage();
     const left = [];
     notes.removal = env.removalFor({ leave: (ids) => page.tabs.leaveNotes(ids), announce: (ids) => left.push(ids) });
     env.global.console = { ...console, error: () => {} };
     // Deleted for good in another tab, which this one hasn't heard of yet
-    await Storage.permanentlyDeleteNote('C');
+    await release.permanentlyDeleteNote('C');
     await runUntil(env, notes.archiveNote('C'));
     await runUntil(env, notes.unarchiveNote('C'));
     assert.deepEqual(left, []);

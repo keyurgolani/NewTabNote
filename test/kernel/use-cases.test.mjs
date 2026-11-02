@@ -6,8 +6,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
+import { indexCommands } from '../../js/kernel/core/application/indexing.js';
 import { noteCommands } from '../../js/kernel/core/application/notes.js';
+import { remoteCommands } from '../../js/kernel/core/application/remote.js';
 import { derivedOnly } from '../../js/kernel/core/application/scopes.js';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { dailyDateStr } from '../../js/kernel/core/domain/note.js';
@@ -37,6 +39,10 @@ function spyTx(log, records) {
     getAll: async store => {
       log.push(`getAll ${store}`);
       return all(store);
+    },
+    getAllKeys: async store => {
+      log.push(`getAllKeys ${store}`);
+      return Object.keys(records[store] || {}).sort();
     },
     getAllByIndex: async (store, index, value) => {
       log.push(`getAllByIndex ${store} ${index}`);
@@ -150,6 +156,100 @@ describe('saveNoteContent', () => {
     const log = [];
     await unit.run(spyTx(log, { notes: { n1: { id: 'n1', name: 'Plan' } } }));
     assert.deepEqual(log, ['get notes n1', 'versions notes n1', 'put blocks b1', 'put blocks b2', 'put notes n1']);
+  });
+});
+
+describe('updateSearchIndex', () => {
+  it("rebuilding the whole index reads its notes' and entries' keys alone, and a stored entry only for a batch entry that says what it was made from (R131)", async () => {
+    /** @type {import('../../js/kernel/core/contracts/commands.js').CommandOf<'updateSearchIndex'>} */
+    const command = {
+      type: 'updateSearchIndex',
+      commandId: 'c1',
+      replaceAll: true,
+      entries: [
+        { noteId: 'n1', name: 'One', content: 'Line', updatedAt: NOW },
+        { noteId: 'n2', name: 'Two', content: 'More', updatedAt: NOW, sourceRevision: 3 },
+      ],
+    };
+    /** @type {UseCaseContext} */
+    const context = {
+      adapter: createMemoryAdapter(),
+      clock: testClock(),
+      ids: testIds(),
+      run: () => assert.fail('updateSearchIndex runs no other command'),
+    };
+    const work = /** @type {Work} */ (indexCommands.updateSearchIndex(command, context));
+    const [unit] = work.effect.kind === 'units' ? work.effect.units : [];
+    /** @type {string[]} */
+    const log = [];
+    await unit.run(
+      spyTx(log, {
+        notes: { n1: { id: 'n1' }, n2: { id: 'n2' } },
+        searchIndex: {
+          n1: { noteId: 'n1', content: 'Old' },
+          n2: { noteId: 'n2', content: 'Old', sourceRevision: 2 },
+          n3: { noteId: 'n3', content: 'Gone' },
+        },
+      }),
+    );
+    assert.deepEqual(log, [
+      'has searchIndex',
+      'getAllKeys notes',
+      'getAllKeys searchIndex',
+      'put searchIndex n1',
+      'get searchIndex n2',
+      'put searchIndex n2',
+      'delete searchIndex n3',
+    ]);
+  });
+});
+
+describe('applyRemoteContent', () => {
+  it("is the conflict, writing nothing, where there's no `conflicts` to keep the 1.4.x text a change made from version 0 would replace (R131)", async () => {
+    /** @type {UseCaseContext} */
+    const context = {
+      adapter: createMemoryAdapter(),
+      clock: testClock(),
+      ids: testIds(),
+      run: () => assert.fail('applyRemoteContent runs no other command'),
+    };
+    /** @type {import('../../js/kernel/core/contracts/commands.js').CommandOf<'applyRemoteContent'>} */
+    const command = {
+      type: 'applyRemoteContent',
+      commandId: 'c1',
+      noteId: 'old',
+      note: { id: 'old', name: 'Theirs' },
+      blocks: [],
+      expectedRevision: 0,
+    };
+    const work = /** @type {Work} */ (remoteCommands.applyRemoteContent(command, context));
+    const [unit] = work.effect.kind === 'units' ? work.effect.units : [];
+    const records = {
+      notes: { old: { id: 'old', name: 'Old' } },
+      blocks: { b1: { id: 'b1', canvasId: 'old', type: 'text', content: 'Old line', order: 0 } },
+    };
+    for (const kept of [false, true]) {
+      /** @type {string[]} */
+      const log = [];
+      const tx = /** @type {Tx} */ ({
+        ...spyTx(log, records),
+        // A database below step 10, which has no `conflicts`, or one at it
+        has: (/** @type {string} */ store) => kept || store !== 'conflicts',
+        versions: () => ({ revision: 0, placementVersion: 0, sourceRevision: 0 }),
+      });
+      const stop = await unit.run(tx);
+      const writes = log.filter(line => line.startsWith('put') || line.startsWith('delete'));
+      if (kept) {
+        assert.equal(stop, undefined);
+        assert.deepEqual(writes.slice(0, 2), ['put conflicts c1', 'delete blocks b1']);
+      } else {
+        assert.deepEqual(stop && stop.kind === 'conflict' && [stop.code, stop.currentRevision], [
+          'revision-conflict',
+          0,
+        ]);
+        assert.deepEqual(writes, []);
+      }
+    }
   });
 });
 
@@ -297,6 +397,78 @@ describe('the derived scope', () => {
     });
     assert.equal(error, undefined);
     assert.deepEqual(log, ['get notes n1', 'put notes n1']);
+  });
+
+  it('takes a search entry and an embedding of a note it read and found, from a get or a list, and deletes either (#17 PR 4b)', async () => {
+    const note = { id: 'n1', name: 'Plan' };
+    for (const read of /** @type {Array<(tx: Tx) => Promise<unknown>>} */ ([
+      tx => tx.get('notes', 'n1'),
+      tx => tx.getAll('notes'),
+    ])) {
+      const { log, error } = await runDerived(note, async tx => {
+        await read(tx);
+        tx.put('searchIndex', { noteId: 'n1', name: 'Plan', content: 'Line', sourceRevision: 2 });
+        tx.put('vectors', { id: 'n1', noteId: 'n1', vector: [0.5], updatedAt: NOW });
+        // Dropping either loses nothing the user wrote, so any note's goes
+        tx.delete('searchIndex', 'gone');
+        tx.delete('vectors', 'gone');
+      });
+      assert.equal(error, undefined);
+      assert.deepEqual(log.slice(1), [
+        'put searchIndex n1',
+        'put vectors n1',
+        'delete searchIndex gone',
+        'delete vectors gone',
+      ]);
+    }
+  });
+
+  it("refuses a search entry or an embedding of a note it didn't read or didn't find, and any other store's record", async () => {
+    /** @type {Array<[string, (tx: Tx) => Promise<void>]>} */
+    const writes = [
+      ['an entry of a note it never read', async tx => tx.put('searchIndex', { noteId: 'n1' })],
+      [
+        'an embedding of a note that is gone',
+        async tx => {
+          await tx.get('notes', 'gone');
+          tx.put('vectors', { id: 'gone', noteId: 'gone', vector: [1] });
+        },
+      ],
+      [
+        'an embedding without the id it is kept under',
+        async tx => {
+          await tx.get('notes', 'n1');
+          tx.put('vectors', /** @type {any} */ ({ noteId: 'n1', vector: [1] }));
+        },
+      ],
+      [
+        'a link',
+        async tx => {
+          await tx.get('notes', 'n1');
+          tx.put('links', { id: 'l1', fromNoteId: 'n1', toNoteId: 'n2' });
+        },
+      ],
+      [
+        'a deleted link',
+        async tx => {
+          await tx.get('notes', 'n1');
+          tx.delete('links', 'l1');
+        },
+      ],
+    ];
+    for (const [what, run] of writes) {
+      const { log, error } = await runDerived({ id: 'n1', name: 'Plan' }, run);
+      assert.deepEqual(
+        error instanceof UnavailableError && [error.unavailableCause, error.code],
+        ['adapter', 'write-outside-scope'],
+        what,
+      );
+      assert.deepEqual(
+        log.filter(line => line.startsWith('put') || line.startsWith('delete')),
+        [],
+        what,
+      );
+    }
   });
 
   it("refuses a note with a field it can't compare, such as a Map, even for a write that keeps it", async () => {

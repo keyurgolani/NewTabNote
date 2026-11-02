@@ -96,7 +96,7 @@ async function typeAndSave(env, editor, text) {
   editor.blocks[0].markUpdated();
   editor.scheduleSave();
   await runUntil(env, editor.flushSave());
-  const stored = await env.get('Storage').getElementsByNote('A');
+  const stored = await env.release.getElementsByNote('A');
   return plain(stored.map((element) => element.content));
 }
 
@@ -432,7 +432,7 @@ describe("App's reload guard and the PiP window's stylesheets", () => {
       editor.scheduleSave();
       await runUntil(env, loader.reloadAfterGuards());
       assert.equal(reloads, 1);
-      const stored = await env.get('Storage').getElementsByNote('A');
+      const stored = await env.release.getElementsByNote('A');
       return plain(stored.map((element) => element.content));
     };
     assert.deepEqual(await reloadWith(true), ['typed just before the reload']);

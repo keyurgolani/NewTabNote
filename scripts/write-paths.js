@@ -10,9 +10,9 @@
  *   use that it doesn't define), called on the Storage global (bare, or through self,
  *   window, or globalThis), on this.storage, on a function or method that returns one of
  *   those (appStorage(), editorStorage(), this._getStorage()), or on a local bound to one;
- * - an add, put, delete, or clear on an object store, from an IndexedDB transaction or
- *   Storage.getStore(), and a readwrite transaction or getStore() whose own stores write
- *   nothing, which counts once by itself;
+ * - an add, put, delete, or clear on an object store, from an IndexedDB transaction, and a
+ *   readwrite transaction whose own stores write nothing, which counts once by itself
+ *   (Storage's transaction() and getStore() went with #17 PR 4b, so a call to either fails);
  * - a chrome.storage write: `<chrome>.storage.<area>.set|remove|clear(...)`, or the same on
  *   a const bound to `<chrome>.storage.<area>`;
  * - update or delete on a cursor, indexedDB.deleteDatabase, or indexedDB.open with a version;
@@ -22,11 +22,12 @@
  * that isn't a literal, a DatabaseManager write name called on a receiver it can't place,
  * and an object store or chrome.storage area bound with anything but const.
  *
- * RULES give each call its command, and COMMANDS give each command its slice or the issue
- * it's ledgered to. A call no rule matches fails the check, so a new write path can't land
- * without a decision. One status comes from the code instead: "no live caller" for writes in
- * methods nothing refers to, App's included, since #12 slice 7 deleted App's copies of
- * controller paths.
+ * RULES give each call its command, and COMMANDS give each command the #12 slice or the PR
+ * that routes it, or the issue it's ledgered to. A call no rule matches fails the check, so a
+ * new write path can't land without a decision. A rule can give its calls a status of its own:
+ * "no live path" for calls on a handle that has no such method (#17 PR 4b). One status comes
+ * from the code instead: "no live caller" for writes in methods nothing refers to, App's
+ * included, since #12 slice 7 deleted App's copies of controller paths.
  *
  *   npm run check:write-paths              fail when the doc and the code differ, line numbers aside
  *   npm run check:write-paths -- --write   rewrite the doc
@@ -50,39 +51,22 @@ const WRITE_COMMAND = 'npm run check:write-paths -- --write';
 
 /**
  * DatabaseManager methods that write to IndexedDB or chrome.storage.local. Each is one
- * DatabaseManager defines, as READS' are (collect() holds both to js/storage.js): #17 PR 4a
- * deleted the writers nothing called once the new tab wrote through #17's adapter.
+ * DatabaseManager defines, as READS' are (collect() holds both to js/storage.js). Since #17 PR
+ * 4b it's the shell the new tab's root connects to its kernel, under the names the holders and
+ * their handles call: each write is a command there (js/kernel/composition/storage-facade.js),
+ * or a setting through the holders' accessor (holder-settings.js).
  */
-const WRITES = new Set([
-  'init', 'checkAndRepairDatabase', 'initializeDefaultSettings',
-  '_writeMissingStoresCopy', '_writeMissingStoresCopyIfNone', '_writeRecoveryBackup', 'createAutoBackup',
-  'createNote', 'updateNote',
-  'archiveNote', 'unarchiveNote', 'trashNote', 'permanentlyDeleteNote',
-  'setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'updateNoteNameInSearchIndex',
-  'createFolder', 'deleteFolder',
-  'saveElement', 'deleteElements', 'deleteElementsByNote',
-  'deleteMediaByNote',
-  'setSetting',
-  'importData', '_commitImport', '_writeImport',
-  'saveVector',
-  'deleteSnapshotsByNote',
-]);
+const WRITES = new Set(['setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'saveVector', 'setSetting']);
 
-/** DatabaseManager methods that open a transaction, which writes only in 'readwrite' mode */
+/**
+ * Methods that open an IndexedDB transaction, which writes only in 'readwrite' mode.
+ * DatabaseManager has defined neither since #17 PR 4b, so a call to one on Storage fails.
+ */
 const MODE_WRITES = new Set(['transaction', 'getStore']);
 
-/** DatabaseManager methods that only read */
+/** DatabaseManager methods that write nothing: the shell's own, and the reads it answers */
 const READS = new Set([
-  'constructor', '_chromeApi', '_codedError', 'hasStore', '_sleep', 'withRetry', '_newerSchemaError',
-  '_throwIfCoreStoresMissing', '_openUnversioned', '_readOnDiskVersion', 'isPageContext',
-  '_readStoreForCopy', '_blobsToDataUrls', '_hasBlob', '_blobToDataUrl', 'getAutoBackups',
-  '_getAutoBackupKeys', '_getStorageValue', '_getAllNoteIds', 'validateDatabase', '_getAllKeys', '_countOrphanIndexKeys',
-  '_readAux', 'getTodayNote', 'getAllNotes', 'getNoteNames', 'getArchivedNotes', 'getTemplates', 'getSearchIndex',
-  'isNoteEmpty', 'isNoteUntitled', 'isEmptyTextBlock', 'getTrashedNotes', 'getElements', 'getNote',
-  'getAllFolders', 'getFolder', 'getBacklinks', 'getElementsByNote', 'getMedia', 'getSetting',
-  'readSetting', 'getAllSettings', 'exportAll', 'exportAllAsBlob', '_readExport', '_exportMediaRow',
-  '_getAllMedia', 'validateImport', '_dataUrlToBlob', 'getCustomThemes', 'getVector', 'getAllVectors',
-  'getSnapshots',
+  'constructor', 'connect', '_call', 'hasStore', 'getAllVectors', 'getAllNotes', 'listLinks', 'exportAll', 'getSetting',
 ]);
 
 /**
@@ -92,10 +76,8 @@ const READS = new Set([
 const UNDEFINED_WRITES = {
   importNote: "sync-service's remote-only merge calls it, so that path throws today (#19)",
   importAll: "sync-service's remote apply checks for it first, so that path never runs (#19)",
+  saveElement: "sync-service's remote-only merge calls it after importNote, which throws first (#19)",
 };
-
-/** Write names too common to flag on receivers the scanner can't place */
-const GENERIC_WRITE_NAMES = new Set(['init']);
 
 /**
  * App's components: a write-named call on `this.<component>` is that component's own method.
@@ -170,12 +152,13 @@ const COMMANDS = {
   snoozeSpaceNotice: { slice: 6 },
   createAutoBackup: { slice: 6 },
   importBackup: { slice: 6 },
+  // #22's derived writes, which the search index handle runs as commands (#17 PR 4b's facade)
+  updateSearchIndex: { pr: '#17 PR 4b' },
+  saveVector: { pr: '#17 PR 4b' },
   // Left outside the kernel for their own issues
   saveProviderSettings: { ledger: 11 },
   saveSyncSettings: { ledger: 19 },
   applyRemoteChanges: { ledger: 19 },
-  updateSearchIndex: { ledger: 22 },
-  saveVector: { ledger: 22 },
 };
 
 /** Settings that are preferences, which the kernel's settings port owns (#25 owns their schemas) */
@@ -193,32 +176,12 @@ const SYNC_KEYS = ['syncProvider', 'syncWebdavConfig', 'syncLastSyncAt'];
 /**
  * Which command each call becomes: the first rule whose fields all match. `file` and
  * `method` are exact or a RegExp on the File and Method cells, `op` is the method called
- * (exact or a list), `key` the setting key, chrome.storage key, or object store (exact, a
- * list, or a RegExp), and `fields` a field the call's update sets. A rule that names a file
- * or a method also names its ops, so a new call there fails until it's classified.
+ * (exact or a list), and `key` the setting key, chrome.storage key, or object store (exact,
+ * a list, or a RegExp). A rule that names a file or a method also names its ops, so a new call
+ * there fails until it's classified. The rules for the writers DatabaseManager lost went with
+ * them, in #17 PR 4a and 4b: a call to one fails the check as a method it doesn't define.
  */
 const RULES = [
-  // A new note and its first blocks are one intent, an imported one's included
-  { command: 'createNote', method: /\.(runOnboarding|createNoteFromAIResponse|_createNoteFromBlock|importNote)$/, op: ['createNote', 'saveElement'] },
-  { command: 'createNote', op: 'createNote' },
-  { command: 'convertNoteToTemplate', method: /\.convertNoteToTemplate$/, op: 'updateNote' },
-  { command: 'convertTemplateToNote', method: /\.convertTemplateToNote$/, op: 'updateNote' },
-  // The editor's save, the links and search-index name it refreshes, and template blocks inserted as an edit
-  { command: 'saveNoteContent', method: /^BlockEditor\.(_writeSaveState|_afterSaveWrite|selectTemplateItem)$/, op: ['updateNoteNameInSearchIndex', 'saveElement'] },
-  { command: 'restoreSnapshot', method: 'BlockEditor._revertToSnapshot', op: ['deleteElements', 'saveElement', 'updateNote'] },
-  { command: 'insertBlocks', method: /\.(appendAIResponseToNote|refreshNoteMetadataAfterInsert|_appendBlockToNote)$/, op: ['saveElement', 'updateNote'] },
-  // Titles the user asked for are renames; automatic ones yield to titleManuallySet
-  { command: 'renameNote', method: /\.(generateTitleForNote|applyGeneratedTitle)$/, op: 'updateNote' },
-  { command: 'applyDerivedTitle', method: /\.(runAutoTitle|generateTitleForNewNote)$/, op: 'updateNote' },
-  { command: 'attachInsights', op: 'updateNote', fields: 'insights' },
-  { command: 'setPinned', op: 'updateNote', fields: 'pinned' },
-  { command: 'moveNoteToFolder', op: 'updateNote', fields: 'folderId' },
-  { command: 'deleteFolder', op: 'deleteFolder' },
-  { command: 'createFolder', op: 'createFolder' },
-  { command: 'archiveNote', op: 'archiveNote' },
-  { command: 'unarchiveNote', op: 'unarchiveNote' },
-  { command: 'trashNote', op: 'trashNote' },
-  { command: 'deleteNotePermanently', op: 'permanentlyDeleteNote' },
   { command: 'recordJobRun', op: 'setSetting', key: ['lastAutoTitleRun', 'lastInsightsRun'] },
   // A running extraction, kept across reloads
   { command: 'setInsightsPending', op: 'setSetting', key: /^insightsExtracting_/ },
@@ -226,7 +189,8 @@ const RULES = [
   { command: 'saveVector', op: 'saveVector' },
   { command: 'saveProviderSettings', op: 'setSetting', key: PROVIDER_KEYS },
   { command: 'saveSyncSettings', op: 'setSetting', key: SYNC_KEYS },
-  { command: 'applyRemoteChanges', file: 'js/services/sync-service.js', op: ['importNote', 'importAll', 'saveElement'] },
+  // Sync's handle has none of the three (js/kernel/composition/newtab.js): sync has never applied a remote note (#17 PR 4b)
+  { command: 'applyRemoteChanges', file: 'js/services/sync-service.js', op: ['importNote', 'importAll', 'saveElement'], status: 'no live path' },
   { command: 'saveWorkspaceSession', op: ['setSetting', 'set'], key: SESSION_KEYS },
   { command: 'saveChatHistory', op: 'setSetting', key: CHAT_KEYS },
   { command: 'savePromptTemplates', op: 'setSetting', key: 'aiPromptTemplates' },
@@ -236,8 +200,6 @@ const RULES = [
   { command: 'recordExportNotice', op: 'setSetting', key: 'preMigrationNotice' },
   // The space-blocked notice's Not now and Done (#17 PR 1b)
   { command: 'snoozeSpaceNotice', op: 'setSetting', key: 'spaceNoticeSnoozedAt' },
-  { command: 'createAutoBackup', op: 'createAutoBackup' },
-  { command: 'importBackup', op: 'importData' },
   { command: 'setPreferences', op: 'setSetting', key: PREFERENCE_KEYS },
 ];
 
@@ -246,7 +208,9 @@ const STATUSES = [
   ['kernel command, slice 4', '#12 slice 4 (notes and blocks) routes it through the command.'],
   ['kernel command, slice 5', '#12 slice 5 (folders, templates, trash) routes it through the command.'],
   ['kernel command, slice 6', '#12 slice 6 (preferences and session) routes it through the command.'],
+  ['kernel command, #17 PR 4b', "#17 PR 4b's facade (`js/kernel/composition/storage-facade.js`) runs it as the command on the new tab's kernel, under the name its holder has always called."],
   ['no live caller', 'Nothing in `js/` refers to the method or function the write sits in, so the write never runs. Deleting it drops the row. The command is what the call would become.'],
+  ['no live path', "The holder's handle has no such method (`js/kernel/composition/newtab.js`), so the call throws or is skipped and never writes. Sync has never applied a remote note, and its paths stay as they are until #19 wires the command."],
   ['ledgered to #11', "Provider settings and keys, which #11's provider registry takes over (#21 reviews the key rows)."],
   ['ledgered to #19', "The sync service, which #19's sync engine replaces."],
   ['ledgered to #22', "The search index and vectors, which #22's pipelines own."],
@@ -385,7 +349,7 @@ function describe(node) {
 
 /**
  * Scan one file's source for mutating persistence calls. Returns { hits, problems }: each
- * hit is { file, line, method, kind, op, key, fields, call, holder }, and each problem a
+ * hit is { file, line, method, kind, op, key, call, holder }, and each problem a
  * string. `members` (DatabaseManager's method names) sharpens the message for a method
  * nobody classified.
  */
@@ -492,8 +456,12 @@ function scanSource(file, text, { members = null } = {}) {
   }
 
   /** A transaction call: `<db>.transaction(...)` on anything, or Storage.getStore(...) */
-  const isTransaction = n => ts.isCallExpression(n) && ts.isPropertyAccessExpression(strip(n.expression))
+  const opensTransaction = n => ts.isCallExpression(n) && ts.isPropertyAccessExpression(strip(n.expression))
     && (strip(n.expression).name.text === 'transaction' || (strip(n.expression).name.text === 'getStore' && storageRoot(strip(n.expression).expression)));
+  /** A transaction() or getStore() on Storage that DatabaseManager doesn't define, as since #17 PR 4b */
+  const isUndefinedOpen = n => opensTransaction(n) && Boolean(members) && Boolean(storageRoot(strip(n.expression).expression))
+    && !members.has(strip(n.expression).name.text);
+  const isTransaction = n => opensTransaction(n) && !isUndefinedOpen(n);
 
   /** The object store an expression is, as {store, root, tx}, or null */
   function storeOf(node) {
@@ -509,7 +477,7 @@ function scanSource(file, text, { members = null } = {}) {
       const root = tx ? storageRoot(strip(tx.expression).expression) : null;
       return { store: constantString(n.arguments[0]) || '(store)', root, tx };
     }
-    if (callee.name.text === 'getStore' && storageRoot(callee.expression)) {
+    if (callee.name.text === 'getStore' && storageRoot(callee.expression) && !isUndefinedOpen(n)) {
       return { store: constantString(n.arguments[0]) || '(store)', root: storageRoot(callee.expression), tx: n };
     }
     return null;
@@ -582,27 +550,9 @@ function scanSource(file, text, { members = null } = {}) {
     return false;
   }
 
-  /** The fields an update call's record has set on it in the same function before the call */
-  function fieldsSet(call) {
-    const arg = call.arguments[0] && strip(call.arguments[0]);
-    if (!arg || !(ts.isIdentifier(arg) || ts.isPropertyAccessExpression(arg))) return [];
-    const target = arg.getText(sf);
-    const scope = nearestScope(call);
-    const fields = new Set();
-    (function walk(n) {
-      if (n !== scope && ts.isFunctionLike(n)) return;
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-        && ts.isPropertyAccessExpression(n.left) && strip(n.left.expression).getText(sf) === target && n.end <= call.getStart(sf)) {
-        fields.add(n.left.name.text);
-      }
-      ts.forEachChild(n, walk);
-    })(scope);
-    return [...fields].sort();
-  }
-
-  const add = (node, fields) => {
+  const add = (node, found) => {
     const { method, holder } = describe(node);
-    const hit = { file, line: lineOf(node), method, fields: [], ...fields, holder };
+    const hit = { file, line: lineOf(node), method, ...found, holder };
     hits.push(hit);
     return hit;
   };
@@ -610,7 +560,10 @@ function scanSource(file, text, { members = null } = {}) {
   // Every transaction first: a store write in a chain is visited before its transaction
   const transactions = new Map(); // call -> { readwrite, root, written }
   (function walk(n) {
-    if (isTransaction(n)) {
+    if (isUndefinedOpen(n)) {
+      const callee = strip(n.expression);
+      problem(n, `calls ${storageRoot(callee.expression)}.${callee.name.text}, which DatabaseManager doesn't define: fix the call`);
+    } else if (isTransaction(n)) {
       const callee = strip(n.expression);
       const mode = n.arguments[1];
       if (mode && constantString(mode) === null) {
@@ -641,9 +594,6 @@ function scanSource(file, text, { members = null } = {}) {
           if (op === 'setSetting') {
             const key = keyText(args[0]);
             add(n, { kind: 'storage', op, key, call: `${root}.setSetting('${key}'${args.length > 1 ? ', …' : ''})` });
-          } else if (op === 'updateNote') {
-            const fields = fieldsSet(n);
-            add(n, { kind: 'storage', op, key: null, fields, call: `${root}.${op}(${fields.length > 0 ? `{${fields.join(', ')}}` : shown})` });
           } else {
             add(n, { kind: 'storage', op, key: null, call: `${root}.${op}(${shown})` });
           }
@@ -668,7 +618,7 @@ function scanSource(file, text, { members = null } = {}) {
       } else if (WEB_STORAGE_WRITES.has(op) && /^((window|self|globalThis)\.)?(localStorage|sessionStorage)$/.test(receiver.getText(sf))) {
         const key = constantString(args[0]);
         add(n, { kind: 'web storage', op, key, call: `${receiver.getText(sf)}.${op}(${key ? `'${key}'` : '…'})` });
-      } else if ((WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op)) && !GENERIC_WRITE_NAMES.has(op) && !knownOther(receiver)) {
+      } else if ((WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op)) && !knownOther(receiver)) {
         problem(n, `calls ${op}() on ${receiver.getText(sf).replace(/\s+/g, ' ').slice(0, 60)}, which the scanner can't place: reach Storage directly, or add the component to COMPONENTS`);
       }
     }
@@ -710,7 +660,10 @@ function listFiles(root = ROOT_DIR) {
   return files.sort();
 }
 
-/** DatabaseManager's method names, from js/storage.js, or null when there's no such class */
+/**
+ * DatabaseManager's method names, from js/storage.js, or null when there's no js/storage.js or
+ * no such class in it, which fails the check (collect)
+ */
 function storageMembers(root = ROOT_DIR) {
   const file = path.join(root, 'js/storage.js');
   if (!fs.existsSync(file)) return null;
@@ -768,20 +721,26 @@ function matches(want, value) {
   return want === value;
 }
 
-function statusOf(command, hit) {
+/** A command's status in the Commands table: the slice or PR that routes it, or the issue it's ledgered to */
+function commandStatus(entry) {
+  if (entry.ledger) return `ledgered to #${entry.ledger}`;
+  return entry.pr ? `kernel command, ${entry.pr}` : `kernel command, slice ${entry.slice}`;
+}
+
+function statusOf(rule, hit) {
   if (hit.noLiveCaller) return 'no live caller';
+  if (rule.status) return rule.status;
   if (Object.hasOwn(LEDGERED_FILES, hit.file)) return `ledgered to #${LEDGERED_FILES[hit.file]}`;
-  const entry = COMMANDS[command];
-  return entry.ledger ? `ledgered to #${entry.ledger}` : `kernel command, slice ${entry.slice}`;
+  return commandStatus(COMMANDS[rule.command]);
 }
 
 /** The hit with its command and status, or with command null when no rule matches */
 function classify(hit) {
   const rule = RULES.find(r => matches(r.file, hit.file) && matches(r.method, hit.method) && matches(r.op, hit.op)
-    && matches(r.key, hit.key) && (r.fields === undefined || (hit.fields || []).includes(r.fields)));
+    && matches(r.key, hit.key));
   const { holder, ...row } = hit;
   if (!rule) return { ...row, command: null, status: null };
-  return { ...row, command: rule.command, status: statusOf(rule.command, hit) };
+  return { ...row, command: rule.command, status: statusOf(rule, hit) };
 }
 
 /** The other writes the scan finds, which RULES may name besides DatabaseManager's */
@@ -812,6 +771,8 @@ function staleListings(members) {
   return problems;
 }
 
+const NO_DATABASE_MANAGER = "js/storage.js has no class DatabaseManager, so no call to it can be checked: keep the class, or take Storage out of scripts/write-paths.js";
+
 /** Every write path in js/, classified, and what keeps the doc from being written */
 function collect(root = ROOT_DIR) {
   const files = listFiles(root);
@@ -820,7 +781,10 @@ function collect(root = ROOT_DIR) {
   const members = storageMembers(root);
   const index = referencesOf(sources);
   const rows = [];
-  const problems = staleListings(members);
+  // Without the class nothing can tell a method it has from one it lost, so the lookup fails
+  // the check, where it used to let every listing and call through (R88's read of #17 PR 4b)
+  const problems = members ? [] : [NO_DATABASE_MANAGER];
+  problems.push(...staleListings(members));
   for (const file of files) {
     const result = scanSource(file, texts.get(file), { members });
     for (const hit of result.hits) {
@@ -863,18 +827,15 @@ function renderDoc(rows) {
     '',
     '| Command | Status | Rows |',
     '| --- | --- | --- |',
-    ...Object.entries(COMMANDS).map(([command, entry]) => {
-      const status = entry.ledger ? `ledgered to #${entry.ledger}` : `kernel command, slice ${entry.slice}`;
-      return `| \`${command}\` | ${status} | ${count('command', command)} |`;
-    }),
+    ...Object.entries(COMMANDS).map(([command, entry]) => `| \`${command}\` | ${commandStatus(entry)} | ${count('command', command)} |`),
     '',
-    'Rows marked "no live caller" are counted under the command the call would become.',
+    'Rows marked "no live caller" or "no live path" are counted under the command the call would become.',
     '',
     "Routed ahead of their slice: the sidebar folder menu's Add Note to Folder files its new note with `createNote`'s `folderId` (#12 slice 4c2), so the slice 5 `moveNoteToFolder` row that set the folder after the create went with the slice 4 `createNote` row.",
     '',
     '## Calls',
     '',
-    "Method is the class method or function the call sits in. After `>` comes the anonymous or nested function inside it, when where it sits says what it's for: a listener, a callback property such as `onResizeEnd`, or a menu item's `action`. An update's Call lists the fields it sets.",
+    "Method is the class method or function the call sits in. After `>` comes the anonymous or nested function inside it, when where it sits says what it's for: a listener, a callback property such as `onResizeEnd`, or a menu item's `action`.",
     '',
     '| File | Line | Method | Call | Command | Status |',
     '| --- | --- | --- | --- | --- | --- |',
@@ -961,6 +922,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  WRITES, READS, MODE_WRITES, UNDEFINED_WRITES, COMMANDS, RULES, STATUSES, PREFERENCE_KEYS, COMPONENTS,
-  LEDGERED_FILES, DOC, scanSource, listFiles, storageMembers, staleListings, classify, collect, renderDoc, withoutLines, check, main,
+  WRITES, READS, MODE_WRITES, UNDEFINED_WRITES, COMMANDS, RULES, STATUSES, PREFERENCE_KEYS, PROVIDER_KEYS, SYNC_KEYS,
+  COMPONENTS, LEDGERED_FILES, DOC, scanSource, listFiles, storageMembers, staleListings, classify, collect, renderDoc,
+  withoutLines, check, main,
 };

@@ -26,7 +26,7 @@ import { createRequire } from 'node:module';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
-import { createKernel } from '../../js/kernel/core/application/kernel.js';
+import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { dump, legacyEnv, newProfile, profileWith, recordsIn, run, synthesized } from './migration-support.mjs';
 import { CALLERS } from './support.mjs';

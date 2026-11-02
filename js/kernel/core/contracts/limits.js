@@ -30,7 +30,10 @@ export const COMMAND_DEADLINE_MS = 30_000;
 /** How long a query has from when it's sent to its answer */
 export const QUERY_DEADLINE_MS = 15_000;
 
-/** How long startup maintenance has, since its integrity check reads every note */
+/**
+ * How long startup maintenance has: the time its integrity check took to read every note, which
+ * it kept when the check went with #17 PR 4a
+ */
 export const MAINTENANCE_DEADLINE_MS = 120_000;
 
 /**

@@ -10,6 +10,7 @@
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
+const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 const MARGIN = 8;
@@ -158,10 +159,11 @@ const MENUS = [
     // Nothing in 1.4.x opens it (e2e/characterization/overlays.spec.js), so the editor's own call does
     open: async (page, viewport) => {
       await low(page, blockAt(page, LINKS_AT), viewport);
-      await page.evaluate(async index => {
-        app.editor.templates = await Storage.getTemplates();
+      const templates = await profileStore(page).getTemplates();
+      await page.evaluate(([index, list]) => {
+        app.editor.templates = list;
         app.editor.showTemplateMenu(document.querySelectorAll('#blocks-container > .block')[index]);
-      }, LINKS_AT);
+      }, [LINKS_AT, templates]);
     },
   },
   {

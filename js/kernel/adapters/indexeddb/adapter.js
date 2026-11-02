@@ -87,10 +87,10 @@ import {
   unavailableFrom,
 } from '../../core/contracts/outcomes.js';
 import { withoutPlacement } from '../../core/domain/placement.js';
-import { digestOf } from '../../core/memory/fingerprint.js';
+import { digestOf, sameConflict } from '../../core/memory/fingerprint.js';
 import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 import { systemClock } from '../../core/ports/runtime.js';
-import { createAutoBackup, exportFile, prepareImport, readExport } from './backups.js';
+import { createAutoBackup, exportFile, exportObject, prepareImport, readExport } from './backups.js';
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
@@ -126,6 +126,7 @@ import { createVersionTracker } from './versions.js';
 /** @typedef {import('../../core/ports/runtime.js').Clock} Clock */
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../core/contracts/outcomes.js').Conflict} Conflict */
+/** @typedef {import('./conflicts.js').ConflictRecord} ConflictRecord */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
 /** @typedef {import('./integrity.js').IntegrityLog} IntegrityLog */
 /** @typedef {import('./connection.js').OpenState} OpenState */
@@ -336,6 +337,10 @@ function view(db, tx, scope, writable, tracker) {
     getAll: async store => {
       const objectStore = handle(store);
       return sawAll(store, objectStore ? await result(objectStore.getAll()) : []);
+    },
+    getAllKeys: async store => {
+      const objectStore = handle(store);
+      return objectStore ? /** @type {string[]} */ (await result(objectStore.getAllKeys())) : [];
     },
     getAllByIndex: async (store, index, value) => {
       const objectStore = handle(store);
@@ -612,17 +617,26 @@ export function createIndexedDbAdapter({
   const lastWrite = new Map();
 
   /**
-   * Keeps a conflict that wrote nothing: its record and its ledger row, in `tx`
+   * Keeps a conflict that wrote nothing: its record, unless the note has one of the same change
+   * already, sent again under a new commandId (R131), and its ledger row, in `tx`
    * @param {IDBTransaction} tx
    * @param {Books} books
    * @param {Work} work
    * @param {Conflict} conflict
+   * @returns {Promise<void>}
    */
-  const keepConflict = (tx, books, work, conflict) => {
+  const keepConflict = async (tx, books, work, conflict) => {
     const at = clock.now();
-    if (books.conflicts) tx.objectStore(CONFLICTS_STORE).put(conflictRecord(work, conflict, at));
     if (books.ledger && isCatalogCommand(work))
       tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, conflict, at));
+    if (!books.conflicts) return;
+    const record = conflictRecord(work, conflict, at);
+    const store = tx.objectStore(CONFLICTS_STORE);
+    const theirs =
+      typeof record.noteId === 'string'
+        ? /** @type {ConflictRecord[]} */ (await result(store.index('noteId').getAll(record.noteId)))
+        : [];
+    if (!theirs.some(other => sameConflict(other, record))) store.put(record);
   };
 
   /**
@@ -749,7 +763,7 @@ export function createIndexedDbAdapter({
         if (stop && stop.kind === 'conflict') {
           // A unit checks the version it expects before it writes, so this is a bug in the unit
           if (tracker.written()) return { abort: answered(unavailable('adapter', 'conflict-after-write', false)) };
-          keepConflict(open, books, work, stop);
+          await keepConflict(open, books, work, stop);
           return { commit: stop };
         }
         if (stop) return { abort: answered(stop) };
@@ -828,7 +842,7 @@ export function createIndexedDbAdapter({
    * The read-only integrity check (integrity.js), which only reports what it finds, so it
    * commits whatever that is. The worker runs it after an install or an update, as
    * runIntegrityCheck (#35 slice 1), never as it starts. With no connection to read, one
-   * another context's upgrade or delete closed included, it warns and commits, as
+   * another context's upgrade or delete closed included, it warns and commits, as 1.4.x's
    * Storage.runIntegrityCheck does on a closed database: a check is no reason to open the
    * database again, or to make one.
    * @param {Work} work
@@ -931,6 +945,29 @@ export function createIndexedDbAdapter({
   };
 
   /**
+   * What an export read gives, on an adapter that runs the backup tasks: `read` over the open
+   * database, failing as the adapter's reads fail
+   * @template T
+   * @param {(db: IDBDatabase) => Promise<T>} read
+   * @returns {Promise<T>}
+   */
+  const exported = async read => {
+    if (!backups) throw new UnavailableError('adapter', 'backups-need-legacy-storage', false);
+    /** @type {IDBDatabase} */
+    let db;
+    try {
+      db = connection.database();
+    } catch (error) {
+      throw startFailure(error);
+    }
+    try {
+      return await read(db);
+    } catch (error) {
+      throw failureIn(error);
+    }
+  };
+
+  /**
    * Each bulk command's digest, by commandId, from its first recall in this adapter
    * @type {Map<string, string>}
    */
@@ -1008,21 +1045,16 @@ export function createIndexedDbAdapter({
     },
 
     // Export JSON's file, and Create Backup's with its fields, on an adapter that runs the
-    // backup tasks (backups.js), read in one readonly transaction
+    // backup tasks (backups.js), read in one readonly transaction, with the conflict records of
+    // the notes it holds (#17 PR 4b)
     async exportBackup(extra) {
-      if (!backups) throw new UnavailableError('adapter', 'backups-need-legacy-storage', false);
-      /** @type {IDBDatabase} */
-      let db;
-      try {
-        db = connection.database();
-      } catch (error) {
-        throw startFailure(error);
-      }
-      try {
-        return await exportFile(await readExport(db), clock.now(), extra);
-      } catch (error) {
-        throw failureIn(error);
-      }
+      return exported(db => readExport(db, { conflicts: true }).then(rows => exportFile(rows, clock.now(), extra)));
+    },
+
+    // The export as one object, what sync uploads, on an adapter that runs the backup tasks
+    async exportData() {
+      const data = await exported(db => readExport(db).then(rows => exportObject(rows, clock.now())));
+      return /** @type {import('../../core/ports/repository.js').ExportData} */ (data);
     },
 
     async readSettings(area, keys) {

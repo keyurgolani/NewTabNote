@@ -45,7 +45,7 @@ async function createProfile(factory, { active = ['A', 'B'] } = {}) {
 
 /**
  * The keys TabController.saveTabs and cacheLastOpenedNoteId write, on a profile
- * whose default settings are already written (or Storage.init resets openTabs).
+ * whose default settings are already written (or the first run's defaults reset openTabs).
  * A string in `tabs` is a tab for that note ID; anything else is saved as given.
  */
 function saveWorkspace(env, { tabs, active = 0, split = false, secondary = null, lastOpened = null }) {
@@ -60,11 +60,9 @@ function saveWorkspace(env, { tabs, active = 0, split = false, secondary = null,
   if (lastOpened) env.chrome.local.lastOpenedNoteId = lastOpened;
 }
 
-/** A new tab starting up: Storage, the tab bar and split-view elements, and a TabController with both editors. */
+/** A new tab starting up: its kernel, the tab bar and split-view elements, and a TabController with both editors. */
 async function start(env) {
   env.load(...FILES);
-  const Storage = env.get('Storage');
-  await Storage.init();
   await startEditorClient(env);
   const panes = env.document.stub(['note-tabs', 'workspace-container', 'editor-container', 'secondary-editor-container', 'split-view-toggle']);
   panes['editor-container'].className = 'editor-pane active';
@@ -83,7 +81,7 @@ async function start(env) {
   tabs.noteList = env.noteList;
   const toasts = [];
   env.get('Utils').showToast = (message, kind) => { toasts.push({ message, kind }); };
-  return { Storage, tabs, toasts };
+  return { tabs, toasts };
 }
 
 /** Record the note IDs an editor is asked to load. */

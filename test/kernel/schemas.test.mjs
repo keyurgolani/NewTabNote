@@ -160,6 +160,9 @@ const folderTypesMatch = true;
  *   listThemes: typeof import('../../js/kernel/core/contracts/operations/list-themes.js').result,
  *   exportBackup: typeof import('../../js/kernel/core/contracts/operations/export-backup.js').result,
  *   profileHoldsContent: typeof import('../../js/kernel/core/contracts/operations/profile-holds-content.js').result,
+ *   listLinks: typeof import('../../js/kernel/core/contracts/operations/list-links.js').result,
+ *   listVectors: typeof import('../../js/kernel/core/contracts/operations/list-vectors.js').result,
+ *   getSyncData: typeof import('../../js/kernel/core/contracts/operations/get-sync-data.js').result,
  * }} ResultSchemas
  */
 
@@ -191,6 +194,9 @@ const queryDataMatches = {
   listThemes: true,
   exportBackup: true,
   profileHoldsContent: true,
+  listLinks: true,
+  listVectors: true,
+  getSyncData: true,
 };
 
 /**
