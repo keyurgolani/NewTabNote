@@ -618,6 +618,44 @@ v8(
   },
 );
 
+// After every other fixture too (#14 slice 3): blocks a 1.4.x profile can hold, from a file a
+// newer build exported or one made by hand, that this build reads in a safe state, or with a
+// field its type doesn't own, beside 1.4.x's own. The upgrade and the editor keep each as it is.
+v8(
+  'v8.opaque-blocks',
+  "Blocks this build doesn't fully read, beside 1.4.x's own: one saved by a newer version, one of a type no release has, a table whose data isn't rows, one with no type, and a text block with a field from a newer build.",
+  r => {
+    const kept = note('v8', 'opaque-blocks-note', 'Kept as it is', { createdAt: T0 + 95000, updatedAt: T0 + 95000 });
+    /** A block of the note, as 1.4.x's serializer writes it, with `fields` over it */
+    const at = (name, order, content, fields = {}) => block(`opaque-blocks-${name}`, kept.id, order, content, fields);
+    const typeless = Object.fromEntries(Object.entries(at('typeless', 5, 'A block with no type')).filter(([name]) => name !== 'type'));
+    return {
+      ...r,
+      canvases: [...r.canvases, kept],
+      elements: [
+        ...r.elements,
+        at('before', 0, 'Before the cards'),
+        at('newer', 1, 'Saved by a newer version', { schemaVersion: 9, newerField: { shape: 'unknown' } }),
+        at('unknown', 2, '', { type: 'kanban', columns: [{ name: 'To do', cards: ['Tile the floor'] }] }),
+        at('invalid', 3, '', { type: 'table', rows: 2, cols: 2, tableData: 'Item,Cost', hasHeaderRow: true }),
+        at('extra', 4, 'A field from a newer build', { futureField: 'kept' }),
+        typeless,
+        at('table', 6, '', {
+          type: 'table',
+          rows: 2,
+          cols: 2,
+          tableData: [
+            ['Item', 'Cost'],
+            ['Tiles', '$640'],
+          ],
+          hasHeaderRow: true,
+        }),
+        at('after', 7, 'After the cards'),
+      ],
+    };
+  },
+);
+
 fs.mkdirSync(OUT, { recursive: true });
 for (const value of fixtures) {
   fs.writeFileSync(path.join(OUT, `${value.header.id}.json`), `${JSON.stringify(value, null, 2)}\n`);

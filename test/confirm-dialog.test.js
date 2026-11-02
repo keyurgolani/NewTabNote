@@ -1,10 +1,10 @@
 'use strict';
 
-// choiceDialog and confirmDialog's initialFocus, driven through a minimal DOM.
+// choiceDialog, and confirmDialog's initialFocus and doc, driven through a minimal DOM.
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { createLegacyEnv } = require('./helpers/legacy-env');
+const { createLegacyEnv, FakeDocument } = require('./helpers/legacy-env');
 
 function openOverlay(env) {
   return env.document.querySelector('.confirm-dialog-overlay');
@@ -112,5 +112,22 @@ describe('confirmDialog initialFocus', () => {
     assert.ok(openOverlay(env).querySelector('.confirm-dialog-danger'), 'danger-styled confirm button');
     openOverlay(env).dispatchEvent({ type: 'keydown', key: 'Enter' });
     assert.equal(await result, false);
+  });
+});
+
+describe('confirmDialog doc', () => {
+  it('opens in the document it is given, as a pop-out editor gives its own window, and leaves the page alone (#14 slice 3)', async () => {
+    const env = createLegacyEnv();
+    env.load('js/ui/confirm-dialog.js');
+    const confirmDialog = env.get('confirmDialog');
+    const pip = new FakeDocument();
+    const result = confirmDialog({ title: 'Turn into Text?', message: 'x', initialFocus: 'cancel', doc: pip });
+    assert.ok(env.document.querySelector('.confirm-dialog-overlay') === null, 'not on the page');
+    const overlay = pip.querySelector('.confirm-dialog-overlay');
+    assert.ok(overlay !== null, 'in the pop-out');
+    assert.equal(pip.activeElement.textContent, 'Cancel');
+    overlay.dispatchEvent({ type: 'keydown', key: 'Enter' });
+    assert.equal(await result, false, 'Enter on the pop-out\'s focused Cancel cancels');
+    assert.ok(pip.querySelector('.confirm-dialog-overlay') === null, 'gone once answered');
   });
 });

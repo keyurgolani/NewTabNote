@@ -27,6 +27,34 @@ const OPEN_OVERLAYS = [
 const NON_TEXT_INPUTS = ['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'];
 
 /**
+ * What a Turn into that removes structure says goes and what stays (#14 slice 3), for one block
+ * and for a selection's, by the part the kernel's conversions.js names, in the order it names them
+ */
+const TURN_LOSSES = Object.freeze([
+  {
+    part: 'grid',
+    one: "The table's grid is removed. Its cells are kept as text, one row per line.",
+    many: 'Tables lose their grid, and their cells are kept as text, one row per line.',
+  },
+  { part: 'image', one: 'The image is removed. Undo brings it back.', many: 'Images are removed.' },
+  {
+    part: 'video',
+    one: 'The video is removed. Its link is kept as text.',
+    many: 'Videos are removed, and their links are kept as text.',
+  },
+  {
+    part: 'file',
+    one: 'The attached file is removed. Its name is kept as text.',
+    many: 'Attached files are removed, and their names are kept as text.',
+  },
+  {
+    part: 'arrow',
+    one: "The toggle's arrow is removed. Its hidden content moves to a new block below it.",
+    many: 'Toggles lose their arrow, and their hidden content moves to a new block below each one.',
+  },
+]);
+
+/**
  * What an editor asks of the page around it: its navigation port. App gives it to the editors
  * it makes, and TabController to the PiP editor, in place of the window.app lookup getApp made.
  * @typedef {Object} EditorNavigation
@@ -405,7 +433,7 @@ class BlockEditor {
 
     // Check if note already has content (for first-content detection)
     const existingContent = this.blocks.some(block => {
-      const text = this.extractBlockTextContent(block);
+      const text = this._textOf(block);
       return text && text.trim().length > 0;
     });
     this.hasReceivedFirstContent = existingContent;
@@ -965,6 +993,22 @@ class BlockEditor {
   }
 
   /**
+   * A block's text for the editor's own reads (whether the note has content yet, the text its
+   * save reads wiki links from), one block at a time: a block whose text can't be read gives
+   * none, so it can't stop a load or a save (#14 slice 3, per-block isolation).
+   * extractBlockTextContent itself keeps 1.4.x's output, throws included.
+   * @param {Object} block
+   * @returns {string}
+   */
+  _textOf(block) {
+    try {
+      return this.extractBlockTextContent(block);
+    } catch {
+      return '';
+    }
+  }
+
+  /**
    * One picker item, as the slash menu, the wiki-link picker, and the template picker show it:
    * `iconHtml` is packaged markup, and the title and description are set as text, so a name
    * shows exactly as typed
@@ -1291,20 +1335,27 @@ class BlockEditor {
     const index = this.blocks.findIndex((b) => b.id === blockId);
     if (index === -1) return;
 
-    // Don't delete if it's the only block
+    // The note's last block goes, and a new empty text block takes its place, rather than the
+    // block being retyped, which would drop what its type held (#14 slice 3, the opaque rule)
     if (this.blocks.length === 1) {
-      // Just clear it
-      const beforeSnapshot = this.snapshotBlock(this.blocks[0]);
-      this.blocks[0].content = '';
-      this.blocks[0].type = 'text';
+      const gone = this.blocks[0];
+      const goneSnapshot = this.snapshotBlock(gone);
+      goneSnapshot.order = 0;
+      const fresh = this.createBlock('text');
+      const freshSnapshot = this.snapshotBlock(fresh);
+      freshSnapshot.order = 0;
       this.pushUndo({
-        type: 'content',
-        blockId: this.blocks[0].id,
-        before: beforeSnapshot,
-        after: this.snapshotBlock(this.blocks[0]),
+        type: 'group',
+        entries: [
+          { type: 'delete', blockId: gone.id, before: goneSnapshot, after: null },
+          { type: 'add', blockId: fresh.id, before: null, after: freshSnapshot },
+        ],
       });
-      this.rerenderBlock(this.blocks[0]);
-      this.focusBlock(this.blocks[0].id);
+      this.blocks = [fresh];
+      this._deleteStoredBlocks([gone.id]);
+      this.renderBlocks();
+      this.focusBlock(fresh.id);
+      this.scheduleSave();
       return;
     }
 
@@ -1328,24 +1379,48 @@ class BlockEditor {
   }
 
   /**
-   * Change block type
+   * What `block` keeps and removes when it turns into `newType` (#14 slice 3, the kernel's
+   * conversions.js): the new text, the structure that goes, and the text blocks to add after it.
+   * Turning into its own type keeps its text as it is. Null when it doesn't convert, as a block in
+   * a safe state never does, so nothing re-encodes it.
+   * @param {Block} block
+   * @param {string} newType
+   * @returns {{content: string, removes: readonly string[], after: readonly {type: string, content: string}[]} | null}
    */
-  changeBlockType(blockId, newType) {
-    const block = this.getBlockById(blockId);
-    if (!block) return;
+  _conversionOf(block, newType) {
+    if (block.safeState()) return null;
+    if (newType === block.type) return { content: block.content, removes: [], after: [] };
+    return globalThis.BlockProjections.conversionOf(block.serialize(), newType);
+  }
 
-    const beforeSnapshot = this.snapshotBlock(block);
-    const oldType = block.type;
+  /**
+   * Whether `block`'s text is all it holds, so a merge that takes its text and deletes it loses
+   * nothing (#14 slice 3): turning it into text would remove and move nothing, it carries no
+   * field its type doesn't own, and its imageUrl holds no image
+   * @param {Block} block
+   * @returns {boolean}
+   */
+  _holdsOnlyText(block) {
+    if (block.kept || globalThis.BlockProjections.holdsImage(block.imageUrl)) return false;
+    const asText = this._conversionOf(block, 'text');
+    return asText !== null && asText.removes.length === 0 && asText.after.length === 0;
+  }
 
-    // Extract text content from incompatible block types (Req 12.3): their fields are plain
-    // text, escaped into the new type's rich content (#14 slice 2)
-    if (['image', 'video', 'file', 'bookmark', 'equation', 'table'].includes(oldType)) {
-      block.content = globalThis.BlockRendering.escapePlainText(this.extractBlockTextContent(block) || '');
-    }
-
+  /**
+   * Turn `block` into `newType` as `conversion` says, adding its text blocks right after it, with
+   * no render or save (#14 slice 3)
+   * @param {Block} block
+   * @param {string} newType
+   * @param {{content: string, after: readonly {type: string, content: string}[]}} conversion - _conversionOf's
+   * @returns {Array<UndoEntry>} its undo entries in the order they ran: the convert, then each add
+   */
+  _convertBlock(block, newType, conversion) {
+    const before = this.snapshotBlock(block);
+    block.content = conversion.content;
     block.type = newType;
 
-    // Discard incompatible properties (Req 12.3)
+    // Discard incompatible properties (Req 12.3). What a block holds is kept in its new text,
+    // or the conversion asked first (turnInto)
     if (newType !== 'table') {
       block.tableData = null;
       block.rows = 2;
@@ -1382,15 +1457,39 @@ class BlockEditor {
       block.indentLevel = 0;
     }
 
-    // Record undo for type conversion
-    this.pushUndo({
-      type: 'convert',
-      blockId,
-      before: beforeSnapshot,
-      after: this.snapshotBlock(block),
-    });
+    /** @type {Array<UndoEntry>} */
+    const entries = [{ type: 'convert', blockId: block.id, before, after: this.snapshotBlock(block) }];
+    let index = this.blocks.indexOf(block);
+    for (const added of conversion.after) {
+      const fresh = this.createBlock(added.type, added.content);
+      index += 1;
+      this.blocks.splice(index, 0, fresh);
+      const after = this.snapshotBlock(fresh);
+      after.order = index;
+      entries.push({ type: 'add', blockId: fresh.id, before: null, after });
+    }
+    return entries;
+  }
 
-    // Re-render this block
+  /**
+   * Change block type. A conversion that removes structure (a table's grid, an image, a video,
+   * an attached file, or a toggle's arrow with what it hides) happens only once it's
+   * `confirmed`, by the yes turnInto asks for (#14 slice 3); without one it changes nothing.
+   * The conversion is one undo entry.
+   * @param {string} blockId
+   * @param {string} newType
+   * @param {{confirmed?: boolean}} [options]
+   * @returns {boolean} whether it changed
+   */
+  changeBlockType(blockId, newType, { confirmed = false } = {}) {
+    const block = this.getBlockById(blockId);
+    const conversion = block ? this._conversionOf(block, newType) : null;
+    if (!conversion || (conversion.removes.length > 0 && !confirmed)) return false;
+
+    const entries = this._convertBlock(block, newType, conversion);
+    this.pushUndo(entries.length === 1 ? entries[0] : { type: 'group', entries });
+
+    // Re-render this block, with the blocks it added after it
     const oldEl = this.container.querySelector(`[data-id="${blockId}"]`);
     if (oldEl) {
       const newEl = block.createElement();
@@ -1399,11 +1498,131 @@ class BlockEditor {
         newEl.dataset.number = this.getNumberedListNumber(index);
       }
       oldEl.replaceWith(newEl);
+      let afterId = blockId;
+      for (const entry of entries.slice(1)) {
+        this.insertBlockDOM(this.getBlockById(entry.blockId), afterId);
+        afterId = entry.blockId;
+      }
       this.focusBlock(blockId);
     }
 
     this.updateNumberedLists();
     this.scheduleSave();
+    return true;
+  }
+
+  /**
+   * Turn a block into `newType`, asking first when that removes structure (#14 slice 3). Turn
+   * into in a block's menu, Alt+1, 2 and 3, Backspace at a block's start and the slash menu come
+   * here. The question opens in this editor's own document, so a pop-out editor asks in its own
+   * window, and a yes is one undo entry.
+   * @param {string} blockId
+   * @param {string} newType
+   * @returns {Promise<boolean>} whether it turned
+   */
+  async turnInto(blockId, newType) {
+    const block = this.getBlockById(blockId);
+    const conversion = block ? this._conversionOf(block, newType) : null;
+    if (!conversion) return false;
+    if (conversion.removes.length === 0) return this.changeBlockType(blockId, newType);
+    const noteId = this.noteId;
+    const focused = this.doc.activeElement;
+    if (!(await this._confirmTurn([conversion], newType))) {
+      this._focusAfterCancel(focused, [blockId]);
+      return false;
+    }
+    // The note and the block it asked about are still the ones on screen
+    if (noteId !== this.noteId || this.getBlockById(blockId) !== block) return false;
+    return this.changeBlockType(blockId, newType, { confirmed: true });
+  }
+
+  /**
+   * Turn the blocks `ids` names into `newType`, Turn into on a selection (#14 slice 3): it asks
+   * once for all of them when any loses structure, and a yes is one undo entry. A block of the
+   * type already, or in a safe state, stays as it is.
+   * @param {Iterable<string>} ids
+   * @param {string} newType
+   * @returns {Promise<boolean>} whether any turned
+   */
+  async turnSelectionInto(ids, newType) {
+    const wanted = new Set(ids);
+    const turning = this.blocks.filter((block) => wanted.has(block.id) && block.type !== newType);
+    const conversions = turning.map((block) => this._conversionOf(block, newType)).filter(Boolean);
+    if (conversions.length === 0) return false;
+    if (conversions.some((conversion) => conversion.removes.length > 0)) {
+      const noteId = this.noteId;
+      const focused = this.doc.activeElement;
+      if (!(await this._confirmTurn(conversions, newType))) {
+        this._focusAfterCancel(focused, this.blocks.filter((block) => wanted.has(block.id)).map((block) => block.id));
+        return false;
+      }
+      if (noteId !== this.noteId) return false;
+    }
+
+    /** @type {Array<UndoEntry>} */
+    const entries = [];
+    for (const block of turning) {
+      // A block gone since it asked stays gone
+      if (this.getBlockById(block.id) !== block) continue;
+      const conversion = this._conversionOf(block, newType);
+      if (conversion) entries.push(...this._convertBlock(block, newType, conversion));
+    }
+    if (entries.length === 0) return false;
+    this.pushUndo(entries.length === 1 ? entries[0] : { type: 'group', entries });
+    this.renderBlocks();
+    this.scheduleSave();
+    return true;
+  }
+
+  /**
+   * Put focus back after a question's Cancel (#14 slice 3): where it was in this note, so typing
+   * goes on there, or else, when the question came from outside the note (a block's menu, a
+   * selection), in the first of `blockIds` that takes it, its text or a table's first cell. A
+   * card takes none.
+   * @param {Element | null} focused - what had focus when the question opened
+   * @param {string[]} blockIds - the blocks the question was about, in note order
+   */
+  _focusAfterCancel(focused, blockIds) {
+    const back = /** @type {HTMLElement | null} */ (focused);
+    if (back && this.container.contains(back) && typeof back.focus === 'function') {
+      back.focus();
+      return;
+    }
+    for (const id of blockIds) {
+      const el = this.getBlockElement(id);
+      const target = /** @type {HTMLElement | null} */ (el ? el.querySelector('.block-content, td, th') : null);
+      if (target) {
+        target.focus();
+        return;
+      }
+    }
+  }
+
+  /**
+   * Ask before a Turn into removes structure (#14 slice 3), in this editor's own document, so a
+   * pop-out editor asks in its own window: what goes and what's kept, for one block or for a
+   * selection's. Undo reverses it, so its yes is no danger button. No dialog, no turn.
+   * @param {Array<{removes: readonly string[]}>} conversions - one for each block that turns
+   * @param {string} newType
+   * @returns {Promise<boolean>} true on a yes
+   */
+  _confirmTurn(conversions, newType) {
+    const ask = globalThis.confirmDialog;
+    if (typeof ask !== 'function') return Promise.resolve(false);
+    const named = this.getTurnIntoTypes().find(({ type }) => type === newType);
+    const label = named ? named.name : (BlockTypes[newType] ? BlockTypes[newType].name : newType);
+    const removed = new Set(conversions.flatMap((conversion) => conversion.removes));
+    const one = conversions.length === 1;
+    const sentences = TURN_LOSSES.filter(({ part }) => removed.has(part)).map((loss) => (one ? loss.one : loss.many));
+    if (!one && removed.has('image')) sentences.push('Undo brings them back.');
+    return ask({
+      title: one ? `Turn into ${label}?` : `Turn ${conversions.length} blocks into ${label}?`,
+      message: sentences.join(' '),
+      confirmText: `Turn into ${label}`,
+      cancelText: 'Cancel',
+      initialFocus: 'cancel',
+      doc: this.doc,
+    });
   }
 
   /**
@@ -1700,7 +1919,7 @@ class BlockEditor {
    */
   getAllBlocksTextContent(blocks = this.blocks) {
     return blocks
-      .map(block => this.extractBlockTextContent(block))
+      .map(block => this._textOf(block))
       .filter(text => text && text.trim())
       .join('\n\n');
   }
@@ -2068,6 +2287,10 @@ class BlockEditor {
     const block = this.getBlockById(blockEl.dataset.id);
     if (!block) return;
 
+    // With blocks selected, Backspace and Delete delete the selection (onGlobalKeyDown, Req
+    // 13.4), so the block they're pressed in leaves them alone (#14 slice 3)
+    if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds && this.selectedBlockIds.size > 0) return;
+
     const content = blockEl.querySelector('.block-content');
 
     // Handle table cell Tab/Shift+Tab navigation (Req 33.1, 33.2)
@@ -2226,7 +2449,7 @@ class BlockEditor {
       }
 
       if (shortcutAction.type === 'convert-block') {
-        this.changeBlockType(block.id, shortcutAction.blockType);
+        this.turnInto(block.id, shortcutAction.blockType);
         return;
       }
 
@@ -2278,7 +2501,7 @@ class BlockEditor {
 
         // If block has special type, convert to text first
         if (block.type !== 'text') {
-          this.changeBlockType(block.id, 'text');
+          this.turnInto(block.id, 'text');
           return;
         }
 
@@ -2289,7 +2512,8 @@ class BlockEditor {
           const prevEl = this.getBlockElement(prevBlock.id);
           const prevContent = prevEl?.querySelector('.block-content');
 
-          if (prevContent && prevBlock.type !== 'divider' && prevBlock.type !== 'image') {
+          // The block merges in only when its text is all it holds (#14 slice 3)
+          if (prevContent && prevBlock.type !== 'divider' && prevBlock.type !== 'image' && this._holdsOnlyText(block)) {
             const prevLength = prevContent.textContent.length;
             prevBlock.content = prevContent.innerHTML + block.content;
             this.deleteBlock(block.id);
@@ -2318,8 +2542,9 @@ class BlockEditor {
           const nextBlock = this.blocks[index + 1];
           const nextEl = this.getBlockElement(nextBlock.id);
           const nextContent = nextEl?.querySelector('.block-content');
-
-          if (nextContent && nextBlock.type !== 'divider' && nextBlock.type !== 'image') {
+          // The next block merges in only when its text is all it holds, so a toggle's hidden
+          // content and a field its type doesn't own stay (#14 slice 3)
+          if (nextContent && nextBlock.type !== 'divider' && nextBlock.type !== 'image' && this._holdsOnlyText(nextBlock)) {
             block.content = content.innerHTML + nextBlock.content;
             globalThis.BlockRendering.render(content, block.content);
             this.deleteBlock(nextBlock.id);
@@ -2635,12 +2860,14 @@ class BlockEditor {
 
   /**
    * @typedef {Object} UndoEntry
-   * @property {'add'|'delete'|'move'|'convert'|'content'} type
-   * @property {string} blockId
-   * @property {Object} before - Snapshot before the operation
-   * @property {Object} after - Snapshot after the operation
+   * @property {'add'|'delete'|'move'|'convert'|'content'|'group'} type
+   * @property {string} [blockId]
+   * @property {Object} [before] - Snapshot before the operation
+   * @property {Object} [after] - Snapshot after the operation
    * @property {number} [fromIndex] - For move operations
    * @property {number} [toIndex] - For move operations
+   * @property {Array<UndoEntry>} [entries] - A group's entries, one action's steps in the order
+   *   they ran, which undo in the reverse order (#14 slice 3)
    */
 
   /**
@@ -2692,9 +2919,28 @@ class BlockEditor {
    * @param {boolean} reverse
    */
   _applyUndoEntry(entry, reverse) {
+    this._applyUndoStep(entry, reverse);
+    this.renderBlocks();
+    this.scheduleSave();
+  }
+
+  /**
+   * An entry's change to the blocks, with no render or save. A group's entries apply in the order
+   * they ran and undo in the reverse order, so one action that took several steps undoes in one
+   * (#14 slice 3): a Turn into that adds a block, a selection's Turn into or delete, or the last
+   * block's delete.
+   * @param {UndoEntry} entry
+   * @param {boolean} reverse
+   */
+  _applyUndoStep(entry, reverse) {
     const snapshot = reverse ? entry.before : entry.after;
 
     switch (entry.type) {
+      case 'group': {
+        const steps = reverse ? [...entry.entries].reverse() : entry.entries;
+        for (const step of steps) this._applyUndoStep(step, reverse);
+        break;
+      }
       case 'add': {
         if (reverse) {
           // Undo add → remove the block
@@ -2742,18 +2988,16 @@ class BlockEditor {
       }
       case 'convert':
       case 'content': {
-        const block = this.getBlockById(entry.blockId);
-        if (block && snapshot) {
-          // Restore block properties from snapshot
-          Object.assign(block, snapshot);
-          block.id = entry.blockId; // Ensure ID stays consistent
+        const index = this.blocks.findIndex(b => b.id === entry.blockId);
+        if (index !== -1 && snapshot) {
+          // A block made from the snapshot takes the old one's place: the snapshot holds every
+          // field the block held, those this class doesn't model too, which decode reads again
+          // rather than copying them onto the old block (#14 slice 3)
+          this.blocks[index] = Block.deserialize({ ...snapshot, id: entry.blockId });
         }
         break;
       }
     }
-
-    this.renderBlocks();
-    this.scheduleSave();
   }
 
   /**
@@ -3080,7 +3324,7 @@ class BlockEditor {
     const selected = items[this.slashMenuIndex];
     if (selected) {
       const type = selected.dataset.type;
-      this.changeBlockType(this.activeBlock, type);
+      this.turnInto(this.activeBlock, type);
     }
     this.hideSlashMenu();
   }
@@ -3092,7 +3336,7 @@ class BlockEditor {
     const item = e.target.closest('.slash-menu-item');
     if (item) {
       const type = item.dataset.type;
-      this.changeBlockType(this.activeBlock, type);
+      this.turnInto(this.activeBlock, type);
       this.hideSlashMenu();
     }
   }
@@ -3113,9 +3357,10 @@ class BlockEditor {
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', blockEl.dataset.id);
 
-    // Set block content data for drag-to-sidebar (Req 46.1)
+    // Set block content data for drag-to-sidebar (Req 46.1). A block in a safe state moves within
+    // the note, and carries nothing the sidebar would store as a new block (#14 slice 3)
     const block = this.getBlockById(blockEl.dataset.id);
-    if (block) {
+    if (block && !block.safeState()) {
       const textContent = this.extractBlockTextContent(block);
       e.dataTransfer.setData('application/x-block-content', textContent || '');
       e.dataTransfer.setData('application/x-block-type', block.type || 'text');
@@ -3336,8 +3581,9 @@ class BlockEditor {
     if (this.isFencedCode(trimmed)) {
       e.preventDefault();
       const codeContent = this.extractFencedCode(trimmed);
-      if (isEmptyBlock) {
-        this.changeBlockType(currentBlock.id, 'code');
+      // An empty block turns only when that removes nothing it holds (#14 slice 3); otherwise
+      // the code goes after it
+      if (isEmptyBlock && this.changeBlockType(currentBlock.id, 'code')) {
         currentBlock.content = this.escapeHtmlForBlock(codeContent);
         this.rerenderBlock(currentBlock);
         this.scheduleSave();
@@ -3386,10 +3632,10 @@ class BlockEditor {
       if (parsedBlocks && parsedBlocks.length > 0) {
         let afterId = currentBlock ? currentBlock.id : null;
 
-        // If current block is empty, replace it with the first parsed block
-        if (isEmptyBlock && parsedBlocks.length > 0) {
+        // If current block is empty, replace it with the first parsed block, when turning it
+        // removes nothing it holds (#14 slice 3)
+        if (isEmptyBlock && parsedBlocks.length > 0 && this.changeBlockType(currentBlock.id, parsedBlocks[0].type)) {
           const first = parsedBlocks.shift();
-          this.changeBlockType(currentBlock.id, first.type);
           currentBlock.content = first.content || '';
           if (first.checked !== undefined) currentBlock.checked = first.checked;
           if (first.tableData) {
@@ -4900,33 +5146,58 @@ class BlockEditor {
   }
 
   /**
-   * Delete all selected blocks (Req 13.4).
+   * Delete all selected blocks (Req 13.4). A selection holding a block this build can't show asks
+   * first, since nobody can see what such a block holds (#14 slice 3); the rest delete at once,
+   * as before. One Undo brings them all back, each where it was.
+   * @returns {Promise<void>}
    */
-  deleteSelectedBlocks() {
+  async deleteSelectedBlocks() {
     if (this.selectedBlockIds.size === 0) return;
 
-    // Find the index of the first selected block for focus after deletion
-    const firstSelectedIdx = this.blocks.findIndex(b => this.selectedBlockIds.has(b.id));
-
-    // Record undo entries and delete
     const idsToDelete = new Set(this.selectedBlockIds);
-    idsToDelete.forEach(id => {
-      const idx = this.blocks.findIndex(b => b.id === id);
-      if (idx !== -1) {
-        const snapshot = this.snapshotBlock(this.blocks[idx]);
-        snapshot.order = idx;
-        this.pushUndo({ type: 'delete', blockId: id, before: snapshot, after: null });
+    const selected = this.blocks.filter(b => idsToDelete.has(b.id));
+    const safe = selected.filter(b => b.safeState()).length;
+    if (safe > 0) {
+      const noteId = this.noteId;
+      const focused = this.doc.activeElement;
+      if (!(await this._confirmDeleteUnseen(selected.length, safe))) {
+        // The selection stays, for another try
+        this._focusAfterCancel(focused, selected.map(b => b.id));
+        return;
       }
-    });
+      // The note it asked about is still the one on screen
+      if (noteId !== this.noteId) return;
+      for (const id of idsToDelete) if (!this.getBlockById(id)) idsToDelete.delete(id);
+      if (idsToDelete.size === 0) return;
+    }
+
+    // Find the index of the first selected block for focus after deletion
+    const firstSelectedIdx = this.blocks.findIndex(b => idsToDelete.has(b.id));
+
+    // One undo entry for the whole delete (#14 slice 3), its blocks recorded last first, so
+    // undo puts each back where it was, first first
+    /** @type {Array<UndoEntry>} */
+    const entries = [];
+    for (let idx = this.blocks.length - 1; idx >= 0; idx--) {
+      const block = this.blocks[idx];
+      if (!idsToDelete.has(block.id)) continue;
+      const snapshot = this.snapshotBlock(block);
+      snapshot.order = idx;
+      entries.push({ type: 'delete', blockId: block.id, before: snapshot, after: null });
+    }
 
     this.blocks = this.blocks.filter(b => !idsToDelete.has(b.id));
     this._deleteStoredBlocks([...idsToDelete]);
 
-    // Ensure at least one block remains
+    // Ensure at least one block remains, which the same undo takes away again
     if (this.blocks.length === 0) {
       const block = this.createBlock('text');
       this.blocks.push(block);
+      const after = this.snapshotBlock(block);
+      after.order = 0;
+      entries.push({ type: 'add', blockId: block.id, before: null, after });
     }
+    if (entries.length > 0) this.pushUndo(entries.length === 1 ? entries[0] : { type: 'group', entries });
 
     this.clearBlockSelection();
     this.renderBlocks();
@@ -4935,6 +5206,31 @@ class BlockEditor {
     const focusIdx = Math.max(0, Math.min(firstSelectedIdx, this.blocks.length - 1));
     this.focusBlock(this.blocks[focusIdx].id, true);
     this.scheduleSave();
+  }
+
+  /**
+   * Ask before deleting `count` selected blocks, `safe` of which this build can't show (#14 slice
+   * 3), in this editor's own document, so a pop-out editor asks in its own window. No dialog, no
+   * delete.
+   * @param {number} count
+   * @param {number} safe
+   * @returns {Promise<boolean>} true on a yes
+   */
+  _confirmDeleteUnseen(count, safe) {
+    const ask = globalThis.confirmDialog;
+    if (typeof ask !== 'function') return Promise.resolve(false);
+    const which = safe === count ? 'all' : safe === 1 ? 'one' : String(safe);
+    return ask({
+      title: count === 1 ? 'Delete this block?' : `Delete ${count} blocks?`,
+      message: count === 1
+        ? "This version of NewTabNote can't show what's in it, so you can't see what you'd delete. Undo brings it back."
+        : `This version of NewTabNote can't show what's in ${which} of them, so you can't see everything you'd delete. Undo brings them back.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      danger: true,
+      initialFocus: 'cancel',
+      doc: this.doc,
+    });
   }
 
   /**
@@ -4994,14 +5290,12 @@ class BlockEditor {
 
       item.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.selectedBlockIds.forEach(id => {
-          const block = this.getBlockById(id);
-          if (block && block.type !== type) {
-            this.changeBlockType(id, type);
-          }
-        });
         submenu.remove();
-        this.clearBlockSelection();
+        // One question for all of them, and one undo entry (#14 slice 3); only a turn clears the
+        // selection, so Cancel keeps it
+        this.turnSelectionInto([...this.selectedBlockIds], type).then(turned => {
+          if (turned) this.clearBlockSelection();
+        });
       });
 
       submenu.appendChild(item);
@@ -5268,7 +5562,8 @@ class BlockEditor {
     this.hideBlockActionMenu();
 
     const block = this.getBlockById(blockId);
-    if (!block) return;
+    // A block in a safe state can't be converted or sent to AI, so it has no menu (#14 slice 3)
+    if (!block || block.safeState()) return;
 
     const menu = this.doc.createElement('div');
     menu.className = 'block-action-menu';
@@ -5465,7 +5760,7 @@ class BlockEditor {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         if (type !== block.type) {
-          this.changeBlockType(blockId, type);
+          this.turnInto(blockId, type);
         }
         this.hideBlockActionMenu();
       });

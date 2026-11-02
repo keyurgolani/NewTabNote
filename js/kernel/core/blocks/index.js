@@ -20,6 +20,8 @@
 
 import { BUILT_IN_BLOCKS } from './builtins.js';
 import { createCatalog } from './catalog.js';
+import { conversionOn } from './conversions.js';
+import { holdsImage } from './meaningful.js';
 import { replaceTags, stripTags } from './strip-tags.js';
 import { wikiLinkNames } from './wiki-links.js';
 
@@ -83,8 +85,9 @@ export function refusalOf(decoded) {
  * What the new tab's legacy scripts read blocks and markup through, as `BlockProjections`
  * (js/kernel/composition/block-projections.js sets it): the projections over a catalog, the
  * tag stripping in linear time that the note list, AI responses and the editor's version
- * history use, the wiki-link names the editor's save reads, also in linear time, and the
- * catalog's decode, with the refusal a producer checks a block it built against
+ * history use, the wiki-link names the editor's save reads, also in linear time, the catalog's
+ * decode, with the refusal a producer checks a block it built against, the version the
+ * editor saves each type at, and what a block keeps when Turn into turns it into another type
  * @param {Catalog} catalog
  */
 export function pageReaders(catalog) {
@@ -96,6 +99,25 @@ export function pageReaders(catalog) {
     decodeBlock: catalog.decode,
     /** @param {unknown} record */
     producedBlockRefusal: record => refusalOf(catalog.decode(record)),
+    /**
+     * The version a block of `type` is saved at, its model's, or null for a type with no valid
+     * definition here (#14 slice 3)
+     * @param {unknown} type
+     * @returns {number | null}
+     */
+    blockVersion: type => (typeof type === 'string' ? (catalog.definition(type)?.version ?? null) : null),
+    /**
+     * What `record` keeps and removes when it turns into `target`, or null when it doesn't
+     * convert (conversions.js; #14 slice 3)
+     * @param {unknown} record
+     * @param {unknown} target
+     */
+    conversionOf: (record, target) => conversionOn(catalog, record, target),
+    /**
+     * Whether a block's imageUrl holds an image (meaningful.js), which the editor's merges
+     * leave alone (#14 slice 3)
+     */
+    holdsImage,
   });
 }
 
@@ -134,6 +156,14 @@ export const encodeBlock = decoded => builtInCatalog().encode(decoded);
  * @param {unknown} record
  */
 export const producedBlockRefusal = record => refusalOf(decodeBlock(record));
+
+/**
+ * What `record` keeps and removes when it turns into `target`, or null when it doesn't convert
+ * (conversions.js)
+ * @param {unknown} record
+ * @param {unknown} target
+ */
+export const conversionOf = (record, target) => conversionOn(builtInCatalog(), record, target);
 
 /**
  * Make a new block of `type`

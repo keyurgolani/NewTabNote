@@ -8,10 +8,14 @@
  * - `preview`: the note list's preview and the kernel's note metadata (SidebarUtils'
  *   `extractBlockText` and the kernel's `blockText`), and `search`, the same text, which #22
  *   indexes later;
- * - `plainText`: the editor's text of a block (`extractBlockTextContent`), for content checks,
- *   Turn into, and the note's text, read as #105 left it, in an inert document (scripting off);
+ * - `plainText`: the editor's text of a block (`extractBlockTextContent`), for content checks
+ *   and the note's text, read as #105 left it, in an inert document (scripting off), and Turn
+ *   into's until slice 3 gave conversions a part of their own (`convert`);
  * - `aiContext`: what AI chat and the AI jobs send of a block (their `extractBlockText`);
- * - `codecs.markdown.encode`: every Markdown export (AIResponseUtils.blockToMarkdown).
+ * - `codecs.markdown.encode`: every Markdown export (AIResponseUtils.blockToMarkdown);
+ * - `convert`: what a block keeps when it turns into another type, which conversions.js reads
+ *   (#14 slice 3): the lines of rich text its own fields keep, escaped, the structure that
+ *   goes, and the rich text that moves to new text blocks after it.
  * They read a record's fields as 1.4.x did, quirks included (`String(null)` is "null" in a
  * preview, a table row that isn't a list throws where 1.4.x threw), so nothing reads
  * differently; slice 4 cleans them up as a declared change. Markup is read by html-text.js's
@@ -21,12 +25,15 @@
  * record and returns a value (#14, "Security and privacy").
  */
 
-import { invalidField } from './fields.js';
+import { SHARED_FIELDS, invalidField } from './fields.js';
 import { textContent } from './html-text.js';
 import { inlineMarkdown } from './markup.js';
+import { isBlankText } from './meaningful.js';
 import { PREVIEWS, previewOfContent } from './previews.js';
+import { escapeAttributeText, escapePlainText, isLinkHref } from './rich-text.js';
 
 /** @typedef {import('./fields.js').FieldKind} FieldKind */
+/** @typedef {import('./conversions.js').ConvertPart} ConvertPart */
 /** @typedef {Readonly<Record<string, unknown>>} BlockRecord */
 
 /**
@@ -37,6 +44,8 @@ import { PREVIEWS, previewOfContent } from './previews.js';
  * @property {(record: BlockRecord) => string | null} validate - the first field that isn't its kind, or null
  * @property {Readonly<{preview: Projection, plainText: Projection, search: Projection, aiContext: Projection}>} project
  * @property {Readonly<{markdown: Readonly<{encode: (record: BlockRecord) => string}>}>} codecs
+ * @property {(record: BlockRecord) => ConvertPart} [convert] - what a block keeps when it turns
+ *   into another type (conversions.js); a model without one doesn't convert
  * @property {Readonly<{current: BlockRecord, legacy: BlockRecord, newer: BlockRecord, invalid: BlockRecord}>} examples
  *   a version 1 record, a version 0 one as 1.4.x saved it (with a field from a newer build), one
  *   from a newer version, and one whose owned field isn't its kind
@@ -44,16 +53,7 @@ import { PREVIEWS, previewOfContent } from './previews.js';
 
 /** @typedef {(record: BlockRecord) => unknown} Projection */
 
-/** The fields 1.4.x's `serialize()` writes for every type */
-const SHARED = Object.freeze({
-  content: /** @type {FieldKind} */ ('richText'),
-  indentLevel: /** @type {FieldKind} */ ('number'),
-  checked: /** @type {FieldKind} */ ('flag'),
-  imageUrl: /** @type {FieldKind} */ ('data'),
-  calloutIcon: /** @type {FieldKind} */ ('plainText'),
-});
-
-/** What `Block`'s constructor gives those, as a new block holds them */
+/** What `Block`'s constructor gives the fields every type has (fields.js, SHARED_FIELDS), as a new block holds them */
 const SHARED_DEFAULTS = Object.freeze({ content: '', indentLevel: 0, checked: false, imageUrl: null, calloutIcon: '💡' });
 
 /**
@@ -94,6 +94,46 @@ const nothing = () => '';
 /** Version 0 to 1: the record says its version, and nothing else changes */
 const toVersion1 = (/** @type {BlockRecord} */ record) => Object.freeze({ ...record, schemaVersion: 1 });
 
+/** A conversion's part for a type whose text is its content: it keeps that, and removes nothing */
+const KEEPS_CONTENT = Object.freeze({ text: Object.freeze([]), removes: Object.freeze([]), after: Object.freeze([]) });
+
+/**
+ * A plain-text field as one line of rich text, escaped and trimmed, or null when it's blank
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+const plainLine = value => {
+  const line = value === null || value === undefined ? '' : String(value).trim();
+  return line === '' ? null : escapePlainText(line);
+};
+
+/**
+ * A link to `address` reading `label`, both escaped, as rich text, when a link may point there
+ * (isLinkHref); otherwise both as text, or null when there's neither
+ * @param {unknown} address
+ * @param {unknown} label
+ * @returns {string | null}
+ */
+const linkLine = (address, label) => {
+  const href = address === null || address === undefined ? '' : String(address).trim();
+  const text = plainLine(label);
+  if (href === '') return text;
+  if (!isLinkHref(href)) return plainLine([label, href].filter(part => plainLine(part) !== null).join(' '));
+  return `<a href="${escapeAttributeText(href)}">${text ?? escapePlainText(href)}</a>`;
+};
+
+/**
+ * A conversion's part from the lines it keeps, the nulls left out
+ * @param {(string | null)[]} lines
+ * @param {ConvertPart['removes']} [removes]
+ * @returns {ConvertPart}
+ */
+const keeps = (lines, removes = []) => ({
+  text: /** @type {string[]} */ (lines.filter(line => line !== null)),
+  removes,
+  after: [],
+});
+
 /**
  * A model from its parts, with the shared fields, defaults, and version 0 upcaster
  * @param {string} type
@@ -104,13 +144,14 @@ const toVersion1 = (/** @type {BlockRecord} */ record) => Object.freeze({ ...rec
  *   plainText?: Projection,
  *   aiContext?: Projection,
  *   markdown?: (record: BlockRecord) => string,
+ *   convert?: (record: BlockRecord) => ConvertPart,
  *   example?: Readonly<Record<string, unknown>>,
  *   invalid?: Readonly<Record<string, unknown>>,
  * }} parts
  * @returns {{fields: Readonly<Record<string, FieldKind>>, model: BlockModel}}
  */
 function defineModel(type, parts) {
-  const fields = Object.freeze({ ...SHARED, ...parts.fields });
+  const fields = Object.freeze({ ...SHARED_FIELDS, ...parts.fields });
   const preview = parts.preview || previewOfContent;
   const legacy = Object.freeze({
     id: '1730000000000-a1b2c3d4e',
@@ -138,6 +179,7 @@ function defineModel(type, parts) {
       aiContext: parts.aiContext || nothing,
     }),
     codecs: Object.freeze({ markdown: Object.freeze({ encode: parts.markdown || plainMarkdown }) }),
+    convert: parts.convert || (() => KEEPS_CONTENT),
     examples: Object.freeze({
       current: Object.freeze({ ...legacy, schemaVersion: 1 }),
       legacy,
@@ -187,6 +229,11 @@ export const MODELS = Object.freeze({
       const content = markdownContent(record);
       return `<details>\n<summary>${content}</summary>\n${inlineMarkdown(/** @type {string} */ (record.children || ''))}\n</details>\n\n`;
     },
+    // Its heading stays its text; what it hides moves to a text block after it, and its arrow goes
+    convert: record =>
+      isBlankText(record.children)
+        ? KEEPS_CONTENT
+        : { text: [], removes: ['arrow'], after: [/** @type {string} */ (record.children)] },
     example: { children: 'Inside <i>it</i>' },
     invalid: { children: ['not', 'text'] },
   }),
@@ -252,6 +299,15 @@ export const MODELS = Object.freeze({
       }
       return '';
     },
+    // Its cells, a row per line, and its grid goes
+    convert: record => {
+      const rows = /** @type {unknown[][] | null | undefined} */ (record.tableData) || [];
+      const lines = rows.map(row => {
+        const cells = /** @type {string[]} */ (row.map(plainLine).filter(cell => cell !== null));
+        return cells.length > 0 ? cells.join(' ') : null;
+      });
+      return keeps(lines, ['grid']);
+    },
     example: { content: '', tableData: [['Name', 'Age'], ['Ada', '36']] },
     invalid: { tableData: 'Name,Age' },
   }),
@@ -266,6 +322,8 @@ export const MODELS = Object.freeze({
       markdownContent(record);
       return record.url ? `[${record.title || record.url}](${record.url})\n\n` : '';
     },
+    // Its title as a link to its address, then its description; its site icon goes
+    convert: record => keeps([linkLine(record.url, record.title), plainLine(record.description)]),
     example: { content: '', url: 'https://example.test/page', title: 'Example page', description: 'A page' },
     invalid: { url: ['https://example.test'] },
   }),
@@ -273,6 +331,11 @@ export const MODELS = Object.freeze({
     fields: { videoUrl: 'url' },
     defaults: { videoUrl: '' },
     preview: PREVIEWS.video,
+    // Its address as a link, and its embed goes
+    convert: record => {
+      const link = linkLine(record.videoUrl, null);
+      return keeps([link], link === null ? [] : ['video']);
+    },
     example: { content: '', videoUrl: 'https://www.youtube.com/watch?v=abc' },
     invalid: { videoUrl: 42 },
   }),
@@ -280,6 +343,8 @@ export const MODELS = Object.freeze({
     fields: { fileName: 'plainText', fileSize: 'number', fileData: 'data' },
     defaults: { fileName: '', fileSize: 0, fileData: null },
     preview: PREVIEWS.file,
+    // Its name, and the file it holds goes
+    convert: record => keeps([plainLine(record.fileName)], record.fileData ? ['file'] : []),
     example: { content: '', fileName: 'notes.txt', fileSize: 5, fileData: 'data:text/plain;base64,aGVsbG8=' },
     invalid: { fileSize: '5 bytes' },
   }),
@@ -294,6 +359,8 @@ export const MODELS = Object.freeze({
       markdownContent(record);
       return `$$\n${record.equation || ''}\n$$\n\n`;
     },
+    // Its source
+    convert: record => keeps([plainLine(record.equation)]),
     example: { content: '', equation: 'E = mc^2' },
     invalid: { equation: { tex: 'E' } },
   }),
