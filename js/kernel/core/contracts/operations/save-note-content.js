@@ -20,18 +20,18 @@
  * `orders` are blocks the save moved and changed nothing else of: each one's new `order` goes on
  * its record as stored, so another writer's newer text in it stays (#17, the per-pane save). A
  * block it names that another note holds refuses the save, as a put does, and one no note holds
- * is skipped. A block it names goes in neither `blocks` nor `orders` twice. Older entries carry
- * no `orders`, so the field is additive, with nothing to upcast.
+ * is skipped. A block goes in once at most, in `blocks` or in `orders`. Older entries carry no
+ * `orders`, so the field is additive, with nothing to upcast.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';
 import { blockInput } from '../entities.js';
 import { content, count, entityId, revision } from '../fields.js';
+import { commandPayload } from '../operation.js';
+import { outcomeSchema } from '../outcome-schemas.js';
 
 /** A block the save moves and leaves as it is otherwise, and the order it moves it to */
 const move = v.strictObject({ id: entityId('block'), order: count });
-import { commandPayload } from '../operation.js';
-import { outcomeSchema } from '../outcome-schemas.js';
 
 export const payload = commandPayload('saveNoteContent', {
   noteId: entityId('note'),
