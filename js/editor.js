@@ -2879,8 +2879,9 @@ class BlockEditor {
 
   /**
    * An entry's change to the blocks, with no render or save. A group's entries apply in the order
-   * they ran and undo in the reverse order, so one action that took several steps, a Turn into
-   * that adds a block or the last block's delete, undoes in one (#14 slice 3).
+   * they ran and undo in the reverse order, so one action that took several steps undoes in one
+   * (#14 slice 3): a Turn into that adds a block, a selection's Turn into or delete, or the last
+   * block's delete.
    * @param {UndoEntry} entry
    * @param {boolean} reverse
    */
