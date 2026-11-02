@@ -124,9 +124,10 @@ describe('a keyword match names its note (js/search.js)', () => {
     chat.aiSidebarOpen = true;
     chat.aiActiveTab = 'smart';
     const related = () => env.document.getElementById('ai-related-notes').querySelectorAll('.ai-related-title').map((title) => title.textContent);
-    // The open note's text is word for word what note A holds
+    // The open note's text is word for word what note A holds. It has no name of its own, so
+    // Related Notes' keyword query is the start of its text (test/related-notes-query.test.js)
     const text = 'Pack the tent and the stove';
-    chat.getEditor = () => ({ noteId: 'B', noteData: { id: 'B', name: 'Groceries' }, getAllBlocksTextContent: () => text, titleEl: null });
+    chat.getEditor = () => ({ noteId: 'B', noteData: { id: 'B', name: 'Untitled' }, getAllBlocksTextContent: () => text, titleEl: null });
     await runUntil(env, chat.updateSmartSuggestions());
     assert.deepEqual(related(), ['Camping trip']);
     chat.getEditor = () => ({ noteId: 'A', noteData: { id: 'A', name: 'Camping trip' }, getAllBlocksTextContent: () => text, titleEl: null });

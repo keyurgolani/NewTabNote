@@ -103,13 +103,15 @@ class SearchEngine {
     /**
      * Perform hybrid search combining keyword and semantic results.
      * @param {string} query - Search query
+     * @param {{keywords?: string}} [options] - `keywords`: the keyword half's pattern in place of
+     *   `query`, which the semantic half still compares
      * @returns {Promise<Array<{id: string, score: number, isSemantic?: boolean}>>} Ranked search results
      */
-    async search(query) {
+    async search(query, { keywords = query } = {}) {
         if (!query) return [];
 
         // 1. Keyword Search (Fuse.js)
-        const keywordResults = this.keywordSearch(query);
+        const keywordResults = this.keywordSearch(keywords);
 
         // 2. Semantic Search (Vectors)
         const semanticResults = await this.semanticSearch(query);

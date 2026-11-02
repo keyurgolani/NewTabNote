@@ -3062,6 +3062,18 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   }
 
   /**
+   * Related Notes' keyword pattern, at most 32 characters: the open note's name, or the start of
+   * its text when the note has no name of its own (empty, or the default)
+   * @param {{name?: string}|null|undefined} note
+   * @param {string} text
+   * @returns {string}
+   */
+  relatedNotesKeywords(note, text) {
+    const name = String((note && note.name) || '').trim();
+    return (name && name !== 'Untitled' ? name : text.trim()).slice(0, 32);
+  }
+
+  /**
    * Related Notes for the note's text. With the model loaded, or no vectors for it to match, its
    * matches and the keyword ones rank together, as before; until it loads, the keyword matches
    * draw at once with the model's status under them, and its matches join them there.
@@ -3074,14 +3086,18 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     const engine = this.searchEngine;
     const model = this.relatedPlace();
     const pick = (/** @type {Array<any>} */ results) => results.filter(r => r.id !== editor.noteId).slice(0, 5).filter(r => r.score > 0.4);
+    // Fuse splits a pattern over 32 characters into 32-character pieces and runs each one over
+    // every entry, so the keyword half gets at most 32 (relatedNotesKeywords); the semantic half
+    // compares the whole text
+    const keywords = this.relatedNotesKeywords(editor.noteData, text);
     if (!engine || !engine.semantic || Embeddings.isReady || !model) {
-      const searchResults = engine ? await engine.search(text) : [];
+      const searchResults = engine ? await engine.search(text, { keywords }) : [];
       if (turn !== this._relatedTurn) return;
       if (model) model.clear();
       this.renderRelatedNotes(pick(searchResults), { empty: true });
       return;
     }
-    const listed = pick(engine.keywordSearch(text).map((/** @type {any} */ r) => ({ ...r, score: r.keywordScore })));
+    const listed = pick(engine.keywordSearch(keywords).map((/** @type {any} */ r) => ({ ...r, score: r.keywordScore })));
     this.renderRelatedNotes(listed, { empty: false });
     const loaded = await model.loading(() => Embeddings.init());
     if (turn !== this._relatedTurn) return;
