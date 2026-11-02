@@ -36,6 +36,20 @@ const CHECKS = Object.freeze({
 /** @type {readonly FieldKind[]} */
 export const FIELD_KINDS = Object.freeze(/** @type {FieldKind[]} */ (Object.keys(CHECKS)));
 
+/**
+ * The fields 1.4.x's `serialize()` writes for every type, which every built-in model owns
+ * (models.js), by kind. Here rather than in models.js, so the empty-note check
+ * (meaningful.js) reads them without loading the models.
+ * @type {Readonly<Record<string, FieldKind>>}
+ */
+export const SHARED_FIELDS = Object.freeze({
+  content: /** @type {FieldKind} */ ('richText'),
+  indentLevel: /** @type {FieldKind} */ ('number'),
+  checked: /** @type {FieldKind} */ ('flag'),
+  imageUrl: /** @type {FieldKind} */ ('data'),
+  calloutIcon: /** @type {FieldKind} */ ('plainText'),
+});
+
 /** A field name a definition may own: a JavaScript identifier, and no envelope field */
 const FIELD_NAME = /^[A-Za-z][A-Za-z0-9]*$/;
 
