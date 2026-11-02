@@ -432,6 +432,24 @@ describe('an install that ran an earlier version', () => {
     assert.equal(page.chrome.local[MARKER], undefined, 'and nothing marks it done');
   });
 
+  it("when it can't write the switch-off, the command doesn't commit and the switch-off rejects, with both jobs as stored, and the next try turns both off", STEP, async () => {
+    const page = await openPage({ chrome: storedSettings(EARLIER) });
+    page.chrome.failNextSet();
+    await assert.rejects(() => page.env.settingsClient.turnOffBackgroundJobs(), 'the command does not commit');
+    page.chrome.failNextSet();
+    await assert.rejects(() => page.Onboarding.turnBackgroundJobsOffOnce(page.env.settingsClient), 'the switch-off rejects');
+    await settle(60);
+
+    assert.equal(page.chrome.local.setting_autoTitleEnabled, true, 'titles are as stored');
+    assert.equal(page.chrome.local.setting_insightsEnabled, true, 'insights are as stored');
+    assert.equal(page.chrome.local[MARKER], undefined, 'and nothing marks it done');
+
+    assert.equal(await page.Onboarding.turnBackgroundJobsOffOnce(page.env.settingsClient), true, 'a try with nothing refused turns them off');
+    assert.equal(page.chrome.local.setting_autoTitleEnabled, false, 'titles off');
+    assert.equal(page.chrome.local.setting_insightsEnabled, false, 'insights off');
+    assert.equal(page.chrome.local[MARKER], true, 'and marked done');
+  });
+
   it('reads the marker at the key the version before kept it under', STEP, async () => {
     const page = await openPage({ chrome: storedSettings({ ...EARLIER, backgroundJobsOffOnce: true }) });
     const read = await page.env.settingsClient.workspaceData(['backgroundJobsOffOnce']);

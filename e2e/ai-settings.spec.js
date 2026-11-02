@@ -4,7 +4,9 @@
  * background job's switch and interval as the user changes them. A first run leaves both jobs
  * off. An install that ran an earlier version has both turned off once, at its first start,
  * before either can run, however many new tabs open at once, and a job the user turns back on
- * stays on. A profile whose switch-off already ran keeps its jobs as stored. The key is a test
+ * stays on. A profile whose switch-off already ran keeps its jobs as stored. A start that can't
+ * read or write the switch-off shows the error state, builds no controller and sends nothing, and
+ * the next start turns both jobs off. The key is a test
  * value, and the harness refuses every request that leaves the extension; the specs only record
  * them. Each test also fails on an uncaught exception that test/known-defects.json doesn't list.
  * The Insights tab's rule is test/smart-tab.test.js's, and a job's stop in every tab
@@ -198,6 +200,69 @@ test('an install that ran an earlier version has both background jobs turned off
   await expect(settings.locator('#insights-enabled')).not.toBeChecked();
   await expectNoUncaught(extension, page);
 });
+
+/** The extension's localStorage key that tells refuseMarker what to refuse */
+const REFUSE = 'ntn-test-refuse';
+
+/**
+ * Runs in each page the context opens from here on: while the extension's localStorage has
+ * REFUSE set to `read` or `write`, the page's chrome.storage.local refuses a read or a write that
+ * names the one-time switch-off's marker. It can use nothing from this file but itself.
+ */
+function refuseMarker() {
+  let mode = null;
+  try {
+    mode = localStorage.getItem('ntn-test-refuse');
+  } catch {
+    return;
+  }
+  if (!mode || !(globalThis.chrome && chrome.storage && chrome.storage.local)) return;
+  const local = chrome.storage.local;
+  const MARKER = 'setting_backgroundJobsOffOnce';
+  const names = keys => (keys == null ? [] : typeof keys === 'string' ? [keys] : Array.isArray(keys) ? keys : Object.keys(keys));
+  if (mode === 'read') {
+    const get = local.get.bind(local);
+    local.get = (keys, ...rest) => (names(keys).includes(MARKER) ? Promise.reject(new Error('refused by the test')) : get(keys, ...rest));
+  }
+  if (mode === 'write') {
+    const set = local.set.bind(local);
+    local.set = (items, ...rest) => (Object.keys(items || {}).includes(MARKER) ? Promise.reject(new Error('refused by the test')) : set(items, ...rest));
+  }
+}
+
+for (const [refused, what] of [['read', "can't read whether the switch-off ran"], ['write', "can't write the switch-off"]]) {
+  test(`a start that ${what} shows the error state and builds nothing, and the next start turns both jobs off`, async ({ extension }) => {
+    await extension.seedOnboarded();
+    await storeSettings(extension, EARLIER);
+    await driver.seedNotes(extension, [UNTITLED_NOTE]);
+    await extension.context.addInitScript(refuseMarker);
+    const requests = await recordRequests(extension);
+    // The flag goes in the extension's localStorage from a page of its own, before the tab under test opens
+    const setter = await extension.openSurface('popup');
+    await setter.evaluate(([key, mode]) => localStorage.setItem(key, mode), [REFUSE, refused]);
+    await setter.close();
+
+    const page = await driver.openNewTab(extension, { wait: false });
+    await page.waitForFunction(() => window.__ntnAppInit !== undefined, null, { timeout: 30_000 });
+    await page.evaluate(() => window.__ntnAppInit);
+    await expect(page.locator('#app h2', { hasText: 'Failed to initialize' }), 'the error state').toBeVisible();
+    expect(await page.evaluate(() => Boolean(window.app && window.app.notesManager)), 'a NotesManager').toBe(false);
+    await page.waitForTimeout(3000);
+    expect(toProvider(await requests.stop()), 'requests to the provider').toEqual([]);
+    expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled', 'backgroundJobsOffOnce']), 'both jobs as stored, and no marker')
+      .toEqual({ autoTitleEnabled: true, insightsEnabled: true, backgroundJobsOffOnce: undefined });
+
+    // The next start, with nothing refused, runs the switch-off
+    await page.evaluate(key => localStorage.removeItem(key), REFUSE);
+    const again = await recordRequests(extension);
+    await driver.reload(page);
+    await startSettled(page);
+    expect(await storedSettings(extension, ['autoTitleEnabled', 'insightsEnabled', 'backgroundJobsOffOnce']), 'the next start')
+      .toEqual({ autoTitleEnabled: false, insightsEnabled: false, backgroundJobsOffOnce: true });
+    expect(toProvider(await again.stop()), 'requests to the provider at the next start').toEqual([]);
+    await expectNoUncaught(extension, page);
+  });
+}
 
 test('an install that ran an earlier version, opened in three new tabs at once, sends nothing to the provider', async ({ extension }) => {
   await extension.seedOnboarded();
