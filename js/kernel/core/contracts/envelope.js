@@ -50,10 +50,12 @@ export const helloSchema = v.strictObject({
 });
 
 /**
- * The coordinator's answer to a hello, sent before its start-up maintenance: the protocol it
- * speaks, its extension version, this instance's id, which a client sees change when the
- * worker restarted, and whether it's ready or degraded and why (#35's `starting`,
- * `migrating`, and `restoring`). A client whose major version differs sends no command.
+ * The coordinator's answer to a hello: the protocol it speaks, its extension version, this
+ * instance's id, which a client sees change when the worker restarted, and whether it's ready
+ * or degraded and why (#35's `starting`, `migrating`, and `restoring`). A first hello in this
+ * major, while the coordinator is starting, waits for its start for WELCOME_WAIT_MS at most,
+ * and is welcomed `starting` past the cap. Any other hello is welcomed at once. A client whose
+ * major version differs sends no command.
  */
 export const welcomeSchema = v.strictObject({
   frame: v.literal('welcome'),

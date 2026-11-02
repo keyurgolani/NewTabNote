@@ -27,6 +27,11 @@
  * transaction. A command that has runs to its outcome: a cancel gets `too-late` with that
  * outcome, then the response. A connection that closes stops what it asked for the same way.
  *
+ * A hello in this major while #35's coordinator says it's `starting` waits for that start
+ * (`settled`), for WELCOME_WAIT_MS at most, so its welcome says what the start came to, or
+ * `starting` at the cap. Meanwhile its connection is `greeting`: a request is refused as one
+ * sent before a hello, a second hello closes it, and one that closes gets no welcome.
+ *
  * The `sessions` hooks hear of each connection's session as the router welcomes it in this
  * major, and again when that connection closes, by its surface and sessionId alone, so #35's
  * coordinator knows which pages are there and when one goes.
@@ -39,7 +44,7 @@
 
 import { encode, encodedBytes } from '../contracts/codec.js';
 import { code } from '../contracts/fields.js';
-import { LATENCY_BUCKETS_MS, MAX_MESSAGE_BYTES, PROTOCOL_VERSION } from '../contracts/limits.js';
+import { LATENCY_BUCKETS_MS, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, WELCOME_WAIT_MS } from '../contracts/limits.js';
 import { ready } from '../contracts/outcomes.js';
 import { POLICY_CODES, VALIDATION_CODES } from '../contracts/transport-codes.js';
 import { check, checkRequest, checkResult, readFrame } from '../contracts/validate.js';
@@ -127,6 +132,12 @@ import { createScopeCheck } from './scope.js';
  * @property {string} coordinatorId - this instance's id, new each time the worker starts
  * @property {string} extensionVersion
  * @property {() => CoordinatorStatus} [status]
+ * @property {() => unknown} [settled]
+ *   Starts the coordinator, and returns what settles once its start has, a promise or nothing.
+ *   A hello welcomed into this major while `status` says degraded `starting` calls it, and its
+ *   welcome waits for it, for WELCOME_WAIT_MS at most. It's called once for each hello held,
+ *   so it must be safe to call again: coordinator.start() shares its first start. Without it,
+ *   every welcome goes at once.
  * @property {SessionHooks} [sessions]
  * @property {Logger} [logger]
  */
@@ -155,9 +166,11 @@ import { createScopeCheck } from './scope.js';
  * @typedef {object} Peer
  * @property {Link} link
  * @property {import('../contracts/surfaces.js').Surface} surface
- * @property {'new' | 'open' | 'incompatible' | 'closed'} phase
+ * @property {'new' | 'greeting' | 'open' | 'incompatible' | 'closed'} phase
+ *   `greeting` is a hello in this major whose welcome waits for the coordinator's start
  * @property {string} sessionId
  * @property {Session | null} session - what the session hooks were told it opened, if they were
+ * @property {unknown} held - the cap's timer while its welcome waits, and null otherwise
  * @property {Map<string, Running>} running - by requestId
  */
 
@@ -194,6 +207,7 @@ export function createRouter({
   coordinatorId,
   extensionVersion,
   status = () => ({ status: 'ready' }),
+  settled = undefined,
   sessions = {},
   logger = silentLogger,
 }) {
@@ -368,6 +382,10 @@ export function createRouter({
     if (peer.phase === 'closed') return;
     peer.phase = 'closed';
     peers.delete(peer);
+    if (peer.held !== null) {
+      timers.clear(peer.held);
+      peer.held = null;
+    }
     for (const [requestId, running] of [...peer.running]) {
       end(peer, requestId, running, !(running.isCommand && running.begun));
     }
@@ -403,6 +421,49 @@ export function createRouter({
   };
 
   /**
+   * Sends a hello its welcome, saying `now`, and opens its session when it's in this major
+   * @param {Peer} peer
+   * @param {Pick<WelcomeFrame, 'status' | 'reason'>} now
+   */
+  const welcome = (peer, now) => {
+    countHandshake(peer);
+    send(peer, { frame: 'welcome', protocol: PROTOCOL_VERSION, extensionVersion, coordinatorId, ...now });
+    if (peer.phase !== 'open') return;
+    peer.session = Object.freeze({ surface: peer.surface, sessionId: peer.sessionId });
+    tellSessions('opened', peer.session);
+  };
+
+  /**
+   * Holds a hello's welcome while the coordinator starts: `start` sets the start off, and the
+   * welcome goes once it settles or at WELCOME_WAIT_MS, whichever comes first, saying what
+   * `status` says then. A connection that closes first gets none.
+   * @param {Peer} peer
+   * @param {() => unknown} start
+   */
+  const hold = (peer, start) => {
+    peer.phase = 'greeting';
+    const release = () => {
+      if (peer.phase !== 'greeting') return;
+      timers.clear(peer.held);
+      peer.held = null;
+      peer.phase = 'open';
+      welcome(peer, statusNow());
+    };
+    peer.held = timers.set(release, WELCOME_WAIT_MS);
+    /** @type {unknown} */
+    let starting;
+    try {
+      starting = start();
+    } catch (error) {
+      warn('router-start-failed', { error });
+    }
+    Promise.resolve(starting).then(release, error => {
+      warn('router-start-failed', { error });
+      release();
+    });
+  };
+
+  /**
    * @param {Peer} peer
    * @param {HelloFrame} frame
    */
@@ -414,12 +475,19 @@ export function createRouter({
       return;
     }
     peer.sessionId = frame.sessionId;
-    peer.phase = frame.protocol.major === PROTOCOL_VERSION.major ? 'open' : 'incompatible';
-    countHandshake(peer);
-    send(peer, { frame: 'welcome', protocol: PROTOCOL_VERSION, extensionVersion, coordinatorId, ...statusNow() });
-    if (peer.phase !== 'open') return;
-    peer.session = Object.freeze({ surface: peer.surface, sessionId: peer.sessionId });
-    tellSessions('opened', peer.session);
+    const now = statusNow();
+    if (frame.protocol.major !== PROTOCOL_VERSION.major) {
+      peer.phase = 'incompatible';
+      welcome(peer, now);
+      return;
+    }
+    // Only a hello in this major waits on the coordinator's start, so only one starts it
+    if (settled && now.status === 'degraded' && now.reason === 'starting') {
+      hold(peer, settled);
+      return;
+    }
+    peer.phase = 'open';
+    welcome(peer, now);
   };
 
   /**
@@ -449,7 +517,8 @@ export function createRouter({
    */
   const receive = (peer, frame, bytes) => {
     const { requestId } = frame;
-    if (peer.phase === 'new') return refuse(peer, requestId, 'unauthorized-sender');
+    // Before its welcome, with no hello yet or its welcome held, a request has no session yet
+    if (peer.phase === 'new' || peer.phase === 'greeting') return refuse(peer, requestId, 'unauthorized-sender');
     if (peer.phase !== 'open') return refuse(peer, requestId, 'unsupported-version');
     // An answer by a running request's id would be ambiguous, so the second gets none
     if (peer.running.has(requestId)) {
@@ -622,7 +691,7 @@ export function createRouter({
   return Object.freeze({
     accept({ link, surface }) {
       /** @type {Peer} */
-      const peer = { link, surface, phase: 'new', sessionId: '', session: null, running: new Map() };
+      const peer = { link, surface, phase: 'new', sessionId: '', session: null, held: null, running: new Map() };
       peers.add(peer);
       link.onMessage(text => hear(peer, text));
       link.onClose(() => drop(peer));

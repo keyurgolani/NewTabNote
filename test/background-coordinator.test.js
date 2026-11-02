@@ -206,10 +206,32 @@ describe("the worker's listeners and what starts its coordinator", () => {
 });
 
 describe("the coordinator's welcome", () => {
-  it('says starting before the database is open, and ready once it is', async () => {
+  it("waits for the start a page's hello sets off, and says ready once the database is open", async () => {
     const worker = await loadBackground({ start: false });
-    assert.deepEqual(await welcomeOf(worker, 'session-1'), { status: 'degraded', reason: 'starting' });
+    assert.deepEqual(await welcomeOf(worker, 'session-1'), { status: 'ready', reason: undefined });
     assert.deepEqual(await welcomeOf(worker, 'session-2'), { status: 'ready', reason: undefined });
+  });
+
+  it("says starting when the start hasn't answered by WELCOME_WAIT_MS, and nothing before", async () => {
+    // A database open that never answers, so the start never does either
+    const worker = await loadBackground({
+      start: false,
+      setup: (env) => {
+        env.indexedDB.open = () => ({});
+      },
+    });
+    const page = pagePort();
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('session-1');
+    await worker.drain();
+    assert.deepEqual(page.received, []);
+    worker.env.clock.tick(limits.WELCOME_WAIT_MS - 1);
+    await worker.drain();
+    assert.deepEqual(page.received, []);
+    worker.env.clock.tick(1);
+    await worker.drain();
+    const welcome = page.received.find((frame) => frame.frame === 'welcome');
+    assert.deepEqual(welcome && [welcome.status, welcome.reason], ['degraded', 'starting']);
   });
 
   it("says newer-schema for a database a newer build upgraded, which it won't open", async () => {
