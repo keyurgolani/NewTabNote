@@ -973,6 +973,10 @@ class SidebarController {
 
       const header = document.createElement('div');
       header.className = 'sidebar-folder-header';
+      // The header is the folder's toggle, a button that says whether the folder is expanded
+      header.setAttribute('role', 'button');
+      header.tabIndex = 0;
+      header.setAttribute('aria-expanded', String(!folder.collapsed));
       header.innerHTML = `
         <svg class="folder-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="6 9 12 15 18 9"></polyline>
@@ -987,11 +991,20 @@ class SidebarController {
       nameEl.textContent = folder.name;
       header.appendChild(nameEl);
 
-      header.addEventListener('click', async (e) => {
-        e.stopPropagation();
+      const toggle = async () => {
         folder.collapsed = !folder.collapsed;
         folderEl.classList.toggle('collapsed', folder.collapsed);
+        header.setAttribute('aria-expanded', String(!folder.collapsed));
         await this.storage.updateFolder(folder);
+      };
+      header.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await toggle();
+      });
+      header.addEventListener('keydown', async (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        await toggle();
       });
 
       header.addEventListener('contextmenu', (e) => {
