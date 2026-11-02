@@ -405,7 +405,7 @@ class BlockEditor {
 
     // Check if note already has content (for first-content detection)
     const existingContent = this.blocks.some(block => {
-      const text = this.extractBlockTextContent(block);
+      const text = this._textOf(block);
       return text && text.trim().length > 0;
     });
     this.hasReceivedFirstContent = existingContent;
@@ -965,6 +965,22 @@ class BlockEditor {
   }
 
   /**
+   * A block's text for the editor's own reads (whether the note has content yet, the text its
+   * save reads wiki links from), one block at a time: a block whose text can't be read gives
+   * none, so it can't stop a load or a save (#14 slice 3, per-block isolation).
+   * extractBlockTextContent itself keeps 1.4.x's output, throws included.
+   * @param {Object} block
+   * @returns {string}
+   */
+  _textOf(block) {
+    try {
+      return this.extractBlockTextContent(block);
+    } catch {
+      return '';
+    }
+  }
+
+  /**
    * One picker item, as the slash menu, the wiki-link picker, and the template picker show it:
    * `iconHtml` is packaged markup, and the title and description are set as text, so a name
    * shows exactly as typed
@@ -1339,7 +1355,8 @@ class BlockEditor {
    */
   changeBlockType(blockId, newType) {
     const block = this.getBlockById(blockId);
-    if (!block) return;
+    // A block in a safe state is never converted, so nothing re-encodes it (#14 slice 3)
+    if (!block || block.safeState()) return;
 
     const beforeSnapshot = this.snapshotBlock(block);
     const oldType = block.type;
@@ -1707,7 +1724,7 @@ class BlockEditor {
    */
   getAllBlocksTextContent(blocks = this.blocks) {
     return blocks
-      .map(block => this.extractBlockTextContent(block))
+      .map(block => this._textOf(block))
       .filter(text => text && text.trim())
       .join('\n\n');
   }
@@ -3138,9 +3155,10 @@ class BlockEditor {
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', blockEl.dataset.id);
 
-    // Set block content data for drag-to-sidebar (Req 46.1)
+    // Set block content data for drag-to-sidebar (Req 46.1). A block in a safe state moves within
+    // the note, and carries nothing the sidebar would store as a new block (#14 slice 3)
     const block = this.getBlockById(blockEl.dataset.id);
-    if (block) {
+    if (block && !block.safeState()) {
       const textContent = this.extractBlockTextContent(block);
       e.dataTransfer.setData('application/x-block-content', textContent || '');
       e.dataTransfer.setData('application/x-block-type', block.type || 'text');
@@ -4925,16 +4943,30 @@ class BlockEditor {
   }
 
   /**
-   * Delete all selected blocks (Req 13.4).
+   * Delete all selected blocks (Req 13.4). A selection holding a block this build can't show asks
+   * first, since nobody can see what such a block holds (#14 slice 3); the rest delete at once,
+   * as before.
+   * @returns {Promise<void>}
    */
-  deleteSelectedBlocks() {
+  async deleteSelectedBlocks() {
     if (this.selectedBlockIds.size === 0) return;
 
+    const idsToDelete = new Set(this.selectedBlockIds);
+    const selected = this.blocks.filter(b => idsToDelete.has(b.id));
+    const safe = selected.filter(b => b.safeState()).length;
+    if (safe > 0) {
+      const noteId = this.noteId;
+      if (!(await this._confirmDeleteUnseen(selected.length, safe))) return;
+      // The note it asked about is still the one on screen
+      if (noteId !== this.noteId) return;
+      for (const id of idsToDelete) if (!this.getBlockById(id)) idsToDelete.delete(id);
+      if (idsToDelete.size === 0) return;
+    }
+
     // Find the index of the first selected block for focus after deletion
-    const firstSelectedIdx = this.blocks.findIndex(b => this.selectedBlockIds.has(b.id));
+    const firstSelectedIdx = this.blocks.findIndex(b => idsToDelete.has(b.id));
 
     // Record undo entries and delete
-    const idsToDelete = new Set(this.selectedBlockIds);
     idsToDelete.forEach(id => {
       const idx = this.blocks.findIndex(b => b.id === id);
       if (idx !== -1) {
@@ -4960,6 +4992,31 @@ class BlockEditor {
     const focusIdx = Math.max(0, Math.min(firstSelectedIdx, this.blocks.length - 1));
     this.focusBlock(this.blocks[focusIdx].id, true);
     this.scheduleSave();
+  }
+
+  /**
+   * Ask before deleting `count` selected blocks, `safe` of which this build can't show (#14 slice
+   * 3), in this editor's own document, so a pop-out editor asks in its own window. No dialog, no
+   * delete.
+   * @param {number} count
+   * @param {number} safe
+   * @returns {Promise<boolean>} true on a yes
+   */
+  _confirmDeleteUnseen(count, safe) {
+    const ask = globalThis.confirmDialog;
+    if (typeof ask !== 'function') return Promise.resolve(false);
+    const which = safe === count ? 'all' : safe === 1 ? 'one' : String(safe);
+    return ask({
+      title: count === 1 ? 'Delete this block?' : `Delete ${count} blocks?`,
+      message: count === 1
+        ? "This version of NewTabNote can't show what's in it, so you can't see what you'd delete. Undo brings it back."
+        : `This version of NewTabNote can't show what's in ${which} of them, so you can't see everything you'd delete. Undo brings them back.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      danger: true,
+      initialFocus: 'cancel',
+      doc: this.doc,
+    });
   }
 
   /**
@@ -5293,7 +5350,8 @@ class BlockEditor {
     this.hideBlockActionMenu();
 
     const block = this.getBlockById(blockId);
-    if (!block) return;
+    // A block in a safe state can't be converted or sent to AI, so it has no menu (#14 slice 3)
+    if (!block || block.safeState()) return;
 
     const menu = this.doc.createElement('div');
     menu.className = 'block-action-menu';
