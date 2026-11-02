@@ -56,8 +56,11 @@ describe('notes', () => {
       isEmpty([block({ content: '' }), block({ content: ' <br>&nbsp;<BR/>\n&NBSP;<br />' }), block({ content: null })]),
       true,
     );
-    // A block with no type is a text block, and only its content counts
-    assert.equal(isEmpty([block({ type: undefined, content: ' ', imageUrl: 'data:,', checked: true })]), true);
+    // Only a text block's content counts, beside the other fields every type owns
+    assert.equal(isEmpty([block({ content: ' ', imageUrl: 'data:,', checked: true })]), true);
+    // A block with no type is one this build can't read, so it counts as something (#14 slice 3,
+    // isMeaningful), where 1.4.x read it as a text block
+    assert.equal(isEmpty([block({ type: undefined, content: ' ' })]), false);
     for (const filled of [
       { content: 'x' },
       { content: '<p> </p>' },
