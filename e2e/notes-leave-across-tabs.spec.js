@@ -12,15 +12,20 @@ const { generateId, profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 /**
- * Alpha and Beta, a new tab on `shown`, and a second new tab, the one in use, on Beta. The
- * driver waits until each tab's app has started and its first focus has moved.
+ * Alpha and Beta, a new tab on `shown`, and a second new tab, the one in use, on Beta. Beta is
+ * the newest note, so the first new tab starts on it alone. The driver waits until each tab's
+ * app has started and its first focus has moved.
  */
 async function twoTabs(extension, shown = 'Alpha') {
   await extension.seedOnboarded();
-  await driver.seedNotes(extension, [
-    { name: 'Alpha', blocks: [{ type: 'text', content: 'Alpha body' }] },
-    { name: 'Beta', blocks: [{ type: 'text', content: 'Beta body' }] },
-  ]);
+  await driver.seedNotes(extension, [{ name: 'Alpha', blocks: [{ type: 'text', content: 'Alpha body' }] }]);
+  // A new tab starts on the newest note by updatedAt, and two notes made in the same millisecond
+  // list in either order, so Beta is made once the clock has passed Alpha's
+  const alpha = (await profileStore(extension.worker).getAllNotes()).find(note => note.name === 'Alpha');
+  await extension.worker.evaluate(async updatedAt => {
+    while (Date.now() <= updatedAt) await new Promise(resolve => setTimeout(resolve, 1));
+  }, alpha.updatedAt);
+  await driver.seedNotes(extension, [{ name: 'Beta', blocks: [{ type: 'text', content: 'Beta body' }] }]);
   const other = await driver.openNewTab(extension);
   await driver.openNote(other, shown);
   const used = await driver.openNewTab(extension);
