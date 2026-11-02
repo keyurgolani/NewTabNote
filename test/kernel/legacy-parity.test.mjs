@@ -1789,7 +1789,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
     assert.equal((await links(viaKernel)).length, 1);
   });
 
-  it('decides untitled and empty the way Storage.isNoteUntitled and Storage.isNoteEmpty do', async () => {
+  it("decides untitled the way Storage.isNoteUntitled does, and empty the way Storage.isNoteEmpty does but for a block it can't read as empty text, which it keeps (#14 slice 3)", async () => {
     const page = releaseContext();
     opened.push(page);
     /** @type {Array<Record<string, unknown>[]>} */
@@ -1827,9 +1827,19 @@ describe("the kernel's copies of production rules, run both ways", () => {
       },
     });
     await page.storage.open();
+    // Where 1.4.1 found nothing and the kernel finds content (isMeaningful): a text block holding
+    // a field its type doesn't own, another type's here, and a block with no type. Trash moves
+    // such a note to the trash where 1.4.1 deleted it for good, the safe way round.
+    const kept = new Set([4, 5, 6, 7, 8, 9, 10, 12]);
     for (const [set, blocks] of blockSets.entries()) {
       const stored = legacyEnv.plain(await page.storage.getElementsByNote(`set${set}`));
-      assert.equal(isEmpty(stored), await page.storage.isNoteEmpty(`set${set}`), JSON.stringify(blocks));
+      const legacy = await page.storage.isNoteEmpty(`set${set}`);
+      if (kept.has(set)) {
+        assert.equal(legacy, true, `1.4.1 found nothing in ${JSON.stringify(blocks)}`);
+        assert.equal(isEmpty(stored), false, JSON.stringify(blocks));
+      } else {
+        assert.equal(isEmpty(stored), legacy, JSON.stringify(blocks));
+      }
     }
     for (const name of ['', '  ', 'Untitled', 'untitled 4', 'Untitled draft', 'Plan', undefined]) {
       const note = { id: 'n', name };
