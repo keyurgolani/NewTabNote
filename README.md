@@ -12,26 +12,26 @@
 
 ### 📝 Advanced Block-Based Editor
 ![Slash command block menu](docs/screenshots/02-slash-menu.png)
-- **18+ Block Types**: Structured content with headings, tables, code blocks, math equations (LaTeX), and more.
+- **18 Block Types**: Structured content with headings, tables, code blocks, math equations, and more.
 - **Slash Commands**: Type `/` to instantly access any block type.
-- **Markdown Support**: Use familiar shortcuts like `#`, `-`, `>`, and `` ``` `` for lightning-fast writing.
+- **Markdown Support**: Paste Markdown headings, lists, and quotes (`#`, `-`, `>`), and they turn into blocks.
 - **Drag & Drop**: Effortlessly reorder your thoughts with a simple handle.
 
 ### 🤖 Your Personal AI Assistant
 - **Smart Summarization**: Get the gist of long notes in seconds.
 - **Content Expansion**: Let AI help you flesh out ideas and add detail.
-- **Auto-Titling**: Never see "Untitled" again—AI generates relevant titles based on your content.
+- **Auto-Titling**: Turn it on in Settings, and AI names your untitled notes from what they say.
 - **Multi-Provider Support**: Connect to OpenAI (GPT-4o), Anthropic (Claude 3.5), Google Gemini, or even local models via Ollama.
 
 ### 📂 Professional Organization
 - **Unlimited Notes & Folders**: Organize your life without limits.
-- **Fuzzy Search**: Find any note instantly by searching titles or content.
+- **Fuzzy Search**: Find notes by title, even with a typo, or by the first few words of their text.
 - **Tabbed Interface**: Work on multiple notes simultaneously with a familiar tabbed view.
 - **Daily Notes**: One-click access to your daily journal or scratchpad.
 
 ### 🔒 Privacy & Performance First
 - **100% Local Storage**: Your data stays in your browser (IndexedDB). No servers, no tracking.
-- **Offline Ready**: Works perfectly without an internet connection (except AI features).
+- **Offline Ready**: Your notes work without an internet connection. AI features, bookmark icons, web images and videos need one, and so does semantic search the first time it downloads its model.
 - **Export/Import**: Full control over your data with JSON and Markdown export options.
 
 ---
@@ -146,7 +146,7 @@ npm run check:dist
 
 ## 🔒 Privacy
 - All notes are stored locally in your browser's IndexedDB.
-- No data is sent to any server except when using AI features.
+- Your notes stay on your device. AI features, bookmark icons, web images, YouTube and Vimeo videos, and the semantic search model's one-time download from Hugging Face and jsDelivr use the network. Bookmark icons come from Google's favicon service, which sees the bookmarked site's domain. The [Privacy Policy](PRIVACY_POLICY.md) lists every request.
 - AI requests go directly to your configured provider with your API key.
 - API keys are stored locally and never transmitted elsewhere.
 
