@@ -5651,9 +5651,11 @@ kbd {
 
 /* One-time notice to export before the storage upgrade (js/ui/export-notice.js), between the
    note's title and its blocks. #export-notice is always on the page, with nothing to show until
-   the notice fills it. A part's failure (.part-state, #27 slice 3b) is a card in its form. */
+   the notice fills it. A part's failure (.part-state, #27 slice 3b) is a card in its form, and so
+   is a block this build keeps but can't show (.block-safe-card, #14 slice 3). */
 .export-notice.is-shown,
-.part-state {
+.part-state,
+.block-safe-card {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -5672,7 +5674,8 @@ kbd {
 }
 
 .storage-guard-title,
-.export-notice-title {
+.export-notice-title,
+.block-safe-title {
   margin: 0;
   font-weight: 600;
 }
@@ -5690,7 +5693,8 @@ kbd {
 
 .storage-guard-body,
 .export-notice-body,
-.export-notice-contents {
+.export-notice-contents,
+.block-safe-detail {
   margin: 0;
   color: var(--text-secondary);
 }
@@ -5927,6 +5931,26 @@ kbd {
 
 #sidebar-notes-list > .part-state {
   margin: 12px;
+}
+
+/* A block this build keeps but can't show (js/blocks.js, appendSafeCard; #14 slice 3): read-only,
+   in the card above, at a block's width and spacing. Its detail wraps so no line ends on a lone
+   word, and a selected card's outline follows its corners. */
+.block-safe-card {
+  display: block;
+  margin: 2px 0;
+  padding: 10px 14px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  cursor: default;
+}
+
+.block-safe-detail {
+  text-wrap: pretty;
+}
+
+.block.block-safe.block-selected {
+  border-radius: 14px;
 }
 
 /* Settings > Data & Backup: the copy from before the update (js/ui/pre-update-copy.js). Its
