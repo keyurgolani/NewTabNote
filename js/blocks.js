@@ -134,6 +134,20 @@ const BlockTypes = {
 };
 
 /**
+ * What a block in a safe state says under its title (#14 slice 3): why it can't be shown, and
+ * that its content is kept, by the state Block.safeState names
+ */
+const SAFE_DETAILS = Object.freeze({
+  newer: 'It was saved by a newer version of NewTabNote. Its content is kept as it is.',
+  unknown: "This version of NewTabNote doesn't have this kind of block. Its content is kept as it is.",
+  invalid: "Its saved data isn't in a form this version can read. Its content is kept as it is.",
+  'render-failed': 'Something in it stops it from showing. Its content is kept as it is.',
+});
+
+/** The most characters of a type id this build doesn't have that a safe block's title shows */
+const SAFE_TYPE_ID_LENGTH = 40;
+
+/**
  * Block class representing a single block in the editor
  */
 class Block {
@@ -243,11 +257,14 @@ class Block {
    * Create DOM element for this block
    */
   createElement() {
+    const safe = this.safeState();
     const block = document.createElement('div');
     block.className = 'block';
     block.dataset.id = this.id;
-    block.dataset.type = this.type;
-    block.style.setProperty('--block-indent-level', this.indentLevel || 0);
+    // A block in a safe state takes no type, so no type's styles or list numbering reach it
+    if (safe) block.classList.add('block-safe');
+    else block.dataset.type = this.type;
+    block.style.setProperty('--block-indent-level', safe ? 0 : this.indentLevel || 0);
     block.draggable = true;
 
     // Add drag handle
@@ -269,128 +286,141 @@ class Block {
     metadata.textContent = this.getMetadataText();
     block.appendChild(metadata);
 
-    // Type-specific content
-    switch (this.type) {
-      case 'divider':
-        block.appendChild(document.createElement('hr'));
-        break;
+    if (safe) {
+      this.appendSafeCard(block, safe);
+      return block;
+    }
 
-      case 'image':
-        const imgWrapper = document.createElement('div');
-        imgWrapper.className = 'image-block-wrapper';
+    // Type-specific content. A type that throws while it draws a block shows it read-only, and
+    // the note's other blocks draw as usual (#14 slice 3, per-block isolation)
+    try {
+      switch (this.type) {
+        case 'divider':
+          block.appendChild(document.createElement('hr'));
+          break;
 
-        if (this.imageUrl) {
-          const img = document.createElement('img');
-          // Use data-src for Intersection Observer lazy loading
-          img.dataset.src = this.imageUrl;
-          img.className = 'lazy-image';
-          img.alt = 'Image';
-          imgWrapper.appendChild(img);
-        } else {
-          const placeholder = document.createElement('div');
-          placeholder.className = 'image-placeholder';
-          placeholder.textContent = 'Click to add image';
-          placeholder.addEventListener('click', () => {
-            const input = document.getElementById('image-input');
-            if (input) {
-              input.dataset.blockId = this.id;
-              input.click();
-            }
-          });
-          imgWrapper.appendChild(placeholder);
-        }
-        block.appendChild(imgWrapper);
-        break;
+        case 'image':
+          const imgWrapper = document.createElement('div');
+          imgWrapper.className = 'image-block-wrapper';
 
-      case 'toggle':
-        const toggleArrow = document.createElement('div');
-        toggleArrow.className = 'toggle-arrow';
-        toggleArrow.textContent = '▶';
-        block.appendChild(toggleArrow);
+          if (this.imageUrl) {
+            const img = document.createElement('img');
+            // Use data-src for Intersection Observer lazy loading
+            img.dataset.src = this.imageUrl;
+            img.className = 'lazy-image';
+            img.alt = 'Image';
+            imgWrapper.appendChild(img);
+          } else {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'image-placeholder';
+            placeholder.textContent = 'Click to add image';
+            placeholder.addEventListener('click', () => {
+              const input = document.getElementById('image-input');
+              if (input) {
+                input.dataset.blockId = this.id;
+                input.click();
+              }
+            });
+            imgWrapper.appendChild(placeholder);
+          }
+          block.appendChild(imgWrapper);
+          break;
 
-        if (!this.collapsed) {
-          block.classList.add('expanded');
-        }
+        case 'toggle':
+          const toggleArrow = document.createElement('div');
+          toggleArrow.className = 'toggle-arrow';
+          toggleArrow.textContent = '▶';
+          block.appendChild(toggleArrow);
 
-        const toggleContent = document.createElement('div');
-        toggleContent.className = 'block-content';
-        toggleContent.contentEditable = true;
-        toggleContent.spellcheck = true;
-        toggleContent.dataset.placeholder = typeof BlockPlaceholders !== 'undefined'
-          ? BlockPlaceholders.getBlockPlaceholder('toggle', BlockTypes.toggle.placeholder)
-          : BlockTypes.toggle.placeholder;
-        globalThis.BlockRendering.render(toggleContent, this.content);
-        block.appendChild(toggleContent);
+          if (!this.collapsed) {
+            block.classList.add('expanded');
+          }
 
-        const toggleChildren = document.createElement('div');
-        toggleChildren.className = 'toggle-children';
-        if (this.children) {
-          const childContent = document.createElement('div');
-          childContent.className = 'toggle-children-content';
-          childContent.contentEditable = true;
-          globalThis.BlockRendering.render(childContent, this.children);
-          toggleChildren.appendChild(childContent);
-        } else {
-          const childPlaceholder = document.createElement('div');
-          childPlaceholder.className = 'toggle-children-placeholder';
-          childPlaceholder.contentEditable = true;
-          childPlaceholder.dataset.placeholder = 'Empty toggle. Click to add content.';
-          toggleChildren.appendChild(childPlaceholder);
-        }
-        block.appendChild(toggleChildren);
-        break;
+          const toggleContent = document.createElement('div');
+          toggleContent.className = 'block-content';
+          toggleContent.contentEditable = true;
+          toggleContent.spellcheck = true;
+          toggleContent.dataset.placeholder = typeof BlockPlaceholders !== 'undefined'
+            ? BlockPlaceholders.getBlockPlaceholder('toggle', BlockTypes.toggle.placeholder)
+            : BlockTypes.toggle.placeholder;
+          globalThis.BlockRendering.render(toggleContent, this.content);
+          block.appendChild(toggleContent);
 
-      case 'table':
-        this.createTableElement(block);
-        break;
+          const toggleChildren = document.createElement('div');
+          toggleChildren.className = 'toggle-children';
+          if (this.children) {
+            const childContent = document.createElement('div');
+            childContent.className = 'toggle-children-content';
+            childContent.contentEditable = true;
+            globalThis.BlockRendering.render(childContent, this.children);
+            toggleChildren.appendChild(childContent);
+          } else {
+            const childPlaceholder = document.createElement('div');
+            childPlaceholder.className = 'toggle-children-placeholder';
+            childPlaceholder.contentEditable = true;
+            childPlaceholder.dataset.placeholder = 'Empty toggle. Click to add content.';
+            toggleChildren.appendChild(childPlaceholder);
+          }
+          block.appendChild(toggleChildren);
+          break;
 
-      case 'bookmark':
-        this.createBookmarkElement(block);
-        break;
+        case 'table':
+          this.createTableElement(block);
+          break;
 
-      case 'video':
-        this.createVideoElement(block);
-        break;
+        case 'bookmark':
+          this.createBookmarkElement(block);
+          break;
 
-      case 'file':
-        this.createFileElement(block);
-        break;
+        case 'video':
+          this.createVideoElement(block);
+          break;
 
-      case 'equation':
-        this.createEquationElement(block);
-        break;
+        case 'file':
+          this.createFileElement(block);
+          break;
 
-      case 'todo':
-        const checkbox = document.createElement('div');
-        checkbox.className = 'todo-checkbox';
-        checkbox.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>`;
-        block.appendChild(checkbox);
-        if (this.checked) {
-          block.classList.add('checked');
-        }
-      // Fall through to add content
+        case 'equation':
+          this.createEquationElement(block);
+          break;
 
-      case 'callout':
-        if (this.type === 'callout') {
-          const icon = document.createElement('span');
-          icon.className = 'callout-icon';
-          icon.textContent = this.calloutIcon;
-          block.appendChild(icon);
-        }
-      // Fall through to add content
+        case 'todo':
+          const checkbox = document.createElement('div');
+          checkbox.className = 'todo-checkbox';
+          checkbox.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>`;
+          block.appendChild(checkbox);
+          if (this.checked) {
+            block.classList.add('checked');
+          }
+        // Fall through to add content
 
-      default:
-        const content = document.createElement('div');
-        content.className = 'block-content';
-        content.contentEditable = true;
-        content.spellcheck = true;
-        content.dataset.placeholder = typeof BlockPlaceholders !== 'undefined'
-          ? BlockPlaceholders.getBlockPlaceholder(this.type, BlockTypes[this.type]?.placeholder)
-          : (BlockTypes[this.type]?.placeholder || '');
-        globalThis.BlockRendering.render(content, this.content);
-        block.appendChild(content);
+        case 'callout':
+          if (this.type === 'callout') {
+            const icon = document.createElement('span');
+            icon.className = 'callout-icon';
+            icon.textContent = this.calloutIcon;
+            block.appendChild(icon);
+          }
+        // Fall through to add content
+
+        default:
+          const content = document.createElement('div');
+          content.className = 'block-content';
+          content.contentEditable = true;
+          content.spellcheck = true;
+          content.dataset.placeholder = typeof BlockPlaceholders !== 'undefined'
+            ? BlockPlaceholders.getBlockPlaceholder(this.type, BlockTypes[this.type]?.placeholder)
+            : (BlockTypes[this.type]?.placeholder || '');
+          globalThis.BlockRendering.render(content, this.content);
+          block.appendChild(content);
+      }
+    } catch (error) {
+      // The type and the error's class, never what the block holds
+      console.warn('A block could not be shown:', this.type, error && error.name);
+      this.renderFailed = true;
+      return this.createElement();
     }
 
     // Add number for numbered lists
@@ -400,6 +430,47 @@ class Block {
 
     return block;
   }
+
+  /**
+   * The card a block in a safe state shows in its place, read-only (#14 slice 3): its type and
+   * why it can't be shown, set as text. It holds nothing to type in.
+   * @param {HTMLElement} block
+   * @param {string} state - Block.safeState's
+   */
+  appendSafeCard(block, state) {
+    const card = document.createElement('div');
+    card.className = 'block-safe-card';
+    const title = document.createElement('p');
+    title.className = 'block-safe-title';
+    // The type its record holds, which this class may have read as text, for a record with none
+    title.textContent = Block.safeTitle(this.kept && this.kept.record ? this.kept.record.type : this.type);
+    const detail = document.createElement('p');
+    detail.className = 'block-safe-detail';
+    detail.textContent = SAFE_DETAILS[state] || SAFE_DETAILS.invalid;
+    card.appendChild(title);
+    card.appendChild(detail);
+    block.appendChild(card);
+  }
+
+  /**
+   * A safe block's title, naming its type: a built-in by its name, lowercased in the sentence,
+   * a type this build doesn't have by its id in quotes, cut at SAFE_TYPE_ID_LENGTH characters,
+   * and none when it has no type to name
+   * @param {unknown} type
+   * @returns {string}
+   */
+  static safeTitle(type) {
+    if (typeof type !== 'string' || type === '') return "This block can't be shown";
+    if (Object.prototype.hasOwnProperty.call(BlockTypes, type)) {
+      return `This ${BlockTypes[type].name.toLowerCase()} block can't be shown`;
+    }
+    const characters = Array.from(type);
+    const id = characters.length > SAFE_TYPE_ID_LENGTH
+      ? `${characters.slice(0, SAFE_TYPE_ID_LENGTH).join('')}…`
+      : type;
+    return `This “${id}” block can't be shown`;
+  }
+
 
   /**
    * Create table element

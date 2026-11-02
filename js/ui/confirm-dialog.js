@@ -6,6 +6,8 @@
  * @property {string} [cancelText='Cancel']
  * @property {boolean} [danger=false]
  * @property {'confirm'|'cancel'} [initialFocus='confirm'] - Button focused on open
+ * @property {Document} [doc] - The document it opens in: the page's unless given, as a pop-out
+ *   editor gives its own window's (#14 slice 3)
  */
 
 /**
@@ -24,43 +26,44 @@ function confirmDialog(options) {
     confirmText = 'Confirm',
     cancelText = 'Cancel',
     danger = false,
-    initialFocus = 'confirm'
+    initialFocus = 'confirm',
+    doc = document
   } = options;
 
   return new Promise((resolve) => {
     // Overlay
-    const overlay = document.createElement('div');
+    const overlay = doc.createElement('div');
     overlay.className = 'confirm-dialog-overlay';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
     overlay.setAttribute('aria-label', title);
 
     // Dialog container
-    const dialog = document.createElement('div');
+    const dialog = doc.createElement('div');
     dialog.className = 'confirm-dialog';
 
     // Title
-    const titleEl = document.createElement('h3');
+    const titleEl = doc.createElement('h3');
     titleEl.className = 'confirm-dialog-title';
     titleEl.textContent = title;
     dialog.appendChild(titleEl);
 
     // Message
-    const messageEl = document.createElement('p');
+    const messageEl = doc.createElement('p');
     messageEl.className = 'confirm-dialog-message';
     messageEl.textContent = message;
     dialog.appendChild(messageEl);
 
     // Button row
-    const actions = document.createElement('div');
+    const actions = doc.createElement('div');
     actions.className = 'confirm-dialog-actions';
 
-    const cancelBtn = document.createElement('button');
+    const cancelBtn = doc.createElement('button');
     cancelBtn.className = 'confirm-dialog-btn confirm-dialog-cancel';
     cancelBtn.textContent = cancelText;
     cancelBtn.type = 'button';
 
-    const confirmBtn = document.createElement('button');
+    const confirmBtn = doc.createElement('button');
     confirmBtn.className = 'confirm-dialog-btn confirm-dialog-confirm';
     if (danger) {
       confirmBtn.classList.add('confirm-dialog-danger');
@@ -103,7 +106,7 @@ function confirmDialog(options) {
       if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
-        close(document.activeElement === cancelBtn ? false : true);
+        close(doc.activeElement === cancelBtn ? false : true);
         return;
       }
       if (e.key === 'Tab') {
@@ -131,7 +134,7 @@ function confirmDialog(options) {
     overlay.addEventListener('keydown', onKeyDown);
     overlay.addEventListener('mousedown', onOverlayClick);
 
-    document.body.appendChild(overlay);
+    doc.body.appendChild(overlay);
     focusableEls[focusIndex].focus();
   });
 }
