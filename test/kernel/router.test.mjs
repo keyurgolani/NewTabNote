@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import * as v from '../../js/lib/valibot/index.mjs';
 import { welcomeSchema } from '../../js/kernel/core/contracts/envelope.js';
 import { entityId, id } from '../../js/kernel/core/contracts/fields.js';
+import * as limits from '../../js/kernel/core/contracts/limits.js';
 import { PROTOCOL_VERSION, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { committed, ready } from '../../js/kernel/core/contracts/outcomes.js';
 import { queryStateSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
@@ -680,6 +681,160 @@ describe('the router: deadlines and cancellation (#13, "Cancellation, deadlines,
     await settle();
     assert.deepEqual([first.closed, second.closed], [true, true]);
     assert.deepEqual(stopped.sort(), ['first', 'second']);
+  });
+});
+
+describe("the router: a hello while #35's coordinator is starting waits for its start", () => {
+  /** contracts/limits.js's WELCOME_WAIT_MS, which the first case pins */
+  const WAIT_MS = 1000;
+
+  /**
+   * A coordinator that says starting until finish(), with the router options that read it:
+   * `status`, and `settled`, which counts its calls and settles once finish() is called. With
+   * `hooks`, the session hooks keep what they hear.
+   */
+  const startingCoordinator = () => {
+    /** @type {{status: 'ready'} | {status: 'degraded', reason: string}} */
+    let state = { status: 'degraded', reason: 'starting' };
+    let calls = 0;
+    /** @type {string[]} */
+    const heard = [];
+    /** @type {() => void} */
+    let finish = () => {};
+    const done = new Promise(resolve => {
+      finish = () => {
+        state = { status: 'ready' };
+        resolve(undefined);
+      };
+    });
+    const scheduler = testScheduler();
+    const router = makeRouter({
+      ...scheduler,
+      status: () => state,
+      settled: () => {
+        calls += 1;
+        return done;
+      },
+      sessions: { opened: session => heard.push(`opened ${session.surface}`), closed: session => heard.push(`closed ${session.surface}`) },
+    });
+    return {
+      router,
+      scheduler,
+      heard,
+      finish: () => finish(),
+      get calls() {
+        return calls;
+      },
+    };
+  };
+
+  /** @param {Array<Record<string, any>>} frames */
+  const welcomes = frames => frames.filter(frame => frame.frame === 'welcome').map(frame => [frame.status, frame.reason]);
+
+  it('caps the wait at 1000 ms, under the client\'s RECONNECTING_AFTER_MS and HANDSHAKE_TIMEOUT_MS', () => {
+    assert.equal(limits.WELCOME_WAIT_MS, WAIT_MS);
+    assert.ok(WAIT_MS < limits.RECONNECTING_AFTER_MS && WAIT_MS < limits.HANDSHAKE_TIMEOUT_MS);
+  });
+
+  it('welcomes a hello once the start it waits on settles, saying ready, and opens its session then', async () => {
+    const coordinator = startingCoordinator();
+    const peer = rawConnection(coordinator.router, 'popup');
+    peer.send(hello('popup'));
+    await settle();
+    // Nothing yet: the hello started the coordinator and waits for its start
+    assert.deepEqual(peer.frames, []);
+    assert.equal(coordinator.calls, 1);
+    assert.deepEqual(coordinator.heard, []);
+    coordinator.finish();
+    await settle();
+    assert.deepEqual(welcomes(peer.frames), [['ready', undefined]]);
+    assert.deepEqual(coordinator.heard, ['opened popup']);
+    assert.equal(coordinator.scheduler.waiting, 0, 'the cap is cleared once the start settles');
+  });
+
+  it('welcomes a hello as starting at the cap, when the start has not settled, and sends nothing more after', async () => {
+    const coordinator = startingCoordinator();
+    const peer = rawConnection(coordinator.router, 'popup');
+    peer.send(hello('popup'));
+    await coordinator.scheduler.advance(WAIT_MS - 1);
+    assert.deepEqual(peer.frames, []);
+    await coordinator.scheduler.advance(1);
+    assert.deepEqual(welcomes(peer.frames), [['degraded', 'starting']]);
+    assert.deepEqual(coordinator.heard, ['opened popup']);
+    coordinator.finish();
+    await settle();
+    assert.equal(peer.frames.length, 1);
+  });
+
+  it("welcomes a hello at once when the coordinator isn't starting, and doesn't ask for its start", async () => {
+    for (const status of [{ status: 'ready' }, { status: 'degraded', reason: 'migrating' }]) {
+      let calls = 0;
+      const scheduler = testScheduler();
+      const router = makeRouter({
+        ...scheduler,
+        status: () => /** @type {any} */ (status),
+        settled: () => {
+          calls += 1;
+          return Promise.resolve();
+        },
+      });
+      const peer = rawConnection(router, 'newtab');
+      peer.send(hello('newtab'));
+      await settle();
+      assert.deepEqual(welcomes(peer.frames), [[status.status, /** @type {any} */ (status).reason]]);
+      assert.equal(calls, 0);
+      assert.equal(scheduler.waiting, 0);
+    }
+  });
+
+  it('starts no coordinator for a hello in another major, which it welcomes at once, or for one that closes the connection', async () => {
+    const coordinator = startingCoordinator();
+    const newer = rawConnection(coordinator.router, 'popup');
+    newer.send(hello('popup', 'popup-session', { major: PROTOCOL_VERSION.major + 1, minor: 0 }));
+    await settle();
+    assert.deepEqual(welcomes(newer.frames), [['degraded', 'starting']]);
+    // A hello claiming a surface its transport didn't verify closes its connection
+    const claiming = rawConnection(coordinator.router, 'popup');
+    claiming.send(hello('newtab'));
+    await settle();
+    assert.equal(claiming.closed, true);
+    assert.equal(coordinator.calls, 0);
+    assert.deepEqual(coordinator.heard, []);
+  });
+
+  it('refuses a request sent during the wait as one sent before its hello, and closes the connection on a second hello', async () => {
+    const coordinator = startingCoordinator();
+    const early = rawConnection(coordinator.router, 'popup');
+    early.send(hello('popup'));
+    await settle();
+    early.send(request('r1', { type: 'system.messagingHealth' }));
+    await settle();
+    assert.deepEqual(byRequest(early.frames), { r1: 'error unauthorized-sender' });
+    const twice = rawConnection(coordinator.router, 'popup');
+    twice.send(hello('popup', 'second'));
+    await settle();
+    twice.send(hello('popup', 'second'));
+    await settle();
+    assert.equal(twice.closed, true);
+    coordinator.finish();
+    await settle();
+    // The first connection still gets its welcome, and the second, closed, gets nothing
+    assert.deepEqual(welcomes(early.frames), [['ready', undefined]]);
+    assert.deepEqual(welcomes(twice.frames), []);
+    assert.deepEqual(coordinator.heard, ['opened popup']);
+  });
+
+  it('gives a connection that closes during the wait no welcome, and opens no session for it', async () => {
+    const coordinator = startingCoordinator();
+    const peer = rawConnection(coordinator.router, 'sidepanel');
+    peer.send(hello('sidepanel'));
+    await settle();
+    peer.close();
+    await settle();
+    coordinator.finish();
+    await settle();
+    assert.deepEqual(peer.frames, []);
+    assert.deepEqual(coordinator.heard, []);
   });
 });
 

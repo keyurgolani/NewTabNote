@@ -134,6 +134,45 @@ describe('the worker\'s router (#13, "Topology")', () => {
     ]);
   });
 
+  it("hands the router the coordinator's settled, so a hello while it starts is welcomed once the start is done (#35)", async () => {
+    const fake = createChromeFake();
+    /** @type {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} */
+    let status = { status: 'degraded', reason: 'starting' };
+    let starts = 0;
+    /** @type {() => void} */
+    let finish = () => {};
+    const done = new Promise(resolve => {
+      finish = () => {
+        status = { status: 'ready' };
+        resolve(undefined);
+      };
+    });
+    fake.worker.install(chrome => {
+      installWorkerRouter({
+        runtime: chrome.runtime,
+        status: () => status,
+        settled: () => {
+          starts += 1;
+          return done;
+        },
+      });
+    });
+    const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    port.postMessage(encode(hello('popup', 's1')));
+    await settle();
+    await settle();
+    assert.deepEqual([frames, starts], [[], 1]);
+    finish();
+    await settle();
+    await settle();
+    assert.deepEqual(frames.map(frame => [frame.frame, frame.status, frame.reason]), [['welcome', 'ready', undefined]]);
+  });
+
   it("answers system.coordinatorHealth from the coordinator's handler (#35)", async () => {
     const fake = createChromeFake();
     const health = {
