@@ -115,6 +115,8 @@ test("a block's plain-text field shows as text once it's rich content (#14 slice
   await block.locator('.block-handle').click();
   await page.locator('.block-action-menu').getByText('Turn into...').click();
   await page.locator('.turn-into-menu').getByText('Text', { exact: true }).click();
+  // Turning a table into text removes its grid, so it asks first (#14 slice 3)
+  await page.getByRole('dialog', { name: 'Turn into Text?' }).locator('.confirm-dialog-confirm').click();
   await expect(block).toHaveAttribute('data-type', 'text');
   await block.screenshot({ path: testInfo.outputPath('turn-into.png') });
   await expect.poll(() => driver.blocks(page)).toEqual([{ type: 'text', text: 'Plan <b>this</b> a & b' }]);

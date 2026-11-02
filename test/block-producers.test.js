@@ -131,21 +131,23 @@ describe('plain text written into rich content is escaped (#14 slice 2, declared
     assert.ok(known(stateOf(env, { ...target.serialize(), type: 'h1' })));
   });
 
-  it("Turn into: a table's cells become the new type's text, escaped, and the other plain-text types still turn into empty text", () => {
-    // Of the types whose fields are plain text, only a table's carry over: 1.4.x's
-    // extractBlockTextContent, which the plain-text projection keeps, gives the cells, and an
-    // empty string for a bookmark, an equation, a file, a video, or an image, so their fields
-    // never reach the new content, before this slice or after it
+  it("Turn into: what a block's plain-text fields hold becomes the new type's text, escaped, and a toggle's hidden content a text block after it (#14 slice 3, declared)", () => {
+    // Slice 3's lossless conversions (conversions.js): a table's cells, a bookmark's title as a
+    // link to its address, an equation's source, a file's name and a video's address are the
+    // new text, where only a table's cells were before. A yes is what a conversion that removes
+    // structure waits for (test/editor-conversions.test.js); here it's given. Every block it
+    // makes decodes as a known block.
     const env = codePage();
     const BlockEditor = env.get('BlockEditor');
     const Block = env.get('Block');
     for (const [fields, content] of [
       [{ type: 'table', tableData: [['<b>x</b>', 'a & b']], rows: 1, cols: 2 }, '&lt;b&gt;x&lt;/b&gt; a &amp; b'],
-      [{ type: 'bookmark', url: 'https://a.test/?a&b', title: '<i>t</i>' }, ''],
-      [{ type: 'equation', equation: 'a < b > c' }, ''],
-      [{ type: 'file', fileName: '<x>.txt', fileData: 'data:,' }, ''],
-      [{ type: 'video', videoUrl: 'https://a.test/<v>' }, ''],
+      [{ type: 'bookmark', url: 'https://a.test/?a&b', title: '<i>t</i>' }, '<a href="https://a.test/?a&amp;b">&lt;i&gt;t&lt;/i&gt;</a>'],
+      [{ type: 'equation', equation: 'a < b > c' }, 'a &lt; b &gt; c'],
+      [{ type: 'file', fileName: '<x>.txt', fileData: 'data:,' }, '&lt;x&gt;.txt'],
+      [{ type: 'video', videoUrl: 'https://a.test/<v>' }, '<a href="https://a.test/&lt;v&gt;">https://a.test/&lt;v&gt;</a>'],
       [{ type: 'image', imageUrl: 'https://a.test/<i>.png' }, ''],
+      [{ type: 'toggle', content: 'Heading', children: 'Inside <i>it</i> & <b>out</b>' }, 'Heading'],
     ]) {
       const target = new Block({ id: 'b', ...fields });
       const editor = Object.assign(Object.create(BlockEditor.prototype), {
@@ -155,9 +157,15 @@ describe('plain text written into rich content is escaped (#14 slice 2, declared
         updateNumberedLists() {},
         scheduleSave() {},
       });
-      editor.changeBlockType('b', 'text');
+      assert.equal(editor.changeBlockType('b', 'text', { confirmed: true }), true, fields.type);
       assert.equal(target.content, content, fields.type);
-      assert.ok(known(stateOf(env, target.serialize())), fields.type);
+      for (const made of editor.blocks) assert.ok(known(stateOf(env, made.serialize())), fields.type);
+      // A toggle's hidden content is a text block of its own, right after it
+      assert.deepEqual(
+        editor.blocks.slice(1).map(made => [made.type, made.content]),
+        fields.type === 'toggle' ? [['text', 'Inside <i>it</i> & <b>out</b>']] : [],
+        fields.type,
+      );
     }
   });
 
