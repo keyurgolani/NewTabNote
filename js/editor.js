@@ -119,8 +119,9 @@ let closeDraftsBound = false;
 /**
  * The saves this page's editors issued, by note, so one editor's draft counts another's save of
  * the same note as the page's own, committed or not (#33): each one's place in the page's save
- * order, the title it carried, and the digest of each block it sent, as the note stores it
- * @type {Map<string, Array<{seq: number, name: (string|undefined), blocks: Map<string, string>}>>}
+ * order, the title it carried, the digest of each block it sent, as the note stores it, and once
+ * it commits, the revision it committed at and whether its title was stored (committedPageSave)
+ * @type {Map<string, Array<{seq: number, name: (string|undefined), blocks: Map<string, string>, committed?: {revision: number, named: boolean}}>>}
  */
 const pageSaves = new Map();
 
