@@ -261,7 +261,8 @@ class Block {
     const block = document.createElement('div');
     block.className = 'block';
     block.dataset.id = this.id;
-    // A block in a safe state takes no type, so no type's styles or list numbering reach it
+    // A block in a safe state takes no type, so no type's styles reach it and it shows no list
+    // number; a numbered list around it still counts it, as the version that saved it did
     if (safe) block.classList.add('block-safe');
     else block.dataset.type = this.type;
     block.style.setProperty('--block-indent-level', safe ? 0 : this.indentLevel || 0);
