@@ -23,6 +23,7 @@ import {
   recoveredIdOf,
 } from '../core/domain/close-draft-keys.js';
 import { systemClock } from '../core/ports/runtime.js';
+import { closeDraftWriter } from './close-draft-writer.js';
 import { applyingCloseDrafts, holdsKeys, pageDrafts } from './close-drafts.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
@@ -462,15 +463,19 @@ export function createNewTabPageClient(
 /**
  * The document client the new tab's editors read and write through, on `kernel`. Before the
  * adapter's connection closes for another context's upgrade, it has them write what they have
- * pending, so typing from the last half second isn't lost.
+ * pending, so typing from the last half second isn't lost. At the page's own close, they write
+ * each edit they haven't seen commit as a close-time draft, through the writer on the page's
+ * localStorage (close-draft-writer.js, #33), which the next start applies.
  * @param {Client} kernel
  * @param {Pick<IndexedDbAdapter, 'beforeClose' | 'openState'>} adapter - the one the kernel was built on
+ * @param {{storage?: DraftStorage | undefined}} [page] - the page's localStorage, from its globals
  * @returns {DocumentClient}
  */
-export function createNewTabDocumentClient(kernel, adapter) {
+export function createNewTabDocumentClient(kernel, adapter, { storage = pageDrafts().storage } = {}) {
   return createDocumentClient(kernel, {
     beforeConnectionCloses: flush => adapter.beforeClose(flush),
     connectionOpen: () => adapter.openState() === 'open',
+    closeDrafts: closeDraftWriter({ storage, newId: () => kernel.ids.next() }),
   });
 }
 
