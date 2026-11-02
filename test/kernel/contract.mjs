@@ -589,19 +589,39 @@ export function runContractSuite(fixture) {
         assert.equal((await noteOf('n1'))?.preview, 'Added', 'from the blocks as stored, in their new order');
       });
 
-      it("with orders, a block another note holds refuses the save, and one no note holds is skipped (#17, the per-pane save)", async () => {
+      it('with orders, a block another note holds refuses the save, and one no note holds is skipped (#17, the per-pane save)', async () => {
         await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
         await createNote({ noteId: 'n2', blocks: someBlocks('n2', 1) });
         const typed = { ...someBlocks('n1', 2)[0], content: 'Typed' };
         assertRejected(
-          await kernel.execute(cmd('saveNoteContent', { noteId: 'n1', blocks: [typed], orders: [{ id: 'n2-block-0', order: 5 }], deriveFromStored: true })),
+          await kernel.execute(
+            cmd('saveNoteContent', {
+              noteId: 'n1',
+              blocks: [typed],
+              orders: [{ id: 'n2-block-0', order: 5 }],
+              deriveFromStored: true,
+            }),
+          ),
           'validation',
           'block-of-another-note',
         );
-        assert.deepEqual((await blocksOf('n2')).map(block => [block.id, block.order]), [['n2-block-0', 0]], "n2's block stays");
-        assert.equal((await blocksOf('n1')).find(block => block.id === 'n1-block-0')?.content, 'Line 0', 'nothing of the save went in');
+        assert.deepEqual(
+          (await blocksOf('n2')).map(block => [block.id, block.order]),
+          [['n2-block-0', 0]],
+          "n2's block stays",
+        );
+        assert.equal(
+          (await blocksOf('n1')).find(block => block.id === 'n1-block-0')?.content,
+          'Line 0',
+          'nothing of the save went in',
+        );
         const outcome = await run(
-          cmd('saveNoteContent', { noteId: 'n1', blocks: [typed], orders: [{ id: 'deleted-elsewhere', order: 1 }], deriveFromStored: true }),
+          cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: [typed],
+            orders: [{ id: 'deleted-elsewhere', order: 1 }],
+            deriveFromStored: true,
+          }),
         );
         assert.equal(outcome.code, 'content-saved');
         assert.deepEqual(
@@ -613,15 +633,34 @@ export function runContractSuite(fixture) {
 
       it('refuses orders that are not a list of blocks and orders, or that name a block twice (#17)', async () => {
         await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
-        for (const orders of [{ 'n1-block-0': 1 }, [{ id: 'n1-block-0' }], [{ id: 'n1-block-0', order: -1 }], [{ id: 'n1-block-0', order: 1.5 }], [{ id: '', order: 1 }]]) {
+        for (const orders of [
+          { 'n1-block-0': 1 },
+          [{ id: 'n1-block-0' }],
+          [{ id: 'n1-block-0', order: -1 }],
+          [{ id: 'n1-block-0', order: 1.5 }],
+          [{ id: '', order: 1 }],
+        ]) {
           assertRejected(
-            await kernel.execute(cmd('saveNoteContent', { noteId: 'n1', blocks: [], orders: /** @type {any} */ (orders), deriveFromStored: true })),
+            await kernel.execute(
+              cmd('saveNoteContent', {
+                noteId: 'n1',
+                blocks: [],
+                orders: /** @type {any} */ (orders),
+                deriveFromStored: true,
+              }),
+            ),
             'validation',
             'invalid-command',
           );
         }
         const twice = [
-          { blocks: [], orders: [{ id: 'n1-block-0', order: 1 }, { id: 'n1-block-0', order: 2 }] },
+          {
+            blocks: [],
+            orders: [
+              { id: 'n1-block-0', order: 1 },
+              { id: 'n1-block-0', order: 2 },
+            ],
+          },
           { blocks: [someBlocks('n1', 1)[0]], orders: [{ id: 'n1-block-0', order: 1 }] },
         ];
         for (const { blocks, orders } of twice) {
