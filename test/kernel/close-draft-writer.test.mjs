@@ -138,6 +138,29 @@ describe("the new tab's close-time draft writer", () => {
     const writer = closeDraftWriter({ storage: undefined, newId: idsFrom(['page-1']) });
     assert.equal(writer.digest({ ...typed, canvasId: undefined }, 'n1'), blockDigest(typed, 'n1'));
   });
+
+  it("leaves a block's times and its schema version out of its digest, so a copy a later save wrote a version on is the same block", () => {
+    assert.equal(blockDigest({ ...typed, schemaVersion: 1, createdAt: AT, updatedAt: AT + 5 }, 'n1'), blockDigest(typed, 'n1'));
+    assert.equal(blockDigest({ ...typed, schemaVersion: 0 }, 'n1'), blockDigest({ ...typed, schemaVersion: 1 }, 'n1'));
+    assert.notEqual(blockDigest({ ...typed, content: 'typed again' }, 'n1'), blockDigest(typed, 'n1'));
+  });
+
+  it('a stored block a later save wrote its schema version on is still the one the base names: the draft saves, with no recovered note', () => {
+    const storage = legacyEnv.createLocalStorage();
+    const writer = closeDraftWriter({ storage, newId: idsFrom(['page-1']), now: () => AT });
+    const before = { ...typed, content: 'before' };
+    writer.write(fieldsOf({ base: { ...fieldsOf().base, revision: 4, blocks: { b1: blockDigest(before, 'n1') } } }));
+    const draft = draftsIn(storage)[`${PREFIX}cmd-1`];
+    // Another page's save since the base moved the revision and wrote b1 again, as it was, with its schema version
+    const decision = decide({
+      draft,
+      note: /** @type {any} */ ({ id: 'n1', name: 'Plan', updatedAt: AT - 1_000 }),
+      madeBefore: false,
+      stored: new Map([['b1', { ...before, schemaVersion: 1, updatedAt: AT - 1_000 }]]),
+      versions: { revision: 5, placementVersion: 0, sourceRevision: 0 },
+    });
+    assert.equal(decision.kind, 'save');
+  });
 });
 
 describe("the document client's revision, commandId and writer", () => {

@@ -11,17 +11,22 @@
 /** The format both 1.4.3 and the stack write */
 export const CLOSE_DRAFT_VERSION = 1;
 
-/** A block's times, which change on every edit, so content first leaves them out */
-const TIMES = Object.freeze(['createdAt', 'updatedAt']);
+/**
+ * What two copies of a block can differ by with nothing in the block changed, which content first
+ * leaves out: its times, which change on every edit, and its schema version, which a save writes
+ * on a block an earlier build stored without one (#14 slice 3)
+ */
+const UNCOMPARED = Object.freeze(['createdAt', 'updatedAt', 'schemaVersion']);
 
 /**
- * A block's fields but its times, as a stable string, as 1.4.3 compares them
+ * A block's fields but its times and its schema version, as a stable string, as 1.4.3 compares
+ * them (1.4.3 writes no schema version)
  * @param {Record<string, unknown>} block
  * @returns {string}
  */
 export function fingerprint(block) {
   const fields = Object.keys(block)
-    .filter(key => !TIMES.includes(key))
+    .filter(key => !UNCOMPARED.includes(key))
     .sort();
   return JSON.stringify(fields.map(key => [key, block[key]]));
 }
