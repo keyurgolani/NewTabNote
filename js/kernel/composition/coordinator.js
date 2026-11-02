@@ -379,11 +379,13 @@ export function createCoordinator({
    * @returns {'running' | 'blocked' | null}
    */
   const migrationNow = () => {
-    const run = kernel ? /** @type {WithMigration} */ (/** @type {unknown} */ (kernel)).migration : undefined;
+    const migration = kernel ? /** @type {WithMigration} */ (/** @type {unknown} */ (kernel)).migration : undefined;
     if (state === 'degraded' && reason === MIGRATING) {
-      return run && typeof run.blocked === 'function' && !run.blocked() ? 'running' : 'blocked';
+      return migration && typeof migration.blocked === 'function' && !migration.blocked() ? 'running' : 'blocked';
     }
-    if (state === 'starting' && run && typeof run.upgrading === 'function' && run.upgrading()) return 'running';
+    if (state === 'starting' && migration && typeof migration.upgrading === 'function' && migration.upgrading()) {
+      return 'running';
+    }
     return null;
   };
 
