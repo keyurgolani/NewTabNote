@@ -12,8 +12,8 @@
  *
  * Each of DatabaseManager's calls the specs make is here by its name, with its arguments, and
  * answers what 1.4.x's answered, once its transaction has committed: createNote, saveElement,
- * updateNote, archiveNote, unarchiveNote, trashNote, createFolder, deleteFolder, getAllNotes,
- * getNote, getElementsByNote, getAllFolders, getTrashedNotes, getTemplates and
+ * updateNote, archiveNote, unarchiveNote, trashNote, createFolder, updateFolder, deleteFolder,
+ * getAllNotes, getNote, getElementsByNote, getAllFolders, getTrashedNotes, getTemplates and
  * getCustomThemes, and seedNotes for the driver. Arguments and answers cross as JSON, which
  * 1.4.x's note, block, folder and theme records are. generateId makes an id as Utils.generateId
  * did, here, without a call into the target. The store's source is evaluated in the target
@@ -35,6 +35,7 @@ const PROFILE_STORE_METHODS = Object.freeze([
   'unarchiveNote',
   'trashNote',
   'createFolder',
+  'updateFolder',
   'deleteFolder',
   'getAllNotes',
   'getNote',

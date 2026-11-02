@@ -155,9 +155,11 @@ async function writes(api) {
   await api.updateNote({ ...(await api.getNote(alpha.id)), folderId: inner.id });
   await api.updateNote({ ...(await api.getNote(beta.id)), folderId: work.id });
   await api.deleteFolder(work.id);
+  const kept = await api.createFolder('Kept');
+  await api.updateFolder({ ...kept, collapsed: true });
   await api.updateNote({ ...(await api.getNote(template.id)), isTemplate: true });
   await api.trashNote(beta.id);
-  return [alpha.id, beta.id, template.id, work.id, inner.id];
+  return [alpha.id, beta.id, template.id, work.id, inner.id, kept.id];
 }
 
 /**
@@ -224,7 +226,7 @@ describe('the profile store the e2e specs and the driver write and read through 
     const context = await release141();
     const theirs = await writes(context.storage);
     closeAll([context]);
-    const names = ['alpha', 'beta', 'template', 'work', 'inner'];
+    const names = ['alpha', 'beta', 'template', 'work', 'inner', 'kept'];
     const stored = await storedOn(env.indexedDB, new Map(mine.map((id, index) => [id, names[index]])));
     const expected = await storedOn(context.env.indexedDB, new Map(theirs.map((id, index) => [id, names[index]])));
     assert.deepStrictEqual(stored, expected);

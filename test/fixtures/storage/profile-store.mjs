@@ -441,6 +441,21 @@ export function createProfileStore(factory) {
       }),
 
     /**
+     * DatabaseManager.updateFolder: the folder as given, written at a new updatedAt
+     * @param {FolderRecord} folder
+     * @returns {Promise<true>}
+     */
+    updateFolder: folder =>
+      withDatabase(async db => {
+        if (!has(db, 'folders')) throw new Error('profile store: the profile has no folders store');
+        const tx = db.transaction('folders', 'readwrite');
+        const done = committed(tx);
+        tx.objectStore('folders').put({ ...folder, updatedAt: Date.now() });
+        await done;
+        return /** @type {true} */ (true);
+      }),
+
+    /**
      * DatabaseManager.deleteFolder: the folder and every folder under it go, and the notes filed
      * in any of them, archived ones included, move to the top level
      * @param {string} folderId
