@@ -443,7 +443,11 @@ describe('no shipped path reaches a conflict before #17 PR 4 (#17 PR 2a, plan se
       entry.surfaces.some(surface => ['popup', 'sidepanel', 'worker-internal'].includes(surface)),
     );
     assert.deepEqual(shipped.map(([type]) => type).sort(), [
+      // A closing tab's edit, whose base the command checks in its own transaction (#33)
+      'applyCloseDraft',
       'captureToDailyNote',
+      // The worker's one-time catch-up of 1.4.x's lagging records, a derived write with no source revision (#33)
+      'catchUpNoteRecords',
       'createNote',
       // The worker's read-only check after an install or an update (#35 slice 1)
       'runIntegrityCheck',

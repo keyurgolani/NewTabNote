@@ -19,8 +19,8 @@ const READS = ['listNotes', 'getNote', 'getNoteBlocks', 'listFolders', 'getPrefe
 /** @type {Record<Surface, {commands: string[] | 'all', queries: string[] | 'all'}>} */
 const TODAY = {
   newtab: {
-    // Every command but the integrity check, which only the service worker runs (#35)
-    commands: COMMAND_TYPES.filter(type => type !== 'runIntegrityCheck'),
+    // Every command but the integrity check and the records' catch-up, which only the service worker runs (#35, #33)
+    commands: COMMAND_TYPES.filter(type => type !== 'runIntegrityCheck' && type !== 'catchUpNoteRecords'),
     queries: [
       ...READS,
       'getBacklinks',
@@ -41,10 +41,14 @@ const TODAY = {
       'getSyncData',
     ],
   },
-  popup: { commands: ['createNote'], queries: [...READS, 'getPopupInsightsEnabled'] },
-  sidepanel: { commands: [], queries: READS },
+  // Since 1.4.3 Popup and Side Panel also apply closing tabs' edits at their start (#33)
+  popup: { commands: ['createNote', 'applyCloseDraft'], queries: [...READS, 'getPopupInsightsEnabled'] },
+  sidepanel: { commands: ['applyCloseDraft'], queries: READS },
   offscreen: { commands: [], queries: [] },
-  'worker-internal': { commands: ['captureToDailyNote', 'runStartupMaintenance', 'runIntegrityCheck'], queries: [] },
+  'worker-internal': {
+    commands: ['captureToDailyNote', 'runStartupMaintenance', 'runIntegrityCheck', 'catchUpNoteRecords'],
+    queries: [],
+  },
   recovery: { commands: [], queries: [] },
 };
 

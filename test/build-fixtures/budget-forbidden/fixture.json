@@ -10,6 +10,11 @@
     {
       "file": "js/entries/newtab.js",
       "append": "\nimport { EVENT_CODES } from '../trust/core/event-codes.js';\nwindow.ntnFixtureCodes = EVENT_CODES;\n"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 716800, \"gzip\": 204800 }",
+      "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
     }
   ]
 }

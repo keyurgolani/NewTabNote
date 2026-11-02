@@ -90,6 +90,9 @@ describe("the worker's composition root", () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v10.basic')));
     assert.equal((await recordsOf(of, 'operations')).length, 3);
     const swept = async () => (await recordsOf(of, 'meta')).find(record => record.key === SWEPT_KEY);
+    // The rows but the records' catch-up's, which runs beside the sweep (records-catch-up.test.mjs)
+    const rows = async () =>
+      (await recordsOf(of, 'operations')).filter(row => !String(row.outcome?.code).startsWith('records-caught-up'));
     const worker = createWorkerClient(hostOf(of));
     assert.equal(await worker.whenReady(), null);
     assert.equal((await worker.migration.done).status, 'migrated');
@@ -98,14 +101,14 @@ describe("the worker's composition root", () => {
     while (!(await swept()) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     const record = await swept();
     assert.equal(typeof record?.sweptAt, 'number');
-    assert.deepEqual(await recordsOf(of, 'operations'), []);
+    assert.deepEqual(await rows(), []);
     // A capture keeps its row, and the next start, within the day, sweeps nothing
     assert.equal((await capture(worker, 'kept')).kind, 'committed');
     const again = createWorkerClient(hostOf(of));
     assert.equal(await again.whenReady(), null);
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.deepEqual(await swept(), record);
-    assert.equal((await recordsOf(of, 'operations')).length, 1);
+    assert.equal((await rows()).length, 1);
   });
 
   it('short of space: records it, opens the database as it is, and captures still commit on 8', async () => {
@@ -787,7 +790,7 @@ describe("the worker's data transforms (#17 PR 3a)", () => {
   it('at every start, once its run is in, runs the transforms the database still needs, then the purge, without holding the kernel up', async () => {
     const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
     // The logical version as each holder of the points lock lets it go: the run, then the
-    // transforms, then the purge, each after the one before
+    // transforms, then the records' catch-up (#33), then the purge, each after the one before
     const manager = legacyEnv.createLockManager();
     /** @type {number[]} */
     const released = [];
@@ -812,13 +815,24 @@ describe("the worker's data transforms (#17 PR 3a)", () => {
     };
     const worker = createWorkerClient({ ...hostOf(of), locks, timers, keepAlive: async () => {} });
     assert.equal(await worker.whenReady(), null);
+    // Which ends first, since the versions alone read the same either way: the purge waits for
+    // the catch-up (w11)
+    /** @type {string[]} */
+    const ended = [];
+    const endings = Promise.all([
+      worker.recordsCatchUp.done.then(() => ended.push('catch-up')),
+      Promise.resolve(worker.purge.done).then(() => ended.push('purge')),
+    ]);
     assert.equal((await worker.transforms.done)?.status, 'transformed');
+    assert.equal((await worker.recordsCatchUp.done)?.status, 'done');
     assert.equal((await worker.purge.done)?.status, 'nothing');
+    await endings;
+    assert.deepEqual(ended, ['catch-up', 'purge']);
     // The transforms take it through logical 2 and 3 (#17 PR 3b) in one run
-    assert.deepEqual(released, [1, 3, 3]);
+    assert.deepEqual(released, [1, 3, 3, 3]);
     assert.deepEqual(await state(of), { logicalVersion: 3, grouped: true });
-    // The keepalive spans each: the run, the transforms, and the sweep
-    assert.equal(kept, 3);
+    // The keepalive spans each: the run, the transforms, the catch-up, and the sweep
+    assert.equal(kept, 4);
     await legacyEnv.waitFor(() => base.live.size === 0, { withinMs: 5000, message: 'the keepalive to stop' });
     // The next start finds nothing to do
     const next = createWorkerClient(hostOf(of));

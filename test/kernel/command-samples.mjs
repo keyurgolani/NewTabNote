@@ -78,6 +78,23 @@ export const COMMAND_SAMPLES = {
     name: 'Plan',
   },
   insertBlocks: { noteId: 'n1', blocks: [{ id: 'b2', type: 'text', content: 'From the chat' }], atOrder: 1 },
+  // A closing tab's edit of b2, in 1.4.3's format, on n1 as the samples before it leave it
+  applyCloseDraft: {
+    draft: {
+      v: 1,
+      id: 'draft-1',
+      noteId: 'n1',
+      at: NOW,
+      base: { revision: null, updatedAt: NOW, issued: [] },
+      blocks: [{ id: 'b2', type: 'text', content: 'From the chat, edited as the tab closed', order: 1 }],
+      deletedBlockIds: [],
+      preview: 'Line',
+      todoProgress: null,
+      linkedNames: [],
+    },
+  },
+  // The worker's catch-up of the records 1.4.x left behind their blocks, over n1 and a note it has no record of
+  catchUpNoteRecords: { noteIds: ['n1', 'n-gone'] },
   captureToDailyNote: {
     noteId: 'd1',
     blockId: 'b9',

@@ -31,7 +31,7 @@ import { createRegistryRoot } from '../../js/kernel/registry/root.js';
 import { createRuntime } from '../../js/kernel/registry/runtime.js';
 import { health } from '../../js/trust/core/families.js';
 import { lint } from './contract-schema-lint.test.mjs';
-import { dynamicImportsIn, importGraph } from './import-graph.mjs';
+import { dynamicImportsIn, importGraph, loadsOf, reachGraph } from './import-graph.mjs';
 import { hexIds, manualClock, realTimers, settingsArea } from './trust-support.mjs';
 
 /** @type {{readScriptGraph: (root: string, options?: {pages?: string[]}) => {modules: Set<string>, classic: Set<string>, workerFiles: Set<string>, pageModules: Map<string, Array<{file: string, depth: number}>>, problems: unknown[]}}} */
@@ -289,14 +289,36 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     assert.ok(newtab.includes('js/kernel/composition/lazy-failure-events.js'));
     assert.deepEqual(newtab.filter(isTrust), []);
     assert.ok(!newtab.includes('js/kernel/composition/trust.js'));
-    // The tab's import()s: the root's of the workspace chunk, the loader's retry, and the failure
-    // events' own, of ./trust.js
+    // The tab's import()s: the root's of the workspace chunk, the loader's retry, the failure
+    // events' own, of ./trust.js, and the close-time drafts' two, of close-drafts-chunk.js: the
+    // start's, when localStorage gives it work, and applyCloseDraft's wrapper's, at first use
+    // (#33, option 1)
     const dynamic = dynamicImportsIn(newtab.map(file => path.join(ROOT, file)))
       .map(at => path.relative(ROOT, at).split(path.sep).join('/').replace(/:\d+:\d+$/, ''))
       .sort();
-    assert.deepEqual(dynamic, ['js/entries/newtab.js', 'js/kernel/composition/lazy-failure-events.js', 'js/runtime/lazy.js']);
+    assert.deepEqual(dynamic, [
+      'js/entries/newtab.js',
+      'js/kernel/composition/lazy-failure-events.js',
+      'js/kernel/composition/newtab.js',
+      'js/kernel/core/application/close-drafts-on-demand.js',
+      'js/runtime/lazy.js',
+    ]);
     const source = fs.readFileSync(path.join(ROOT, 'js', 'kernel', 'composition', 'lazy-failure-events.js'), 'utf8');
     assert.ok(source.includes("import('./trust.js')"));
+    // Each close-time drafts' import() loads the chunk and nothing else, and what the chunk
+    // reaches, through its imports and import()s, holds no trust code
+    for (const [file, specifier] of [
+      ['js/kernel/composition/newtab.js', '../core/application/close-drafts-chunk.js'],
+      ['js/kernel/core/application/close-drafts-on-demand.js', './close-drafts-chunk.js'],
+    ]) {
+      const loads = loadsOf(fs.readFileSync(path.join(ROOT, file), 'utf8')).dynamicLoads.map(load => load.specifier);
+      assert.deepEqual(loads, [specifier], file);
+    }
+    const drafts = reachGraph([path.join(ROOT, 'js', 'kernel', 'core', 'application', 'close-drafts-chunk.js')]);
+    const reached = [...drafts.modules].map(file => path.relative(ROOT, file).split(path.sep).join('/'));
+    assert.ok(reached.length > 10, "the chunk's graph found too little to mean anything");
+    assert.deepEqual(reached.filter(isTrust), []);
+    assert.deepEqual(drafts.computed, []);
   });
 
   it("is never reached from capture-critical.js, Moment's import of #13, whose graph is what it was before slice 1b", () => {

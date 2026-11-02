@@ -266,6 +266,14 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     assert.deepEqual(bulkWithoutRefusal(ALL_HANDLERS), []);
   });
 
+  it("the close-time drafts' apply is in the table of each page whose root applies them: the new tab's, Popup's and Side Panel's (#33)", () => {
+    for (const { page, entries, surface, table, maintains } of PAGES) {
+      const applies = surface !== 'worker-internal';
+      assert.equal(sentBy({ entries, maintains }).sent.has('applyCloseDraft'), applies, `${page} ${applies ? 'sends' : "doesn't send"} it`);
+      assert.equal(registered(table).has('applyCloseDraft'), applies, `${page}'s table ${applies ? 'holds' : "doesn't hold"} it`);
+    }
+  });
+
   it("neither Popup's nor Side Panel's start loads the remote apply or the index commands while #19 isn't live", () => {
     for (const entries of [['js/popup.js'], ['js/sidepanel.js', 'js/insights-summary.js']]) {
       const loaded = pageModules(entries).map(file => path.relative(ROOT, file));

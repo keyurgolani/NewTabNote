@@ -375,6 +375,8 @@ describe('the contract schema lint (#13, AC5)', () => {
       saveSnapshot: ['blocks.[]', 'title'],
       restoreSnapshot: ['blocks.[]', 'name'],
       insertBlocks: ['blocks.[]'],
+      // A closing tab's edit, blocks and name and the names its links read
+      applyCloseDraft: ['draft'],
       // AI chat's conversations and prompt templates, a theme's name, and a backup file
       saveChatHistory: ['history', 'messages'],
       savePromptTemplates: ['templates'],
