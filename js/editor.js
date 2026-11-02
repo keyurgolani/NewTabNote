@@ -1394,6 +1394,19 @@ class BlockEditor {
   }
 
   /**
+   * Whether `block`'s text is all it holds, so a merge that takes its text and deletes it loses
+   * nothing (#14 slice 3): turning it into text would remove and move nothing, and it carries no
+   * field its type doesn't own
+   * @param {Block} block
+   * @returns {boolean}
+   */
+  _holdsOnlyText(block) {
+    if (block.kept) return false;
+    const asText = this._conversionOf(block, 'text');
+    return asText !== null && asText.removes.length === 0 && asText.after.length === 0;
+  }
+
+  /**
    * Turn `block` into `newType` as `conversion` says, adding its text blocks right after it, with
    * no render or save (#14 slice 3)
    * @param {Block} block
@@ -1513,7 +1526,12 @@ class BlockEditor {
     if (!conversion) return false;
     if (conversion.removes.length === 0) return this.changeBlockType(blockId, newType);
     const noteId = this.noteId;
-    if (!(await this._confirmTurn([conversion], newType))) return false;
+    const focused = this.doc.activeElement;
+    if (!(await this._confirmTurn([conversion], newType))) {
+      // Cancel puts the caret back in the block it was in, so typing goes on there
+      if (focused && this.container.contains(focused) && typeof focused.focus === 'function') focused.focus();
+      return false;
+    }
     // The note and the block it asked about are still the ones on screen
     if (noteId !== this.noteId || this.getBlockById(blockId) !== block) return false;
     return this.changeBlockType(blockId, newType, { confirmed: true });
@@ -2463,7 +2481,8 @@ class BlockEditor {
           const prevEl = this.getBlockElement(prevBlock.id);
           const prevContent = prevEl?.querySelector('.block-content');
 
-          if (prevContent && prevBlock.type !== 'divider' && prevBlock.type !== 'image') {
+          // The block merges in only when its text is all it holds (#14 slice 3)
+          if (prevContent && prevBlock.type !== 'divider' && prevBlock.type !== 'image' && this._holdsOnlyText(block)) {
             const prevLength = prevContent.textContent.length;
             prevBlock.content = prevContent.innerHTML + block.content;
             this.deleteBlock(block.id);
@@ -2493,11 +2512,8 @@ class BlockEditor {
           const nextEl = this.getBlockElement(nextBlock.id);
           const nextContent = nextEl?.querySelector('.block-content');
           // The next block merges in only when its text is all it holds, so a toggle's hidden
-          // content stays (#14 slice 3)
-          const merged = this._conversionOf(nextBlock, 'text');
-          const textOnly = merged !== null && merged.removes.length === 0 && merged.after.length === 0;
-
-          if (nextContent && nextBlock.type !== 'divider' && nextBlock.type !== 'image' && textOnly) {
+          // content and a field its type doesn't own stay (#14 slice 3)
+          if (nextContent && nextBlock.type !== 'divider' && nextBlock.type !== 'image' && this._holdsOnlyText(nextBlock)) {
             block.content = content.innerHTML + nextBlock.content;
             globalThis.BlockRendering.render(content, block.content);
             this.deleteBlock(nextBlock.id);
@@ -3534,8 +3550,9 @@ class BlockEditor {
     if (this.isFencedCode(trimmed)) {
       e.preventDefault();
       const codeContent = this.extractFencedCode(trimmed);
-      if (isEmptyBlock) {
-        this.changeBlockType(currentBlock.id, 'code');
+      // An empty block turns only when that removes nothing it holds (#14 slice 3); otherwise
+      // the code goes after it
+      if (isEmptyBlock && this.changeBlockType(currentBlock.id, 'code')) {
         currentBlock.content = this.escapeHtmlForBlock(codeContent);
         this.rerenderBlock(currentBlock);
         this.scheduleSave();
@@ -3584,10 +3601,10 @@ class BlockEditor {
       if (parsedBlocks && parsedBlocks.length > 0) {
         let afterId = currentBlock ? currentBlock.id : null;
 
-        // If current block is empty, replace it with the first parsed block
-        if (isEmptyBlock && parsedBlocks.length > 0) {
+        // If current block is empty, replace it with the first parsed block, when turning it
+        // removes nothing it holds (#14 slice 3)
+        if (isEmptyBlock && parsedBlocks.length > 0 && this.changeBlockType(currentBlock.id, parsedBlocks[0].type)) {
           const first = parsedBlocks.shift();
-          this.changeBlockType(currentBlock.id, first.type);
           currentBlock.content = first.content || '';
           if (first.checked !== undefined) currentBlock.checked = first.checked;
           if (first.tableData) {
