@@ -689,6 +689,9 @@ export const noteCommands = {
     if (linkedNames !== undefined && !isStringList(linkedNames)) return invalid();
     if (!isOptionalVersion(expectedRevision)) return invalid();
     if (deriveFromStored !== undefined && deriveFromStored !== true) return invalid();
+    // A save that moves blocks carries only some of the note's blocks, so its preview and to-do
+    // progress come from the blocks as stored, never from a page's copy of the rest (#17)
+    if (orders !== undefined && deriveFromStored !== true) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
     const moves = blockMoves(orders, records);
