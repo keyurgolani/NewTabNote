@@ -803,6 +803,34 @@ describe("the saves a page keeps for a pane that no longer shows the note (R160'
   });
 });
 
+describe("the saves a page keeps while one pane saves a note another holds idle (R160's S1)", () => {
+  it("the pop-out saves 40 times while the main pane holds the same note: the page keeps the newest save alone, and the main pane's later edit still wins at the next start", async () => {
+    const env = await setup();
+    const main = makeEditor(env);
+    await main.loadNote('A');
+    const { pip, pipWindow } = await openPiP(env, 'A');
+    const ROUNDS = 40;
+    for (let round = 1; round <= ROUNDS; round += 1) {
+      type(pip, `alpha two, pop-out round ${round}`, 1);
+      assert.equal(await runWithPiP(env, pipWindow, pip.flushSave()), true);
+    }
+    const held = env.get('pageSaves').get('A') || [];
+    assert.deepEqual(held.map((save) => save.blocks.size), [2], `the newest of the ${ROUNDS}, with its 2 blocks`);
+    watchSaves(env, { hold: closingSave });
+    type(main, 'alpha, from the main pane at the end', 0);
+    closePage(env);
+    const [draft] = drafts(env);
+    assert.deepEqual(draft.blocks.map((b) => b.id), ['a1']);
+    assert.equal(draft.base.issuedSaves.length, 1, "the pop-out's newest save");
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['A']);
+    assert.deepEqual(await recoveredNames(env), []);
+    const rows = (await storedRows(env)).blocks;
+    assert.equal(rows.a1.content, 'alpha, from the main pane at the end');
+    assert.equal(rows.a2.content, `alpha two, pop-out round ${ROUNDS}`);
+  });
+});
+
 describe('the writer and saveOpenEditors (#129)', () => {
   it('a reload forced past a failed save, the edit unstored, brings the edit back at the next start', async () => {
     const env = await setup();

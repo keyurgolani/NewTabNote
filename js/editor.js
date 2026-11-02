@@ -158,6 +158,34 @@ function prunePageSaves(noteId) {
   else pageSaves.set(noteId, kept);
 }
 
+/**
+ * A save of `noteId` the page issued committed, so each block it wrote is stored as it sent it.
+ * An earlier save's digest of one of those blocks can't be what's stored now, so it goes, and
+ * so does the earlier save once it names nothing more. A note's list keeps its newest commit and
+ * the saves in flight, however many times one pane saves while another holds an older base.
+ * @param {string} noteId
+ * @param {{seq: number, name: (string|undefined), blocks: Map<string, string>}} issued - the save's
+ * @param {boolean} named - whether the name it carried is stored
+ * @returns {void}
+ */
+function supersedePageSaves(noteId, issued, named) {
+  const saves = pageSaves.get(noteId);
+  if (!saves) return;
+  const kept = [];
+  for (const save of saves) {
+    if (save.seq >= issued.seq) {
+      kept.push(save);
+      continue;
+    }
+    // A new entry, not the earlier save's own, whose editor may not have heard its commit yet
+    const blocks = new Map([...save.blocks].filter(([id]) => !issued.blocks.has(id)));
+    const name = named && issued.name !== undefined ? undefined : save.name;
+    if (blocks.size > 0 || name !== undefined) kept.push({ seq: save.seq, name, blocks });
+  }
+  if (kept.length === 0) pageSaves.delete(noteId);
+  else pageSaves.set(noteId, kept);
+}
+
 /** How long an "insights are being extracted" mark is trusted before the editor clears it */
 const INSIGHTS_PENDING_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -5018,7 +5046,10 @@ class BlockEditor {
     }
     // What it sent is the note's close-time draft base now (#33). A save the connection's close
     // cut short stored its text with no revision to say, and one whose generated title was kept
-    // out leaves the stored name unknown here.
+    // out leaves the stored name unknown here. The page's earlier saves of its blocks are moot.
+    if (state.issued && (result === 'saved' || result === 'title-kept' || result === 'stored')) {
+      supersedePageSaves(state.noteId, state.issued, result !== 'title-kept');
+    }
     if (result === 'saved' || result === 'title-kept') {
       this._sawCommit(state, state.committedRevision ?? null, { nameKnown: result === 'saved' });
     } else if (result === 'stored') {
