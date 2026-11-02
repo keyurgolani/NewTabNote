@@ -66,8 +66,21 @@ for (const size of WIDTHS) {
     expect(withButton.button, 'the AI button shows').not.toBeNull();
     expectClear(withButton, 'with the AI button');
 
-    // The chat's input row shows once a provider is set up; this stands in for one, and no call is made
-    await page.evaluate(() => Object.assign(LLM, { isConfigured: () => true }));
+    // The chat's input row shows once a provider is set up. This stands one in, as ai-jobs.spec.js
+    // does, every call answered here and counted, and none is made
+    await page.evaluate(() => {
+      window.__aiCalls = [];
+      const answer = (name, value) => async () => {
+        window.__aiCalls.push(name);
+        return value;
+      };
+      Object.assign(LLM, {
+        isConfigured: () => true,
+        generateTitle: answer('generateTitle', null),
+        extractInsights: answer('extractInsights', null),
+        chat: answer('chat', ''),
+      });
+    });
     await page.locator('#ai-floating-btn').click();
     await expect(page.locator('#ai-sidebar')).toBeVisible();
     const withPanel = await toastAmong(page);
@@ -78,6 +91,7 @@ for (const size of WIDTHS) {
     await page.evaluate(() => app.toggleFocusMode(true));
     await expect(page.locator('body')).toHaveClass(/focus-mode/);
     expectClear(await toastAmong(page), 'in focus mode');
+    expect(await page.evaluate(() => window.__aiCalls), 'no provider call').toEqual([]);
     await expectNoUncaught(extension, page);
   });
 }
