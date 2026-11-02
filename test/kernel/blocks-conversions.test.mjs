@@ -111,7 +111,7 @@ describe('what a conversion keeps and removes (#14 slice 3)', () => {
   it("every built-in's examples, and every corpus block, convert into every target to rich text, or to nothing", { timeout: 60_000 }, () => {
     const records = [
       ...BUILT_IN_TYPES.flatMap(type => Object.values(MODELS[type].model.examples)),
-      ...CASES.map(([, record]) => record),
+      ...CASES.map((/** @type {[string, unknown]} */ [, record]) => record),
     ];
     for (const record of records) {
       for (const target of TARGETS) {

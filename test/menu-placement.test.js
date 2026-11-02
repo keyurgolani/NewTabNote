@@ -457,9 +457,12 @@ const WINDOWS = [
   },
 ];
 
-/** A text block and a table block, as the editor holds them */
-const TEXT_BLOCK = { id: 'B', type: 'text', content: 'eggs' };
-const TABLE_BLOCK = { id: 'T', type: 'table', content: '', tableData: [['a', 'b'], ['1', '2']], rows: 2, cols: 2 };
+/**
+ * A text block and a table block, as the editor holds them: each edits as usual, in no safe
+ * state (Block's safeState, #14 slice 3)
+ */
+const TEXT_BLOCK = { id: 'B', type: 'text', content: 'eggs', safeState: () => null };
+const TABLE_BLOCK = { id: 'T', type: 'table', content: '', tableData: [['a', 'b'], ['1', '2']], rows: 2, cols: 2, safeState: () => null };
 
 /** Each editor menu: how it opens from its anchor in `place` (an entry of WINDOWS), and the menu it shows */
 const EDITOR_SITES = [
