@@ -268,6 +268,22 @@ describe('a conversion that removes structure asks first (#14 slice 3)', () => {
     assert.deepEqual(typesOf(editor), ['text', 'text', 'text']);
   });
 
+  it("Cancel on a selection's Turn into puts focus back where it was in the note, or in the first selected block that takes it", OPTIONS, async () => {
+    const { env, editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), TABLE, { ...IMAGE, order: 2 }]);
+    const firstCell = () => editor.container.querySelector('[data-id="t1"]').querySelector('td, th');
+    doc.body.focus();
+    const fromOutside = editor.turnSelectionInto(['m1', 't1'], 'text');
+    press(doc, 'Cancel');
+    assert.equal(await runUntil(env, fromOutside), false);
+    assert.ok(doc.activeElement === firstCell(), "focus is in the table's first cell");
+    contentEl(editor, 'a1').focus();
+    const fromNote = editor.turnSelectionInto(['t1', 'm1'], 'text');
+    press(doc, 'Cancel');
+    await runUntil(env, fromNote);
+    assert.ok(doc.activeElement === contentEl(editor, 'a1'), 'focus is back in a1');
+    assert.deepEqual(typesOf(editor), ['text', 'table', 'image']);
+  });
+
   it('with blocks selected, Backspace and Delete in a block are the selection\'s, and the block leaves them alone', OPTIONS, async () => {
     const { editor, doc } = await openNote([block('a1', 'N', 0, 'Before'), TOGGLE, block('a3', 'N', 2, 'After')]);
     doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 1 });
