@@ -477,7 +477,6 @@ class BlockEditor {
     this.blocks = blocksData
       .sort((a, b) => (a.order || 0) - (b.order || 0))
       .map((data) => Block.deserialize(data));
-    this._rememberLoaded(blocksData, openedRevision, openedSeq);
 
     // Clear undo/redo stacks for new note
     this.undoStack.length = 0;
@@ -518,6 +517,9 @@ class BlockEditor {
       this.blocks.push(block);
       this.renderBlocks();
     }
+    // The close-time draft base, with that empty block in it as the editor shows it, so a close
+    // with nothing typed into it writes no draft (#33)
+    this._rememberLoaded(blocksData, openedRevision, openedSeq);
 
     // Scroll to top of editor
     // Set editor width

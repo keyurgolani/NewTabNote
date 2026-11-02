@@ -702,6 +702,33 @@ describe("the base after the editor's own writes that aren't saves: AI chat's in
   });
 });
 
+describe("a note opened with no blocks, which the editor shows with one empty block (R160's S2)", () => {
+  it('the close with nothing typed writes no draft and leaves the note as it was, and typed into, its block goes into the note', async () => {
+    const env = await setup({ notes: [note('E', { name: 'Untitled' })] });
+    const editor = makeEditor(env);
+    await editor.loadNote('E');
+    assert.equal(editor.blocks.length, 1, 'the editor shows one empty block');
+    const before = (await storedRows(env)).notes.E;
+    closePage(env);
+    assert.deepEqual(drafts(env), [], 'no edit, so no draft');
+    await nextStart(env);
+    assert.equal((await storedRows(env)).notes.E.updatedAt, before.updatedAt, 'the note is as it was');
+
+    const typed = await setup({ notes: [note('E', { name: 'Untitled' })] });
+    const other = makeEditor(typed);
+    await other.loadNote('E');
+    watchSaves(typed, { hold: closingSave });
+    type(other, 'the first words of E');
+    closePage(typed);
+    const [draft] = drafts(typed);
+    assert.deepEqual(draft.blocks.map((b) => b.content), ['the first words of E']);
+    const result = await nextStart(typed);
+    assert.deepEqual(result.saved, ['E']);
+    const rows = Object.values((await storedRows(typed)).blocks).filter((row) => row.canvasId === 'E');
+    assert.deepEqual(rows.map((row) => row.content), ['the first words of E']);
+  });
+});
+
 describe('the writer and saveOpenEditors (#129)', () => {
   it('a reload forced past a failed save, the edit unstored, brings the edit back at the next start', async () => {
     const env = await setup();
