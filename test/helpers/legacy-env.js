@@ -1127,7 +1127,7 @@ function testDocumentClient(client) {
     blocksOf: copied(client.blocksOf),
     blocksAsStored: copied(client.blocksAsStored),
     searchEntries: copied(client.searchEntries),
-    saveContent: (save) => client.saveContent(save),
+    saveContent: (save, options) => client.saveContent(save, options),
     deleteBlocks: (noteId, blockIds) => client.deleteBlocks(noteId, blockIds),
     createNote: (fields) => client.createNote(fields),
     ensureDailyNote: (dateStr) => client.ensureDailyNote(dateStr),
@@ -1160,6 +1160,8 @@ function testDocumentClient(client) {
     insertBlocks: (noteId, blocks, atOrder) => client.insertBlocks(noteId, blocks, atOrder),
     beforeConnectionCloses: (flush) => client.beforeConnectionCloses(flush),
     connectionOpen: () => client.connectionOpen(),
+    // The page's close-time draft writer (#33), as the new tab's root hands it to its editors
+    closeDrafts: client.closeDrafts,
   };
 }
 
