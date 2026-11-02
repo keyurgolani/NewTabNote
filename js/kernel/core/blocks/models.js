@@ -8,8 +8,9 @@
  * - `preview`: the note list's preview and the kernel's note metadata (SidebarUtils'
  *   `extractBlockText` and the kernel's `blockText`), and `search`, the same text, which #22
  *   indexes later;
- * - `plainText`: the editor's text of a block (`extractBlockTextContent`), for content checks,
- *   Turn into, and the note's text, read as #105 left it, in an inert document (scripting off);
+ * - `plainText`: the editor's text of a block (`extractBlockTextContent`), for content checks
+ *   and the note's text, read as #105 left it, in an inert document (scripting off), and Turn
+ *   into's until slice 3 gave conversions a part of their own (`convert`);
  * - `aiContext`: what AI chat and the AI jobs send of a block (their `extractBlockText`);
  * - `codecs.markdown.encode`: every Markdown export (AIResponseUtils.blockToMarkdown);
  * - `convert`: what a block keeps when it turns into another type, which conversions.js reads
