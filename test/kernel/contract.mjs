@@ -589,6 +589,62 @@ export function runContractSuite(fixture) {
         assert.equal((await noteOf('n1'))?.preview, 'Added', 'from the blocks as stored, in their new order');
       });
 
+      it('with orders, each block the save only moved keeps its record as stored, every field of it, with its order alone changed (#17, the per-pane save)', async () => {
+        // A checked to-do, an image, and a block with a field the editor doesn't write, each made at its own time
+        const blocks = [
+          { id: 'n1-todo', type: 'todo', content: 'Call', checked: true, canvasId: 'n1', order: 0, createdAt: 1000 },
+          {
+            id: 'n1-image',
+            type: 'image',
+            content: '',
+            imageUrl: 'https://example.test/a.png',
+            canvasId: 'n1',
+            order: 1,
+            createdAt: 1001,
+          },
+          {
+            id: 'n1-kept',
+            type: 'text',
+            content: 'Kept',
+            legacyField: 'kept',
+            canvasId: 'n1',
+            order: 2,
+            createdAt: 1002,
+          },
+        ];
+        await createNote({ noteId: 'n1', blocks });
+        const before = new Map((await blocksOf('n1')).map(block => [block.id, block]));
+        const added = { id: 'n1-new', type: 'text', content: 'Added', canvasId: 'n1', order: 0 };
+        const orders = blocks.map((block, index) => ({ id: block.id, order: index + 1 }));
+        await run(cmd('saveNoteContent', { noteId: 'n1', blocks: [added], orders, deriveFromStored: true }));
+        const after = new Map((await blocksOf('n1')).map(block => [block.id, block]));
+        for (const [index, block] of blocks.entries()) {
+          assert.deepEqual(after.get(block.id), { ...before.get(block.id), order: index + 1 }, block.id);
+        }
+      });
+
+      it("with orders alone, a save that only moves a block puts no block, and the derive reads the block's new order (#17, the per-pane save)", async () => {
+        // A pane's move with nothing else changed, as Alt+Down makes: the first block goes last
+        await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
+        await run(
+          cmd('saveNoteContent', {
+            noteId: 'n1',
+            blocks: [],
+            orders: [{ id: 'n1-block-0', order: 5 }],
+            deriveFromStored: true,
+          }),
+        );
+        const rows = (await blocksOf('n1')).sort((a, b) => Number(a.order) - Number(b.order));
+        assert.deepEqual(
+          rows.map(block => [block.id, block.content, block.order]),
+          [
+            ['n1-block-1', 'Line 1', 1],
+            ['n1-block-0', 'Line 0', 5],
+          ],
+        );
+        assert.equal((await noteOf('n1'))?.preview, 'Line 1', 'from the blocks as stored, in their new order');
+      });
+
       it('with orders, a block another note holds refuses the save, and one no note holds is skipped (#17, the per-pane save)', async () => {
         await createNote({ noteId: 'n1', blocks: someBlocks('n1', 2) });
         await createNote({ noteId: 'n2', blocks: someBlocks('n2', 1) });
