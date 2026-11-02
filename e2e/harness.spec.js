@@ -54,9 +54,9 @@ chrome.runtime.onMessage.addListener(message => {
 
 for (const [title, edits, thrown] of [
   ['throws at the top level', { 'js/background.js': text => `${text}\nthrow new Error('self-test: background.js throws');\n` }, 'self-test: background.js throws'],
-  // The worker's one module holds storage.js, so what it throws stops the worker; the pages'
-  // chunks that hold it run it with a window
-  ['loses storage.js', { 'js/storage.js': text => `if (typeof window === 'undefined') throw new Error('self-test: storage.js throws');\n${text}` }, 'self-test: storage.js throws'],
+  // The worker's one module holds #17's adapter, as the pages' chunks do, so what it throws stops
+  // the worker, and the pages run it with a window. Since #17 PR 4a the worker has no storage.js.
+  ['throws in a module it shares with the pages', { 'js/kernel/adapters/indexeddb/adapter.js': text => `if (typeof window === 'undefined') throw new Error('self-test: adapter.js throws');\n${text}` }, 'self-test: adapter.js throws'],
 ]) {
   test(`fails the launch when the worker ${title} while starting`, async ({ playwright, headless }) => {
     const dist = editedBuild(edits);

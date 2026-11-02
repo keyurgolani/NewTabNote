@@ -2930,7 +2930,7 @@ export function runContractSuite(fixture) {
 
       it(
         flags.backups
-          ? "backups: createAutoBackup and importBackup run 1.4.x's Storage code, and an import counts only what committed"
+          ? "backups: createAutoBackup and importBackup do what 1.4.x's Storage did, and an import counts only what committed"
           : 'no backups: createAutoBackup and importBackup are unavailable and write nothing',
         async () => {
           const backup = {
@@ -3353,6 +3353,10 @@ export function runContractSuite(fixture) {
         }
         const keys = await ctx.adapter.read(['blocks'], tx => tx.getKeysByIndex('blocks', 'canvasId', 'n1'));
         assert.equal(keys.length, 2);
+      });
+
+      it('has no kept Daily Note answer in a transaction over the daily index while no transform runs (#17 PR 4a, F10)', async () => {
+        assert.equal(await ctx.adapter.read(['notes', 'dailyIndex'], tx => tx.dailyAnswer()), null);
       });
 
       it("another context's kernel over the same storage sees a commit on its next read", async () => {

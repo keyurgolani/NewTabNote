@@ -6,7 +6,7 @@
   "edits": [
     {
       "file": "js/background.js",
-      "append": "\nself.ntnFixtureLater = () => import('./utils.js');\n"
+      "append": "\nself.ntnFixtureLater = () => import('./kernel/composition/coordinator.js');\n"
     }
   ]
 }

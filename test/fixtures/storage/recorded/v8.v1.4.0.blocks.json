@@ -1,0 +1,736 @@
+{
+  "format": "ntn-storage-fixture/1",
+  "header": {
+    "id": "v8.v1.4.0.blocks",
+    "purpose": "What v1.4.0's editor save writes for a code block, a bookmark and a table, which v8.v1.4.0 has none of in that shape, beside what v1.4.0 writes at its first run.",
+    "shape": "v8",
+    "releases": [
+      "v1.4.0"
+    ],
+    "provenance": "recorded",
+    "source": {
+      "recorder": "scripts/fixtures/record-release.mjs",
+      "tag": "v1.4.0",
+      "commit": "e93b21e6acf065c198a71646fc0ee185cfd416ba",
+      "tree": "3c9926fe68088cbe9b5031b1dd20d9da5b4917e1",
+      "browser": "chromium 156.0.0.0",
+      "writePaths": [
+        "Storage.createNote",
+        "the editor save (Block.serialize, saveElement)",
+        "the editor save metadata (preview, todoProgress)"
+      ]
+    },
+    "schema": {
+      "idbVersion": 8,
+      "structuralVersion": null,
+      "logicalVersion": null
+    },
+    "degraded": [],
+    "privacy": "synthetic"
+  },
+  "databases": [
+    {
+      "name": "CanvasTabDB",
+      "version": 8,
+      "stores": [
+        {
+          "name": "canvases",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793499601405-lm0r95nhe",
+              "value": {
+                "id": "1793499601405-lm0r95nhe",
+                "name": "Welcome to NewTabNote 🚀",
+                "createdAt": 1793499601405,
+                "updatedAt": 1793499601405,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            },
+            {
+              "key": "1793499602887-r7dzbij2o",
+              "value": {
+                "id": "1793499602887-r7dzbij2o",
+                "name": "{{CANARY:blocks-note-title}}",
+                "createdAt": 1793499602887,
+                "updatedAt": 1793499602888,
+                "archived": false,
+                "archivedAt": null,
+                "titleManuallySet": false,
+                "lastAutoTitleAt": null,
+                "insights": null,
+                "lastInsightsExtractedAt": null,
+                "preview": "{{CANARY:code-block}}",
+                "pinned": false,
+                "todoProgress": null,
+                "isDaily": false,
+                "dateStr": null,
+                "isTemplate": false,
+                "folderId": null,
+                "viewport": {
+                  "scale": 1,
+                  "offsetX": 0,
+                  "offsetY": 0
+                },
+                "settings": {
+                  "gridType": "dots",
+                  "backgroundColor": "#fafafa"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "elements",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "type",
+              "keyPath": "type",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": [
+            {
+              "key": "1793499601405-sd4y1p053",
+              "value": {
+                "id": "1793499601405-sd4y1p053",
+                "type": "text",
+                "content": "Welcome to <b>NewTabNote</b>! 🚀",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 0,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601405,
+                "updatedAt": 1793499601405
+              }
+            },
+            {
+              "key": "1793499601406-6u832he8v",
+              "value": {
+                "id": "1793499601406-6u832he8v",
+                "type": "text",
+                "content": "This is a block-based note-taking app designed for speed and productivity. Every paragraph, image, or list is a \"block\" that you can move, change, or delete.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 1,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601406,
+                "updatedAt": 1793499601406
+              }
+            },
+            {
+              "key": "1793499601406-ahlbwkm67",
+              "value": {
+                "id": "1793499601406-ahlbwkm67",
+                "type": "h2",
+                "content": "Quick Start",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 2,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601406,
+                "updatedAt": 1793499601406
+              }
+            },
+            {
+              "key": "1793499601406-mk8nyquqb",
+              "value": {
+                "id": "1793499601406-mk8nyquqb",
+                "type": "text",
+                "content": "<b>Daily Notes</b>: Click the 📅 icon in the sidebar or press <kbd>Alt</kbd>+<kbd>D</kbd> to open today's note.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 4,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601406,
+                "updatedAt": 1793499601406
+              }
+            },
+            {
+              "key": "1793499601406-r5udj3cug",
+              "value": {
+                "id": "1793499601406-r5udj3cug",
+                "type": "text",
+                "content": "<b>Slash Commands</b>: Type <code class=\"code-pill\">/</code> in any empty block to see all available block types.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 3,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601406,
+                "updatedAt": 1793499601406
+              }
+            },
+            {
+              "key": "1793499601407-l4n3hwo1p",
+              "value": {
+                "id": "1793499601407-l4n3hwo1p",
+                "type": "todo",
+                "content": "Check off this todo item",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 7,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601407,
+                "updatedAt": 1793499601407
+              }
+            },
+            {
+              "key": "1793499601407-nmxfdv6tq",
+              "value": {
+                "id": "1793499601407-nmxfdv6tq",
+                "type": "todo",
+                "content": "Create a new note from the sidebar",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 8,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601408,
+                "updatedAt": 1793499601408
+              }
+            },
+            {
+              "key": "1793499601407-q9zejbl2d",
+              "value": {
+                "id": "1793499601407-q9zejbl2d",
+                "type": "h2",
+                "content": "Try It Out",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 6,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601407,
+                "updatedAt": 1793499601407
+              }
+            },
+            {
+              "key": "1793499601407-xij4kdkwf",
+              "value": {
+                "id": "1793499601407-xij4kdkwf",
+                "type": "text",
+                "content": "<b>Drag &amp; Drop</b>: Grab the ⠿ handle on the left of any block to reorder it.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 5,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601407,
+                "updatedAt": 1793499601407
+              }
+            },
+            {
+              "key": "1793499601408-5g4c24d0m",
+              "value": {
+                "id": "1793499601408-5g4c24d0m",
+                "type": "todo",
+                "content": "Try the slash command menu by typing /",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 9,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601408,
+                "updatedAt": 1793499601408
+              }
+            },
+            {
+              "key": "1793499601408-aecd6sjo2",
+              "value": {
+                "id": "1793499601408-aecd6sjo2",
+                "type": "h2",
+                "content": "Code Blocks",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 10,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601408,
+                "updatedAt": 1793499601408
+              }
+            },
+            {
+              "key": "1793499601408-hr9oy2vef",
+              "value": {
+                "id": "1793499601408-hr9oy2vef",
+                "type": "code",
+                "content": "console.log(\"Hello from NewTabNote!\");",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 12,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601408,
+                "updatedAt": 1793499601408
+              }
+            },
+            {
+              "key": "1793499601408-s2p6oca70",
+              "value": {
+                "id": "1793499601408-s2p6oca70",
+                "type": "text",
+                "content": "You can add code snippets with syntax highlighting:",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 11,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601408,
+                "updatedAt": 1793499601408
+              }
+            },
+            {
+              "key": "1793499601409-6u28fm61m",
+              "value": {
+                "id": "1793499601409-6u28fm61m",
+                "type": "h2",
+                "content": "AI Powered Features",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 13,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601409,
+                "updatedAt": 1793499601409
+              }
+            },
+            {
+              "key": "1793499601409-d3ac6t96f",
+              "value": {
+                "id": "1793499601409-d3ac6t96f",
+                "type": "bullet",
+                "content": "<b>Smart Sidebar</b>: Click the ✨ button to chat with your notes or see proactive insights.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 16,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601409,
+                "updatedAt": 1793499601409
+              }
+            },
+            {
+              "key": "1793499601409-r3s2fmf8c",
+              "value": {
+                "id": "1793499601409-r3s2fmf8c",
+                "type": "bullet",
+                "content": "<b>Semantic Search</b>: Find notes by meaning, not just keywords.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 15,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601409,
+                "updatedAt": 1793499601409
+              }
+            },
+            {
+              "key": "1793499601409-s1eopcroq",
+              "value": {
+                "id": "1793499601409-s1eopcroq",
+                "type": "text",
+                "content": "We've integrated AI to help you organize your thoughts.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 14,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601409,
+                "updatedAt": 1793499601409
+              }
+            },
+            {
+              "key": "1793499601410-17sfvd477",
+              "value": {
+                "id": "1793499601410-17sfvd477",
+                "type": "h2",
+                "content": "Organization",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 17,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601410,
+                "updatedAt": 1793499601410
+              }
+            },
+            {
+              "key": "1793499601410-4qfy8d9rn",
+              "value": {
+                "id": "1793499601410-4qfy8d9rn",
+                "type": "bullet",
+                "content": "<b>Folders</b>: Create folders in the sidebar and drag notes into them.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 18,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601410,
+                "updatedAt": 1793499601410
+              }
+            },
+            {
+              "key": "1793499601410-np4fxtwgs",
+              "value": {
+                "id": "1793499601410-np4fxtwgs",
+                "type": "bullet",
+                "content": "<b>Backlinks</b>: Use <code class=\"code-pill\">[[Note Name]]</code> to link notes together.",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 19,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601410,
+                "updatedAt": 1793499601410
+              }
+            },
+            {
+              "key": "1793499601410-y8b90yvyd",
+              "value": {
+                "id": "1793499601410-y8b90yvyd",
+                "type": "text",
+                "content": "Happy note-taking! ✨",
+                "canvasId": "1793499601405-lm0r95nhe",
+                "order": 20,
+                "checked": false,
+                "indentLevel": 0,
+                "createdAt": 1793499601410,
+                "updatedAt": 1793499601410
+              }
+            },
+            {
+              "key": "1793499602887-2lxrfhh7b",
+              "value": {
+                "id": "1793499602887-2lxrfhh7b",
+                "type": "bookmark",
+                "content": "",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793499602887,
+                "updatedAt": 1793499602887,
+                "url": "https://example.test/bookmarked",
+                "title": "{{CANARY:bookmark-title}}",
+                "description": "",
+                "favicon": "",
+                "canvasId": "1793499602887-r7dzbij2o",
+                "order": 1
+              }
+            },
+            {
+              "key": "1793499602887-9wv7kwbip",
+              "value": {
+                "id": "1793499602887-9wv7kwbip",
+                "type": "table",
+                "content": "",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793499602887,
+                "updatedAt": 1793499602887,
+                "rows": 2,
+                "cols": 2,
+                "tableData": [
+                  [
+                    "{{CANARY:table-cell}}",
+                    "b"
+                  ],
+                  [
+                    "1",
+                    "2"
+                  ]
+                ],
+                "hasHeaderRow": true,
+                "canvasId": "1793499602887-r7dzbij2o",
+                "order": 2
+              }
+            },
+            {
+              "key": "1793499602887-pe88ec1df",
+              "value": {
+                "id": "1793499602887-pe88ec1df",
+                "type": "code",
+                "content": "{{CANARY:code-block}}",
+                "indentLevel": 0,
+                "checked": false,
+                "imageUrl": null,
+                "calloutIcon": "💡",
+                "createdAt": 1793499602887,
+                "updatedAt": 1793499602887,
+                "canvasId": "1793499602887-r7dzbij2o",
+                "order": 0
+              }
+            }
+          ]
+        },
+        {
+          "name": "folders",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "parentId",
+              "keyPath": "parentId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "links",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "fromNoteId",
+              "keyPath": "fromNoteId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "toNoteId",
+              "keyPath": "toNoteId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "media",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "canvasId",
+              "keyPath": "canvasId",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "search_index",
+          "keyPath": "noteId",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": [
+            {
+              "key": "1793499601405-lm0r95nhe",
+              "value": {
+                "noteId": "1793499601405-lm0r95nhe",
+                "name": "Welcome to NewTabNote 🚀",
+                "content": "",
+                "updatedAt": 1793499601405
+              }
+            },
+            {
+              "key": "1793499602887-r7dzbij2o",
+              "value": {
+                "noteId": "1793499602887-r7dzbij2o",
+                "name": "{{CANARY:blocks-note-title}}",
+                "content": "",
+                "updatedAt": 1793499602889
+              }
+            }
+          ]
+        },
+        {
+          "name": "settings",
+          "keyPath": "key",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        },
+        {
+          "name": "snapshots",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "noteId",
+              "keyPath": "noteId",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "timestamp",
+              "keyPath": "timestamp",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "themes",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [
+            {
+              "name": "name",
+              "keyPath": "name",
+              "unique": false,
+              "multiEntry": false
+            },
+            {
+              "name": "updatedAt",
+              "keyPath": "updatedAt",
+              "unique": false,
+              "multiEntry": false
+            }
+          ],
+          "records": []
+        },
+        {
+          "name": "vectors",
+          "keyPath": "id",
+          "autoIncrement": false,
+          "indexes": [],
+          "records": []
+        }
+      ]
+    }
+  ],
+  "chromeStorageLocal": {
+    "lastOpenedNoteId": "1793499601405-lm0r95nhe",
+    "setting_activeTabIndex": 0,
+    "setting_aiChatHistory": [],
+    "setting_aiPromptTemplates": [
+      {
+        "behavior": "send",
+        "id": "note-summarize",
+        "label": "Summarize note",
+        "prompt": "Summarize this note",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "note-expand",
+        "label": "Expand content",
+        "prompt": "Expand on the main points in this note",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "note-title",
+        "label": "Generate title",
+        "prompt": "Generate a concise title for this note",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "note-takeaways",
+        "label": "Key takeaways",
+        "prompt": "What are the key takeaways from this note?",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "note-questions",
+        "label": "Suggest questions",
+        "prompt": "Suggest follow-up questions based on this note",
+        "scope": "note"
+      },
+      {
+        "behavior": "send",
+        "id": "global-deadlines",
+        "label": "Upcoming deadlines",
+        "prompt": "What are my upcoming deadlines?",
+        "scope": "global"
+      },
+      {
+        "behavior": "send",
+        "id": "global-meetings",
+        "label": "Meeting summaries",
+        "prompt": "Summarize my recent meeting notes",
+        "scope": "global"
+      },
+      {
+        "behavior": "send",
+        "id": "global-tasks",
+        "label": "Pending tasks",
+        "prompt": "What tasks do I have pending?",
+        "scope": "global"
+      },
+      {
+        "behavior": "prefill",
+        "id": "global-find",
+        "label": "Find notes about...",
+        "prompt": "Find notes about",
+        "scope": "global"
+      }
+    ],
+    "setting_aiSidebarWidth": 360,
+    "setting_autoTitleEnabled": true,
+    "setting_autoTitleInterval": 15,
+    "setting_embeddingsEnabled": true,
+    "setting_font": "default",
+    "setting_globalChatHistory": [],
+    "setting_globalChatMessages": [],
+    "setting_insightsEnabled": true,
+    "setting_insightsInterval": 360,
+    "setting_lastAutoTitleRun": 0,
+    "setting_lastInsightsRun": 0,
+    "setting_llmApiKey": "",
+    "setting_llmModel": "",
+    "setting_llmProvider": "none",
+    "setting_noteChatMessages": [],
+    "setting_ollamaUrl": "http://localhost:11434",
+    "setting_openTabs": [
+      {
+        "name": "Welcome to NewTabNote 🚀",
+        "noteId": "1793499601405-lm0r95nhe"
+      }
+    ],
+    "setting_sidebarOpen": true,
+    "setting_sidebarViewMode": "list",
+    "setting_sidebarWidth": 260,
+    "setting_splitViewEnabled": false,
+    "setting_storageInitialized": true,
+    "setting_theme": "system",
+    "setting_trashRetention": 30,
+    "setting_width": "default"
+  }
+}

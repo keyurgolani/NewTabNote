@@ -10,7 +10,6 @@ import assert from 'node:assert/strict';
 import { runCheck } from '../../js/trust/core/checks.js';
 import { PROBE_KEY, capture, probeCommit, storage } from '../../js/trust/core/providers/probe.js';
 import { dump, legacyEnv, run as migrate } from './migration-support.mjs';
-import { adapterFor, closeAll, legacyContext } from './legacy-fixture.mjs';
 import { adapterOn } from './storage-fixture.mjs';
 import { freshProfile } from './trust-provider-support.mjs';
 import { manualClock, realTimers } from './trust-support.mjs';
@@ -167,27 +166,19 @@ describe("capture and storage probe through #17's adapter (#20 slice 2)", () => 
   });
 });
 
-describe("capture and storage probe through #12's legacy adapter (#20 slice 2)", () => {
-  it('verify on the adapter shipped roots use today, and leave the database as it was', async () => {
-    const context = legacyContext();
-    const adapter = adapterFor(context);
+// The legacy adapter's two cases went with it (#17 PR 4a): every root opens #17's adapter, whose
+// verify on a committed write is the first case above, and whose transient failure is this one
+describe("a probe write #17's adapter can't commit, as a transient UnknownError there and on its one more run (#20 slice 2, #17 PR 4a)", () => {
+  it("verifies nothing: unverified, with the code #17's adapter gives a commit whose one more run failed too", async () => {
+    const of = freshProfile();
+    const adapter = adapterOn(of);
     await adapter.open();
-    for (const id of /** @type {const} */ (['capture', 'storage'])) {
-      const { receipt } = await run(id, { storage: adapter });
-      assert.deepEqual([receipt.status, receipt.capture], ['verified', 'safe'], id);
-    }
-    const left = await legacyEnv.dumpDatabase(context.env.indexedDB);
-    assert.ok(!JSON.stringify(left).includes(PROBE_KEY[0]), 'the probe left its record');
-    closeAll([context]);
-  });
-
-  it('a write that fails there, as a transient UnknownError, verifies nothing', async () => {
-    const context = legacyContext();
-    const adapter = adapterFor(context);
-    await adapter.open();
-    context.failing.push('notes');
+    // #17's adapter runs a transaction an UnknownError aborted once more, and answers
+    // retries-exhausted when that fails too, where the legacy adapter answered transaction-failed
+    of.faults.throwOnNextWrite('canvases', 'UnknownError');
+    of.faults.throwOnNextWrite('canvases', 'UnknownError');
     const { receipt } = await run('storage', { storage: adapter });
-    assert.deepEqual([receipt.status, receipt.evidence], ['unverified', { cause: 'storage', errorCode: 'transaction-failed' }]);
-    closeAll([context]);
+    assert.deepEqual([receipt.status, receipt.evidence], ['unverified', { cause: 'storage', errorCode: 'retries-exhausted' }]);
+    adapter.close();
   });
 });

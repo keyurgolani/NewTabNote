@@ -13,6 +13,7 @@ import {
   holdsKey,
   localKeyIn,
   madeBefore,
+  underAnswer,
   utcKeyedLocalKey,
   withAssignedKey,
 } from '../../js/kernel/core/domain/daily.js';
@@ -383,5 +384,54 @@ describe('what logical 3 writes on a note (withAssignedKey)', () => {
   it('the fields every legacy path strips are the group and the key (placement.js)', () => {
     assert.deepEqual(DAILY_FIELDS, ['dailyKey', 'dailyTimeZone', 'dailyDuplicateOf']);
     assert.deepEqual(NEW_NOTE_FIELDS, [...PLACEMENT_FIELDS, ...DAILY_FIELDS]);
+  });
+});
+
+describe("a lookup while logical 3's batches run (underAnswer, #17 PR 4a, F10)", () => {
+  // Oct 28's evening note, which 1.4.x keyed by Oct 29's UTC date, renamed to Oct 25 since the
+  // run read it; Oct 27's morning note; and a note a page made since, for Oct 30
+  const evening = daily('evening', 'Oct 25', '2025-10-29', Date.UTC(2025, 9, 29, 2));
+  const morning = daily('morning', 'Oct 27', '2025-10-27', Date.UTC(2025, 9, 27, 16));
+  const made = {
+    ...daily('made', 'Oct 30', '2025-10-30', Date.UTC(2025, 9, 30, 17)),
+    dailyKey: '2025-10-30',
+    dailyTimeZone: LA,
+    dailyDuplicateOf: null,
+  };
+  const answer = new Map([
+    ['evening', { dailyKey: '2025-10-28', rekeyed: true, duplicateOf: null }],
+    ['morning', { dailyKey: '2025-10-27', rekeyed: false, duplicateOf: null }],
+  ]);
+
+  it('gives each note the run read the fields its batch writes, and leaves the rest as they are', () => {
+    /** @type {Array<Record<string, unknown>>} */
+    const notes = underAnswer([evening, morning, made], answer);
+    const [keyed, read, page] = notes;
+    /** @type {Record<string, unknown>} */
+    const written = withAssignedKey(evening, /** @type {any} */ (answer.get('evening')));
+    assert.deepEqual(keyed, written);
+    assert.deepEqual(
+      [keyed.dailyKey, keyed.dateStr, keyed.name],
+      ['2025-10-28', '2025-10-28', 'Daily Note - Oct 25, 2025'],
+    );
+    assert.equal(read.dailyKey, '2025-10-27');
+    assert.equal(page, made);
+    // With no run going, every note is as it is
+    assert.deepEqual(underAnswer([evening, morning], null), [evening, morning]);
+  });
+
+  it("finds the note a date's lookup will find once the run is done, not the one the notes' fields give now", () => {
+    // By its name now, the renamed note would take Oct 25, where the run gives it Oct 28
+    assert.equal(dailyHolder([evening, morning], '2025-10-25', LA)?.note.id, 'evening');
+    const notes = underAnswer([evening, morning, made], answer);
+    assert.equal(dailyHolder(notes, '2025-10-25', LA), undefined);
+    assert.equal(dailyHolder(notes, '2025-10-28', LA)?.note.id, 'evening');
+    assert.equal(dailyHolder(notes, '2025-10-30', LA)?.note.id, 'made');
+  });
+
+  it('leaves a note a command keyed to another day since the run read it, as its batch does', () => {
+    const otherwise = { ...evening, dailyKey: '2025-10-25', dailyTimeZone: LA, dailyDuplicateOf: null };
+    const [kept] = underAnswer([otherwise], answer);
+    assert.equal(kept, otherwise);
   });
 });

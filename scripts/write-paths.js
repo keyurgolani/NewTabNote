@@ -48,23 +48,24 @@ const SKIP_DIRS = ['js/lib', 'js/kernel'];
 const SKIP_FILES = ['js/storage.js'];
 const WRITE_COMMAND = 'npm run check:write-paths -- --write';
 
-/** DatabaseManager methods that write to IndexedDB or chrome.storage.local */
+/**
+ * DatabaseManager methods that write to IndexedDB or chrome.storage.local. Each is one
+ * DatabaseManager defines, as READS' are (collect() holds both to js/storage.js): #17 PR 4a
+ * deleted the writers nothing called once the new tab wrote through #17's adapter.
+ */
 const WRITES = new Set([
-  'init', 'checkAndRepairDatabase', 'initializeDefaultSettings', '_createMissingStores',
+  'init', 'checkAndRepairDatabase', 'initializeDefaultSettings',
   '_writeMissingStoresCopy', '_writeMissingStoresCopyIfNone', '_writeRecoveryBackup', 'createAutoBackup',
-  'ensureDailyNote', 'ensureDailyNoteForDate', 'createNote', 'updateNote', 'saveNoteWithBlocks', 'deleteNote',
-  'applyTemplateToNote', 'archiveNote', 'unarchiveNote', 'trashNote', 'restoreNote', 'permanentlyDeleteNote',
-  'bulkNoteAction', 'cleanupTrash', 'emptyTrash',
-  'setSearchIndex', 'updateNoteSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'updateNoteNameInSearchIndex',
-  'createFolder', 'updateFolder', 'deleteFolder', 'moveNoteToFolder',
-  'updateNoteLinks', 'clearLinksFromNote',
-  'saveElement', 'saveElements', 'deleteElement', 'deleteElements', 'deleteElementsByNote',
-  'saveMedia', 'deleteMediaByNote',
+  'createNote', 'updateNote',
+  'archiveNote', 'unarchiveNote', 'trashNote', 'permanentlyDeleteNote',
+  'setSearchIndex', 'setSearchIndexEntry', 'removeSearchIndexEntry', 'updateNoteNameInSearchIndex',
+  'createFolder', 'deleteFolder',
+  'saveElement', 'deleteElements', 'deleteElementsByNote',
+  'deleteMediaByNote',
   'setSetting',
   'importData', '_commitImport', '_writeImport',
-  'saveCustomTheme', 'deleteCustomTheme',
   'saveVector',
-  'saveSnapshot', 'deleteSnapshot', 'pruneSnapshots', 'deleteSnapshotsByNote',
+  'deleteSnapshotsByNote',
 ]);
 
 /** DatabaseManager methods that open a transaction, which writes only in 'readwrite' mode */
@@ -73,14 +74,14 @@ const MODE_WRITES = new Set(['transaction', 'getStore']);
 /** DatabaseManager methods that only read */
 const READS = new Set([
   'constructor', '_chromeApi', '_codedError', 'hasStore', '_sleep', 'withRetry', '_newerSchemaError',
-  '_throwIfCoreStoresMissing', '_openAtCurrentVersion', '_openUnversioned', '_readOnDiskVersion', 'isPageContext',
-  'exportRawStores', '_readStoreForCopy', '_blobsToDataUrls', '_hasBlob', '_blobToDataUrl', 'getAutoBackups',
+  '_throwIfCoreStoresMissing', '_openUnversioned', '_readOnDiskVersion', 'isPageContext',
+  '_readStoreForCopy', '_blobsToDataUrls', '_hasBlob', '_blobToDataUrl', 'getAutoBackups',
   '_getAutoBackupKeys', '_getStorageValue', '_getAllNoteIds', 'validateDatabase', '_getAllKeys', '_countOrphanIndexKeys',
   '_readAux', 'getTodayNote', 'getAllNotes', 'getNoteNames', 'getArchivedNotes', 'getTemplates', 'getSearchIndex',
   'isNoteEmpty', 'isNoteUntitled', 'isEmptyTextBlock', 'getTrashedNotes', 'getElements', 'getNote',
-  '_keepStoredNoteState', 'getAllFolders', 'getFolder', 'getBacklinks', 'getElementsByNote', 'getMedia', 'getSetting',
-  'readSetting', 'getAllSettings', 'isUpgraded', 'onSettingsChange', 'exportAll', 'exportAllAsBlob', '_readExport', '_exportMediaRow',
-  '_getAllMedia', 'exportNote', 'validateImport', '_dataUrlToBlob', 'getCustomThemes', 'getVector', 'getAllVectors',
+  'getAllFolders', 'getFolder', 'getBacklinks', 'getElementsByNote', 'getMedia', 'getSetting',
+  'readSetting', 'getAllSettings', 'exportAll', 'exportAllAsBlob', '_readExport', '_exportMediaRow',
+  '_getAllMedia', 'validateImport', '_dataUrlToBlob', 'getCustomThemes', 'getVector', 'getAllVectors',
   'getSnapshots',
 ]);
 
@@ -197,39 +198,27 @@ const SYNC_KEYS = ['syncProvider', 'syncWebdavConfig', 'syncLastSyncAt'];
  * or a method also names its ops, so a new call there fails until it's classified.
  */
 const RULES = [
-  { command: 'ensureDailyNote', op: ['ensureDailyNote', 'ensureDailyNoteForDate'] },
   // A new note and its first blocks are one intent, an imported one's included
-  { command: 'createNote', method: /\.(runOnboarding|createNoteFromAIResponse|_createNoteFromBlock|importNote)$/, op: ['createNote', 'saveElement', 'saveElements'] },
+  { command: 'createNote', method: /\.(runOnboarding|createNoteFromAIResponse|_createNoteFromBlock|importNote)$/, op: ['createNote', 'saveElement'] },
   { command: 'createNote', op: 'createNote' },
   { command: 'convertNoteToTemplate', method: /\.convertNoteToTemplate$/, op: 'updateNote' },
   { command: 'convertTemplateToNote', method: /\.convertTemplateToNote$/, op: 'updateNote' },
   // The editor's save, the links and search-index name it refreshes, and template blocks inserted as an edit
-  { command: 'saveNoteContent', method: /^BlockEditor\.(_writeSaveState|_afterSaveWrite|selectTemplateItem)$/, op: ['saveNoteWithBlocks', 'updateNoteNameInSearchIndex', 'updateNoteLinks', 'saveElement'] },
-  { command: 'deleteBlocks', file: 'js/editor.js', op: 'deleteElement' },
-  { command: 'saveSnapshot', method: 'BlockEditor._autoSnapshot', op: 'saveSnapshot' },
-  { command: 'restoreSnapshot', method: 'BlockEditor._revertToSnapshot', op: ['saveSnapshot', 'deleteElements', 'saveElement', 'updateNote'] },
-  { command: 'insertBlocks', method: /\.(appendAIResponseToNote|refreshNoteMetadataAfterInsert|_appendBlockToNote)$/, op: ['saveElement', 'saveElements', 'updateNote', 'updateNoteLinks'] },
+  { command: 'saveNoteContent', method: /^BlockEditor\.(_writeSaveState|_afterSaveWrite|selectTemplateItem)$/, op: ['updateNoteNameInSearchIndex', 'saveElement'] },
+  { command: 'restoreSnapshot', method: 'BlockEditor._revertToSnapshot', op: ['deleteElements', 'saveElement', 'updateNote'] },
+  { command: 'insertBlocks', method: /\.(appendAIResponseToNote|refreshNoteMetadataAfterInsert|_appendBlockToNote)$/, op: ['saveElement', 'updateNote'] },
   // Titles the user asked for are renames; automatic ones yield to titleManuallySet
   { command: 'renameNote', method: /\.(generateTitleForNote|applyGeneratedTitle)$/, op: 'updateNote' },
   { command: 'applyDerivedTitle', method: /\.(runAutoTitle|generateTitleForNewNote)$/, op: 'updateNote' },
   { command: 'attachInsights', op: 'updateNote', fields: 'insights' },
   { command: 'setPinned', op: 'updateNote', fields: 'pinned' },
   { command: 'moveNoteToFolder', op: 'updateNote', fields: 'folderId' },
-  { command: 'renameFolder', op: 'updateFolder', fields: 'name' },
-  { command: 'moveFolder', op: 'updateFolder', fields: 'parentId' },
-  { command: 'setFolderCollapsed', op: 'updateFolder', fields: 'collapsed' },
   { command: 'deleteFolder', op: 'deleteFolder' },
-  { command: 'moveNoteToFolder', op: 'moveNoteToFolder' },
   { command: 'createFolder', op: 'createFolder' },
   { command: 'archiveNote', op: 'archiveNote' },
   { command: 'unarchiveNote', op: 'unarchiveNote' },
-  // Storage.deleteNote moves the note to trash
-  { command: 'trashNote', op: ['trashNote', 'deleteNote'] },
-  { command: 'restoreNote', op: 'restoreNote' },
+  { command: 'trashNote', op: 'trashNote' },
   { command: 'deleteNotePermanently', op: 'permanentlyDeleteNote' },
-  { command: 'emptyTrash', op: 'emptyTrash' },
-  { command: 'runTrashCleanup', op: 'cleanupTrash' },
-  { command: 'runBulkAction', op: 'bulkNoteAction' },
   { command: 'recordJobRun', op: 'setSetting', key: ['lastAutoTitleRun', 'lastInsightsRun'] },
   // A running extraction, kept across reloads
   { command: 'setInsightsPending', op: 'setSetting', key: /^insightsExtracting_/ },
@@ -241,7 +230,6 @@ const RULES = [
   { command: 'saveWorkspaceSession', op: ['setSetting', 'set'], key: SESSION_KEYS },
   { command: 'saveChatHistory', op: 'setSetting', key: CHAT_KEYS },
   { command: 'savePromptTemplates', op: 'setSetting', key: 'aiPromptTemplates' },
-  { command: 'saveTheme', op: 'saveCustomTheme' },
   { command: 'completeOnboarding', op: 'setSetting', key: 'hasCompletedOnboarding' },
   { command: 'recordBackup', op: 'setSetting', key: ['lastBackupAt', 'lastFullExportAt'] },
   // The pre-migration export notice's outcome (#18 slice 0)
@@ -646,11 +634,14 @@ function scanSource(file, text, { members = null } = {}) {
         // The pass above counts transactions
       } else if (root) {
         const shown = (args.length > 0 ? '…' : '');
-        if (WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op)) {
+        if (members && !members.has(op) && !Object.hasOwn(UNDEFINED_WRITES, op)) {
+          // Whatever the lists say: they named the writers #17 PR 4a deleted until R88's read
+          problem(n, `calls ${root}.${op}, which DatabaseManager doesn't define: fix the call, or list it in UNDEFINED_WRITES`);
+        } else if (WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op)) {
           if (op === 'setSetting') {
             const key = keyText(args[0]);
             add(n, { kind: 'storage', op, key, call: `${root}.setSetting('${key}'${args.length > 1 ? ', …' : ''})` });
-          } else if (op === 'updateNote' || op === 'updateFolder') {
+          } else if (op === 'updateNote') {
             const fields = fieldsSet(n);
             add(n, { kind: 'storage', op, key: null, fields, call: `${root}.${op}(${fields.length > 0 ? `{${fields.join(', ')}}` : shown})` });
           } else {
@@ -793,6 +784,34 @@ function classify(hit) {
   return { ...row, command: rule.command, status: statusOf(rule.command, hit) };
 }
 
+/** The other writes the scan finds, which RULES may name besides DatabaseManager's */
+const OTHER_WRITES = new Set([...CHROME_WRITES, ...STORE_WRITES, ...CURSOR_WRITES, ...WEB_STORAGE_WRITES, 'deleteDatabase', 'open']);
+
+/**
+ * What the lists name that nothing has: a name in WRITES or READS that DatabaseManager doesn't
+ * define, which would let a call to a method it lost through as a write or a read (R88's read
+ * of #17 PR 4a), and an op in RULES no list or other write has
+ * @param {Set<string> | null} members - DatabaseManager's, or null when there's no such class
+ * @returns {string[]}
+ */
+function staleListings(members) {
+  const problems = [];
+  if (members) {
+    for (const [name, list] of [['WRITES', WRITES], ['READS', READS]]) {
+      for (const op of list) {
+        if (!members.has(op)) problems.push(`${name} in scripts/write-paths.js lists ${op}, which DatabaseManager doesn't define: drop it`);
+      }
+    }
+  }
+  for (const rule of RULES) {
+    for (const op of [].concat(rule.op ?? [])) {
+      const known = WRITES.has(op) || MODE_WRITES.has(op) || Object.hasOwn(UNDEFINED_WRITES, op) || OTHER_WRITES.has(op);
+      if (!known) problems.push(`the ${rule.command} rule in scripts/write-paths.js names ${op}, which nothing writes with: drop it`);
+    }
+  }
+  return problems;
+}
+
 /** Every write path in js/, classified, and what keeps the doc from being written */
 function collect(root = ROOT_DIR) {
   const files = listFiles(root);
@@ -801,7 +820,7 @@ function collect(root = ROOT_DIR) {
   const members = storageMembers(root);
   const index = referencesOf(sources);
   const rows = [];
-  const problems = [];
+  const problems = staleListings(members);
   for (const file of files) {
     const result = scanSource(file, texts.get(file), { members });
     for (const hit of result.hits) {
@@ -943,5 +962,5 @@ if (require.main === module) {
 
 module.exports = {
   WRITES, READS, MODE_WRITES, UNDEFINED_WRITES, COMMANDS, RULES, STATUSES, PREFERENCE_KEYS, COMPONENTS,
-  LEDGERED_FILES, DOC, scanSource, listFiles, storageMembers, classify, collect, renderDoc, withoutLines, check, main,
+  LEDGERED_FILES, DOC, scanSource, listFiles, storageMembers, staleListings, classify, collect, renderDoc, withoutLines, check, main,
 };

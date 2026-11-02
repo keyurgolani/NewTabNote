@@ -10,6 +10,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, waitFor, plain, note, block, runUntil, bootNewTab,
+  watchTransactions,
   NEW_TAB_FILES, shownTabs,
 } = require('./helpers/legacy-env');
 
@@ -485,11 +486,11 @@ describe('importing a note', () => {
   it("an import that doesn't commit leaves no note, opens nothing, and isn't counted as imported", async () => {
     const { env, page, notes, toasts } = await importPage();
     const before = Object.keys((await stored(env)).notes).sort();
-    // A disk that fills while the blocks are written: the note and its blocks fail together
-    const write = page.Storage.db.transaction.bind(page.Storage.db);
-    page.Storage.db.transaction = (stores, mode) => {
-      const tx = write(stores, mode);
-      if (mode === 'readwrite' && [].concat(stores).includes('elements')) {
+    // A disk that fills while the blocks are written: the note and its blocks fail together, in
+    // the transaction #17's adapter opens for them since #17 PR 4a
+    const unwatch = watchTransactions(({ stores, mode, open }) => {
+      const tx = open();
+      if (mode === 'readwrite' && stores.includes('elements')) {
         const store = tx.objectStore.bind(tx);
         tx.objectStore = (name) => {
           const target = store(name);
@@ -498,11 +499,14 @@ describe('importing a note', () => {
         };
       }
       return tx;
-    };
+    });
     const errors = [];
     env.global.console = { ...console, error: (...args) => errors.push(args) };
-    await runUntil(env, notes.importNote(fileOf('lost.md', '# Lost\n\nWords')));
-    page.Storage.db.transaction = write;
+    try {
+      await runUntil(env, notes.importNote(fileOf('lost.md', '# Lost\n\nWords')));
+    } finally {
+      unwatch();
+    }
     assert.deepEqual(Object.keys((await stored(env)).notes).sort(), before, 'no note stays behind without its blocks');
     assert.equal(page.tabs.openTabs.length, 1);
     assert.deepEqual(plain(toasts), [{ message: 'Failed to import note. Please try again.', kind: 'error' }]);

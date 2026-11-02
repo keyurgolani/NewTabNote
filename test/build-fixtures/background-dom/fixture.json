@@ -5,7 +5,7 @@
   ],
   "edits": [
     {
-      "file": "js/storage.js",
+      "file": "js/kernel/composition/host.js",
       "append": "\nglobalThis.ntnFixtureTitle = () => document.title;\n"
     }
   ]

@@ -4,14 +4,16 @@
  * Reads return plain values (text, lists, block summaries), never a locator, so a later
  * issue that changes the UI on purpose updates this file, not the assertions.
  *
- * The driver may seed through the legacy Storage global and read app state to know when
- * the UI has settled. Specs never assert on either.
+ * The driver seeds a profile through the profile store (e2e/harness/profile-store.js: raw
+ * IndexedDB in the shapes 1.4.x's Storage wrote), and reads app state to know when the UI has
+ * settled. Specs never assert on either.
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { expect, launchExtension, resolveDist, builtFiles, TIME_ZONE } = require('../harness');
+const { profileStore } = require('../harness/profile-store');
 
 // BlockEditor.loadNote (js/editor.js) focuses the note's first block this long after it renders
 const EDITOR_FOCUS_DELAY_MS = 50;
@@ -430,28 +432,28 @@ async function startCoordinator(extension) {
 }
 
 /**
- * Resolve once a write through the worker's Storage global can't be lost. At 1.4.x the
- * startup Storage.init() ends by deleting blocks whose note it hadn't read yet, so a block
- * written while it runs can vanish. Since #33 that check only reads, and Storage.openState
- * turns 'open' once the database is open, which is enough. Since #35 the database opens on
- * the first event that needs it, so this starts the coordinator first (startCoordinator).
+ * Resolve once a write the profile store makes in the worker can't be lost. Since #17 PR 1b
+ * the worker's migration run may upgrade the database as it starts, so the store writes once
+ * the run is in, and since #17 PR 4a the worker has no Storage global to wait on. Since #35 the
+ * database opens on the first event that needs it, so this starts the coordinator first
+ * (startCoordinator).
  *
- * A 1.4.x worker has no openState, so this waits for the startup promise itself.
- * background.js keeps it in a top-level binding that captureToDailyNote awaits first, and
- * the minifier renames it, so the name comes from that function's source. A module worker
- * (#12) keeps its top-level bindings out of the global scope, so without openState this
- * fails asking for an update instead of guessing.
+ * A 1.4.x worker has its Storage global and no run. Its startup Storage.init() ends by
+ * deleting blocks whose note it hadn't read yet, so a block written while it runs can vanish.
+ * Since #33 that check only reads, and Storage.openState turns 'open' once the database is
+ * open, which is enough. One without openState has this wait for the startup promise itself:
+ * background.js keeps it in a top-level binding that captureToDailyNote awaits first, and the
+ * minifier renames it, so the name comes from that function's source. A module worker (#12)
+ * keeps its top-level bindings out of the global scope, so without openState this fails asking
+ * for an update instead of guessing.
  */
 async function workerStorageSettled(extension) {
   await startCoordinator(extension);
-  // Since #17 PR 1b the worker's kernel runs on #17's adapter, after its migration run, and
-  // nothing in the worker opens its Storage global, so the harness opens it, as it is, once the
-  // run is in (a run that upgrades later would close it)
-  if (await extension.worker.evaluate(() => Boolean(self.storageUpgrade) && Boolean(self.Storage))) {
+  if (await extension.worker.evaluate(() => Boolean(self.storageUpgrade))) {
     await extension.worker.evaluate(async () => {
       await self.storageUpgrade;
-      if (self.Storage.openState !== 'open') await self.Storage.openExisting();
     });
+    return;
   }
   if (await extension.worker.evaluate(() => Boolean(self.Storage) && 'openState' in self.Storage)) {
     await expect.poll(() => extension.worker.evaluate(() => self.Storage.openState), { timeout: SETTLE_TIMEOUT_MS }).not.toBe('closed');
@@ -475,28 +477,26 @@ async function workerStorageSettled(extension) {
 
 /**
  * Write `notes` ([{ name, blocks: [element fields], archived, isTemplate }]) through the
- * worker's Storage global, blocks in order, then archive the archived ones and make the
- * templates templates. Run it before the first new tab opens, so the app starts on these
- * notes. Each note starts in a later millisecond than the one before it was last written,
- * as when a user writes them one after another, so the last one is the newest: the app
- * lists it first and a new tab opens it. Notes that share an updatedAt sort by their
- * random IDs.
+ * profile store in the worker, blocks in order, each with the fields 1.4.x's editor saved a
+ * text block with under the ones given, then archive the archived ones and make the templates
+ * templates. Run it before the first new tab opens, so the app starts on these notes. Each
+ * note starts in a later millisecond than the one before it was last written, as when a user
+ * writes them one after another, so the last one is the newest: the app lists it first and a
+ * new tab opens it. Notes that share an updatedAt sort by their random IDs. Answers each
+ * note's id and name.
  */
 async function seedNotes(extension, notes) {
   await workerStorageSettled(extension);
-  await extension.worker.evaluate(async notes => {
-    let lastWrite = 0;
-    for (const { name, blocks = [], archived = false, isTemplate = false } of notes) {
-      while (Date.now() <= lastWrite) await new Promise(resolve => setTimeout(resolve, 1));
-      const note = await self.Storage.createNote(name);
-      for (const [order, block] of blocks.entries()) {
-        await self.Storage.saveElement({ id: self.Utils.generateId(), canvasId: note.id, order, ...block });
-      }
-      if (archived) await self.Storage.archiveNote(note.id);
-      if (isTemplate) await self.Storage.updateNote({ ...(await self.Storage.getNote(note.id)), isTemplate: true });
-      lastWrite = (await self.Storage.getNote(note.id)).updatedAt;
-    }
-  }, notes);
+  return profileStore(extension.worker).seedNotes(notes);
+}
+
+/**
+ * Make a folder named `name`, under `parentId` or at the top, through the profile store in the
+ * worker, as seedNotes writes notes. Answers the folder's record.
+ */
+async function seedFolder(extension, name, parentId = null) {
+  await workerStorageSettled(extension);
+  return profileStore(extension.worker).createFolder(name, parentId);
 }
 
 /**
@@ -973,6 +973,7 @@ module.exports = {
   openTodaysDailyNote,
   todaysDailyNoteTitle,
   seedNotes,
+  seedFolder,
   captureText,
   captureBookmark,
   setTheme,

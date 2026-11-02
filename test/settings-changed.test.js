@@ -1,12 +1,14 @@
 // #13's settings.changed notice (#13, "Current problem", settings row, and "Security and
-// privacy"): Storage.onSettingsChange tells its listeners which settings changed, by key name
-// only, and never a value, so no listener is handed llmApiKey's old or new value. Consumers
-// read the values they need again.
+// privacy"): the new tab's root hears chrome.storage.onChanged (host.js's chromeSettingsChanges,
+// Storage.onSettingsChange's port since #17 PR 4a) and tells its listeners which settings
+// changed, by key name only, and never a value, so no listener is handed llmApiKey's old or new
+// value. Consumers read the values they need again.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createLegacyEnv, createDatabase, FakeDocument, settle, plain, startEditorClient } = require('./helpers/legacy-env');
+const { loadPageModule } = require('./helpers/page-module');
 
 const FILES = ['js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/controllers/settings-controller.js'];
 
@@ -31,9 +33,10 @@ const SECRET_NEW = 'sk-test-new-1111';
 
 describe('settings.changed (#13)', () => {
   it('names the settings that changed and nothing else: no old or new value, llmApiKey included', async () => {
-    const { Storage, report } = await setup();
+    const { env, report } = await setup();
+    const { chromeSettingsChanges } = await loadPageModule(env, 'js/kernel/composition/host.js');
     const heard = [];
-    Storage.onSettingsChange((notice) => heard.push(notice));
+    chromeSettingsChanges()((notice) => heard.push(notice));
     report({
       setting_llmApiKey: { oldValue: SECRET_OLD, newValue: SECRET_NEW },
       setting_theme: { oldValue: 'light', newValue: 'dark' },

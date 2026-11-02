@@ -289,6 +289,44 @@ describe('the producers that take outside text, in a new tab (#14 slice 2)', () 
     assert.deepEqual(plain(blocks.map(strip)), records.map(strip));
   });
 
+  it("a backup's import (backups.js): every block is planned and written as the file holds it, in each state decode reads, under the new note's ids", async () => {
+    const { importUnit, planImport } = await kernelModule('js/kernel/adapters/indexeddb/backups.js');
+    const { decodeBlock } = await kernelModule('js/kernel/core/blocks/index.js');
+    const records = [
+      { id: 'x1', canvasId: 'old', type: 'text', content: '<b>kept</b>', order: 0 },
+      { id: 'x2', canvasId: 'old', type: 'text', content: 'v1', schemaVersion: 1, order: 1 },
+      { id: 'x3', canvasId: 'old', type: 'gadget', content: 'unknown', order: 2 },
+      { id: 'x4', canvasId: 'old', type: 'text', content: 'newer', schemaVersion: 7, order: 3 },
+      { id: 'x5', canvasId: 'old', type: 'text', content: { not: 'text' }, order: 4 },
+      { id: 'x6', canvasId: 'old', type: 'todo', content: 'x', checked: true, extra: { kept: 1 }, order: 5 },
+    ];
+    assert.deepEqual(
+      records.map(r => decodeBlock(r).state),
+      ['upcast', 'current', 'unknown', 'newer', 'invalid', 'upcast'],
+    );
+    const backup = { version: 1, exportedAt: 1, canvases: [note('old', { name: 'Plan' })], elements: records };
+    let made = 0;
+    const planned = planImport(backup, 'merge', { newId: () => `new-${++made}`, has: () => true });
+    assert.ok(planned.plan, 'the file is taken');
+    const { elements, noteIds } = planned.plan;
+    const strip = ({ id, canvasId, ...rest }) => rest;
+    assert.deepEqual(elements.map(strip), records.map(strip));
+    // Under the new note's id, each under a new one of its own: the note's is taken first
+    assert.equal(noteIds.get('old'), 'new-1');
+    assert.deepEqual(
+      elements.map(block => [block.id, block.canvasId]),
+      [2, 3, 4, 5, 6, 7].map(n => [`new-${n}`, 'new-1']),
+    );
+    // Written as planned, each once, by the import's unit
+    const puts = [];
+    const tx = { has: () => true, getAll: async () => [], put: (store, value) => puts.push([store, value]) };
+    assert.equal(await importUnit(planned.plan, { now: () => 2 }).unit.run(tx), undefined);
+    assert.deepEqual(
+      puts.filter(([store]) => store === 'blocks').map(([, block]) => block),
+      elements,
+    );
+  });
+
   it("AI chat's insert and new note: blocks that don't decode are refused before anything is written", async () => {
     const { env, page, chat, toasts, events } = await openPage();
     page.tabs.editor.activeBlock = 'a1';

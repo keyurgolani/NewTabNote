@@ -11,8 +11,8 @@
     },
     {
       "file": "js/background.js",
-      "replace": "import './storage.js';\n",
-      "with": "import './storage.js';\nimport { contextGuard } from './kernel/composition/network-guard-first.js';\n"
+      "replace": "} from './kernel/composition/background.js';\n",
+      "with": "} from './kernel/composition/background.js';\nimport { contextGuard } from './kernel/composition/network-guard-first.js';\n"
     }
   ]
 }

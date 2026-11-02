@@ -4,7 +4,7 @@
 // window inside the 500 ms debounce never moves a block to another note and
 // keeps the last edit. Overlapping loadNote calls end on the later note.
 
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -62,19 +62,48 @@ function type(editor, text, index = 0) {
   editor.scheduleSave();
 }
 
-/** Record transactions opened on the database. */
-function spyTransactions(storage) {
-  const db = storage.db;
-  const original = db.transaction.bind(db);
-  const opened = [];
-  db.transaction = (stores, mode) => {
-    opened.push({ stores: [].concat(stores), mode: mode || 'readonly' });
-    return original(stores, mode);
-  };
-  return opened;
+/** The spies a test set on fake-indexeddb's connections, which come off when it ends */
+const spies = [];
+afterEach(() => {
+  while (spies.length) spies.pop().restore();
+});
+
+/**
+ * Record transactions opened on the database, on any connection: the page's kernel writes
+ * through #17's adapter's own since #17 PR 4a, and the test's Storage calls through Storage's.
+ * It comes off when the test ends.
+ */
+function spyTransactions() {
+  const spy = spyAllTransactions();
+  spies.push(spy);
+  return spy.opened;
 }
 
 const writesOf = (opened) => opened.filter((t) => t.mode === 'readwrite');
+
+/**
+ * Puts `blocks` as another writer would, one at a time (Storage.saveElements had no caller once
+ * the new tab wrote through #17's adapter, and went with #17 PR 4a)
+ */
+async function putBlocks(Storage, blocks) {
+  for (const saved of blocks) await Storage.saveElement(saved);
+}
+
+/**
+ * Every transaction any fake-indexeddb connection opens from now on, as #17's adapter opens the
+ * new tab's since #17 PR 4a, in place of Storage's, until `restore`
+ * @returns {{opened: {stores: string[], mode: string}[], restore: () => void}}
+ */
+function spyAllTransactions() {
+  const { IDBDatabase } = require('fake-indexeddb');
+  const original = IDBDatabase.prototype.transaction;
+  const opened = [];
+  IDBDatabase.prototype.transaction = function spied(stores, mode, options) {
+    opened.push({ stores: [].concat(stores), mode: mode || 'readonly' });
+    return original.call(this, stores, mode, options);
+  };
+  return { opened, restore: () => { IDBDatabase.prototype.transaction = original; } };
+}
 
 async function setup() {
   const env = createLegacyEnv();
@@ -224,14 +253,15 @@ describe('BlockEditor save and load (AC1)', () => {
   });
 
   it('writes the note and its blocks in one readwrite transaction', async () => {
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     type(editor, 'one transaction');
     env.clock.tick(500);
     env.frames();
     await editor.flushSave();
 
     const first = writesOf(opened)[0];
-    assert.deepEqual(first, { stores: ['canvases', 'elements'], mode: 'readwrite' });
+    // #17's adapter commits the save's units in one transaction, its links with its blocks
+    assert.deepEqual(first, { stores: ['canvases', 'elements', 'links'], mode: 'readwrite' });
     const stored = await Storage.getNote('A');
     assert.ok(stored.updatedAt > note('A').updatedAt, 'updatedAt set like updateNote');
   });
@@ -280,7 +310,7 @@ describe('BlockEditor save and load (AC1)', () => {
   });
 
   it('flushSave writes nothing when nothing is pending', async () => {
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     await editor.flushSave();
     assert.equal(writesOf(opened).length, 0);
   });
@@ -298,12 +328,12 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
   });
 
   it('visibilitychange to hidden opens the transaction before the handler returns', async () => {
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     type(editor, 'hidden tab');
     env.document.visibilityState = 'hidden';
     env.document.fire('visibilitychange');
 
-    assert.deepEqual(writesOf(opened), [{ stores: ['canvases', 'elements'], mode: 'readwrite' }],
+    assert.deepEqual(writesOf(opened), [{ stores: ['canvases', 'elements', 'links'], mode: 'readwrite' }],
       'opened synchronously, with no animation frame');
     assert.equal(env.pendingFrames(), 0);
     await settle();
@@ -312,7 +342,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
   });
 
   it('visibilitychange to visible does nothing', () => {
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     type(editor, 'visible');
     env.document.visibilityState = 'visible';
     env.document.fire('visibilitychange');
@@ -321,7 +351,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
   });
 
   it('pagehide (closing the tab) writes the pending edit synchronously', async () => {
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     type(editor, 'tab closing');
     env.window.fire('pagehide');
     assert.equal(writesOf(opened).length, 1);
@@ -332,7 +362,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
   });
 
   it('a save waiting for its frame is written by pagehide, and only once', async () => {
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     type(editor, 'in flight');
     env.clock.tick(500); // the save starts and waits for requestAnimationFrame
     assert.equal(env.pendingFrames(), 1);
@@ -361,7 +391,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
   });
 
   it('nothing pending: pagehide and visibilitychange write nothing', () => {
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     env.window.fire('pagehide');
     env.document.visibilityState = 'hidden';
     env.document.fire('visibilitychange');
@@ -377,7 +407,7 @@ describe('BlockEditor page lifecycle flush (AC1)', () => {
 
     type(pipEditor, 'charlie in PiP');
     type(editor, 'alpha in main');
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     pipWindow.fire('pagehide');
     assert.equal(writesOf(opened).length, 1, 'PiP edit written synchronously');
     assert.notEqual(editor.saveTimeout, null, 'the main editor keeps its own debounce');
@@ -457,7 +487,7 @@ describe('BlockEditor deletes stay deleted', () => {
     env.clock.tick(500);
     assert.equal(pipWindow.pendingFrames(), 3, 'three saves waiting for a frame');
 
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     const blockWrites = () => writesOf(opened).filter((t) => t.stores.includes('elements')).length;
     pipWindow.fire('pagehide');
     assert.equal(writesOf(opened).length, 1, 'one write, opened before the handler returned');
@@ -503,7 +533,7 @@ describe('BlockEditor in a PiP window', () => {
     }
     assert.equal(pipWindow.pendingFrames(), 3);
 
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     pipWindow.frames();
     await settle();
     assert.equal(writesOf(opened).filter((t) => t.stores.includes('elements')).length, 1, 'one write, not three');
@@ -741,7 +771,7 @@ describe('BlockEditor failed save before a note switch', () => {
     failWritesOf(env, 'A', 1);
     await switchWhileTyping('retry on close');
 
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     env.window.fire('pagehide');
     assert.equal(writesOf(opened).length, 1, 'opened before the handler returned');
     await settle();
@@ -837,7 +867,7 @@ describe('BlockEditor reloading the open note', () => {
     editor = makeEditor(env);
     await editor.loadNote('A');
     // Another writer adds a block, as the AI insert does before it reloads the note.
-    await Storage.saveElements([block('ai1', 'A', 5, 'from AI')]);
+    await putBlocks(Storage, [block('ai1', 'A', 5, 'from AI')]);
   });
 
   it('keeps an edit typed while the reload reads the note', async () => {
@@ -981,7 +1011,7 @@ describe('BlockEditor template inserts (#12)', () => {
     // form 1.4.x's Utils.generateId gave every block, which begins with when it was made.
     const Storage = env.get('Storage');
     await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
-    await Storage.saveElements([
+    await putBlocks(Storage, [
       block('1700000000000-t1aaaaaaa', 'C', 1, 'second shown'),
       block('1700000005000-t2bbbbbbb', 'C', 0, 'first shown'),
     ]);
@@ -1009,7 +1039,7 @@ describe('BlockEditor template inserts (#12)', () => {
     await Storage.updateNote({ ...(await Storage.getNote('C')), isTemplate: true });
     // Two blocks from 1.4.x, whose ids sort by time, then two a 2a build made, whose UUIDs don't:
     // one typed, and one captured, which has no createdAt and keeps its capture time as order
-    await Storage.saveElements([
+    await putBlocks(Storage, [
       block('1700000000000-aaaaaaaaa', 'C', 3, 'made first', { createdAt: 1700000000000 }),
       block('0f2c41aa-0000-4000-8000-000000000003', 'C', 0, 'made third', { createdAt: 1700000002000 }),
       block('1700000001000-bbbbbbbbb', 'C', 2, 'made second', { createdAt: 1700000001000 }),
@@ -1053,7 +1083,7 @@ describe('BlockEditor template inserts (#12)', () => {
     // copy a new id, which begins with when it went in, and kept the createdAt of the block it
     // copied, from before the typed ones. Both copies went in within one millisecond, where 1.4.x's
     // id order fell to the random rest of each id: their order breaks that tie.
-    await Storage.saveElements([
+    await putBlocks(Storage, [
       block('1700000100000-k2m9x0a1b', 'C', 0, 'typed first', { createdAt: 1700000100000 }),
       block('1700000101000-a0b1c2d3e', 'C', 1, 'typed second', { createdAt: 1700000101000 }),
       block('1700000200000-zz9y8x7w6', 'C', 2, 'copy put in first', { createdAt: 1700000000000 }),
@@ -1073,7 +1103,7 @@ describe('BlockEditor template inserts (#12)', () => {
     const capturedAt = 1761800000000;
     const first = 'f0000000-0000-4000-8000-000000000001';
     const second = '00000000-0000-4000-8000-000000000002';
-    await Storage.saveElements([
+    await putBlocks(Storage, [
       captureBlock({ id: first, noteId: 'C', capture: { type: 'text', content: 'captured first' }, now: capturedAt }),
       captureBlock({ id: second, noteId: 'C', capture: { type: 'text', content: 'captured second' }, now: capturedAt + 60_000 }),
     ]);
@@ -1187,7 +1217,7 @@ describe('BlockEditor save hold (import)', () => {
   });
 
   it('a save that comes due while held waits for release and keeps the import\'s trash flags', async () => {
-    const opened = spyTransactions(Storage);
+    const opened = spyTransactions();
     editor.holdSaves();
     type(editor, 'typed during import');
     env.clock.tick(500);
@@ -1229,15 +1259,17 @@ describe('BlockEditor save hold (import)', () => {
 });
 
 /**
- * Record what each readwrite transaction puts, by store: `{stores, puts: [{store, record}]}`.
+ * Record what each readwrite transaction puts, by store: `{stores, puts: [{store, record}]}`,
+ * on any connection, as spyTransactions does. It comes off when the test ends.
  * @returns {Array<{stores: Array<string>, puts: Array<{store: string, record: Object}>}>}
  */
-function spyPuts(storage) {
-  const db = storage.db;
-  const original = db.transaction.bind(db);
+function spyPuts() {
+  const { IDBDatabase } = require('fake-indexeddb');
+  const transaction = IDBDatabase.prototype.transaction;
+  spies.push({ restore: () => { IDBDatabase.prototype.transaction = transaction; } });
   const writes = [];
-  db.transaction = (stores, mode) => {
-    const tx = original(stores, mode);
+  IDBDatabase.prototype.transaction = function spied(stores, mode, options) {
+    const tx = transaction.call(this, stores, mode, options);
     if (mode !== 'readwrite') return tx;
     const entry = { stores: [].concat(stores), puts: [] };
     writes.push(entry);
@@ -1304,7 +1336,9 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
 
   it("moving the open note into a folder survives the editor's next save", async () => {
     const folder = await Storage.createFolder('Work');
-    await Storage.moveNoteToFolder('A', folder.id); // the sidebar's move
+    // The sidebar's move, which goes through the kernel
+    const moved = await env.kernel.execute({ type: 'moveNoteToFolder', commandId: 'move-a', noteId: 'A', folderId: folder.id });
+    assert.equal(moved.kind, 'committed', JSON.stringify(moved));
     const stored = await saveEdit('typed after the move');
     assert.equal(stored.folderId, folder.id, 'the save left the folder alone');
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed after the move' });
@@ -1324,14 +1358,16 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
   });
 
   it('a title and text typed inside one debounce both land, in the one transaction that writes the blocks', async () => {
-    const writes = spyPuts(Storage);
+    const writes = spyPuts();
     typeTitle(editor, 'Groceries');
     type(editor, 'eggs');
     await runUntil(env, editor.flushSave());
 
     const saves = writes.filter((w) => w.puts.some((p) => p.store === 'elements'));
     assert.equal(saves.length, 1, 'one save');
-    assert.deepEqual(saves[0].stores.slice().sort(), ['canvases', 'elements']);
+    // With its links and the note's search entry, which takes the new name, as #17's adapter
+    // commits a save's units in one transaction
+    assert.deepEqual(saves[0].stores.slice().sort(), ['canvases', 'elements', 'links', 'search_index']);
     const written = saves[0].puts.find((p) => p.store === 'canvases').record;
     assert.equal(written.name, 'Groceries', 'the typed title went in with the blocks');
     assert.equal(written.titleManuallySet, true);
@@ -1341,14 +1377,18 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
   });
 
   it("a content save of a note opened with its title marks nothing as set by hand, and moves updatedAt as Storage.saveNoteWithBlocks did", async () => {
-    const writes = spyPuts(Storage);
+    const writes = spyPuts();
     const before = Date.now();
     const stored = await saveEdit('content only');
     const after = Date.now();
     assert.deepEqual([stored.name, stored.titleManuallySet], ['Note A', false]);
     assert.ok(stored.updatedAt >= before && stored.updatedAt <= after, 'updatedAt is the time of the save');
-    const written = writes.flatMap((w) => w.puts).filter((p) => p.store === 'canvases');
-    assert.equal(written.length, 1, 'the note record is written once, with the blocks');
+    // #17's adapter puts the note with the blocks, and once more in that transaction with its
+    // revision moved on (versions.js), so no other transaction writes the record
+    const written = writes.filter((w) => w.puts.some((p) => p.store === 'canvases'));
+    assert.equal(written.length, 1, 'the note record is written in one transaction, with the blocks');
+    assert.ok(written[0].puts.some((p) => p.store === 'elements'));
+    assert.equal(written[0].puts.filter((p) => p.store === 'canvases').at(-1).record.updatedAt, stored.updatedAt);
   });
 
   it('a content save after a generated title landed leaves it, and marks nothing as set by hand', async () => {
@@ -1364,7 +1404,7 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
   });
 
   it('a title element input that changes nothing sends no title', async () => {
-    const writes = spyPuts(Storage);
+    const writes = spyPuts();
     typeTitle(editor, 'Note A');
     type(editor, 'content');
     await runUntil(env, editor.flushSave());
@@ -1381,7 +1421,7 @@ describe("BlockEditor saves write the note's content only (#12)", () => {
   });
 
   it('a title the AI set goes in with the blocks without marking it as set by hand', async () => {
-    const writes = spyPuts(Storage);
+    const writes = spyPuts();
     editor.setTitleProgrammatically('Weekly plan');
     type(editor, 'monday');
     await runUntil(env, editor.flushSave());
@@ -1459,7 +1499,7 @@ describe('BlockEditor "Save as a new note" (#12)', () => {
 });
 
 describe('BlockEditor when the page has to reload (#12)', () => {
-  /** A new tab started by its own root, on A, with its editor */
+  /** A new tab started by its own root, on #17's adapter since #17 PR 4a, on A, with its editor */
   async function newTabOnA() {
     const env = createLegacyEnv();
     await createDatabase(env.indexedDB, {
@@ -1490,12 +1530,18 @@ describe('BlockEditor when the page has to reload (#12)', () => {
 
   it('an edit still in the debounce when another context upgrades is written before the connection closes', async () => {
     const { env, Storage, editor, feedback } = await newTabOnA();
-    const opened = spyTransactions(Storage);
+    const spy = spyAllTransactions();
     type(editor, 'typed just before the upgrade');
     assert.notEqual(editor.saveTimeout, null, 'pending');
-    await upgradeElsewhere(env);
-    assert.equal(Storage.openState, 'version-changed', 'the connection closed');
-    assert.deepEqual(writesOf(opened)[0], { stores: ['canvases', 'elements'], mode: 'readwrite' },
+    try {
+      await upgradeElsewhere(env);
+    } finally {
+      spy.restore();
+    }
+    assert.equal(env.adapter.openState(), 'version-changed', 'the connection closed');
+    assert.equal(Storage.openState, 'version-changed', "and the holders' Storage's");
+    // #17's adapter commits the save's units in one transaction, its links with its blocks
+    assert.deepEqual(writesOf(spy.opened)[0], { stores: ['canvases', 'elements', 'links'], mode: 'readwrite' },
       'its transaction opened before the close');
     await runUntil(env, editor.flushSave());
 
@@ -1537,7 +1583,7 @@ describe('BlockEditor when the page has to reload (#12)', () => {
     env.frames();
     await runUntil(env, editor.flushSave());
     await upgraded;
-    assert.equal(Storage.openState, 'version-changed');
+    assert.equal(env.adapter.openState(), 'version-changed');
 
     assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed and saving as the upgrade comes' });
     assert.equal(feedback.statuses.at(-1), 'Saved', 'what was stored is not reported as unsaved');
@@ -1562,17 +1608,22 @@ describe('BlockEditor when the page has to reload (#12)', () => {
   });
 
   it('with nothing pending, the upgrade writes nothing before the connection closes', async () => {
-    const { env, Storage } = await newTabOnA();
-    const opened = spyTransactions(Storage);
-    await upgradeElsewhere(env);
-    assert.equal(Storage.openState, 'version-changed');
-    assert.deepEqual(writesOf(opened), []);
+    const { env } = await newTabOnA();
+    const spy = spyAllTransactions();
+    try {
+      await upgradeElsewhere(env);
+    } finally {
+      spy.restore();
+    }
+    assert.equal(env.adapter.openState(), 'version-changed');
+    // The newer build's own upgrade transaction is a versionchange one, not a write
+    assert.deepEqual(writesOf(spy.opened), []);
   });
 
   it('a save after another context upgraded the database keeps the text and shows the reload notice', async () => {
-    const { env, Storage, navigation, editor, feedback } = await newTabOnA();
+    const { env, navigation, editor, feedback } = await newTabOnA();
     await upgradeElsewhere(env);
-    assert.equal(Storage.openState, 'version-changed');
+    assert.equal(env.adapter.openState(), 'version-changed');
 
     type(editor, 'typed after the upgrade');
     await runUntil(env, editor.flushSave());

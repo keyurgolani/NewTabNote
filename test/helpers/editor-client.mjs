@@ -1,11 +1,13 @@
-// The document client a test page's editors read and write through: a new tab's kernel over
-// the page's own Storage, as js/kernel/composition/newtab.js builds it, but already open,
-// since the test started Storage itself. test/helpers/legacy-env.js loads it into the page
-// with test/helpers/page-module.js, so the kernel runs in the page as it does in Chrome.
+// The document client a test page's editors read and write through: a new tab's kernel on #17's
+// adapter, opened as js/kernel/composition/newtab.js's root opens it since #17 PR 4a, over the
+// page's database, which the test's own Storage has already opened, since the test started
+// Storage itself. test/helpers/legacy-env.js loads it into the page with
+// test/helpers/page-module.js, so the kernel runs in the page as it does in Chrome.
 
-import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
+import { chromeSettingsChanges } from '../../js/kernel/composition/host.js';
 import {
+  createNewTabAdapter,
   createNewTabBackupCheck,
   createNewTabNoteList,
   createNewTabRecovery,
@@ -21,10 +23,10 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  * The page's kernel client, the document client over it, and its note list
  * (js/kernel/core/application/note-list.js), all on one kernel, as the new tab's root builds
  * them, so a commit an editor or a job makes reaches the list's feed. The database's state, the
- * storage guard's raw export, and an import's backup check come from the page's Storage, as
- * the root gives them to App.
- * @param {{storage: any, settings: any, onListQuery?: (query: any) => void, kernelNow?: () => number,
- *   pageNow?: () => number, zone?: string}} host - the page's Storage and chrome.storage.local,
+ * storage guard's raw export, and an import's backup check are the root's, as the root gives
+ * them to App.
+ * @param {{settings: any, onListQuery?: (query: any) => void, kernelNow?: () => number,
+ *   pageNow?: () => number, zone?: string}} host - the page's chrome.storage.local,
  *   what to tell of each query the note list makes, the kernel's and the document client's
  *   clocks, the system's unless given, and the zone both take today's Daily Note in, the host's
  *   unless given (#17 PR 3b)
@@ -42,8 +44,14 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  *   `removalFor` makes the page's removeNotes, with the pane moves and announce the test's
  *   page has, settled by its note list
  */
-export function pageClientsFor({ storage, settings, onListQuery = () => {}, kernelNow, pageNow, zone }) {
-  const adapter = createLegacyAdapter({ storage, settings, mode: 'versioned' });
+export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pageNow, zone }) {
+  // The worker's wait is over: the test's Storage waited on it as it opened
+  const adapter = createNewTabAdapter({
+    indexedDB: globalThis.indexedDB,
+    settings,
+    awaitUpgrade: async () => {},
+    locks: /** @type {any} */ (globalThis.navigator?.locks || null),
+  });
   const zoneNow = zone ? () => zone : systemClock.zone;
   const kernel = createKernel({
     adapter,
@@ -51,6 +59,7 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {}, kern
     caller: Object.freeze({ surface: 'newtab', contextId: 'newtab-test' }),
     ids: legacyIds,
     clock: { now: kernelNow || systemClock.now, zone: zoneNow },
+    ready: adapter.open(),
   });
   const client = Object.freeze({
     execute: kernel.execute,
@@ -70,17 +79,19 @@ export function pageClientsFor({ storage, settings, onListQuery = () => {}, kern
     documentClient: createDocumentClient(client, { ...(pageNow ? { now: pageNow } : {}), zone: zoneNow }),
     noteList,
     removalFor: ports => createNoteRemoval(client, { ...ports, settled: () => noteList.settled() }),
-    // It hears of settings changes as the new tab's does, through the page's Storage
-    settingsClient: createSettingsClient(client, { onSettingsChange: listener => storage.onSettingsChange(listener) }),
-    storageState: createNewTabStorageState({ storage, settings }),
-    recovery: createNewTabRecovery({ storage, settings }),
-    validateBackup: createNewTabBackupCheck({ storage, settings }),
+    // It hears of settings changes as the new tab's does, from chrome.storage.onChanged (#17 PR 4a)
+    settingsClient: createSettingsClient(client, { onSettingsChange: chromeSettingsChanges() }),
+    // The adapter's state, as the root gives it to App
+    storageState: createNewTabStorageState(adapter),
+    // The raw export over the page's IndexedDB, as the root's (raw-export.js)
+    recovery: createNewTabRecovery({ indexedDB: globalThis.indexedDB }),
+    validateBackup: createNewTabBackupCheck(),
   };
 }
 
 /**
  * The page's kernel client, and the document client over it
- * @param {{storage: any, settings: any}} host - the page's Storage and chrome.storage.local
+ * @param {{settings: any}} host - the page's chrome.storage.local
  * @returns {{kernel: import('../../js/kernel/composition/host.js').Client,
  *   documentClient: import('../../js/kernel/composition/document.js').DocumentClient}}
  */
@@ -90,7 +101,7 @@ export function editorKernelFor(host) {
 }
 
 /**
- * @param {{storage: any, settings: any}} host - the page's Storage and chrome.storage.local
+ * @param {{settings: any}} host - the page's chrome.storage.local
  * @returns {import('../../js/kernel/composition/document.js').DocumentClient}
  */
 export function editorClientFor(host) {

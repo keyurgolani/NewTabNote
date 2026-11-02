@@ -111,8 +111,17 @@ describe('trashing an untitled note', () => {
     env.load(...FILES);
     const Storage = env.get('Storage');
     await Storage.init();
+    await startEditorClient(env);
 
-    await Storage.bulkNoteAction([...HOLDING.map((_, i) => `H${i}`), 'E'], 'trash');
+    // The sidebar's bulk trash, which goes through the kernel's runBulkAction since #12, one
+    // trashNote per note (Storage.bulkNoteAction had no caller, and went with #17 PR 4a)
+    const outcome = await env.kernel.execute({
+      type: 'runBulkAction',
+      commandId: 'bulk-trash',
+      action: 'trash',
+      noteIds: [...HOLDING.map((_, i) => `H${i}`), 'E'],
+    });
+    assert.equal(outcome.kind, 'bulk', JSON.stringify(outcome));
 
     const notes = recordsOf(await dumpDatabase(env.indexedDB), 'canvases');
     for (const [i, [what]] of HOLDING.entries()) assert.equal(notes[`H${i}`].trashed, true, what);
