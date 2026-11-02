@@ -170,6 +170,40 @@ class Block {
     const now = Date.now();
     this.createdAt = options.createdAt || now;
     this.updatedAt = options.updatedAt || now;
+    /**
+     * What decode found that this class doesn't model, so a save writes it back (#14 slice 3,
+     * the opaque rule; see keep): null, `{extra}`, or `{state, record}`
+     */
+    this.kept = null;
+    /** True once this block's type drew no element for it (createElement), so it shows read-only */
+    this.renderFailed = false;
+  }
+
+  /**
+   * Keep what decode found in the record this block was read from, beside the fields this class
+   * copies (#14 slice 3, the opaque rule): for a known block, the fields its type doesn't own,
+   * when it holds any; for a record this build doesn't fully read (from a newer version, of a
+   * type it doesn't have, or with stored data it can't read), the record itself, which a save
+   * writes back as it was loaded.
+   * @param {any} decoded - BlockProjections.decodeBlock's answer for that record
+   */
+  keep(decoded) {
+    if (decoded.state === 'current' || decoded.state === 'upcast') {
+      this.kept = Object.keys(decoded.extra).length > 0 ? { extra: decoded.extra } : null;
+    } else {
+      this.kept = { state: decoded.state, record: decoded.record };
+    }
+  }
+
+  /**
+   * Why this block is in a safe state, where it shows read-only and is kept as loaded: 'newer',
+   * 'unknown' or 'invalid' as decode read it, or 'render-failed' once its type drew no element
+   * for it. Null for a block that edits as usual.
+   * @returns {string|null}
+   */
+  safeState() {
+    if (this.kept && this.kept.state) return this.kept.state;
+    return this.renderFailed ? 'render-failed' : null;
   }
 
   /**
@@ -679,10 +713,15 @@ class Block {
   }
 
   /**
-   * Serialize block for storage
+   * Serialize block for storage. A block this build doesn't fully read goes back as it was
+   * loaded, with only its id as the editor has it (Save as a new note gives blocks new ids). A
+   * known block writes its type's fields over the fields it carries that its type doesn't own,
+   * and the version its model is at (#14 slice 3). The save adds the note and the order.
    */
   serialize() {
+    if (this.kept && this.kept.record) return { ...this.kept.record, id: this.id };
     const data = {
+      ...(this.kept && this.kept.extra),
       id: this.id,
       type: this.type,
       content: this.content,
@@ -728,14 +767,22 @@ class Block {
       data.equation = this.equation;
     }
 
+    // The version a save writes a block at, its model's (#14 slice 3); a record without one is
+    // version 0, which decode reads as the same block
+    const version = globalThis.BlockProjections.blockVersion(this.type);
+    if (version !== null) data.schemaVersion = version;
+
     return data;
   }
 
   /**
-   * Create block from serialized data
+   * Create block from serialized data, read through decode, so what the record holds beyond
+   * this class's fields is kept (keep)
    */
   static deserialize(data) {
-    return new Block(data);
+    const block = new Block(data);
+    block.keep(globalThis.BlockProjections.decodeBlock(data));
+    return block;
   }
 }
 
