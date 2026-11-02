@@ -60,9 +60,10 @@ const BLOCKED = Object.freeze({ kind: 'unavailable', cause: 'storage', code: 'bl
 /**
  * A kernel with a migration run behind it whose upgrade an older build's open page blocks, as
  * js/kernel/composition/background.js's worker client is: it answers BLOCKED at once, counting
- * each ask, until the test ends the attempt. `unblock` ends it with the page gone, after which
- * it opens with `failure` (null: it opened); `endStillBlocked` ends it and keeps answering
- * BLOCKED; `blockAgain` starts another attempt, blocked too.
+ * each ask, and says its upgrade is blocked, until the test ends the attempt. `unblock` ends it
+ * with the page gone, after which it opens with `failure` (null: it opened); with `held`, that
+ * open waits until the test calls the function `unblock` returns. `endStillBlocked` ends it
+ * and keeps answering BLOCKED; `blockAgain` starts another attempt, blocked too.
  * @param {{failure?: unknown}} [options]
  */
 function blockedKernel({ failure = null } = {}) {
@@ -73,6 +74,8 @@ function blockedKernel({ failure = null } = {}) {
     end = resolve;
   });
   let blocked = true;
+  /** @type {Promise<void> | null} */
+  let opening = null;
   const asks = { count: 0 };
   /** @type {Array<Record<string, unknown>>} */
   const executed = [];
@@ -86,22 +89,34 @@ function blockedKernel({ failure = null } = {}) {
     subscribe: () => () => {},
     whenReady: async () => {
       asks.count++;
-      return blocked ? BLOCKED : failure;
+      if (blocked) return BLOCKED;
+      if (opening) await opening;
+      return failure;
     },
     ids: { next: () => `id-${++next}` },
     migration: Object.freeze({
       get done() {
         return done;
       },
+      blocked: () => blocked,
     }),
   };
   return {
     client: /** @type {any} */ (client),
     asks,
     executed,
-    unblock() {
+    /** @param {{held?: boolean}} [options] */
+    unblock({ held = false } = {}) {
+      /** @type {() => void} */
+      let open = () => {};
+      if (held) {
+        opening = new Promise(resolve => {
+          open = () => resolve(undefined);
+        });
+      }
       blocked = false;
       end({ status: 'migrated' });
+      return open;
     },
     endStillBlocked() {
       end({ status: 'migrated' });
@@ -410,7 +425,11 @@ describe("the coordinator on a kernel with #17's migration run (PR 1b)", () => {
     const { coordinator } = coordinatorOn(kernel);
     await coordinator.start();
     assert.deepEqual([coordinator.health().reason, coordinator.health().migration], ['migrating', 'blocked']);
-    kernel.unblock();
+    // Once the page closes, the upgrade runs, no longer blocked, until the kernel opens
+    const open = kernel.unblock({ held: true });
+    await turns();
+    assert.deepEqual([coordinator.health().reason, coordinator.health().migration], ['migrating', 'running']);
+    open();
     await turns();
     assert.deepEqual([coordinator.status(), coordinator.health().migration], [{ status: 'ready' }, null]);
   });

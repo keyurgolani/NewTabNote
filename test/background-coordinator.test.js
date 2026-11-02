@@ -611,6 +611,26 @@ describe("an older build's page that keeps the upgrade blocked (#17 PR 1b)", () 
     for (let i = 0; i < n; i++) await new Promise((resolve) => setImmediate(resolve));
   }
 
+  /** The welcome a hello on a new port gets, and what system.coordinatorHealth answers it then */
+  async function healthNow(worker, sessionId) {
+    const page = pagePort();
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello(sessionId);
+    const welcome = await waitFor(() => page.received.find((frame) => frame.frame === 'welcome'), { withinMs: 5000, message: 'the welcome' });
+    page.send({
+      frame: 'request',
+      requestId: `${sessionId}-health`,
+      operation: 'system.coordinatorHealth',
+      version: 1,
+      deadline: Date.now() + 10_000,
+      payload: { type: 'system.coordinatorHealth' },
+    });
+    const answer = await waitFor(() => page.received.find((frame) => frame.frame === 'response' || frame.frame === 'error'), { withinMs: 5000, message: 'the health' });
+    assert.equal(answer.frame, 'response', JSON.stringify(answer));
+    const { reason, migration } = answer.result.data;
+    return { welcome: [welcome.status, welcome.reason], health: [reason, migration] };
+  }
+
   it('is migrating for as long as it stays, with no failed open and no repeated asks, and ready once it closes', async () => {
     const opens = [];
     /** chrome.storage.local reads of the run's record: one for each migration attempt */
@@ -681,6 +701,57 @@ describe("an older build's page that keeps the upgrade blocked (#17 PR 1b)", () 
       await worker.drain();
       assert.equal(worker.env.chrome.notifications.at(-1).title, 'Captured to New Tab Note');
     } finally {
+      if (blocker) blocker.close();
+    }
+  });
+
+  it('makes system.coordinatorHealth say blocked while it stays, then running once it closes, until the worker is ready (#35 slice 2)', async () => {
+    /** @type {IDBDatabase | null} */
+    let blocker = null;
+    const seen = { marked: false, recording: false };
+    /** @type {() => void} */
+    let record = () => {};
+    const recorded = new Promise((resolve) => {
+      record = () => resolve(undefined);
+    });
+    const worker = await loadBackground({
+      start: false,
+      opens: false,
+      setup: async (env) => {
+        await createDatabase(env.indexedDB, { records: { canvases: [note('n1')] } });
+        // 1.4.1's new tab holds its connection and never closes it on versionchange
+        blocker = await requestToPromise(env.indexedDB.open('CanvasTabDB'));
+        const local = env.chrome.api.storage.local;
+        const set = local.set.bind(local);
+        local.set = (items, ...rest) => {
+          // The worker marks the upgrade blocked as its run hears the page hold it
+          if (items && items.storageUpgradeBlocked) seen.marked = true;
+          // It records the run's outcome once the run ends, and that waits for the test here,
+          // so the attempt isn't in
+          if (items && Object.hasOwn(items, 'setting_storageUpgrade')) {
+            seen.recording = true;
+            return recorded.then(() => set(items, ...rest));
+          }
+          return set(items, ...rest);
+        };
+      },
+    });
+    try {
+      await worker.dispatch('runtime.onStartup');
+      await waitFor(() => seen.marked, { withinMs: 10_000, message: "the run's upgrade to be blocked" });
+      assert.deepEqual(await healthNow(worker, 'blocked'), { welcome: ['degraded', 'migrating'], health: ['migrating', 'blocked'] });
+
+      // The page closes: the upgrade goes on, no longer blocked, until the attempt is in
+      blocker.close();
+      blocker = null;
+      await waitFor(() => seen.recording, { withinMs: 10_000, message: "the run's record" });
+      assert.deepEqual(await healthNow(worker, 'running'), { welcome: ['degraded', 'migrating'], health: ['migrating', 'running'] });
+
+      record();
+      assert.deepEqual(await welcomeOnce(worker, 'ready'), { status: 'ready', reason: undefined });
+      assert.deepEqual(await healthNow(worker, 'ready'), { welcome: ['ready', undefined], health: [undefined, null] });
+    } finally {
+      record();
       if (blocker) blocker.close();
     }
   });
