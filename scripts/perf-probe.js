@@ -182,7 +182,10 @@ async function measureTiming({ packages, runs, profiles, log }) {
           const run = await installCold({ dist, fixture });
           result.browser = run.browser;
           measured[index][round] = run;
-          log(`${name} round ${round + 1}/${runs} ${label}: interaction-ready ${run.interactionReadyMs} ms, heap ${(run.heapBytes / 1048576).toFixed(2)} MiB, save ${run.saveMs === null ? 'none' : `+${run.saveMs} ms`}`);
+          const retyped = (run.retypes || [])
+            .map(r => `${r.state}: ${r.rule}${r.target ? `, keydown at ${r.target}` : ''}${typeof r.decidedMs === 'number' ? ` (keydown +${r.keydownMs}, input ${r.inputMs === null ? 'none' : `+${r.inputMs}`}, decided +${r.decidedMs} ms from the try's focus)` : ''}`)
+            .join('; ');
+          log(`${name} round ${round + 1}/${runs} ${label}: interaction-ready ${run.interactionReadyMs} ms, heap ${(run.heapBytes / 1048576).toFixed(2)} MiB, save ${run.saveMs === null ? 'none' : `+${run.saveMs} ms`}${retyped ? `, key typed ${run.keyTries} times: ${retyped}` : ''}`);
         } catch (error) {
           measured[index][round] = null;
           failures[index].push({ round: round + 1, message: String(error && error.message ? error.message : error).split('\n')[0] });
@@ -192,8 +195,15 @@ async function measureTiming({ packages, runs, profiles, log }) {
     }
     const of = (index, key) => summary(measured[index].filter(Boolean).map(run => run[key]).filter(value => typeof value === 'number'));
     const profile = { fixtureDigest: digest, packages: {}, ratios: {} };
+    // Each round that typed its key again, with why, as the page said
+    const retypesOf = index =>
+      measured[index].flatMap((run, round) => (run && run.retypes && run.retypes.length > 0 ? [{ round: round + 1, tries: run.retypes }] : []));
     packages.forEach(({ label }, index) => {
-      profile.packages[label] = Object.fromEntries([...TIMED.map(key => [key, of(index, key)]), ['failures', failures[index]]]);
+      profile.packages[label] = Object.fromEntries([
+        ...TIMED.map(key => [key, of(index, key)]),
+        ['retypes', retypesOf(index)],
+        ['failures', failures[index]],
+      ]);
     });
     // Each package against the first, round by round, over the rounds both measured
     const twin = packages.length > 2 && packages[1].digest === packages[0].digest;

@@ -4,7 +4,8 @@
  * makes. It checks that the run measures something sensible, not how fast it is; the numbers
  * are docs/performance/baseline-1.4.0.md's. The bytes are test/perf-probe.test.js's. The heap
  * reading waits for the save the probe's own key sets off, on a package whose save holds what
- * it writes until it commits. And the probe's network-off mode (the harness's `network:
+ * it writes until it commits. The probe types its key once on a page too busy to answer as the
+ * key lands. And the probe's network-off mode (the harness's `network:
  * 'offline'`, no route) still stops every request outside the extension, from a page and from
  * the service worker, loopback included, where a control launch with the route taken off gets
  * through.
@@ -119,6 +120,60 @@ test('the heap reading waits out the writes the save sets off too, so what they 
     // Both writes' 10 MiB went once the second committed, at least 2 * HOLD_MS after the echo
     expect(run.heapBytes / MIB).toBeLessThan(4);
     expect(run.saveMs).toBeGreaterThanOrEqual(2 * HOLD_MS + FOLLOW_UP_MS);
+  } finally {
+    fs.rmSync(dist, { recursive: true, force: true });
+  }
+});
+
+/** How long the blocked package's page stays busy once the probe's key is in */
+const BLOCKED_MS = 200;
+
+/**
+ * A package whose page is blocked for BLOCKED_MS as the probe's key lands, as the stack's new tab
+ * can be while its start runs: its editor takes the key in 5 ms after the keydown, with an input
+ * event, then stays busy in the same task, so the key's echo and everything the driver asks the
+ * page wait until it's done. It blocks for the first key only. The package is written to a
+ * temporary directory, which the caller removes.
+ */
+function blockedPackage() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-perf-blocked-'));
+  const files = {
+    'manifest.json': JSON.stringify({ manifest_version: 3, name: 'Blocked as the key lands', version: '1.0.0', background: { service_worker: 'background.js' } }),
+    'background.js': '// The probe opens newtab.html itself\n',
+    'newtab.html':
+      '<!doctype html><html><head><meta charset="utf-8"><title>Blocked</title></head><body>'
+      + '<div id="editor-container"><div id="blocks-container"><div class="block-content" contenteditable="true"></div></div></div>'
+      + '<script src="newtab.js"></script></body></html>\n',
+    'newtab.js': `
+const block = document.querySelector('.block-content');
+let blocked = false;
+block.addEventListener('keydown', event => {
+  if (event.key.length !== 1) return;
+  event.preventDefault();
+  const first = !blocked;
+  blocked = true;
+  setTimeout(() => {
+    block.append(event.key);
+    block.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: event.key }));
+    if (!first) return;
+    const until = performance.now() + ${BLOCKED_MS};
+    while (performance.now() < until) {}
+  }, 5);
+});
+`,
+  };
+  for (const [file, text] of Object.entries(files)) fs.writeFileSync(path.join(root, file), text);
+  return root;
+}
+
+test("the probe types its key once when the page is too busy to answer as it lands, so a second key can't add a save", async ({ playwright }) => {
+  test.setTimeout(120_000);
+  const dist = blockedPackage();
+  try {
+    const run = await installCold({ dist, fixture: null, chromium: playwright.chromium });
+    // The editor took the key in before the page went busy, so the wait was no reason to type
+    // it again
+    expect(run.keyTries).toBe(1);
   } finally {
     fs.rmSync(dist, { recursive: true, force: true });
   }
