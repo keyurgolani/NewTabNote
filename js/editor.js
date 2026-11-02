@@ -123,6 +123,15 @@ class BlockEditor {
     this.templateFilter = '';
     this.templates = []; // Cached templates
 
+    // The slash and link menus' lists are listboxes named by their headers, so a screen reader can
+    // tell which option the arrow keys picked
+    for (const [menu, list] of [[this.slashMenu, this.slashMenuItems], [this.wikiMenu, this.wikiMenuItems]]) {
+      if (!list) continue;
+      list.setAttribute('role', 'listbox');
+      const header = menu.querySelector('.slash-menu-header');
+      if (header) list.setAttribute('aria-label', header.textContent);
+    }
+
     this._initPersistenceState();
     this.isDragging = false;
     this.draggedBlock = null;
@@ -1624,6 +1633,7 @@ class BlockEditor {
     this.wikiMenuVisible = true;
     this.wikiMenuIndex = 0;
     this.wikiFilter = '';
+    this._pickLive();
     this.wikiMenu.classList.remove('hidden');
     this.renderWikiMenu();
 
@@ -1638,6 +1648,7 @@ class BlockEditor {
   hideWikiMenu() {
     this.wikiMenuVisible = false;
     if (this.wikiMenu) this.wikiMenu.classList.add('hidden');
+    this._announcePick(null);
   }
 
   /**
@@ -1661,9 +1672,13 @@ class BlockEditor {
 
     filtered.forEach((name, index) => {
       const item = this._pickerItem(`slash-menu-item ${index === this.wikiMenuIndex ? 'active' : ''}`, NOTE_ICON, name);
+      item.setAttribute('role', 'option');
+      item.setAttribute('aria-selected', String(index === this.wikiMenuIndex));
       item.addEventListener('click', () => this.selectWikiMenuItem(name));
       this.wikiMenuItems.appendChild(item);
     });
+    const picked = this.wikiMenuItems.children[this.wikiMenuIndex];
+    if (picked && this.wikiMenu) this._scrollIntoMenu(this.wikiMenu, picked);
   }
 
   /**
@@ -1990,6 +2005,7 @@ class BlockEditor {
         const items = this.noteNames.filter(name => name.toLowerCase().includes(this.wikiFilter.toLowerCase())).slice(0, 10);
         this.wikiMenuIndex = (this.wikiMenuIndex + 1) % items.length;
         this.renderWikiMenu();
+        if (items.length) this._announcePick(items[this.wikiMenuIndex], this.wikiMenuIndex, items.length);
         return;
       }
       if (e.key === 'ArrowUp') {
@@ -1997,6 +2013,7 @@ class BlockEditor {
         const items = this.noteNames.filter(name => name.toLowerCase().includes(this.wikiFilter.toLowerCase())).slice(0, 10);
         this.wikiMenuIndex = (this.wikiMenuIndex - 1 + items.length) % items.length;
         this.renderWikiMenu();
+        if (items.length) this._announcePick(items[this.wikiMenuIndex], this.wikiMenuIndex, items.length);
         return;
       }
       if (e.key === 'Enter') {
@@ -2855,6 +2872,8 @@ class BlockEditor {
       const item = this._pickerItem('slash-menu-item', info.icon, info.name, info.description);
       item.dataset.type = type;
       item.dataset.index = String(index);
+      item.setAttribute('role', 'option');
+      item.setAttribute('aria-selected', 'false');
 
       this.slashMenuItems.appendChild(item);
     });
@@ -2888,6 +2907,7 @@ class BlockEditor {
    * Show slash menu
    */
   showSlashMenu(blockEl) {
+    this._pickLive();
     this.slashMenu.classList.remove('hidden');
     this._placeMenu(this.slashMenu, blockEl.getBoundingClientRect(), 4);
     this.slashMenuVisible = true;
@@ -2901,6 +2921,7 @@ class BlockEditor {
   hideSlashMenu() {
     if (this.slashMenu) this.slashMenu.classList.add('hidden');
     this.slashMenuVisible = false;
+    this._announcePick(null);
   }
 
   /**
@@ -2925,6 +2946,9 @@ class BlockEditor {
     const items = this.slashMenuItems.querySelectorAll('.slash-menu-item');
     this.slashMenuIndex = Math.max(0, Math.min(items.length - 1, this.slashMenuIndex + direction));
     this.updateSlashMenuSelection();
+    const picked = items[this.slashMenuIndex];
+    const title = picked && picked.querySelector('.slash-menu-item-title');
+    if (title) this._announcePick(title.textContent, this.slashMenuIndex, items.length);
   }
 
   /**
@@ -2935,17 +2959,59 @@ class BlockEditor {
     const items = this.slashMenuItems.querySelectorAll('.slash-menu-item');
     items.forEach((item, index) => {
       item.classList.toggle('selected', index === this.slashMenuIndex);
+      item.setAttribute('aria-selected', String(index === this.slashMenuIndex));
     });
 
-    // Into view in the menu's own list. scrollIntoView would scroll the note under the menu too.
     const selected = items[this.slashMenuIndex];
-    if (selected) {
-      const menu = this.slashMenu;
-      const top = selected.offsetTop;
-      const bottom = top + selected.offsetHeight;
-      if (top < menu.scrollTop) menu.scrollTop = top;
-      else if (bottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = bottom - menu.clientHeight;
+    if (selected) this._scrollIntoMenu(this.slashMenu, selected);
+  }
+
+  /**
+   * Scroll `item` into view in `menu`'s own list. scrollIntoView would scroll the note under the
+   * menu too.
+   * @param {HTMLElement} menu
+   * @param {HTMLElement} item
+   */
+  _scrollIntoMenu(menu, item) {
+    const top = item.offsetTop;
+    const bottom = top + item.offsetHeight;
+    if (top < menu.scrollTop) menu.scrollTop = top;
+    else if (bottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = bottom - menu.clientHeight;
+  }
+
+  /**
+   * The polite live region where the slash and link menus say which item the arrow keys picked.
+   * It's visually hidden, and there's one per document, which the editors in it share. A menu
+   * makes it when it opens, so it's there before the first thing it says.
+   * @returns {HTMLElement}
+   */
+  _pickLive() {
+    let live = this.doc.getElementById('menu-pick-live');
+    if (!live) {
+      live = this.doc.createElement('div');
+      live.id = 'menu-pick-live';
+      live.className = 'menu-pick-live';
+      live.setAttribute('aria-live', 'polite');
+      this.doc.body.appendChild(live);
     }
+    return live;
+  }
+
+  /**
+   * Say which item the arrow keys picked, its label and its place, such as "Heading 1, 2 of 18".
+   * Focus stays in the block while a menu is open, so this is how a screen reader hears what Enter
+   * will pick. With no label, what the region says is cleared, as when a menu closes.
+   * @param {string|null} label
+   * @param {number} [index]
+   * @param {number} [count]
+   */
+  _announcePick(label, index, count) {
+    if (label) {
+      this._pickLive().textContent = `${label}, ${index + 1} of ${count}`;
+      return;
+    }
+    const live = this.doc && this.doc.getElementById ? this.doc.getElementById('menu-pick-live') : null;
+    if (live) live.textContent = '';
   }
 
   /**
