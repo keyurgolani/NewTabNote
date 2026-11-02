@@ -219,6 +219,24 @@ describe('deleting a selection that holds a card asks first (#14 slice 3)', () =
     });
   }
 
+  it('deletes a selection holding cards on a yes, and one Undo brings every block back where it was, as it was loaded', OPTIONS, async () => {
+    const newer = { ...NEWER, order: 2 };
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, newer, block('a3', 'N', 3, 'After')]);
+    editor.selectedBlockIds = new Set(['k1', 'n1', 'a3']);
+    const deleting = editor.deleteSelectedBlocks();
+    press(env, 'Delete');
+    await runUntil(env, deleting);
+    assert.deepEqual(editor.blocks.map(b => b.id), ['a1']);
+
+    editor.undo();
+    assert.deepEqual(editor.blocks.map(b => b.id), ['a1', 'k1', 'n1', 'a3']);
+    await runUntil(env, editor.save());
+    const after = await stored(env);
+    assert.deepEqual(plain(after.k1), plain(KANBAN));
+    assert.deepEqual(plain(after.n1), plain(newer));
+    assert.equal(after.a3.content, 'After');
+  });
+
   it("deletes a selection with no card in it without asking, as before", OPTIONS, async () => {
     const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), block('a2', 'N', 1, 'Gone')]);
     editor.selectedBlockIds = new Set(['a2']);
