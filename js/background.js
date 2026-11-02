@@ -43,7 +43,7 @@ const instanceId = coordinatorInstanceId();
  * this file, after every listener, so a throw while building it leaves the menus, the commands
  * and #13's port listener in place. Until then, and for good if building it threw, this
  * stand-in answers that it can't serve. It opens nothing until an event needs storage: an
- * install or update, a browser start, a page's port session, a capture, or a page waiting on
+ * install or update, a browser start, a page's hello on its port, a capture, or a page waiting on
  * the migration. The kernel it builds starts #17's migration run, which upgrades the notes
  * database after a verified recovery point, then opens the database and runs startup
  * maintenance, and a capture waits for all of it, except while an older build's open page
@@ -64,17 +64,14 @@ let failureEvents = { event() {} };
 /**
  * #13's router, which takes each port this extension's pages open by its name. It's installed
  * here at the top level, synchronously, so Chrome finds its listener when a port wakes the
- * worker. Each welcome says what the coordinator can do now, a page's session starts it, and
+ * worker. A page's hello starts the coordinator, and while it's starting the welcome waits for
+ * the start, WELCOME_WAIT_MS at most. Each welcome says what the coordinator can do then, and
  * system.coordinatorHealth asks it. It never throws.
  */
 installWorkerRouter({
   coordinatorId: instanceId,
   status: () => coordinator.status(),
-  sessions: {
-    opened: () => {
-      coordinator.start();
-    },
-  },
+  settled: () => coordinator.start(),
   handlers: coordinatorHandlers(() => coordinator),
 });
 

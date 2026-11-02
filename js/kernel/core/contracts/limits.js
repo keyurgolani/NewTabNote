@@ -64,6 +64,15 @@ export const LEDGER_READ_TIMEOUT_MS = 5000;
 /** How long a client waits for the welcome before it counts the attempt failed */
 export const HANDSHAKE_TIMEOUT_MS = 5000;
 
+/**
+ * The longest the router holds a hello's welcome while the coordinator's start is still
+ * running (#35), so a worker that starts cold can welcome its first page as ready. A start
+ * that takes longer gets its welcome at the cap, saying `starting`. It's half of
+ * RECONNECTING_AFTER_MS, so the hold alone never shows Reconnecting, and a fifth of
+ * HANDSHAKE_TIMEOUT_MS, so no client counts a held hello as a failed attempt.
+ */
+export const WELCOME_WAIT_MS = 1000;
+
 /** The most one stream chunk may encode to, in bytes: 256 KiB */
 export const MAX_CHUNK_BYTES = 256 * 1024;
 

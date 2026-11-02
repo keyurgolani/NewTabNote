@@ -4,15 +4,17 @@
  * listener first and builds this last, so a throw while building it leaves the menus, the
  * commands and #13's port listener in place. Building it opens nothing: it starts once per
  * worker instance, on the first event that needs storage (an install or update, a browser
- * start, a page's port session, a capture), and builds the worker's kernel then.
+ * start, a page's hello on #13's port, a capture), and builds the worker's kernel then.
  *
- * Each welcome says what it can do (#13, "Handshake and compatibility"): `starting` until the
- * database is open, then `ready`, or degraded and why: the open's code (`newer-schema`,
- * `missing-core-stores`), else `storage-unavailable`, and `coordinator-unavailable` when the
- * kernel couldn't be built at all, which every command then answers too. A start writes
- * first-run settings only; the read-only integrity check runs after an install or an update
- * (`installed`). system.coordinatorHealth says the same, with this instance's start and the
- * commands it ran by outcome. Loading this module touches no browser API.
+ * Each welcome says what it can do (#13, "Handshake and compatibility"). A hello while it's
+ * starting waits for the start, WELCOME_WAIT_MS at most, and its welcome says `starting` only
+ * when the start takes longer. Then it's `ready`, or degraded and why: the open's code
+ * (`newer-schema`, `missing-core-stores`), else `storage-unavailable`, and
+ * `coordinator-unavailable` when the kernel couldn't be built at all, which every command then
+ * answers too. A start writes first-run settings only; the read-only integrity check runs
+ * after an install or an update (`installed`). system.coordinatorHealth says the same, with
+ * this instance's start and the commands it ran by outcome. Loading this module touches no
+ * browser API.
  *
  * The worker's kernel runs #17's migration run before it opens (PR 1b, ./background.js). While
  * an open page of an older build blocks the run's upgrade, the kernel answers
