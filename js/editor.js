@@ -1551,7 +1551,11 @@ class BlockEditor {
     if (conversions.length === 0) return false;
     if (conversions.some((conversion) => conversion.removes.length > 0)) {
       const noteId = this.noteId;
-      if (!(await this._confirmTurn(conversions, newType))) return false;
+      const focused = this.doc.activeElement;
+      if (!(await this._confirmTurn(conversions, newType))) {
+        this._focusAfterCancel(focused, this.blocks.filter((block) => wanted.has(block.id)).map((block) => block.id));
+        return false;
+      }
       if (noteId !== this.noteId) return false;
     }
 
