@@ -1,0 +1,12 @@
+{
+  "about": "js/onboarding.js exactly as the v1.4.4 tag has it: a release artifact kept as a test fixture, so the upgrade tests run 1.4.4's own one-time switch-off of the background AI jobs, on the frozen 1.4.1 Storage, whose settings code 1.4.4 kept unchanged. Never production code. Excluded from eslint, the type ratchet, prettier, and the design-token scan.",
+  "tag": "v1.4.4",
+  "commit": "05043e9c5987f318a9ac920e4611703f43614673",
+  "files": [
+    {
+      "path": "js/onboarding.js",
+      "gitBlob": "9830c0fcba9a3cf1e26d5d7a1c75978163035001",
+      "sha256": "305c969563d25ce85912f18a190f66e5cc3e974c6b6cf6ef7ba540c4af6d986e"
+    }
+  ]
+}

@@ -103,11 +103,26 @@ test('turning split view on or off is saved at once: a reload keeps it either wa
 });
 
 test('the auto-title and insights switches save, and switched off stay off in every tab', async ({ extension }) => {
-  // A first run, as a new user has it: onboarding switches both on
+  // A first run, as a new user has it: both jobs off, their one-time switch-off marked as done
   const first = await driver.openNewTab(extension, { wait: false });
   await driver.skipOnboarding(first);
-  await expect.poll(() => stored(first, ['setting_autoTitleEnabled', 'setting_insightsEnabled', 'setting_hasCompletedOnboarding']))
-    .toEqual({ setting_autoTitleEnabled: true, setting_insightsEnabled: true, setting_hasCompletedOnboarding: true });
+  await expect.poll(() => stored(first, [
+    'setting_autoTitleEnabled', 'setting_insightsEnabled', 'setting_backgroundJobsOffOnce', 'setting_hasCompletedOnboarding',
+  ])).toEqual({
+    setting_autoTitleEnabled: false, setting_insightsEnabled: false, setting_backgroundJobsOffOnce: true, setting_hasCompletedOnboarding: true,
+  });
+
+  // The user turns both on in Settings. The rows show once a provider is set; the switches are wired either way
+  await driver.openSettings(first, 'AI');
+  for (const id of ['auto-title-enabled', 'insights-enabled']) {
+    await first.locator(`#${id}`).evaluate(input => {
+      input.checked = true;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+  await expect.poll(() => stored(first, ['setting_autoTitleEnabled', 'setting_insightsEnabled']))
+    .toEqual({ setting_autoTitleEnabled: true, setting_insightsEnabled: true });
+  await driver.closeSettings(first);
   const second = await driver.openNewTab(extension);
   // A stub provider in the other tab, so its jobs start their timers as with a real one
   await second.evaluate(async () => {

@@ -418,4 +418,27 @@ describe('the frozen release files (Q11)', () => {
       assert.equal(blob, file.gitBlob, file.path);
     }
   });
+
+  // 1.4.4's onboarding, so the upgrade tests run its own one-time switch-off of the background AI
+  // jobs (test/ai-settings.test.js). Each file another test vendors from the tag gets its own entry.
+  it("v1.4.4: each file is the tag's own, by git blob and SHA-256, its onboarding among them", () => {
+    const dir = path.join(FIXTURES, 'releases', 'v1.4.4');
+    const source = JSON.parse(fs.readFileSync(path.join(dir, 'SOURCE.json'), 'utf8'));
+    assert.equal(source.tag, 'v1.4.4');
+    const paths = source.files.map((/** @type {any} */ f) => f.path);
+    assert.ok(paths.includes('js/onboarding.js'), 'SOURCE.json names js/onboarding.js');
+    // Nothing else is under the tag's folder, which eslint, prettier, and the scanners all skip
+    const listed = fs
+      .readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter(entry => !entry.isDirectory())
+      .map(entry => path.relative(dir, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'))
+      .sort();
+    assert.deepStrictEqual(listed, ['SOURCE.json', ...paths].sort());
+    for (const file of source.files) {
+      const bytes = fs.readFileSync(path.join(dir, file.path));
+      assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256, file.path);
+      const blob = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+      assert.equal(blob, file.gitBlob, file.path);
+    }
+  });
 });
