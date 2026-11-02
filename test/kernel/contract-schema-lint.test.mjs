@@ -389,7 +389,7 @@ describe('the contract schema lint (#13, AC5)', () => {
       // A whole block is content, since any of its fields can hold what the user wrote
       blockInput: ['(root)'],
       blockRecord: ['(root)'],
-      changeRecord: ['ops'],
+      // A change record's ops hold names and ids, never a value (#17 PR 4c), so it has none
       folderRecord: ['name'],
       noteRecord: ['insights', 'name', 'preview'],
       // A search entry holds a note's name and text, and the tags found in it

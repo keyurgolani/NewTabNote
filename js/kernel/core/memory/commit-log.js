@@ -1,24 +1,32 @@
 /**
  * The in-memory CommitLog (ports/commit-log.js). The in-memory adapter appends to it when it's
  * given one (memory/adapter.js), in the task that commits, and tests keep it outside a fake
- * worker, as #17's change log outlives the worker. `prune` stands in for #19's retention.
+ * worker, as #17's change log outlives the worker. `prune` stands in for #19's retention. It
+ * keeps each change's ops (#17 PR 4c), as #17's rows do, and its reads hand on none of them.
  */
 
 import { isId } from '../contracts/checks.js';
+import { clone } from '../contracts/clone.js';
 import { ENTITY_TYPES } from '../contracts/fields.js';
 import { UnavailableError } from '../contracts/outcomes.js';
 
 /** @typedef {import('../ports/commit-log.js').Change} Change */
 /** @typedef {import('../ports/commit-log.js').ChangeEntry} ChangeEntry */
 /** @typedef {import('../ports/commit-log.js').CommitLog} CommitLog */
+/** @typedef {import('../ports/commit-log.js').LoggedChange} LoggedChange */
+/** @typedef {import('../contracts/entities.js').ChangeOp} ChangeOp */
+
+/** @typedef {ChangeEntry & {ops: ChangeOp[]}} KeptEntry */
 
 /**
  * @typedef {CommitLog & {
- *   append: (changes: readonly Change[]) => number,
+ *   append: (changes: readonly LoggedChange[]) => number,
  *   prune: (through: number) => void,
+ *   rows: () => KeptEntry[],
  * }} MemoryCommitLog
  *   `append` adds one commit's changes and answers its commitSeq. `prune` drops every commit
- *   up to `through`, which becomes the floor.
+ *   up to `through`, which becomes the floor. `rows` answers every kept entry with its ops, as
+ *   a test reads #17's rows from the store.
  */
 
 /**
@@ -28,14 +36,18 @@ import { UnavailableError } from '../contracts/outcomes.js';
 const isCount = (value, from) => Number.isSafeInteger(value) && /** @type {number} */ (value) >= from;
 
 /**
+ * A change to an entity, with its ops when it has any
  * @param {unknown} change
- * @returns {change is Change}
+ * @returns {change is LoggedChange}
  */
 const isChange = change => {
   if (change === null || typeof change !== 'object') return false;
-  const { entityType, entityId, revision } = /** @type {Record<string, unknown>} */ (change);
+  const { entityType, entityId, revision, ops } = /** @type {Record<string, unknown>} */ (change);
   return (
-    ENTITY_TYPES.includes(/** @type {Change['entityType']} */ (entityType)) && isId(entityId) && isCount(revision, 0)
+    ENTITY_TYPES.includes(/** @type {Change['entityType']} */ (entityType)) &&
+    isId(entityId) &&
+    isCount(revision, 0) &&
+    (ops === undefined || Array.isArray(ops))
   );
 };
 
@@ -45,7 +57,7 @@ const isChange = change => {
  * @returns {MemoryCommitLog}
  */
 export function createMemoryCommitLog({ beforeRead = () => {} } = {}) {
-  /** @type {ChangeEntry[][]} each commit's entries, oldest first, from just past the floor */
+  /** @type {KeptEntry[][]} each commit's entries, oldest first, from just past the floor */
   let commits = [];
   let head = 0;
   let floor = 0;
@@ -60,7 +72,10 @@ export function createMemoryCommitLog({ beforeRead = () => {} } = {}) {
       const page = after.slice(0, limit);
       return {
         kind: 'changes',
-        entries: page.flat().map(entry => ({ ...entry })),
+        // A hint's fields, never the ops
+        entries: page
+          .flat()
+          .map(({ commitSeq, entityType, entityId, revision }) => ({ commitSeq, entityType, entityId, revision })),
         cursor: page.length > 0 ? page[page.length - 1][0].commitSeq : cursor,
         more: after.length > page.length,
       };
@@ -75,10 +90,17 @@ export function createMemoryCommitLog({ beforeRead = () => {} } = {}) {
       }
       head += 1;
       commits.push(
-        changes.map(({ entityType, entityId, revision }) => ({ commitSeq: head, entityType, entityId, revision })),
+        changes.map(({ entityType, entityId, revision, ops = [] }) => ({
+          commitSeq: head,
+          entityType,
+          entityId,
+          revision,
+          ops: clone(ops),
+        })),
       );
       return head;
     },
+    rows: () => commits.flat().map(entry => clone(entry)),
     prune(through) {
       if (!isCount(through, 0)) throw new TypeError('prune takes a commitSeq');
       floor = Math.max(floor, Math.min(through, head));
