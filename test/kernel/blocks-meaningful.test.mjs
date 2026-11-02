@@ -21,7 +21,12 @@ const requireCommonJs = createRequire(import.meta.url);
 const { CASES } = requireCommonJs('../fixtures/blocks/corpus.cjs');
 const STORAGE = path.join(import.meta.dirname, '..', 'fixtures', 'storage');
 
-/** A text block as 1.4.x's editor saved it */
+/**
+ * A text block as 1.4.x's editor saved it
+ * @param {unknown} content
+ * @param {Record<string, unknown>} [fields]
+ * @returns {any} a stored block, as the store gives it to isEmpty
+ */
 const text = (content, fields = {}) => ({
   id: '1730000000000-a1b2c3d4e',
   type: 'text',

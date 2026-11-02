@@ -7,6 +7,7 @@
  * `isDaily` and `dateStr` (daily.js), and every flag stays.
  */
 
+import { isMeaningful } from '../blocks/meaningful.js';
 import { previewText } from '../blocks/previews.js';
 import { escapeAttributeText, escapePlainText } from '../blocks/rich-text.js';
 import { dailyHolder, localKeyIn } from './daily.js';
@@ -156,30 +157,17 @@ export function isUntitled(note) {
 }
 
 /**
- * Whether a block holds nothing, as Storage.isEmptyTextBlock decides it: a text block (a
- * block with no type is one) whose content is only spaces, line breaks, and non-breaking
- * spaces. Any other block holds something, an image, a table, or a divider included, and so
- * does a text block with any other markup.
- * @param {BlockRecord} block
- * @returns {boolean}
- */
-function isEmptyTextBlock(block) {
-  if ((block.type || 'text') !== 'text') return false;
-  return (
-    String(block.content || '')
-      .replace(/<br\s*\/?>|&nbsp;/gi, '')
-      .trim() === ''
-  );
-}
-
-/**
- * Whether blocks hold nothing, as Storage.isNoteEmpty decides it: every block is an empty
- * text block, or there are none. The export notice goes by the same rule.
+ * Whether blocks hold nothing: none of them holds anything (blocks/meaningful.js), or there are
+ * none. An empty text block, whose content is only spaces, line breaks, and non-breaking spaces,
+ * holds nothing, as Storage.isNoteEmpty decided. Every other block holds something: an image,
+ * a table, or a divider, a text block with any other markup, and since #14 slice 3 a block in a
+ * safe state and a block holding a field its type doesn't own, where 1.4.x read text blocks by
+ * their content alone. Trash and the export notice go by it.
  * @param {BlockRecord[]} blocks
  * @returns {boolean}
  */
 export function isEmpty(blocks) {
-  return blocks.every(isEmptyTextBlock);
+  return !blocks.some(isMeaningful);
 }
 
 // ============ Trash retention ============
