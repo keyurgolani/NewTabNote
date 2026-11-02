@@ -66,6 +66,8 @@ for (const size of WIDTHS) {
     expect(withButton.button, 'the AI button shows').not.toBeNull();
     expectClear(withButton, 'with the AI button');
 
+    // The chat's input row shows once a provider is set up; this stands in for one, and no call is made
+    await page.evaluate(() => Object.assign(LLM, { isConfigured: () => true }));
     await page.locator('#ai-floating-btn').click();
     await expect(page.locator('#ai-sidebar')).toBeVisible();
     const withPanel = await toastAmong(page);

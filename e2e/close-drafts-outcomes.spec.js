@@ -84,7 +84,9 @@ function toastsOf(page) {
 
 /** Every stored note, the Trash's and Archive's included, by name */
 async function notesByName(page) {
-  return Object.fromEntries((await profileStore(page).getAllNotes(true)).map(note => [note.name, note]));
+  const store = profileStore(page);
+  const notes = [...(await store.getAllNotes(true)), ...(await store.getTrashedNotes())];
+  return Object.fromEntries(notes.map(note => [note.name, note]));
 }
 
 /** Note `noteId`'s blocks as stored, in note order, by their text */
@@ -129,7 +131,7 @@ test('an edit to a note another tab moved to the Trash is saved into it there, a
   const next = await driver.openNewTab(extension);
   await expect.poll(() => toastsOf(next)).toEqual(["Saved your changes to “Shared” from a closed tab. It's in the Trash."]);
   const notes = await notesByName(next);
-  expect(Object.keys(notes).filter(name => name.startsWith('Recovered:')), 'no recovered note').toEqual([]);
+  expect(Object.keys(notes).filter(name => name.startsWith('Recovered:')), 'no recovered note, in Notes, Archive or the Trash').toEqual([]);
   expect(notes.Shared.trashed, 'still in the Trash').toBe(true);
   expect(await contentsOf(next, noteId)).toEqual(['first', 'start closing']);
   await expectNoUncaught(extension, next);
