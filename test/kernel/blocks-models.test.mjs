@@ -278,7 +278,7 @@ describe('the model layer is pure, DOM-free, and static (#14, "Projections", cod
     }
   });
 
-  it("loads statically, and each surface loads what it reads: the new tab all of it, the others only previews, wiki-link names and the plain-text escape", () => {
+  it("loads statically, and each surface loads what it reads: the new tab all of it, the others only previews, wiki-link names, the plain-text escape and the empty-note check", () => {
     /** @param {string} file @param {Set<string>} seen */
     const walk = (file, seen) => {
       if (seen.has(file)) return seen;
@@ -311,11 +311,16 @@ describe('the model layer is pure, DOM-free, and static (#14, "Projections", cod
     assert.deepEqual(scriptsOf('sidepanel.html').sort(), ['insights-summary.js', 'network-guard.js', 'sidepanel.js']);
     // The new tab's bridge reads every projection and the codec
     assert.deepEqual(blocksIn(scriptsOf('newtab.html').filter(name => !name.startsWith('lib/'))), sources.map(([name]) => name).sort());
-    // The Popup, the Side Panel and the service worker read only previews, wiki-link names and
-    // capture's escape of plain text into rich text, through the note domain, so the tokenizer
-    // and its table of character references stay off them
+    // The Popup, the Side Panel and the service worker read only previews, wiki-link names,
+    // capture's escape of plain text into rich text and trash's empty-note check (#14 slice 3),
+    // through the note domain, so the models, the tokenizer and its table of character
+    // references stay off them
     for (const entries of [scriptsOf('popup.html'), scriptsOf('sidepanel.html'), ['background.js']]) {
-      assert.deepEqual(blocksIn(entries), ['previews.js', 'rich-text.js', 'strip-tags.js', 'wiki-links.js'], entries.join(', '));
+      assert.deepEqual(
+        blocksIn(entries),
+        ['fields.js', 'meaningful.js', 'previews.js', 'rich-text.js', 'strip-tags.js', 'wiki-links.js'],
+        entries.join(', '),
+      );
     }
   });
 
