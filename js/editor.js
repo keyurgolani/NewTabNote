@@ -1625,16 +1625,11 @@ class BlockEditor {
     this.wikiMenuIndex = 0;
     this.wikiFilter = '';
     this.wikiMenu.classList.remove('hidden');
-
-    // Position menu
-    const selection = this.doc.defaultView.getSelection();
-    const range = selection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-
-    this.wikiMenu.style.left = `${rect.left}px`;
-    this.wikiMenu.style.top = `${rect.bottom + this.doc.defaultView.scrollY}px`;
-
     this.renderWikiMenu();
+
+    // Under the caret, once its items are in
+    const range = this.doc.defaultView.getSelection().getRangeAt(0);
+    this._placeMenu(this.wikiMenu, range.getBoundingClientRect(), 0);
   }
 
   /**
@@ -1782,12 +1777,8 @@ class BlockEditor {
     this.templateMenuIndex = 0;
     this.templateFilter = '';
     this.templateMenu.classList.remove('hidden');
-
-    const rect = blockEl.getBoundingClientRect();
-    this.templateMenu.style.left = `${rect.left}px`;
-    this.templateMenu.style.top = `${rect.bottom + this.doc.defaultView.scrollY}px`;
-
     this.renderTemplateMenu();
+    this._placeMenu(this.templateMenu, blockEl.getBoundingClientRect(), 0);
   }
 
   /**
@@ -2870,13 +2861,35 @@ class BlockEditor {
   }
 
   /**
+   * Put one of the note's menus (the slash, link and template menus, which are fixed to the
+   * window) at `anchor`: its left at the anchor's left, its top `gap` px under the anchor. When
+   * the menu is taller than the room under the anchor and there's more room above, it opens above
+   * instead. It's never taller than the room it opens in, so all of it stays inside the window.
+   * @param {HTMLElement} menu Shown, so it can be measured
+   * @param {{ left: number, top: number, bottom: number }} anchor In window coordinates
+   * @param {number} gap
+   */
+  _placeMenu(menu, anchor, gap) {
+    const view = this.doc.defaultView;
+    const edge = 8;
+    menu.style.maxHeight = '';
+    const height = menu.offsetHeight;
+    const below = view.innerHeight - anchor.bottom - gap - edge;
+    const above = anchor.top - gap - edge;
+    const up = height > below && above > below;
+    const room = Math.max(0, up ? above : below);
+    if (height > room) menu.style.maxHeight = `${room}px`;
+    menu.style.left = `${Math.max(0, Math.min(anchor.left, view.innerWidth - menu.offsetWidth - edge))}px`;
+    menu.style.top = up ? 'auto' : `${anchor.bottom + gap}px`;
+    menu.style.bottom = up ? `${view.innerHeight - anchor.top + gap}px` : 'auto';
+  }
+
+  /**
    * Show slash menu
    */
   showSlashMenu(blockEl) {
-    const rect = blockEl.getBoundingClientRect();
-    this.slashMenu.style.left = rect.left + 'px';
-    this.slashMenu.style.top = rect.bottom + 4 + 'px';
     this.slashMenu.classList.remove('hidden');
+    this._placeMenu(this.slashMenu, blockEl.getBoundingClientRect(), 4);
     this.slashMenuVisible = true;
     this.slashMenuIndex = 0;
     this.updateSlashMenuSelection();
@@ -2924,10 +2937,14 @@ class BlockEditor {
       item.classList.toggle('selected', index === this.slashMenuIndex);
     });
 
-    // Scroll into view
+    // Into view in the menu's own list. scrollIntoView would scroll the note under the menu too.
     const selected = items[this.slashMenuIndex];
     if (selected) {
-      selected.scrollIntoView({ block: 'nearest' });
+      const menu = this.slashMenu;
+      const top = selected.offsetTop;
+      const bottom = top + selected.offsetHeight;
+      if (top < menu.scrollTop) menu.scrollTop = top;
+      else if (bottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = bottom - menu.clientHeight;
     }
   }
 
