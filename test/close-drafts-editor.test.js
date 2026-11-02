@@ -829,6 +829,45 @@ describe("the saves a page keeps while one pane saves a note another holds idle 
     assert.equal(rows.a1.content, 'alpha, from the main pane at the end');
     assert.equal(rows.a2.content, `alpha two, pop-out round ${ROUNDS}`);
   });
+
+  it("two of the pop-out's saves of a block commit in the other order from the one it issued them in: the page keeps the one stored, so the main pane's later edit still wins", async () => {
+    const env = await setup();
+    const main = makeEditor(env);
+    await main.loadNote('A');
+    const { pip, pipWindow } = await openPiP(env, 'A');
+    // The first save is held before its transaction opens, as an async step on its way could
+    // hold it, so the second one commits first
+    const client = env.documentClient;
+    const real = client.saveContent;
+    let release = null;
+    client.saveContent = (save, options) => {
+      if (release !== null) return real(save, options);
+      return new Promise((resolve) => {
+        release = () => resolve(real(save, options));
+      });
+    };
+    type(pip, 'alpha two, issued first', 1);
+    const first = pip.save();
+    for (let i = 0; i < 100 && release === null; i++) {
+      env.frames();
+      pipWindow.frames();
+      await settle(2);
+    }
+    assert.equal(typeof release, 'function', 'the first save was issued');
+    type(pip, 'alpha two, issued second', 1);
+    assert.equal(await runWithPiP(env, pipWindow, pip.save().then(() => true)), true);
+    release();
+    await runWithPiP(env, pipWindow, first);
+    client.saveContent = real;
+    assert.equal((await storedRows(env)).blocks.a2.content, 'alpha two, issued first', 'the save issued first committed last');
+    watchSaves(env, { hold: closingSave });
+    type(main, 'alpha two, from the main pane at the end', 1);
+    closePage(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['A']);
+    assert.deepEqual(await recoveredNames(env), [], "both commits are the page's own");
+    assert.equal((await storedRows(env)).blocks.a2.content, 'alpha two, from the main pane at the end');
+  });
 });
 
 describe('the writer and saveOpenEditors (#129)', () => {

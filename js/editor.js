@@ -159,28 +159,42 @@ function prunePageSaves(noteId) {
 }
 
 /**
- * A save of `noteId` the page issued committed, so each block it wrote is stored as it sent it.
- * An earlier save's digest of one of those blocks can't be what's stored now, so it goes, and
- * so does the earlier save once it names nothing more. A note's list keeps its newest commit and
- * the saves in flight, however many times one pane saves while another holds an older base.
+ * A save of `noteId` the page issued committed, at content revision `revision`: each block it
+ * wrote is stored as it sent it, until a later commit writes that block. So of the page's
+ * committed saves, only the newest commit's digest of each block can be what's stored, and only
+ * the newest stored name, and the rest go, and so does a save that names nothing more. Commits
+ * are ordered by their revisions, not by when they were issued or heard of, and a save still in
+ * flight keeps all it sent. A note's list keeps its newest commit of each block and the saves in
+ * flight, however many times one pane saves while another holds an older base.
  * @param {string} noteId
- * @param {{seq: number, name: (string|undefined), blocks: Map<string, string>}} issued - the save's
+ * @param {number} seq - the committed save's place in the page's save order
+ * @param {number} revision - the content revision it committed at
  * @param {boolean} named - whether the name it carried is stored
  * @returns {void}
  */
-function supersedePageSaves(noteId, issued, named) {
+function committedPageSave(noteId, seq, revision, named) {
   const saves = pageSaves.get(noteId);
   if (!saves) return;
+  // Copies, never the saves' own, which their editors read when they hear of their commits
+  const marked = saves.map((save) => (save.seq === seq ? { ...save, committed: { revision, named } } : save));
+  /** @type {Map<string, number>} The newest commit of each block */
+  const newest = new Map();
+  let newestName = -1;
+  for (const { blocks, name, committed } of marked) {
+    if (!committed) continue;
+    for (const id of blocks.keys()) newest.set(id, Math.max(newest.get(id) ?? -1, committed.revision));
+    if (committed.named && name !== undefined) newestName = Math.max(newestName, committed.revision);
+  }
   const kept = [];
-  for (const save of saves) {
-    if (save.seq >= issued.seq) {
+  for (const save of marked) {
+    const { committed } = save;
+    if (!committed) {
       kept.push(save);
       continue;
     }
-    // A new entry, not the earlier save's own, whose editor may not have heard its commit yet
-    const blocks = new Map([...save.blocks].filter(([id]) => !issued.blocks.has(id)));
-    const name = named && issued.name !== undefined ? undefined : save.name;
-    if (blocks.size > 0 || name !== undefined) kept.push({ seq: save.seq, name, blocks });
+    const blocks = new Map([...save.blocks].filter(([id]) => newest.get(id) === committed.revision));
+    const name = committed.named && committed.revision === newestName ? save.name : undefined;
+    if (blocks.size > 0 || name !== undefined) kept.push({ ...save, name, blocks });
   }
   if (kept.length === 0) pageSaves.delete(noteId);
   else pageSaves.set(noteId, kept);
@@ -5046,14 +5060,17 @@ class BlockEditor {
     }
     // What it sent is the note's close-time draft base now (#33). A save the connection's close
     // cut short stored its text with no revision to say, and one whose generated title was kept
-    // out leaves the stored name unknown here. The page's earlier saves of its blocks are moot.
-    if (state.issued && (result === 'saved' || result === 'title-kept' || result === 'stored')) {
-      supersedePageSaves(state.noteId, state.issued, result !== 'title-kept');
-    }
+    // out leaves the stored name unknown here.
     if (result === 'saved' || result === 'title-kept') {
       this._sawCommit(state, state.committedRevision ?? null, { nameKnown: result === 'saved' });
     } else if (result === 'stored') {
       this._sawCommit(state, null);
+    }
+    // The page's commits of its blocks before this one are moot now. A save with no revision to
+    // say keeps its place as one in flight.
+    const committedAt = state.committedRevision;
+    if (state.issued && typeof committedAt === 'number' && (result === 'saved' || result === 'title-kept')) {
+      committedPageSave(state.noteId, state.issued.seq, committedAt, result === 'saved');
     }
     if (result === 'title-kept') this._showStoredTitle(state.noteId);
     if (result === 'gone') {
