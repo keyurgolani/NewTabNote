@@ -11,15 +11,20 @@ const { test, expect, expectNoUncaught } = require('./harness');
 const driver = require('./characterization/driver');
 
 /**
- * Alpha and Beta, a new tab on `shown`, and a second new tab, the one in use, on Beta. The
- * driver waits until each tab's app has started and its first focus has moved.
+ * Alpha and Beta, a new tab on `shown`, and a second new tab, the one in use, on Beta. Beta is
+ * the newest note, so the first new tab starts on it alone. The driver waits until each tab's
+ * app has started and its first focus has moved.
  */
 async function twoTabs(extension, shown = 'Alpha') {
   await extension.seedOnboarded();
-  await driver.seedNotes(extension, [
-    { name: 'Alpha', blocks: [{ type: 'text', content: 'Alpha body' }] },
-    { name: 'Beta', blocks: [{ type: 'text', content: 'Beta body' }] },
-  ]);
+  await driver.seedNotes(extension, [{ name: 'Alpha', blocks: [{ type: 'text', content: 'Alpha body' }] }]);
+  // A new tab starts on the newest note by updatedAt, and two notes made in the same millisecond
+  // list in either order, so Beta is made once the clock has passed Alpha's
+  await extension.worker.evaluate(async () => {
+    const alpha = (await self.Storage.getAllNotes()).find(note => note.name === 'Alpha');
+    while (Date.now() <= alpha.updatedAt) await new Promise(resolve => setTimeout(resolve, 1));
+  });
+  await driver.seedNotes(extension, [{ name: 'Beta', blocks: [{ type: 'text', content: 'Beta body' }] }]);
   const other = await driver.openNewTab(extension);
   await driver.openNote(other, shown);
   const used = await driver.openNewTab(extension);
@@ -157,7 +162,8 @@ test('trash retention at a new tab\'s start leaves another new tab on the note i
 });
 
 test('clicking the tab of a note deleted in another new tab closes that tab with a toast, and the note on screen stays', async ({ extension }) => {
-  const { used, other, ids } = await twoTabs(extension, 'Beta');
+  const { used, other, ids, otherTabs } = await twoTabs(extension, 'Beta');
+  expect(otherTabs, 'the other new tab has one tab, Beta').toEqual(['Beta']);
   await other.evaluate(id => app.openNoteInNewTab(id), ids.Alpha);
   await other.locator('#note-tabs .note-tab').filter({ hasText: 'Beta' }).click();
   await expect(other.locator('#page-title')).toHaveText('Beta');
