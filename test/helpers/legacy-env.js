@@ -397,7 +397,13 @@ class FakeDocument {
 
 class FakeWindowTarget {
   constructor() { this.listeners = {}; }
-  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+  /** As a window's: an options.signal that aborts takes the listener off */
+  addEventListener(type, fn, options = {}) {
+    const signal = options && typeof options === 'object' ? options.signal : undefined;
+    if (signal && signal.aborted) return;
+    (this.listeners[type] = this.listeners[type] || []).push(fn);
+    if (signal) signal.addEventListener('abort', () => this.removeEventListener(type, fn), { once: true });
+  }
   removeEventListener(type, fn) {
     this.listeners[type] = (this.listeners[type] || []).filter((f) => f !== fn);
   }
@@ -753,6 +759,8 @@ function createLegacyEnv(options = {}) {
     structuredClone,
     crypto: globalThis.crypto,
     DOMException,
+    // A listener's signal, as the pop-out's editor takes its listener on the page off with (#33)
+    AbortController,
     atob,
     btoa,
     TextEncoder,
@@ -793,7 +801,7 @@ function createLegacyEnv(options = {}) {
   vm.runInContext(kind === 'page' ? 'var window = this; var self = this;' : 'var self = this;', context);
   if (windowTarget) {
     // pagehide and other window listeners go to windowTarget so tests can fire them.
-    sandbox.addEventListener = (type, fn) => windowTarget.addEventListener(type, fn);
+    sandbox.addEventListener = (type, fn, options) => windowTarget.addEventListener(type, fn, options);
     sandbox.removeEventListener = (type, fn) => windowTarget.removeEventListener(type, fn);
     sandbox.dispatchEvent = (event) => windowTarget.dispatchEvent(event);
     sandbox.CustomEvent = CustomEvent;

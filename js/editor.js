@@ -4848,19 +4848,24 @@ class BlockEditor {
    *   note-and-blocks transaction had opened, and a closing connection lets it finish, but the
    *   search entry and links that follow it couldn't be written. Rejects when the save failed
    *   otherwise.
-   * @param {boolean} [closing] - the page's own close: the save takes the id of the close-time
-   *   draft its editor wrote for the same edit as its commandId (#33)
+   * @param {boolean} [closing] - the page's own close: the save puts only the blocks changed
+   *   since the last save its editor saw commit, and takes the id of the close-time draft its
+   *   editor wrote for the same edit as its commandId (#33)
    */
   _writeSaveState(state, meta, closing = false) {
     state.written = true;
     if ((this._writtenSeq.get(state.noteId) || 0) < state.seq) {
       this._writtenSeq.set(state.noteId, state.seq);
     }
+    // A closing write puts only the blocks this editor changed since the last save it saw
+    // commit, so its copy of a block another pane saved since never goes over that save, and the
+    // note's preview and to-do progress come from its blocks as stored (#33, #144). It goes when
+    // it puts no block too, so the record catches up after a delete, as a whole save would.
+    state.partial = closing && Boolean(this._drafts()) && this._seen.has(state.noteId);
     const save = {
       noteId: state.noteId,
-      blocks: state.blocks,
-      preview: meta.preview,
-      todoProgress: meta.todoProgress,
+      blocks: state.partial ? this._changedSinceCommit(state.noteId, state.blocks) : state.blocks,
+      ...(state.partial ? { deriveFromStored: true } : { preview: meta.preview, todoProgress: meta.todoProgress }),
       linkedNames: globalThis.BlockProjections.wikiLinkNames(meta.text),
     };
     if (state.title) Object.assign(save, { name: state.title.name, titleOrigin: state.title.origin });
@@ -4979,8 +4984,22 @@ class BlockEditor {
   }
 
   /**
+   * A closed pop-out's editor leaves the page's editors once its close save has committed, so it
+   * and its closed document don't stay with the page. One whose save failed holds the edit for
+   * its retry, so it stays, and the page's own close still writes its draft (#33).
+   * @returns {void}
+   */
+  _leavePageWhenSaved() {
+    // allSettled, so a save that ever rejects still leaves the decision to what's pending
+    Promise.allSettled(this._activeSaves().map((entry) => entry.promise)).then(() => {
+      if (!this._hasPendingSave()) pageEditors.delete(this);
+    });
+  }
+
+  /**
    * Write pending edits when the page is hidden or closed. Each editor listens
-   * on its own document and window, so the PiP editor covers the PiP window.
+   * on its own document and window, so the PiP editor covers the PiP window,
+   * and the PiP editor also listens for this page's own close.
    * @returns {void}
    */
   _bindLifecycleFlush() {
@@ -5011,8 +5030,22 @@ class BlockEditor {
           if (!event.persisted) writeCloseDrafts();
         });
       }
+      // The pop-out's editor writes through this page's connection, and when the whole tab
+      // closes, this page's pagehide fires before the pop-out's, so a write the pop-out opens
+      // after it is lost. So the pop-out's editor also writes at this page's own close, with the
+      // page's closing writes (#33). Its listener goes when the pop-out closes, so a pop-out
+      // closed earlier leaves none on the page.
+      const pageClose = ownPage ? null : new AbortController();
+      if (pageClose) {
+        window.addEventListener('pagehide', (event) => {
+          if (!event.persisted) this._writePendingNow({ closing: true });
+        }, { signal: pageClose.signal });
+      }
       win.addEventListener('pagehide', (event) => {
+        if (pageClose && !event.persisted) pageClose.abort();
+        // The pop-out's own close is no close of this page, so its pending save goes whole
         this._writePendingNow({ closing: ownPage && !event.persisted });
+        if (pageClose && !event.persisted) this._leavePageWhenSaved();
         // A PiP window that closes takes its editor with it
         if (stop && !ownPage) stop();
       });
@@ -5027,8 +5060,9 @@ class BlockEditor {
    * pages don't run rAF and closing pages don't wait, so the metadata is
    * computed here and the transactions open before this returns.
    * Writes nothing when nothing is pending.
-   * @param {{closing?: boolean}} [options] - closing: the page's own close, whose saves take the
-   *   ids of the close-time drafts written for them (#33)
+   * @param {{closing?: boolean}} [options] - closing: the page's own close, whose saves put only
+   *   the blocks changed since the last save their editor saw commit, and take the ids of the
+   *   close-time drafts written for them (#33)
    * @returns {void}
    */
   _writePendingNow({ closing = false } = {}) {
