@@ -1,10 +1,10 @@
 /**
  * What the new tab keeps beside its preferences (#12 slice 6): AI chat's conversations and
- * prompt templates, the first run's end, the backup bookkeeping, custom themes, and the
- * legacy backup tasks. Each settings write is one chrome.storage.local set under the keys
- * 1.4.x's Storage.setSetting wrote, so a pair saved together lands together, and every other
- * open tab hears of it, as before. Outcomes name the keys or ids they changed and never
- * carry what was saved.
+ * prompt templates, the first run's end, the backup bookkeeping, custom themes, the legacy
+ * backup tasks, and since NTN-21 the background jobs' one-time switch-off. Each settings write
+ * is one chrome.storage.local set under the keys 1.4.x's Storage.setSetting wrote, so a pair
+ * saved together lands together, and every other open tab hears of it, as before. Outcomes
+ * name the keys or ids they changed and never carry what was saved.
  *
  * Slice 7's queries read them back: getWorkspaceData each key from the area its command
  * writes, listThemes the custom themes, and exportBackup the export file Export JSON and
@@ -18,6 +18,7 @@ import { isThemeProperties, savedTheme, themesInListOrder } from '../domain/them
 import {
   BACKUP_KEYS,
   CHAT_KEYS,
+  JOBS_OFF_KEY,
   ONBOARDING_KEY,
   PROMPT_TEMPLATES_KEY,
   UPGRADE_KEYS,
@@ -26,7 +27,7 @@ import {
 } from '../domain/workspace-data.js';
 import { unitsWork } from './work.js';
 
-export { BACKUP_KEYS, CHAT_KEYS, ONBOARDING_KEY, PROMPT_TEMPLATES_KEY, UPGRADE_KEYS };
+export { BACKUP_KEYS, CHAT_KEYS, JOBS_OFF_KEY, ONBOARDING_KEY, PROMPT_TEMPLATES_KEY, UPGRADE_KEYS };
 
 /**
  * @template {import('../contracts/commands.js').CommandType} T
@@ -67,6 +68,7 @@ const settingsWork = (command, area, values, code) => ({
  *   savePromptTemplates: CommandHandler<'savePromptTemplates'>,
  *   saveTheme: CommandHandler<'saveTheme'>,
  *   completeOnboarding: CommandHandler<'completeOnboarding'>,
+ *   turnOffBackgroundJobs: CommandHandler<'turnOffBackgroundJobs'>,
  *   recordBackup: CommandHandler<'recordBackup'>,
  *   recordExportNotice: CommandHandler<'recordExportNotice'>,
  *   snoozeSpaceNotice: CommandHandler<'snoozeSpaceNotice'>,
@@ -109,6 +111,14 @@ export const workspaceDataCommands = {
 
   completeOnboarding(command) {
     return settingsWork(command, 'onboarding', { [ONBOARDING_KEY]: true }, 'onboarding-completed');
+  },
+
+  // Both background AI jobs off and the one-time switch-off's marker, in one write in the
+  // preferences area (NTN-21). The values are the handler's own, so the marker never lands
+  // without both switches off beside it.
+  turnOffBackgroundJobs(command) {
+    const values = { autoTitleEnabled: false, insightsEnabled: false, [JOBS_OFF_KEY]: true };
+    return settingsWork(command, 'preferences', values, 'background-jobs-off');
   },
 
   recordBackup(command, { clock }) {
@@ -182,7 +192,7 @@ export const workspaceDataQueries = {
   async getWorkspaceData({ keys = [...WORKSPACE_DATA_KEYS] }, { adapter, clock }) {
     if (!Array.isArray(keys) || keys.some(key => typeof key !== 'string')) return failed('validation', 'invalid-query');
     if (keys.some(key => !WORKSPACE_DATA_KEYS.includes(key))) return failed('validation', 'unknown-workspace-data');
-    /** @type {Map<'chat' | 'onboarding' | 'backup' | 'upgrade', string[]>} */
+    /** @type {Map<import('../domain/workspace-data.js').WorkspaceDataArea, string[]>} */
     const byArea = new Map();
     for (const key of keys) {
       const area = workspaceDataArea(key);

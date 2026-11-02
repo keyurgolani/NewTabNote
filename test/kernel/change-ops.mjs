@@ -67,6 +67,7 @@ export const CHANGE_OPS = Object.freeze({
   savePromptTemplates: [],
   saveTheme: [],
   completeOnboarding: [],
+  turnOffBackgroundJobs: [],
   recordBackup: [],
   recordExportNotice: [],
   snoozeSpaceNotice: [],
