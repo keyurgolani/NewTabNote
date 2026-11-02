@@ -305,6 +305,28 @@ export function blockRecords(blocks, noteId) {
 }
 
 /**
+ * The blocks a save moves and leaves as they are otherwise (saveNoteContent's `orders`), each
+ * with its new order. A block it moves twice, or moves and puts, is refused.
+ * @param {unknown} orders
+ * @param {BlockRecord[]} records - the blocks it puts
+ * @returns {Array<{id: string, order: number}> | Rejected}
+ */
+function blockMoves(orders, records) {
+  if (orders === undefined) return [];
+  if (!Array.isArray(orders)) return invalid();
+  const named = new Set(records.map(block => block.id));
+  /** @type {Array<{id: string, order: number}>} */
+  const moves = [];
+  for (const move of orders) {
+    if (!isRecord(move) || !isId(move.id) || !Number.isSafeInteger(move.order) || Number(move.order) < 0) return invalid();
+    if (named.has(move.id)) return rejected('validation', 'duplicate-block');
+    named.add(move.id);
+    moves.push({ id: move.id, order: Number(move.order) });
+  }
+  return moves;
+}
+
+/**
  * @param {unknown} value
  * @returns {value is undefined | string}
  */
@@ -660,6 +682,7 @@ export const noteCommands = {
       linkedNames,
       expectedRevision,
       deriveFromStored,
+      orders,
     } = command;
     if (!isId(noteId) || !isOptionalString(preview) || !isOptionalString(name)) return invalid();
     if (titleOrigin !== 'typed' && titleOrigin !== 'generated') return invalid();
@@ -668,6 +691,8 @@ export const noteCommands = {
     if (deriveFromStored !== undefined && deriveFromStored !== true) return invalid();
     const records = blockRecords(blocks, noteId);
     if (!Array.isArray(records)) return records;
+    const moves = blockMoves(orders, records);
+    if (!Array.isArray(moves)) return moves;
     const now = clock.now();
     // A generated title the save drops, since the note has a title set by hand
     let titleKept = false;
@@ -678,14 +703,15 @@ export const noteCommands = {
         // Each run decides afresh, since an adapter may run the unit again (ports/repository.js, Unit)
         titleKept = false;
         // The note's blocks as stored, read once ahead of the puts, so the change log's ops name
-        // only the blocks this save changed, where every save puts every block (#17 PR 4c), and
-        // whether each block it puts is stored at all, by its key alone, so a block another note
-        // holds is refused rather than taken from it (R131). Both are issued, not awaited, so
-        // the puts still go out before anything is awaited, and a failure of either is the
-        // transaction's, which the note's read below answers.
+        // only the blocks this save changed, where a save may put every block (#17 PR 4c), and
+        // whether each block it puts or moves is stored at all, by its key alone, so a block
+        // another note holds is refused rather than taken from it (R131). They're issued, not
+        // awaited, so the puts still go out before anything is awaited, and a failure of any is
+        // the transaction's, which the note's read below answers.
         const own = tx.getAllByIndex('blocks', 'canvasId', noteId);
         const stored = records.map(block => tx.getKey('blocks', block.id));
-        for (const read of [own, ...stored]) read.catch(() => undefined);
+        const movedKeys = moves.map(move => tx.getKey('blocks', move.id));
+        for (const read of [own, ...stored, ...movedKeys]) read.catch(() => undefined);
         // Without an expected revision, the block puts go out before anything is awaited, as in
         // Storage.saveNoteWithBlocks. That doesn't keep them when the page goes: Chrome aborts a
         // transaction a closing page hasn't committed, puts and all, which is why a closing page
@@ -701,20 +727,36 @@ export const noteCommands = {
         if (stale) return stale;
         // A block stored under another note stays that note's: the save is refused, and the
         // puts that went out with it go with the transaction
-        const mine = new Set((await own).map(block => block.id));
+        const ownBlocks = await own;
+        const mine = new Set(ownBlocks.map(block => block.id));
         const keys = await Promise.all(stored);
-        if (records.some((block, index) => keys[index] !== undefined && !mine.has(block.id))) {
+        const moveKeys = await Promise.all(movedKeys);
+        if (
+          records.some((block, index) => keys[index] !== undefined && !mine.has(block.id)) ||
+          moves.some((move, index) => moveKeys[index] !== undefined && !mine.has(move.id))
+        ) {
           return rejected('validation', 'block-of-another-note');
         }
         if (checked) for (const block of records) tx.put('blocks', block);
+        // A block it only moved gets its new order on its record as stored, so another writer's
+        // newer text in it stays. One no note holds, deleted since, is skipped (#17, the per-pane save)
+        const newOrders = new Map(moves.map(move => [move.id, move.order]));
+        /** @type {Map<string, BlockRecord>} */
+        const moved = new Map();
+        for (const block of ownBlocks) {
+          const order = newOrders.get(block.id);
+          if (order !== undefined) moved.set(block.id, { ...block, order });
+        }
+        for (const block of moved.values()) tx.put('blocks', block);
         /** @type {NoteRecord} */
         const next = { ...note, updatedAt: now };
         if (deriveFromStored) {
-          // A save of only some of the note's blocks (the editor's closing write, #33): its preview
-          // and to-do progress come from the note's blocks once its puts are in, in note order, as
-          // insertBlocks derives them, not from a page whose copy of the rest may be stale
+          // A save of only some of the note's blocks (an editor's save of what its pane changed,
+          // #33 and #17): its preview and to-do progress come from the note's blocks once its
+          // puts are in, in note order, as insertBlocks derives them, not from a page whose copy
+          // of the rest may be stale
           const putIds = new Set(records.map(block => block.id));
-          const after = [...(await own).filter(block => !putIds.has(block.id)), ...records];
+          const after = [...ownBlocks.filter(block => !putIds.has(block.id)).map(block => moved.get(block.id) || block), ...records];
           const derived = noteSaveMetadata(inBlockOrder(after));
           next.preview = derived.preview;
           next.todoProgress = derived.todoProgress;
