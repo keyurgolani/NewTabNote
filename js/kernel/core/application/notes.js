@@ -318,7 +318,8 @@ function blockMoves(orders, records) {
   /** @type {Array<{id: string, order: number}>} */
   const moves = [];
   for (const move of orders) {
-    if (!isRecord(move) || !isId(move.id) || !Number.isSafeInteger(move.order) || Number(move.order) < 0) return invalid();
+    if (!isRecord(move) || !isId(move.id) || !Number.isSafeInteger(move.order) || Number(move.order) < 0)
+      return invalid();
     if (named.has(move.id)) return rejected('validation', 'duplicate-block');
     named.add(move.id);
     moves.push({ id: move.id, order: Number(move.order) });
@@ -759,7 +760,10 @@ export const noteCommands = {
           // puts are in, in note order, as insertBlocks derives them, not from a page whose copy
           // of the rest may be stale
           const putIds = new Set(records.map(block => block.id));
-          const after = [...ownBlocks.filter(block => !putIds.has(block.id)).map(block => moved.get(block.id) || block), ...records];
+          const after = [
+            ...ownBlocks.filter(block => !putIds.has(block.id)).map(block => moved.get(block.id) || block),
+            ...records,
+          ];
           const derived = noteSaveMetadata(inBlockOrder(after));
           next.preview = derived.preview;
           next.todoProgress = derived.todoProgress;
