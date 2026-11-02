@@ -17,6 +17,7 @@ import {
   RECONNECTING_AFTER_MS,
   RECONNECT_DELAYS_MS,
   SMALL_MESSAGE_BYTES,
+  WELCOME_WAIT_MS,
 } from '../../js/kernel/core/contracts/limits.js';
 import { committed, failed, ready, rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
@@ -447,6 +448,20 @@ describe('the client: connection status (#13, "Product and interaction requireme
     await settle();
     assert.deepEqual(states, ['connecting', 'reconnecting', 'connected']);
     assert.equal(coordinator.attempts, 1);
+  });
+
+  it("sends nothing while the router holds its welcome, for all of WELCOME_WAIT_MS, and shows no Reconnecting and fails no attempt meanwhile (#35)", async () => {
+    const { scheduler, coordinator, client, states } = watched();
+    const answer = client.query(getNote);
+    await scheduler.advance(WELCOME_WAIT_MS);
+    assert.deepEqual(coordinator.last.requests(), []);
+    assert.deepEqual([states, coordinator.attempts, coordinator.last.closed], [['connecting'], 1, false]);
+    coordinator.last.welcome();
+    await settle();
+    const [sent] = coordinator.last.requests();
+    coordinator.last.send({ frame: 'response', requestId: sent.requestId, result: noNote });
+    assert.deepEqual(await answer, noNote);
+    assert.deepEqual(states, ['connecting', 'connected']);
   });
 
   it('shows Reconnecting at once when waking the worker fails, and Coordinator unavailable after the third retry, at 0.5, 1, and 2 s', async () => {

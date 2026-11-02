@@ -1003,13 +1003,15 @@ const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
  * router couldn't be installed, and what a port's listener threw.
  *
  * #35's coordinator gives it this instance's id, which each welcome sends, `status`, which
- * each welcome says, the session hooks, whose `opened` starts the coordinator, and the
- * handler for system.coordinatorHealth.
+ * each welcome says, `settled`, which starts the coordinator and settles with its start, so
+ * a hello while it's starting waits for it (WELCOME_WAIT_MS at most), the session hooks, and
+ * the handler for system.coordinatorHealth.
  * @param {{
  *   runtime?: unknown,
  *   report?: (error: unknown) => void,
  *   coordinatorId?: string,
  *   status?: () => import('../core/messaging/router.js').CoordinatorStatus,
+ *   settled?: () => unknown,
  *   sessions?: import('../core/messaging/router.js').SessionHooks,
  *   handlers?: Readonly<Record<string, import('../core/messaging/router.js').Handler>>,
  * }} [options] - `runtime` is chrome.runtime unless a test passes another
@@ -1020,6 +1022,7 @@ export function installWorkerRouter({
   report = warnOf,
   coordinatorId,
   status,
+  settled,
   sessions,
   handlers,
 } = {}) {
@@ -1032,6 +1035,7 @@ export function installWorkerRouter({
       coordinatorId: coordinatorId ?? randomIds.next(),
       extensionVersion: worker.getManifest().version,
       status,
+      settled,
       sessions,
       handlers,
       logger: messagingLogger,
