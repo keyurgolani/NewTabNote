@@ -6,8 +6,8 @@
  * again once the change is stored. A folder's state changes only when its header is toggled:
  * opening one of its notes or adding a note to it leaves it as it is. Search lists every match,
  * collapsed folders' notes included, and a collapsed folder hides its subfolders, which keep
- * their own state. Each test also fails on an uncaught exception that
- * test/known-defects.json doesn't list.
+ * their own state. A folder's name sits one space after its folder icon, as 1.4.5 drew it. Each
+ * test also fails on an uncaught exception that test/known-defects.json doesn't list.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
@@ -182,5 +182,27 @@ test('a collapsed folder hides its subfolders, and each subfolder keeps its own 
   await expect(clients.rows.nth(0), 'an expanded subfolder shows its notes again').toBeVisible();
   await expect(old.header).toBeVisible();
   await expect(old.rows.nth(0), 'a collapsed subfolder stays collapsed').toBeHidden();
+  await expectNoUncaught(extension, page);
+});
+
+test("the folder name keeps 1.4.5's space after the folder icon", async ({ extension }) => {
+  await extension.seedOnboarded();
+  await storeFolder(extension, 'Projects', ['Alpha plan']);
+  const page = await openOnRootNote(extension);
+  const { header } = folderIn(page, 'Projects');
+  await expect(header).toBeVisible();
+  // 1.4.5's row had whitespace between the folder icon and the name, which draws as one space in
+  // the row's font. The space is measured in the row itself, so the check holds in any font.
+  const { gap, space } = await header.evaluate((row) => {
+    const box = (selector) => row.querySelector(selector).getBoundingClientRect();
+    const probe = row.appendChild(document.createElement('span'));
+    probe.style.whiteSpace = 'pre';
+    probe.textContent = ' ';
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return { gap: box('.folder-name').left - box('.folder-icon').right, space: width };
+  });
+  expect(space, "a space in the row's font has a width").toBeGreaterThan(1);
+  expect(gap, `one space, ${space} px, between the folder icon and the name`).toBeCloseTo(space, 1);
   await expectNoUncaught(extension, page);
 });
