@@ -393,4 +393,29 @@ describe('the frozen release files (Q11)', () => {
       }
     });
   }
+
+  // 1.4.3's close-time drafts and start catch-up, for the stack's close-time PR. 1.4.3 has no tag
+  // yet, so they're release/R0's at the commit SOURCE.json names until they're vendored again
+  // from the tag.
+  it("v1.4.3: each file is release/R0's at the commit it names, by git blob and SHA-256, until the tag", () => {
+    const dir = path.join(FIXTURES, 'releases', 'v1.4.3');
+    const source = JSON.parse(fs.readFileSync(path.join(dir, 'SOURCE.json'), 'utf8'));
+    assert.equal(source.release, 'v1.4.3');
+    if (source.tag === null) {
+      assert.equal(source.branch, 'release/R0');
+      assert.match(source.commit, /^[0-9a-f]{40}$/);
+    } else {
+      assert.equal(source.tag, 'v1.4.3');
+    }
+    assert.deepStrictEqual(
+      source.files.map((/** @type {any} */ f) => f.path),
+      ['js/close-drafts.js', 'js/start-catch-up.js'],
+    );
+    for (const file of source.files) {
+      const bytes = fs.readFileSync(path.join(dir, file.path));
+      assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256, file.path);
+      const blob = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+      assert.equal(blob, file.gitBlob, file.path);
+    }
+  });
 });

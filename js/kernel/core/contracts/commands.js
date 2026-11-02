@@ -70,6 +70,8 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/apply-remote-changes.js').ApplyRemoteChanges} ApplyRemoteChanges */
 /** @typedef {import('./operations/apply-remote-content.js').ApplyRemoteContent} ApplyRemoteContent */
 /** @typedef {import('./operations/apply-remote-placement.js').ApplyRemotePlacement} ApplyRemotePlacement */
+/** @typedef {import('./operations/apply-close-draft.js').ApplyCloseDraft} ApplyCloseDraft */
+/** @typedef {import('./operations/catch-up-note-records.js').CatchUpNoteRecords} CatchUpNoteRecords */
 
 /** @typedef {RunBulkAction['action']} BulkAction */
 
@@ -81,7 +83,8 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance | RunIntegrityCheck | SetInsightsPending | RecordJobRun
  *   | SaveSnapshot | RestoreSnapshot | InsertBlocks | SaveChatHistory | SavePromptTemplates | SaveTheme
  *   | CompleteOnboarding | RecordBackup | RecordExportNotice | SnoozeSpaceNotice | CreateAutoBackup | ImportBackup
- *   | UpdateSearchIndex | SaveVector | ApplyRemoteChanges | ApplyRemoteContent | ApplyRemotePlacement} Command
+ *   | UpdateSearchIndex | SaveVector | ApplyRemoteChanges | ApplyRemoteContent | ApplyRemotePlacement
+ *   | ApplyCloseDraft | CatchUpNoteRecords} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -159,7 +162,8 @@ const LARGE = MAX_MESSAGE_BYTES;
 /**
  * What each surface could do before the kernel: everything from the new-tab page, a quick
  * note from Popup, nothing from Side Panel, and capture plus startup maintenance from the
- * service worker, which #35 gives the integrity check it ran at every start.
+ * service worker, which #35 gives the integrity check it ran at every start. Since 1.4.3 a
+ * Popup or Side Panel start applies closing tabs' edits too (#33).
  * @type {Readonly<Record<CommandType, CommandEntry>>}
  */
 export const COMMANDS = Object.freeze({
@@ -210,6 +214,8 @@ export const COMMANDS = Object.freeze({
     entityTypes: [],
     deadlineMs: MAINTENANCE_DEADLINE_MS,
   }),
+  // The worker's one-time catch-up of 1.4.x's lagging records after the update, in batches (#33)
+  catchUpNoteRecords: entry('catch-up-note-records', 'note', ['worker-internal'], { entityTypes: ['note'] }),
   // The auto-title and insights jobs run in the new tab until #35 moves them
   setInsightsPending: entry('set-insights-pending', 'job', ['newtab'], { entityTypes: ['note'] }),
   recordJobRun: entry('record-job-run', 'job', ['newtab'], { entityTypes: [] }),
@@ -223,6 +229,11 @@ export const COMMANDS = Object.freeze({
     maxBytes: LARGE,
   }),
   insertBlocks: entry('insert-blocks', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
+  // A closing tab's edit, which the next start of the new tab, Popup or Side Panel applies (#33)
+  applyCloseDraft: entry('apply-close-draft', 'note', ['newtab', 'popup', 'sidepanel'], {
+    entityTypes: ['note', 'block'],
+    maxBytes: LARGE,
+  }),
   // Preferences' neighbours in chrome.storage.local, which only the new tab has written
   saveChatHistory: entry('save-chat-history', 'chat', ['newtab'], { entityTypes: [], maxBytes: LARGE }),
   savePromptTemplates: entry('save-prompt-templates', 'chat', ['newtab'], { entityTypes: [], maxBytes: LARGE }),

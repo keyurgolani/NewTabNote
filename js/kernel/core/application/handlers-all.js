@@ -2,9 +2,12 @@
  * Every handler the catalog has (handlers.js), and the new tab's table, the part of it the
  * catalog allows there: the new tab sends nearly every command and query. Tests build their
  * kernels on ALL_HANDLERS, so the policy alone decides what a test's caller may send, as it
- * did before each page had its table (#17 PR 4b).
+ * did before each page had its table (#17 PR 4b). The close-time drafts' apply loads its
+ * handler at its first use (close-drafts-on-demand.js), as on Popup and Side Panel, so the new
+ * tab's start holds none of the applier (#33).
  */
 
+import { applyCloseDraftOnDemand } from './close-drafts-on-demand.js';
 import { folderCommands, folderQueries } from './folders.js';
 import { forSurface, handlerTable } from './handlers.js';
 import { indexCommands, indexQueries } from './indexing.js';
@@ -12,6 +15,7 @@ import { jobCommands, jobQueries } from './jobs.js';
 import { maintenanceCommands } from './maintenance.js';
 import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
 import { preferenceCommands, preferenceQueries } from './preferences.js';
+import { recordCatchUpCommands } from './record-catch-up.js';
 import { remoteChangesRefusal, remoteCommands } from './remote.js';
 import { sessionCommands, sessionQueries } from './session.js';
 import { snapshotCommands, snapshotQueries } from './snapshots.js';
@@ -23,10 +27,12 @@ import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js
 export const ALL_HANDLERS = handlerTable({
   commands: {
     ...noteCommands,
+    applyCloseDraft: applyCloseDraftOnDemand,
     ...folderCommands,
     ...preferenceCommands,
     ...sessionCommands,
     ...maintenanceCommands,
+    ...recordCatchUpCommands,
     ...jobCommands,
     ...snapshotCommands,
     ...workspaceDataCommands,

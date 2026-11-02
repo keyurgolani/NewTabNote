@@ -1,0 +1,19 @@
+{
+  "about": "js/close-drafts.js and js/start-catch-up.js exactly as release/R0 has them at `commit`, 1.4.3's close-time drafts and start catch-up, until 1.4.3 is tagged and they're vendored again from the tag: release artifacts kept as test fixtures for the stack's close-time PR (1.4.3's drafts at the first start after the update, and 1.4.3 reading a stack draft), never production code. Excluded from eslint, the type ratchet, prettier, and the design-token scan.",
+  "tag": null,
+  "release": "v1.4.3",
+  "branch": "release/R0",
+  "commit": "90922ea211b2be5ef7266904e078a45ce3d8c34e",
+  "files": [
+    {
+      "path": "js/close-drafts.js",
+      "gitBlob": "6428e8ce9e39ce76e8c805985898bb5a171785c4",
+      "sha256": "ebb69ebcd5fd424bc31c07987ef431d5e54d8f3f429c499a7afbb59ebb42c356"
+    },
+    {
+      "path": "js/start-catch-up.js",
+      "gitBlob": "0930aac13d256ceaa9ffe9dd83e5f2c4ab6bec86",
+      "sha256": "bc99a9aa0935b639ae274a031e62b42f7459e255388c44d7955b8a510dccf05e"
+    }
+  ]
+}

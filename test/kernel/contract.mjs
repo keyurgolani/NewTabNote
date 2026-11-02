@@ -3697,6 +3697,23 @@ export function runContractSuite(fixture) {
             }),
           ),
           await kernel.execute(cmd('saveNoteContent', { noteId: 'gone', blocks: [{ id: 'b2', content: secret }] })),
+          // A closing tab's edit, the command whose payload holds the most content (#33)
+          await kernel.execute(
+            cmd('applyCloseDraft', {
+              draft: {
+                v: 1,
+                id: 'draft-1',
+                noteId: 'n1',
+                at: NOW,
+                base: { revision: null, updatedAt: NOW, issued: [] },
+                blocks: [{ id: 'b1', type: 'text', content: `${secret} ${url}`, order: 0 }],
+                deletedBlockIds: [],
+                preview: secret,
+                todoProgress: null,
+                linkedNames: [secret],
+              },
+            }),
+          ),
           await kernel.execute(cmd('runBulkAction', { action: 'trash', noteIds: ['n1', 'gone'] })),
         ];
         for (const outcome of outcomes) {
@@ -3732,6 +3749,8 @@ export function runContractSuite(fixture) {
 
       it('every catalog command is one this suite runs', () => {
         assert.deepEqual([...COMMAND_TYPES].sort(), [
+          // #33's two run on both of this suite's adapters in close-drafts.test.mjs and records-catch-up.test.mjs
+          'applyCloseDraft',
           'applyDerivedTitle',
           'applyRemoteChanges',
           'applyRemoteContent',
@@ -3739,6 +3758,7 @@ export function runContractSuite(fixture) {
           'archiveNote',
           'attachInsights',
           'captureToDailyNote',
+          'catchUpNoteRecords',
           'completeOnboarding',
           'convertNoteToTemplate',
           'convertTemplateToNote',

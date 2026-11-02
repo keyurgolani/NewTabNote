@@ -11,6 +11,11 @@
       "file": "newtab.html",
       "replace": "<script vite-ignore src=\"js/entries/boot-guard.js\"></script>",
       "with": "<script vite-ignore src=\"js/lib/fuse.js\"></script>\n  <script vite-ignore src=\"js/entries/boot-guard.js\"></script>"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 716800, \"gzip\": 204800 }",
+      "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
     }
   ]
 }
