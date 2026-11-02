@@ -7,8 +7,8 @@
     "about": "The frozen package the timing and heap runs measure against, twice a round: v1.4.0 built with its own lockfile and build (npm run perf:reference). The digest is a SHA-256 over its files sorted by path (scripts/perf-probe.js packageDigest), and npm run perf:probe --baseline refuses a run whose first or second package isn't it."
   },
   "fixtureDigests": {
-    "typical": "7060d7b19e9357c5c1778d401f04d3c409abe55ed632e2bf09d01735ca7b2cc9",
-    "maximal": "7eac2192becb6faff4bf074e10e935a3fe040cb58f97b360c682ad93c4092431",
+    "typical": "842a624d2a2399a6a6fe362ecda59ce0f74fadacf95ffc4af72222d7c39849a3",
+    "maximal": "95d4c74010e37a71ab3499a47b8dc6b079748827e57420cd6fa3c57b6f5d78c6",
     "first-run": null
   },
   "timing": {

@@ -79,8 +79,8 @@ The fixture profiles (`scripts/perf/profiles.js`), each recorded in the report b
 | Profile | What it holds |
 | --- | --- |
 | `first-run` | nothing, not onboarded: the new tab runs the 1.4.0 walkthrough over the welcome note |
-| `typical` | `recorded/v8.v1.4.0.json`, what 1.4.0's own code wrote for a synthetic seed (eight notes in a folder, archived, trashed, a Daily Note and a template, media, a snapshot, backups and settings, the welcome note last opened), onboarded |
-| `maximal` | #73's maximal profile from `generate.mjs`, every record type past #17's copy bounds, from this tree's block types and default settings, onboarded |
+| `typical` | `recorded/v8.v1.4.0.json`, what 1.4.0's own code wrote for a synthetic seed (eight notes in a folder, archived, trashed, a Daily Note and a template, media, a snapshot, backups and settings, the welcome note last opened), onboarded, with the background AI jobs' one-time switch-off marked as done, so its jobs run as it stores them (both on) |
+| `maximal` | #73's maximal profile from `generate.mjs`, every record type past #17's copy bounds, from this tree's block types and default settings, onboarded, with the same mark |
 
 ```
 npm run perf:probe                                      # bytes for dist/
