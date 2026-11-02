@@ -21,6 +21,7 @@
 import { BUILT_IN_BLOCKS } from './builtins.js';
 import { createCatalog } from './catalog.js';
 import { conversionOn } from './conversions.js';
+import { holdsImage } from './meaningful.js';
 import { replaceTags, stripTags } from './strip-tags.js';
 import { wikiLinkNames } from './wiki-links.js';
 
@@ -112,6 +113,11 @@ export function pageReaders(catalog) {
      * @param {unknown} target
      */
     conversionOf: (record, target) => conversionOn(catalog, record, target),
+    /**
+     * Whether a block's imageUrl holds an image (meaningful.js), which the editor's merges
+     * leave alone (#14 slice 3)
+     */
+    holdsImage,
   });
 }
 
