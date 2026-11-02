@@ -1152,6 +1152,8 @@ class SidebarController {
     // Notes view uses folder tree — not compatible with virtual scrolling
     if (this.sidebarView === 'notes') {
       this._destroyVirtualScroller();
+      // A folder's header with focus has it again once the list is drawn, as after its toggle commits
+      const focusedFolderId = this._focusedFolderId(list);
       list.innerHTML = '';
       if (this.notes.length === 0 && this.folders.length === 0) {
         this.renderEmptySidebar(list);
@@ -1171,6 +1173,7 @@ class SidebarController {
 
       this.renderFolderTree(list, null, notesInFolders);
       this.getSortedSidebarNotes(rootNotes).forEach(note => list.appendChild(this.createSidebarNoteItem(note)));
+      if (focusedFolderId) this._focusFolderHeader(list, focusedFolderId);
       return;
     }
 
@@ -1238,6 +1241,10 @@ class SidebarController {
 
       const header = document.createElement('div');
       header.className = 'sidebar-folder-header';
+      // The header is the folder's toggle, a button that says whether the folder is expanded
+      header.setAttribute('role', 'button');
+      header.tabIndex = 0;
+      header.setAttribute('aria-expanded', String(!folder.collapsed));
       // The icons are packaged markup; the name is set as text, so it shows exactly as typed
       header.innerHTML = SidebarController.FOLDER_ICONS;
       const name = document.createElement('span');
@@ -1245,18 +1252,32 @@ class SidebarController {
       name.textContent = folder.name;
       header.appendChild(name);
 
-      header.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        // Shown now, and written as that one field, so a rename made meanwhile stays
-        const collapsed = !folderEl.classList.contains('collapsed');
+      /** @param {boolean} collapsed */
+      const show = (collapsed) => {
         folderEl.classList.toggle('collapsed', collapsed);
+        header.setAttribute('aria-expanded', String(!collapsed));
+      };
+      const toggle = async () => {
+        // Shown now, and written as that one field, so a rename made meanwhile stays. Once it
+        // commits, the list draws again from the folders as stored (renderNotesList).
+        const collapsed = !folderEl.classList.contains('collapsed');
+        show(collapsed);
         const outcome = await this.documentClient.setFolderCollapsed(folder.id, collapsed);
         if (this._noteList) await this._noteList.settled();
         if (outcome.kind !== 'committed') {
           // Shown as stored again, with the reason in the log and nothing of the folder's
           console.error('Failed to collapse folder:', outcome.kind, outcome.code);
-          folderEl.classList.toggle('collapsed', !collapsed);
+          show(!collapsed);
         }
+      };
+      header.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await toggle();
+      });
+      header.addEventListener('keydown', async (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        await toggle();
       });
 
       header.addEventListener('contextmenu', (e) => {
@@ -1302,6 +1323,32 @@ class SidebarController {
       folderEl.appendChild(contents);
       container.appendChild(folderEl);
     });
+  }
+
+  /**
+   * The id of the folder whose header in `list` has focus, or null
+   * @param {HTMLElement} list
+   * @returns {string | null}
+   * @private
+   */
+  _focusedFolderId(list) {
+    const focused = document.activeElement;
+    if (!focused || !list.contains(focused) || !focused.classList.contains('sidebar-folder-header')) return null;
+    const folderEl = /** @type {HTMLElement | null} */ (focused.parentNode);
+    return folderEl && folderEl.dataset.id ? folderEl.dataset.id : null;
+  }
+
+  /**
+   * Focus the header of the folder `folderId` in `list`, when it's there
+   * @param {HTMLElement} list
+   * @param {string} folderId
+   * @private
+   */
+  _focusFolderHeader(list, folderId) {
+    const folders = /** @type {HTMLElement[]} */ (Array.from(list.querySelectorAll('.sidebar-folder')));
+    const folderEl = folders.find(el => el.dataset.id === folderId);
+    const header = folderEl && Array.from(folderEl.children).find(el => el.classList.contains('sidebar-folder-header'));
+    if (header) /** @type {HTMLElement} */ (header).focus();
   }
 
   isChildFolder(parentId, targetId) {
