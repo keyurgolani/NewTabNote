@@ -7,8 +7,11 @@
  *   with nothing to type in.
  * - The blocks around the cards edit and save as usual, and each card's record, like a known
  *   block's field its type doesn't own, is written back as it was loaded.
- * - Turning a table into text asks first: Cancel keeps the table, a yes keeps its cells a row per
- *   line, and Undo brings the table back.
+ * - Turning a table into text asks first: Cancel keeps the table and puts focus in its first cell,
+ *   a yes keeps its cells a row per line, and Undo brings the table back.
+ * - Deleting a selection that holds cards asks first: Cancel keeps the selection and puts focus
+ *   in its first block that takes it, a yes deletes them all, and one Undo brings each back as
+ *   it was loaded.
  */
 
 const fs = require('fs');
@@ -79,7 +82,7 @@ test('a block this build reads in a safe state shows read-only, and edits around
   await expectNoUncaught(extension, page);
 });
 
-test("turning a table into text asks first: Cancel keeps it, a yes keeps its cells a row per line, and Undo brings it back", async ({ extension }) => {
+test("turning a table into text asks first: Cancel keeps it and puts focus in it, a yes keeps its cells a row per line, and Undo brings it back", async ({ extension }) => {
   const { fixture, held } = opaqueBlocks();
   await fixtureHost(extension.worker).loadFixture(fixture);
   await extension.seedOnboarded();
@@ -95,6 +98,8 @@ test("turning a table into text asks first: Cancel keeps it, a yes keeps its cel
   await question.locator('.confirm-dialog-cancel').click();
   await expect(question).toHaveCount(0);
   await expect(table).toHaveAttribute('data-type', 'table');
+  // The block menu took focus from the note, so it goes to the table's first cell
+  await expect(table.locator('th, td').first()).toBeFocused();
 
   await turnInto(page, table, 'Text');
   await question.locator('.confirm-dialog-confirm').click();
@@ -106,5 +111,44 @@ test("turning a table into text asks first: Cancel keeps it, a yes keeps its cel
   await expect(table).toHaveAttribute('data-type', 'table');
   const back = (await storedBlocks(page))['opaque-blocks-table'];
   expect(back).toEqual({ ...held['opaque-blocks-table'], schemaVersion: 1 });
+  await expectNoUncaught(extension, page);
+});
+
+test('deleting a selection that holds cards asks first: Cancel keeps it and puts focus in it, a yes deletes them all, and one Undo brings each back', async ({ extension }) => {
+  const { fixture, held } = opaqueBlocks();
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const blockOf = id => page.locator(`#blocks-container > .block[data-id="${id}"]`);
+  const order = Object.keys(held).sort((a, b) => held[a].order - held[b].order);
+
+  // Two cards and the block after them, each by Cmd/Ctrl+click, then Backspace
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await blockOf('opaque-blocks-unknown').locator('.block-safe-card').click({ modifiers: [mod] });
+  await blockOf('opaque-blocks-invalid').locator('.block-safe-card').click({ modifiers: [mod] });
+  await blockOf('opaque-blocks-extra').locator('.block-content').click({ modifiers: [mod] });
+  const selected = page.locator('#blocks-container > .block.block-selected');
+  await expect(selected).toHaveCount(3);
+  await page.keyboard.press('Backspace');
+  const question = page.getByRole('dialog', { name: 'Delete 3 blocks?' });
+  await expect(question.locator('.confirm-dialog-cancel')).toBeFocused();
+  await question.locator('.confirm-dialog-cancel').click();
+  await expect(question).toHaveCount(0);
+  await expect(selected).toHaveCount(3);
+  // A card takes no focus, so it goes to the first selected block that does
+  await expect(blockOf('opaque-blocks-extra').locator('.block-content')).toBeFocused();
+
+  // Asked again from there, a yes deletes all three, and one Undo brings each back
+  await page.keyboard.press('Backspace');
+  await question.locator('.confirm-dialog-confirm').click();
+  await expect(page.locator('#blocks-container > .block')).toHaveCount(order.length - 3);
+  await blockOf('opaque-blocks-before').locator('.block-content').click();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('#blocks-container > .block')).toHaveCount(order.length);
+  expect(await page.locator('#blocks-container > .block').evaluateAll(list => list.map(el => el.dataset.id))).toEqual(order);
+  const stored = await storedBlocks(page);
+  for (const id of ['opaque-blocks-unknown', 'opaque-blocks-invalid']) expect(stored[id], id).toEqual(held[id]);
+  expect(stored['opaque-blocks-extra']).toEqual({ ...held['opaque-blocks-extra'], schemaVersion: 1 });
   await expectNoUncaught(extension, page);
 });
