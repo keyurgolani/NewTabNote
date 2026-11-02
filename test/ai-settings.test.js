@@ -171,10 +171,25 @@ async function openPage({ chrome = createChromeStub(), indexedDB = new IDBFactor
 async function startTab(shared) {
   const page = await openPage(shared);
   await page.Onboarding.turnBackgroundJobsOffOnce(page.env.settingsClient);
-  await page.notes.setupAutoTitle();
-  await page.notes.setupInsightsExtraction();
-  await runsDone(page);
+  await setUpJobs(page);
   return page;
+}
+
+/**
+ * Each job's setup, as App runs them, on the page's clock: a catch-up that's due waits a second
+ * or so between notes, so the clock moves on until both setups and their runs are done
+ */
+async function setUpJobs(page) {
+  for (const setup of [() => page.notes.setupAutoTitle(), () => page.notes.setupInsightsExtraction()]) {
+    let done = false;
+    const running = Promise.resolve(setup()).finally(() => { done = true; });
+    for (let i = 0; i < 100 && !done; i++) {
+      await settle(60);
+      if (!done) page.env.clock.tick(2000);
+    }
+    await running;
+  }
+  await runsDone(page);
 }
 
 /**
@@ -419,7 +434,9 @@ describe('an install that ran an earlier version', () => {
 
   it('reads the marker at the key the version before kept it under', STEP, async () => {
     const page = await openPage({ chrome: storedSettings({ ...EARLIER, backgroundJobsOffOnce: true }) });
-    assert.deepEqual(await page.env.settingsClient.workspaceData(['backgroundJobsOffOnce']), { backgroundJobsOffOnce: true });
+    const read = await page.env.settingsClient.workspaceData(['backgroundJobsOffOnce']);
+    assert.deepEqual(Object.keys(read), ['backgroundJobsOffOnce']);
+    assert.equal(read.backgroundJobsOffOnce, true);
   });
 });
 
@@ -438,9 +455,7 @@ describe('an install that ran 1.4.4', () => {
     const page = await openPage({ chrome, indexedDB });
     const from = page.chrome.writes().length;
     assert.equal(await page.Onboarding.turnBackgroundJobsOffOnce(page.env.settingsClient), false, 'there was nothing to turn off');
-    await page.notes.setupAutoTitle();
-    await page.notes.setupInsightsExtraction();
-    await runsDone(page);
+    await setUpJobs(page);
 
     const written = keysWrittenSince(page, from);
     for (const key of ['setting_autoTitleEnabled', 'setting_insightsEnabled', MARKER]) {

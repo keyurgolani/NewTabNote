@@ -325,6 +325,11 @@ class App {
       const failure = await this.kernel.whenReady();
       if (failure) throw storageFailure(failure);
       this.reportMissingStores();
+      // Before anything can start a background AI job: at the first start without the one-time
+      // switch-off's marker, both jobs are turned off, once (NTN-21). A read or a write it can't
+      // make stops the start here, so no job runs on what's stored, and the next start tries
+      // again. onboarding.js puts Onboarding on window.
+      await /** @type {any} */ (globalThis).Onboarding.turnBackgroundJobsOffOnce(this.settings);
       // Every controller exists before init binds a listener, so a click while they start reaches its own
       this.buildControllers();
       // The theme engine reads the saved theme and the custom themes through the settings port,
@@ -873,6 +878,8 @@ class App {
       domRefs: this.domRefs,
       logger: this.logger,
       onOpened: this.preUpdateCopySection ? () => this.preUpdateCopySection.refresh() : null,
+      // Settings > AI shows the settings in effect each time it opens, with no request and no write (NTN-21)
+      showAISettings: () => this.aiChatController.updateLLMSettingsUI(),
       // JSZip loads at the first Markdown export (#27 slice 3), and its section says when an
       // export failed, with Try again and the page's guarded Reload (#27 slice 3b)
       loadLibrary: this.libraryLoader(),
