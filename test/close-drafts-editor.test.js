@@ -99,6 +99,14 @@ async function setup({ localStorage = createLocalStorage(), notes = [], blocks =
   return env;
 }
 
+/** Another tab's page on `env`'s profile, sharing its localStorage, as two new tabs do */
+async function secondTab(env) {
+  const other = createLegacyEnv({ indexedDB: env.indexedDB, localStorage: env.global.localStorage });
+  other.load(...FILES);
+  await startEditorClient(other);
+  return other;
+}
+
 /** The drafts in `env`'s localStorage, oldest first, each with its key */
 function drafts(env) {
   const storage = env.global.localStorage;
@@ -726,6 +734,51 @@ describe("a note opened with no blocks, which the editor shows with one empty bl
     assert.deepEqual(result.saved, ['E']);
     const rows = Object.values((await storedRows(typed)).blocks).filter((row) => row.canvasId === 'E');
     assert.deepEqual(rows.map((row) => row.content), ['the first words of E']);
+  });
+});
+
+describe("two tabs, and a block stored in a shape the editor doesn't write (R160's N1)", () => {
+  /** Note D, whose d1 holds a field the editor's serialize() leaves out, as a 1.4.x record or a capture can, open in two tabs */
+  async function twoTabsOnD() {
+    const env = await setup({
+      notes: [note('D', { name: 'Delta' })],
+      blocks: [block('d1', 'D', 0, 'delta', { legacyField: 'kept' }), block('d2', 'D', 1, 'delta two')],
+    });
+    const closing = makeEditor(env);
+    await closing.loadNote('D');
+    const other = await secondTab(env);
+    const otherEditor = makeEditor(other);
+    await otherEditor.loadNote('D');
+    return { env, closing, other, otherEditor };
+  }
+
+  it("another tab's save puts it back unchanged, as the editor writes it: the closing tab's edit to it is saved, with no recovered note", async () => {
+    const { env, closing, other, otherEditor } = await twoTabsOnD();
+    // The other tab edits d2, and its whole save puts d1 back as the editor writes it
+    type(otherEditor, 'delta two, from the other tab', 1);
+    assert.equal(await runUntil(other, otherEditor.flushSave()), true);
+    assert.equal((await storedRows(env)).blocks.d1.legacyField, undefined, 'd1 is stored as the editor writes it now');
+    watchSaves(env, { hold: closingSave });
+    type(closing, 'delta, from the closing tab', 0);
+    closePage(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['D']);
+    assert.deepEqual(await recoveredNames(env), [], "nobody changed d1's text but the closing tab");
+    const rows = (await storedRows(env)).blocks;
+    assert.equal(rows.d1.content, 'delta, from the closing tab');
+    assert.equal(rows.d2.content, 'delta two, from the other tab');
+  });
+
+  it("another tab's save changes its text: the closing tab's edit to it is a recovered note, and the note keeps the other tab's", async () => {
+    const { env, closing, other, otherEditor } = await twoTabsOnD();
+    type(otherEditor, 'delta, from the other tab', 0);
+    assert.equal(await runUntil(other, otherEditor.flushSave()), true);
+    watchSaves(env, { hold: closingSave });
+    type(closing, 'delta, from the closing tab', 0);
+    closePage(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.recovered.map((entry) => entry.noteId), ['D']);
+    assert.equal((await storedRows(env)).blocks.d1.content, 'delta, from the other tab');
   });
 });
 

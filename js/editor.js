@@ -4581,6 +4581,11 @@ class BlockEditor {
     const issuedSaves = (pageSaves.get(noteId) || [])
       .filter((save) => !seen || save.seq > seen.seq)
       .map((save) => (save.name === undefined ? { blocks: ofDraft(save.blocks) } : { name: save.name, blocks: ofDraft(save.blocks) }));
+    // A block stored in a shape the editor doesn't write (a 1.4.x record, a capture) that another
+    // tab saved since, unchanged, is stored as the editor writes it: that copy is the base's too
+    // (R160's N1)
+    const own = seen ? ofDraft(seen.sent) : {};
+    if (Object.keys(own).length > 0) issuedSaves.push({ blocks: own });
     const meta = this._computeSaveData(blocks);
     return {
       noteId,

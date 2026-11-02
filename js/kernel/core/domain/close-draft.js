@@ -20,7 +20,9 @@
  *   blocks the rules read the base for, so a big note's draft stays small. `base.name` is the
  *   name then, and `base.issuedSaves` what each save the page issued since wrote, the blocks the
  *   draft names by digest and its name, so a save that committed after the page last heard is
- *   still the page's own. `page` names the page load that wrote the draft.
+ *   still the page's own. One more entry, with no name, holds the page's own serialization of a
+ *   block stored in a shape the page doesn't write, which is that block as another tab's save
+ *   stores it unchanged. `page` names the page load that wrote the draft.
  *
  * Each draft goes by these rules, in this order (decide):
  * 0. Its recovered note is stored already: an earlier start made it, and its page went before
