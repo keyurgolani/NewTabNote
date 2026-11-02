@@ -454,6 +454,29 @@ describe("the stack's close-time draft writer", () => {
     assert.equal(rows.d3.content, 'from another writer');
   });
 
+  it('a 1.4.x block with no schemaVersion and a field only it holds, left as it is: the close writes no draft, before a save of the note or after one that stamps the block', async () => {
+    const legacy = () => ({
+      notes: [note('D', { name: 'Delta' })],
+      blocks: [block('d1', 'D', 0, 'delta', { legacyField: 'kept' }), block('d2', 'D', 1, 'delta two')],
+    });
+    const env = await setup(legacy());
+    const editor = makeEditor(env);
+    await editor.loadNote('D');
+    closePage(env);
+    assert.deepEqual(drafts(env), [], 'nothing typed, so no draft');
+
+    const saved = await setup(legacy());
+    const other = makeEditor(saved);
+    await other.loadNote('D');
+    type(other, 'delta two, edited', 1);
+    assert.equal(await runUntil(saved, other.flushSave()), true);
+    const d1 = (await storedRows(saved)).blocks.d1;
+    assert.equal(d1.schemaVersion, 1, "the save stamps d1's version");
+    assert.equal(d1.legacyField, 'kept', 'and writes its field back as loaded');
+    closePage(saved);
+    assert.deepEqual(drafts(saved), [], 'every edit committed, so no draft');
+  });
+
   it("an edit the page couldn't save once its connection went comes back at the next start, read by its digests with no revision known (V7, d20)", async () => {
     const env = await setup();
     const editor = makeEditor(env);
