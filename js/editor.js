@@ -1284,17 +1284,21 @@ class BlockEditor {
    * Take blocks AI chat is inserting into the loaded note (insertBlocks) at `index`, or after
    * the last block, in the task the insert's transaction opens, so a save from then on writes
    * them and every other block where the insert stores them. Undo history goes, as the reload
-   * that showed an insert before cleared it.
+   * that showed an insert before cleared it. Once the insert commits, the note's close-time
+   * draft base takes the blocks as it stored them (_sawInsert).
    * @param {string} noteId
    * @param {Array<Object>} blocks - the inserted blocks, ids included
    * @param {number} [index]
+   * @param {Promise<{kind: string}>} [inserting] - the insert's outcome
    * @returns {() => void} Takes them out again, for an insert that wasn't stored
    */
-  placeInsertedBlocks(noteId, blocks, index) {
+  placeInsertedBlocks(noteId, blocks, index, inserting) {
     if (noteId !== this.noteId) return () => {};
     const added = blocks.map((data) => Block.deserialize(data));
     const at = index === undefined ? this.blocks.length : Math.min(index, this.blocks.length);
+    const before = inserting && this._drafts() ? this._serializedBlocks(noteId) : null;
     this.blocks.splice(at, 0, ...added);
+    if (before) this._sawInsert(noteId, blocks, at, before, inserting);
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this._contentUndoPending = {};
@@ -4260,14 +4264,14 @@ class BlockEditor {
     /** @type {HTMLElement|null} The notice that says so, with Reload */
     this._reloadNotice = null;
     /**
-     * Each note's base for a close-time draft (#33): what this editor last saw commit of it, or
-     * its load. `stored` is each block's digest as the note stores it, and `sent` the editor's
-     * own serialization's, for a block whose stored shape differs (a 1.4.x record, a capture),
-     * which is what tells a block this editor changed. `revision` is the content revision, null
-     * when it isn't known, `updatedAt` the stored stamp as last read, which the editor's own
-     * saves never move (QA1), `name` the name, and `seq` the base's place in the page's save
-     * order. Kept for the loaded note and for each note with a save in flight or waiting to
-     * retry, on a page that keeps drafts.
+     * Each note's base for a close-time draft (#33): what this editor last saw commit of it (its
+     * saves, AI chat's inserts and its reverts), or its load. `stored` is each block's digest as
+     * the note stores it, and `sent` the editor's own serialization's, for a block whose stored
+     * shape differs (a 1.4.x record, a capture), which is what tells a block this editor
+     * changed. `revision` is the content revision, null when it isn't known, `updatedAt` the
+     * stored stamp as last read, which the editor's own saves never move (QA1), `name` the name,
+     * and `seq` the base's place in the page's save order. Kept for the loaded note and for each
+     * note with a save in flight or waiting to retry, on a page that keeps drafts.
      * @type {Map<string, {seq: number, revision: (number|null), updatedAt: (number|null), name: (string|undefined), stored: Map<string, string>, sent: Map<string, string>}>}
      */
     this._seen = new Map();
@@ -4393,8 +4397,7 @@ class BlockEditor {
    * @returns {void}
    */
   _rememberLoaded(records, revision, seq) {
-    const drafts = this._drafts();
-    if (!drafts) return;
+    if (!this._drafts()) return;
     const holding = new Set([this.noteId, ...this._retryCopies.keys()]);
     for (const { state } of this._inFlightSaves) holding.add(state.noteId);
     for (const noteId of [...this._seen.keys()]) {
@@ -4403,21 +4406,32 @@ class BlockEditor {
       prunePageSaves(noteId);
     }
     const noteId = this.noteId;
+    this._seen.set(noteId, {
+      seq,
+      revision,
+      updatedAt: typeof this.noteData.updatedAt === 'number' ? this.noteData.updatedAt : null,
+      name: this.noteData.name,
+      ...this._baseDigests(noteId, records),
+    });
+    prunePageSaves(noteId);
+  }
+
+  /**
+   * A base's digests of the loaded note, whose blocks the editor shows as `records` stores them:
+   * each block's as stored, and the editor's own serialization's where the two differ
+   * @param {string} noteId
+   * @param {Array<Object>} records - the note's blocks as stored
+   * @returns {{stored: Map<string, string>, sent: Map<string, string>}}
+   */
+  _baseDigests(noteId, records) {
+    const drafts = this._drafts();
     const stored = new Map(records.map((record) => [record.id, drafts.digest(record, noteId)]));
     const sent = new Map();
     for (const block of this._serializedBlocks(noteId)) {
       const digest = drafts.digest(block, noteId);
       if (stored.get(block.id) !== digest) sent.set(block.id, digest);
     }
-    this._seen.set(noteId, {
-      seq,
-      revision,
-      updatedAt: typeof this.noteData.updatedAt === 'number' ? this.noteData.updatedAt : null,
-      name: this.noteData.name,
-      stored,
-      sent,
-    });
-    prunePageSaves(noteId);
+    return { stored, sent };
   }
 
   /**
@@ -4450,6 +4464,79 @@ class BlockEditor {
     else if (issued.name !== undefined) seen.name = issued.name;
     seen.seq = issued.seq;
     prunePageSaves(state.noteId);
+  }
+
+  /**
+   * AI chat's insert into the loaded note (placeInsertedBlocks): once it commits, the note's base
+   * takes the blocks as the insert stored them, so a draft holds only what changes after it
+   * (R160's B1). That's each inserted block at its place, with the editor's own serialization
+   * where the two differ, and each block the insert moved down whose copy here is still the
+   * base's. A block typed into since the base keeps its digests, so its edit stays in a draft,
+   * and so does the stored digest of a moved block stored in another shape, which the editor
+   * can't tell: only its own serialization's moves. The base waits for this editor's saves that
+   * were writing, so their commits come first, and keeps its place in the page's save order, so
+   * the saves issued since still count as the page's own. The revision isn't known after it, so
+   * a draft goes by its digests.
+   * @param {string} noteId
+   * @param {Array<Object>} inserted - the blocks as insertBlocks takes them
+   * @param {number} at - where the editor placed them
+   * @param {Array<Object>} before - the editor's blocks before it placed them, serialized
+   * @param {Promise<{kind: string}>} inserting - the insert's outcome
+   * @returns {void}
+   */
+  _sawInsert(noteId, inserted, at, before, inserting) {
+    const drafts = this._drafts();
+    const seen = drafts ? this._seen.get(noteId) : null;
+    if (!seen) return;
+    const after = this._serializedBlocks(noteId);
+    /** @type {Map<string, string>} */
+    const stored = new Map();
+    /** @type {Map<string, string>} */
+    const sent = new Map();
+    inserted.forEach((data, offset) => {
+      const asStored = drafts.digest({ ...data, order: at + offset }, noteId);
+      const own = drafts.digest(after[at + offset], noteId);
+      stored.set(data.id, asStored);
+      if (own !== asStored) sent.set(data.id, own);
+    });
+    before.slice(at).forEach((block, offset) => {
+      const was = seen.sent.has(block.id) ? seen.sent.get(block.id) : seen.stored.get(block.id);
+      if (was !== drafts.digest(block, noteId)) return;
+      const moved = drafts.digest(after[at + inserted.length + offset], noteId);
+      (seen.sent.has(block.id) ? sent : stored).set(block.id, moved);
+    });
+    const seq = ++pageSeq;
+    const writing = Array.from(this._inFlightSaves).filter(({ state }) => state.written).map((entry) => entry.promise);
+    const settled = writing.length > 0 ? Promise.all([inserting, ...writing]).then(([outcome]) => outcome) : inserting;
+    settled.then((outcome) => {
+      const base = this._seen.get(noteId);
+      if (!outcome || outcome.kind !== 'committed' || !base || base.seq >= seq) return;
+      for (const [id, digest] of stored) {
+        base.stored.set(id, digest);
+        if (!sent.has(id)) base.sent.delete(id);
+      }
+      for (const [id, digest] of sent) base.sent.set(id, digest);
+      base.revision = null;
+    }, () => {});
+  }
+
+  /**
+   * The editor's own revert committed, and what it shows is what the restore stored: the note's
+   * base now, so a draft holds only what changes after it (R160's B1). A restore replaces every
+   * block of the note, so the base takes the whole of it, with the restore's revision, the title
+   * it set, if any, and the page's save order when its transaction opened, after every save it
+   * overwrote. The stamp stays the load's (QA1).
+   * @param {string} noteId
+   * @param {{records: Array<Object>, revision: (number|null), name?: string, seq: number}} commit -
+   *   the blocks as stored, in order
+   * @returns {void}
+   */
+  _sawRevert(noteId, { records, revision, name, seq }) {
+    const seen = this._drafts() ? this._seen.get(noteId) : null;
+    if (!seen || seq < seen.seq) return;
+    Object.assign(seen, this._baseDigests(noteId, records), { seq, revision });
+    if (name !== undefined) seen.name = name;
+    prunePageSaves(noteId);
   }
 
   /**
@@ -6437,18 +6524,23 @@ class BlockEditor {
 
   /**
    * Put a committed revert's blocks and title on screen. Text typed into the blocks they replace
-   * goes into version history first (_keepEditsOfRevert), so it isn't lost.
+   * goes into version history first (_keepEditsOfRevert), so it isn't lost. They're the note's
+   * close-time draft base from here (_sawRevert).
    * @param {Array<Object>} blocksData - The blocks as stored, in order
    * @param {string} [title]
+   * @param {{records: Array<Object>, revision: (number|null), seq: number}} [commit] - the blocks'
+   *   records as stored, the revision they're stored at, and the page's save order when the
+   *   write or the read that gave them began
    * @returns {void}
    */
-  _showRevertedBlocks(blocksData, title) {
+  _showRevertedBlocks(blocksData, title, commit) {
     if (this._snapshotDirty) this._keepEditsOfRevert();
     this.blocks = blocksData.map((data) => Block.deserialize(data));
     if (title && this.noteData) {
       this.noteData.name = title;
       this.titleEl.textContent = title;
     }
+    if (commit) this._sawRevert(this.noteId, { ...commit, name: title || undefined });
     this.renderBlocks();
     this._snapshotDirty = false;
   }
@@ -6461,10 +6553,12 @@ class BlockEditor {
    */
   async _showStoredRevert(noteId) {
     try {
+      const seq = pageSeq;
       const opened = await this.documentClient.openNote(noteId);
       if (!opened || noteId !== this.noteId) return false;
       const blocks = (opened.blocks || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-      this._showRevertedBlocks(blocks, opened.note && opened.note.name);
+      const revision = typeof opened.revision === 'number' ? opened.revision : null;
+      this._showRevertedBlocks(blocks, opened.note && opened.note.name, { records: blocks, revision, seq });
       return true;
     } catch (error) {
       if (this._isReloadRequired(error)) this._onReloadRequired();
@@ -6526,8 +6620,10 @@ class BlockEditor {
       return;
     }
 
-    // Its transaction opens now, with nothing waiting to save
+    // Its transaction opens now, with nothing waiting to save, after every save the page issued
+    // so far, which it overwrites (#33)
     const restoring = this.documentClient.restoreSnapshot(noteId, snap.id, snap.blocks || [], snap.title || undefined);
+    const restoredAt = pageSeq;
     this._revertingNoteId = noteId;
     /** @type {() => void} This revert's own, so nothing else can end it */
     let endRevert = () => {};
@@ -6568,7 +6664,10 @@ class BlockEditor {
 
       if (noteId === this.noteId) {
         try {
-          this._showRevertedBlocks(snap.blocks || [], snap.title);
+          // The snapshot's blocks, stored at their places, as restoreSnapshot writes them
+          const records = (snap.blocks || []).map((block, order) => ({ ...block, canvasId: noteId, order }));
+          const revision = typeof outcome.revision === 'number' ? outcome.revision : null;
+          this._showRevertedBlocks(snap.blocks || [], snap.title, { records, revision, seq: restoredAt });
         } catch (error) {
           // The restore committed, but its blocks didn't reach the screen, which may still hold
           // the ones it replaced. Saves are still held, so the note as stored goes on screen

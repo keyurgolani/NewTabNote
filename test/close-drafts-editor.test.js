@@ -77,9 +77,9 @@ function type(editor, text, index = 0) {
 /**
  * A new tab's page on a profile at version 8, as 1.4.x left it, its editors on the real kernel
  * with the page's draft writer: notes A (a1, a2), B (b1) and C (c1, c2), and what `more` adds
- * @param {{localStorage?: Object, notes?: Array<Object>, blocks?: Array<Object>}} [more]
+ * @param {{localStorage?: Object, notes?: Array<Object>, blocks?: Array<Object>, files?: Array<string>}} [more]
  */
-async function setup({ localStorage = createLocalStorage(), notes = [], blocks = [] } = {}) {
+async function setup({ localStorage = createLocalStorage(), notes = [], blocks = [], files = FILES } = {}) {
   const env = createLegacyEnv({ localStorage });
   await createDatabase(env.indexedDB, {
     records: {
@@ -94,7 +94,7 @@ async function setup({ localStorage = createLocalStorage(), notes = [], blocks =
       ],
     },
   });
-  env.load(...FILES);
+  env.load(...files);
   await startEditorClient(env);
   return env;
 }
@@ -533,6 +533,172 @@ describe("the stack's close-time draft writer", () => {
     assert.equal(saves.length, 1, 'the closing save');
     assert.equal((await saves[0].done).kind, 'committed');
     assert.equal((await storedRows(env)).blocks.a1.content, 'x'.repeat(300));
+  });
+});
+
+/** AI chat on `env`'s page, adding to the note `editor` shows, as App hands it the editor */
+function aiChat(env, editor) {
+  const AIChatController = env.get('AIChatController');
+  const chat = new AIChatController({
+    settings: env.settingsClient,
+    eventBus: null,
+    domRefs: null,
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    llm: { isConfigured: () => false },
+    documentClient: env.documentClient,
+  });
+  return Object.assign(chat, { getEditor: () => editor, indexing: null });
+}
+
+/** A snapshot of note A as `editor` shows it, then an edit to a1 saved, so a revert to it changes a1 */
+async function snapshotThenEdit(env, editor) {
+  const snap = await env.documentClient.saveSnapshot('A', editor.blocks.map((b) => b.serialize()), 'Alpha');
+  assert.equal(snap.kind, 'committed');
+  type(editor, 'alpha, edited after the snapshot', 0);
+  assert.equal(await runUntil(env, editor.flushSave()), true);
+  const [summary] = await env.documentClient.snapshots('A');
+  return summary;
+}
+
+/** As AI chat's appendAIResponseToNote: the editor's copy saved, then the insert, which the editor takes into its blocks in the same task, with its outcome */
+async function insertFromAI(env, editor, at) {
+  assert.equal(await runUntil(env, editor.save().then(() => true)), true);
+  const blocks = [{ type: 'text', content: 'from the AI', id: env.documentClient.newId() }];
+  const inserting = env.documentClient.insertBlocks('A', blocks, at);
+  editor.placeInsertedBlocks('A', blocks, at, inserting);
+  assert.equal((await inserting).kind, 'committed');
+}
+
+describe("the base after the editor's own writes that aren't saves: AI chat's insert and a revert (R160's B1)", () => {
+  it('an AI insert into the loaded note, then the close with nothing typed since: no draft, and no recovered note', async () => {
+    const env = await setup();
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    await insertFromAI(env, editor, 1);
+    watchSaves(env, { hold: closingSave });
+    closePage(env);
+    assert.deepEqual(drafts(env), [], 'the page stored every block it shows');
+    await nextStart(env);
+    assert.deepEqual(await recoveredNames(env), [], 'nothing but the page itself wrote the note');
+  });
+
+  it('an AI insert, then an edit inside the debounce, the closing save lost: the edit goes into the note at the next start', async () => {
+    const env = await setup();
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    await insertFromAI(env, editor, 1);
+    watchSaves(env, { hold: closingSave });
+    type(editor, 'alpha, typed after the insert', 0);
+    closePage(env);
+    const [draft] = drafts(env);
+    assert.deepEqual(draft.blocks.map((b) => b.id), ['a1'], 'only the block typed into');
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['A']);
+    assert.deepEqual(await recoveredNames(env), []);
+    assert.equal((await storedRows(env)).blocks.a1.content, 'alpha, typed after the insert');
+  });
+
+  it('an edit not saved yet to a block the insert moves down stays in the draft, and the next start keeps it', async () => {
+    const env = await setup();
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    watchSaves(env, { hold: closingSave });
+    // Typed into a2 inside the debounce, and the insert goes in above it
+    type(editor, 'alpha two, typed before the insert', 1);
+    const blocks = [{ type: 'text', content: 'from the AI', id: env.documentClient.newId() }];
+    const inserting = env.documentClient.insertBlocks('A', blocks, 1);
+    editor.placeInsertedBlocks('A', blocks, 1, inserting);
+    assert.equal((await inserting).kind, 'committed');
+    closePage(env);
+    const [draft] = drafts(env);
+    assert.ok(draft, 'a draft');
+    assert.deepEqual(draft.blocks.filter((b) => b.id === 'a2').map((b) => b.content), ['alpha two, typed before the insert']);
+    await nextStart(env);
+    const kept = Object.values((await storedRows(env)).blocks).filter((row) => row.content === 'alpha two, typed before the insert');
+    assert.equal(kept.length, 1, 'the edit is kept, in the note or in a recovered one');
+  });
+
+  it("through AI chat's own insert at the cursor: the close with nothing typed writes no draft, and an edit to a block it moved down goes into the note", async () => {
+    const files = [...FILES, 'js/controllers/ai-chat-controller.js'];
+    const env = await setup({ files });
+    env.get('Utils').showToast = () => {};
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    editor.activeBlock = 'a1';
+    await runUntil(env, aiChat(env, editor).appendAIResponseToNote([{ type: 'text', content: 'from the AI' }]));
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['alpha', 'from the AI', 'alpha two'], 'in after a1, with a2 moved down');
+    closePage(env);
+    assert.deepEqual(drafts(env), []);
+
+    const typed = await setup({ files });
+    typed.get('Utils').showToast = () => {};
+    const other = makeEditor(typed);
+    await other.loadNote('A');
+    other.activeBlock = 'a1';
+    await runUntil(typed, aiChat(typed, other).appendAIResponseToNote([{ type: 'text', content: 'from the AI' }]));
+    watchSaves(typed, { hold: closingSave });
+    type(other, 'alpha two, moved down, then typed', 2);
+    closePage(typed);
+    const [draft] = drafts(typed);
+    assert.deepEqual(draft.blocks.map((b) => [b.id, b.order]), [['a2', 2]], 'only the block typed into');
+    const result = await nextStart(typed);
+    assert.deepEqual(result.saved, ['A']);
+    assert.deepEqual(await recoveredNames(typed), []);
+    const rows = (await storedRows(typed)).blocks;
+    assert.deepEqual([rows.a2.content, rows.a2.order], ['alpha two, moved down, then typed', 2]);
+  });
+
+  it('a revert, then an edit to a block it changed, the closing save lost: the edit goes into the note, with no recovered note', async () => {
+    const env = await setup();
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const summary = await snapshotThenEdit(env, editor);
+    await runUntil(env, editor._revertToSnapshot(summary));
+    assert.equal(editor.blocks[0].content, 'alpha', 'the revert is on screen');
+    const { revision } = await env.documentClient.openNote('A');
+    watchSaves(env, { hold: closingSave });
+    type(editor, 'alpha, typed after the revert', 0);
+    closePage(env);
+    const [draft] = drafts(env);
+    assert.deepEqual(draft.blocks.map((b) => b.id), ['a1']);
+    assert.equal(draft.base.revision, revision, "the revert's own revision");
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['A']);
+    assert.deepEqual(await recoveredNames(env), [], "the page's own revert is no other writer");
+    assert.equal((await storedRows(env)).blocks.a1.content, 'alpha, typed after the revert');
+  });
+
+  it('a revert, then the close with nothing typed since: no draft, whether its blocks reached the screen at once or from a read of the note', async () => {
+    const env = await setup();
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    const summary = await snapshotThenEdit(env, editor);
+    await runUntil(env, editor._revertToSnapshot(summary));
+    closePage(env);
+    assert.deepEqual(drafts(env), [], 'every change the page made has committed');
+
+    // The restored blocks don't reach the screen at once, so the note as stored goes on screen
+    // from a read of it (R77, P8), which is the base then
+    const read = await setup();
+    const shown = makeEditor(read);
+    await shown.loadNote('A');
+    const again = await snapshotThenEdit(read, shown);
+    const Block = read.get('Block');
+    const deserialize = Block.deserialize;
+    let throwNext = true;
+    Block.deserialize = function (data) {
+      if (throwNext) {
+        throwNext = false;
+        throw new Error('deserialize failed');
+      }
+      return deserialize.call(this, data);
+    };
+    await runUntil(read, shown._revertToSnapshot(again));
+    Block.deserialize = deserialize;
+    assert.equal(throwNext, false, 'the first one threw');
+    assert.equal(shown.blocks[0].content, 'alpha', 'the revert is on screen');
+    closePage(read);
+    assert.deepEqual(drafts(read), []);
   });
 });
 
