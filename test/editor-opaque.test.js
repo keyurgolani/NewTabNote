@@ -89,7 +89,8 @@ describe('the opaque rule in load and save (#14 slice 3)', () => {
 
     editor.undo();
     await runUntil(env, editor.save());
-    const undone = plain((await stored(env)).u1);
+    // Read through the kernel, whose reads keep a field named __proto__, where the test's dump doesn't
+    const undone = plain((await env.documentClient.openNote('N')).blocks.find(b => b.id === 'u1'));
     assert.equal(undone.content, 'One');
     assert.equal(undone.futureField, 'kept');
     assert.deepEqual(Object.getOwnPropertyDescriptor(undone, '__proto__')?.value, { shape: 'kept' });
