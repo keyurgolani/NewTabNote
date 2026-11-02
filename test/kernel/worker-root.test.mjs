@@ -157,6 +157,8 @@ describe("the worker's composition root", () => {
       }, RUN_BLOCKS);
       assert.deepStrictEqual([refused.cause, refused.code, refused.retryable], ['storage', 'blocked-upgrade', true]);
       assert.equal(worker.migration.blocked(), true);
+      // Blocked or not, it's upgrading the database that was there (#35 slice 2)
+      assert.equal(worker.migration.upgrading(), true);
       const held = await capture(worker, 'while-blocked');
       assert.deepStrictEqual(held.kind === 'unavailable' && [held.cause, held.code], ['storage', 'blocked-upgrade']);
     } finally {
@@ -173,6 +175,132 @@ describe("the worker's composition root", () => {
     const failure = await worker.whenReady();
     assert.deepStrictEqual(failure && [failure.cause, failure.code], ['newer-schema', 'version-too-new']);
     assert.equal(/** @type {any} */ (of.chrome.local[UPGRADE_RECORD_KEY]).status, 'refused');
+  });
+});
+
+describe('what the coordinator reads while the run upgrades (#35 slice 2)', () => {
+  /**
+   * A space estimate the test lets answer: the run asks it right after it measures the stores
+   * for its point, and waits there until `release`
+   */
+  const heldEstimate = () => {
+    /** @type {() => void} */
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    const asked = { count: 0 };
+    return {
+      estimate: async () => {
+        asked.count++;
+        await gate;
+        return ROOMY();
+      },
+      asked,
+      release: () => release(),
+    };
+  };
+
+  /**
+   * `real`, with the first versioned open of CanvasTabDB held until `release`: the run makes or
+   * upgrades the database in that open, so the test reads the run while it's there. Every
+   * other open goes straight through.
+   * @param {any} real
+   */
+  const heldUpgrade = real => {
+    /** @type {() => void} */
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    const asked = { count: 0 };
+    const indexedDB = new Proxy(real, {
+      get(target, key) {
+        if (key !== 'open') {
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return (/** @type {string} */ name, /** @type {number | undefined} */ version) => {
+          if (version === undefined) return target.open(name);
+          if (name !== DB_NAME || asked.count > 0) return target.open(name, version);
+          asked.count++;
+          // A request whose handlers the run sets now, wired to the real one once the gate opens
+          /** @type {any} */
+          const request = { result: undefined, transaction: undefined, error: null };
+          gate.then(() => {
+            const inner = target.open(name, version);
+            inner.onupgradeneeded = (/** @type {Event} */ event) => {
+              request.result = inner.result;
+              request.transaction = inner.transaction;
+              if (request.onupgradeneeded) request.onupgradeneeded(event);
+            };
+            inner.onblocked = (/** @type {Event} */ event) => {
+              if (request.onblocked) request.onblocked(event);
+            };
+            inner.onsuccess = (/** @type {Event} */ event) => {
+              request.result = inner.result;
+              if (request.onsuccess) request.onsuccess(event);
+            };
+            inner.onerror = (/** @type {Event} */ event) => {
+              request.error = inner.error;
+              if (request.onerror) request.onerror(event);
+            };
+          });
+          return request;
+        };
+      },
+    });
+    return { indexedDB, asked, release: () => release() };
+  };
+
+  it('migration.upgrading() is true while the run upgrades a 1.4.x database, and false once the attempt is in', async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    const held = heldEstimate();
+    const worker = createWorkerClient(hostOf(of, { estimate: held.estimate }));
+    await legacyEnv.waitFor(() => held.asked.count > 0, { withinMs: 10_000, message: 'the space check' });
+    assert.equal(worker.migration.upgrading(), true);
+    assert.equal(worker.migration.blocked(), false);
+    held.release();
+    assert.equal((await worker.migration.done).status, 'migrated');
+    assert.equal(worker.migration.upgrading(), false);
+    assert.equal(await worker.whenReady(), null);
+  });
+
+  it("is false for a database at this build's version, and for a newer one the run refuses while it makes its point", async () => {
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    await createWorkerClient(hostOf(of)).migration.done;
+    const current = createWorkerClient(hostOf(of));
+    /** @type {Set<boolean>} */
+    const seen = new Set([current.migration.upgrading()]);
+    const sample = setInterval(() => seen.add(current.migration.upgrading()), 1);
+    try {
+      assert.equal((await current.migration.done).status, 'current');
+    } finally {
+      clearInterval(sample);
+    }
+    seen.add(current.migration.upgrading());
+    assert.deepEqual([...seen], [false]);
+
+    const newer = await profileWith(/** @type {any} */ (FIXTURES.get('v9.newer')));
+    const held = heldEstimate();
+    const refused = createWorkerClient(hostOf(newer, { estimate: held.estimate }));
+    await legacyEnv.waitFor(() => held.asked.count > 0, { withinMs: 10_000, message: "the newer database's point" });
+    assert.equal(refused.migration.upgrading(), false);
+    held.release();
+    assert.equal((await refused.migration.done).status, 'refused');
+  });
+
+  it('is false while the run makes a database where there was none, and after', async () => {
+    const of = newProfile();
+    const held = heldUpgrade(of.real);
+    const worker = createWorkerClient({ ...hostOf(of), indexedDB: held.indexedDB });
+    await legacyEnv.waitFor(() => held.asked.count > 0, { withinMs: 10_000, message: "the run's versioned open" });
+    assert.equal(worker.migration.upgrading(), false);
+    held.release();
+    const ended = await worker.migration.done;
+    assert.deepEqual([ended.status, ended.shape], ['migrated', 'none']);
+    assert.equal(worker.migration.upgrading(), false);
+    assert.equal(await worker.whenReady(), null);
   });
 });
 

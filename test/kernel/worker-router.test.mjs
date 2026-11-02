@@ -181,6 +181,7 @@ describe('the worker\'s router (#13, "Topology")', () => {
       startedAt: 7,
       commands: [],
       oldestOrphanedEntryAt: null,
+      migration: null,
     };
     fake.worker.install(chrome => {
       installWorkerRouter({

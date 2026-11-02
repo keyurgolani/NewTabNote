@@ -126,9 +126,12 @@ export const coordinator = Object.freeze({
     }
     // Still starting, or a reason this build doesn't know yet: nothing was verified
     if (health.reason === 'starting') return { status: 'unverified', evidence: { errorCode: 'open-pending' } };
-    // Migrating: an older build's open page blocks the run's upgrade (#17 PR 1b), which waits
-    // for it, and nothing failed
-    if (health.reason === 'migrating') return { status: 'unverified', evidence: { errorCode: 'blocked-upgrade' } };
+    // Migrating: the run upgrades the database (#35 slice 2), or an older build's open page
+    // blocks that upgrade, which waits for it (#17 PR 1b). Nothing failed either way
+    if (health.reason === 'migrating') {
+      const errorCode = health.migration === 'running' ? 'migration-running' : 'blocked-upgrade';
+      return { status: 'unverified', evidence: { errorCode } };
+    }
     return { status: 'unverified' };
   },
 });

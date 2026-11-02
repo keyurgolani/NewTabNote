@@ -97,8 +97,9 @@ describe('the router: handshake (#13, "Handshake and compatibility")', () => {
     assert.equal(check(welcomeSchema, peer.frames[0]).ok, true);
 
     // #35 says why it's degraded. A first hello in this major, while the coordinator is
-    // starting, waits for its start for WELCOME_WAIT_MS at most, and is welcomed `starting`
-    // past the cap (the cases below). In any other state, as here, it's welcomed at once
+    // starting, waits for its start for WELCOME_WAIT_MS at most, and past the cap is welcomed
+    // with what the status says then, `starting` in the cases below. In any other state, as
+    // here, it's welcomed at once
     const degraded = rawConnection(
       makeRouter({ status: () => ({ status: 'degraded', reason: 'migrating' }) }),
       'popup',

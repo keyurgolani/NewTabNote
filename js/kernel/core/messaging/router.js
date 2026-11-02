@@ -28,9 +28,9 @@
  * outcome, then the response. A connection that closes stops what it asked for the same way.
  *
  * A hello in this major while #35's coordinator says it's `starting` waits for that start
- * (`settled`), for WELCOME_WAIT_MS at most, so its welcome says what the start came to, or
- * `starting` at the cap. Meanwhile its connection is `greeting`: a request is refused as one
- * sent before a hello, a second hello closes it, and one that closes gets no welcome.
+ * (`settled`), for WELCOME_WAIT_MS at most, so its welcome says what the start came to, or at
+ * the cap what `status` says then. Meanwhile its connection is `greeting`: a request is refused
+ * as one sent before a hello, a second hello closes it, and one that closes gets no welcome.
  *
  * The `sessions` hooks hear of each connection's session as the router welcomes it in this
  * major, and again when that connection closes, by its surface and sessionId alone, so #35's

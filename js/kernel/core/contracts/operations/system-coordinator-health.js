@@ -2,8 +2,10 @@
  * system.coordinatorHealth, catalog version 1: the background coordinator's own state (#35,
  * "Incidents and health"), which #20's `coordinator` provider reads. What its welcome says,
  * its instance id and when it started, the commands it ran by outcome, and when the oldest
- * journal entry it couldn't replay was written, null until #35's journal (slice 3). Ids,
- * counts, times, and codes only: nothing in it names a note or holds what the user wrote.
+ * journal entry it couldn't replay was written, null until #35's journal (slice 3), and while
+ * it says `migrating`, whether its run upgrades the database or an older build's open page
+ * blocks that upgrade (#35 slice 2). Ids, counts, times, and codes only: nothing in it names a
+ * note or holds what the user wrote.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';
@@ -23,6 +25,9 @@ export const coordinatorHealth = v.strictObject({
   startedAt: v.nullable(timestamp),
   commands: v.array(v.strictObject({ outcome: v.picklist([...OUTCOME_KINDS, 'bulk']), count })),
   oldestOrphanedEntryAt: v.nullable(timestamp),
+  // While it says migrating: its run upgrading the database, or an older build's open page
+  // blocking that upgrade; null otherwise
+  migration: v.nullable(v.picklist(['running', 'blocked'])),
 });
 
 export const result = queryStateSchema(coordinatorHealth);

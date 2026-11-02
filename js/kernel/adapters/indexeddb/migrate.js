@@ -105,11 +105,15 @@ export const MIGRATE_LOCK = POINTS_LOCK;
  * @property {Promise<MigrationOutcome | MigrationPending>} answer - within `openWithinMs`
  * @property {Promise<MigrationOutcome>} done
  * @property {() => 'running' | 'blocked-upgrade' | 'done'} state
+ * @property {() => boolean} upgrading
+ *   Whether it's upgrading a database that was there, from the shape it read to its end,
+ *   blocked or not: #35's coordinator says `migrating` meanwhile. A run that finds the
+ *   database current, or makes one where there was none, or refuses one, never is.
  */
 
 /**
  * Where a run is, and the shape it found once it has read it
- * @typedef {{phase: 'running' | 'blocked-upgrade' | 'done', shape: Shape['kind'] | null}} RunStatus
+ * @typedef {{phase: 'running' | 'blocked-upgrade' | 'done', shape: Shape['kind'] | null, upgrading: boolean}} RunStatus
  */
 
 /** The code a database that stays as it is answers with */
@@ -416,6 +420,8 @@ async function migrate(options, status) {
     ? REFUSALS[/** @type {keyof typeof REFUSALS} */ (shape.kind)]
     : null;
   const target = steps.length > 0 ? steps[steps.length - 1].to : null;
+  // From here to the run's end it upgrades the database it found, unless it refuses it
+  status.upgrading = shape.kind !== 'none' && refusal === null && target !== null;
 
   // No point for no database: there's nothing it would hold
   /** @type {Point | null} */
@@ -526,7 +532,7 @@ async function migrate(options, status) {
 export function startMigrations(options) {
   const { logger, openWithinMs = OPEN_WITHIN_MS } = options;
   /** @type {RunStatus} */
-  const status = { phase: 'running', shape: null };
+  const status = { phase: 'running', shape: null, upgrading: false };
   /** @type {Promise<MigrationOutcome>} */
   const run =
     options.locks && typeof options.locks.request === 'function'
@@ -561,7 +567,7 @@ export function startMigrations(options) {
       resolve(result);
     });
   });
-  return { answer, done, state: () => status.phase };
+  return { answer, done, state: () => status.phase, upgrading: () => status.phase !== 'done' && status.upgrading };
 }
 
 /**

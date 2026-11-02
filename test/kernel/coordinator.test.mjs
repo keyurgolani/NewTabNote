@@ -60,9 +60,10 @@ const BLOCKED = Object.freeze({ kind: 'unavailable', cause: 'storage', code: 'bl
 /**
  * A kernel with a migration run behind it whose upgrade an older build's open page blocks, as
  * js/kernel/composition/background.js's worker client is: it answers BLOCKED at once, counting
- * each ask, until the test ends the attempt. `unblock` ends it with the page gone, after which
- * it opens with `failure` (null: it opened); `endStillBlocked` ends it and keeps answering
- * BLOCKED; `blockAgain` starts another attempt, blocked too.
+ * each ask, and says its upgrade is blocked, until the test ends the attempt. `unblock` ends it
+ * with the page gone, after which it opens with `failure` (null: it opened); with `held`, that
+ * open waits until the test calls the function `unblock` returns. `endStillBlocked` ends it
+ * and keeps answering BLOCKED; `blockAgain` starts another attempt, blocked too.
  * @param {{failure?: unknown}} [options]
  */
 function blockedKernel({ failure = null } = {}) {
@@ -73,6 +74,8 @@ function blockedKernel({ failure = null } = {}) {
     end = resolve;
   });
   let blocked = true;
+  /** @type {Promise<void> | null} */
+  let opening = null;
   const asks = { count: 0 };
   /** @type {Array<Record<string, unknown>>} */
   const executed = [];
@@ -86,22 +89,34 @@ function blockedKernel({ failure = null } = {}) {
     subscribe: () => () => {},
     whenReady: async () => {
       asks.count++;
-      return blocked ? BLOCKED : failure;
+      if (blocked) return BLOCKED;
+      if (opening) await opening;
+      return failure;
     },
     ids: { next: () => `id-${++next}` },
     migration: Object.freeze({
       get done() {
         return done;
       },
+      blocked: () => blocked,
     }),
   };
   return {
     client: /** @type {any} */ (client),
     asks,
     executed,
-    unblock() {
+    /** @param {{held?: boolean}} [options] */
+    unblock({ held = false } = {}) {
+      /** @type {() => void} */
+      let open = () => {};
+      if (held) {
+        opening = new Promise(resolve => {
+          open = () => resolve(undefined);
+        });
+      }
       blocked = false;
       end({ status: 'migrated' });
+      return open;
     },
     endStillBlocked() {
       end({ status: 'migrated' });
@@ -114,6 +129,47 @@ function blockedKernel({ failure = null } = {}) {
       ended({ status: 'failed' });
     },
   };
+}
+
+/**
+ * A kernel whose migration run upgrades a database that was there until the test ends it, as
+ * js/kernel/composition/background.js's worker client is while its run upgrades: its open
+ * waits for the attempt, and `migration.upgrading()` says so meanwhile. `finish` ends the
+ * attempt, after which it opens. With `upgrades` false, its run finds nothing to upgrade, as
+ * on a current database.
+ * @param {{upgrades?: boolean}} [options]
+ */
+function upgradingKernel({ upgrades = true } = {}) {
+  let upgrading = upgrades;
+  /** @type {() => void} */
+  let open = () => {};
+  const opened = new Promise(resolve => {
+    open = () => {
+      upgrading = false;
+      resolve(null);
+    };
+  });
+  /** @type {Array<Record<string, unknown>>} */
+  const executed = [];
+  let next = 0;
+  const client = {
+    execute: async (/** @type {Record<string, unknown>} */ command) => {
+      executed.push(command);
+      return { kind: 'committed', code: 'integrity-checked', changedIds: [] };
+    },
+    query: async () => ({ kind: 'empty', asOf: 0 }),
+    subscribe: () => () => {},
+    whenReady: () => opened,
+    ids: { next: () => `id-${++next}` },
+    migration: Object.freeze({
+      get done() {
+        return opened;
+      },
+      upgrading: () => upgrading,
+      blocked: () => false,
+    }),
+  };
+  return { client: /** @type {any} */ (client), executed, finish: () => open() };
 }
 
 /** Lets `n` rounds of queued work run: every promise reaction, then the next macrotask */
@@ -339,6 +395,45 @@ describe("the coordinator on a kernel with #17's migration run (PR 1b)", () => {
     assert.deepEqual(seen, [['coordinator.started', {}, undefined]]);
   });
 
+  it('says migrating while its run upgrades the database, not only while an older page blocks it, and ready once the attempt is in (#35 slice 2)', async () => {
+    const kernel = upgradingKernel();
+    const { coordinator } = coordinatorOn(kernel);
+    assert.deepEqual(coordinator.status(), { status: 'degraded', reason: 'starting' });
+    assert.equal(coordinator.health().migration, null);
+    const started = coordinator.start();
+    assert.deepEqual(coordinator.status(), { status: 'degraded', reason: 'migrating' });
+    assert.deepEqual([coordinator.health().reason, coordinator.health().migration], ['migrating', 'running']);
+    kernel.finish();
+    await started;
+    assert.deepEqual(coordinator.status(), { status: 'ready' });
+    assert.equal(coordinator.health().migration, null);
+  });
+
+  it("says starting while its run hasn't found an upgrade to make, as for a current database", async () => {
+    const kernel = upgradingKernel({ upgrades: false });
+    const { coordinator } = coordinatorOn(kernel);
+    const started = coordinator.start();
+    assert.deepEqual(coordinator.status(), { status: 'degraded', reason: 'starting' });
+    assert.equal(coordinator.health().migration, null);
+    kernel.finish();
+    await started;
+    assert.deepEqual(coordinator.status(), { status: 'ready' });
+  });
+
+  it("tells system.coordinatorHealth an upgrade an older build's open page blocks from one that runs (#35 slice 2)", async () => {
+    const kernel = blockedKernel();
+    const { coordinator } = coordinatorOn(kernel);
+    await coordinator.start();
+    assert.deepEqual([coordinator.health().reason, coordinator.health().migration], ['migrating', 'blocked']);
+    // Once the page closes, the upgrade runs, no longer blocked, until the kernel opens
+    const open = kernel.unblock({ held: true });
+    await turns();
+    assert.deepEqual([coordinator.health().reason, coordinator.health().migration], ['migrating', 'running']);
+    open();
+    await turns();
+    assert.deepEqual([coordinator.status(), coordinator.health().migration], [{ status: 'ready' }, null]);
+  });
+
   it('waits again on an attempt that starts blocked as one ends, and a run that ends still blocked is a failed open, not a loop', async () => {
     const again = blockedKernel();
     const { coordinator } = coordinatorOn(again);
@@ -414,6 +509,7 @@ describe("the coordinator's health (#35 slice 1, system.coordinatorHealth)", () 
       startedAt: null,
       commands: [],
       oldestOrphanedEntryAt: null,
+      migration: null,
     };
     assert.deepEqual(coordinator.health(), before);
     const started = coordinator.start();
@@ -434,6 +530,7 @@ describe("the coordinator's health (#35 slice 1, system.coordinatorHealth)", () 
         { outcome: 'unavailable', count: 1 },
       ],
       oldestOrphanedEntryAt: null,
+      migration: null,
     });
   });
 
@@ -452,6 +549,7 @@ describe("the coordinator's health (#35 slice 1, system.coordinatorHealth)", () 
         startedAt: null,
         commands: [],
         oldestOrphanedEntryAt: null,
+        migration: null,
       },
     });
     const kernel = fakeKernel();
@@ -474,6 +572,46 @@ describe("the coordinator's integrity check (#35 slice 1, the lead's Q2)", () =>
       assert.deepEqual(kernel.executed, [{ type: 'runIntegrityCheck', commandId: 'id-1' }]);
     });
   }
+
+  it('runs it once the transforms and the catch-up the start set off are in, not before (#35 slice 2)', async () => {
+    for (const reason of ['install', 'update']) {
+      const kernel = fakeKernel();
+      /** @type {Record<string, () => void>} */
+      const end = {};
+      const transforms = new Promise(resolve => {
+        end.transforms = () => resolve(null);
+      });
+      const caughtUp = new Promise(resolve => {
+        end.caughtUp = () => resolve(null);
+      });
+      kernel.client.transforms = { done: transforms };
+      kernel.client.recordsCatchUp = { done: caughtUp };
+      const { coordinator } = coordinatorOn(kernel);
+      const installed = coordinator.installed(reason);
+      kernel.open();
+      await turns();
+      assert.deepEqual(kernel.executed, [], `${reason}: while the transforms run`);
+      end.transforms();
+      await turns();
+      assert.deepEqual(kernel.executed, [], `${reason}: while the catch-up runs`);
+      end.caughtUp();
+      await installed;
+      assert.deepEqual(kernel.executed, [{ type: 'runIntegrityCheck', commandId: 'id-1' }], reason);
+    }
+  });
+
+  it('runs it when the transforms or the catch-up end in a rejection, and only once', async () => {
+    const kernel = fakeKernel();
+    const threw = Promise.reject(new Error('test: the transforms threw'));
+    // Handled here too, so it's no unhandled rejection before the check reaches it
+    threw.catch(() => {});
+    kernel.client.transforms = { done: threw };
+    kernel.client.recordsCatchUp = { done: Promise.resolve(null) };
+    kernel.open();
+    const { coordinator } = coordinatorOn(kernel);
+    await coordinator.installed('update');
+    assert.deepEqual(kernel.executed, [{ type: 'runIntegrityCheck', commandId: 'id-1' }]);
+  });
 
   it("doesn't run after Chrome's own update, a shared module's, or a start", async () => {
     for (const reason of ['chrome_update', 'shared_module_update', undefined]) {

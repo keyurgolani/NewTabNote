@@ -316,6 +316,7 @@ describe('schema modules (#13, AC1)', () => {
       startedAt: NOW,
       commands: [{ outcome: 'committed', count: 2 }],
       oldestOrphanedEntryAt: null,
+      migration: null,
     };
     const { result } = moduleOf('system.coordinatorHealth');
     assert.equal(v.safeParse(result, { kind: 'ready', asOf: NOW, data: health }).success, true);
@@ -324,12 +325,20 @@ describe('schema modules (#13, AC1)', () => {
       v.safeParse(result, { kind: 'ready', asOf: NOW, data: { ...ready, status: 'ready', startedAt: null } }).success,
       true,
     );
+    // While it's migrating, whether the run upgrades or an older build's open page holds it (#35 slice 2)
+    for (const migration of ['running', 'blocked']) {
+      const data = { ...health, reason: 'migrating', migration };
+      assert.equal(v.safeParse(result, { kind: 'ready', asOf: NOW, data }).success, true, migration);
+    }
+    const { migration, ...unsaid } = health;
     for (const data of [
       { ...health, reason: 'Disk full' },
       { ...health, lastError: 'boom' },
       { ...health, commands: [{ outcome: 'saved', count: 1 }] },
       { ...health, status: 'starting' },
       { ...health, oldestOrphanedEntryAt: 'yesterday' },
+      { ...health, migration: 'copying 3 of 120 notes' },
+      unsaid,
     ]) {
       assert.equal(v.safeParse(result, { kind: 'ready', asOf: NOW, data }).success, false, JSON.stringify(data));
     }
