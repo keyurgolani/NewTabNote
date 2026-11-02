@@ -21,7 +21,7 @@
  * record and returns a value (#14, "Security and privacy").
  */
 
-import { invalidField } from './fields.js';
+import { SHARED_FIELDS, invalidField } from './fields.js';
 import { textContent } from './html-text.js';
 import { inlineMarkdown } from './markup.js';
 import { PREVIEWS, previewOfContent } from './previews.js';
@@ -44,16 +44,7 @@ import { PREVIEWS, previewOfContent } from './previews.js';
 
 /** @typedef {(record: BlockRecord) => unknown} Projection */
 
-/** The fields 1.4.x's `serialize()` writes for every type */
-const SHARED = Object.freeze({
-  content: /** @type {FieldKind} */ ('richText'),
-  indentLevel: /** @type {FieldKind} */ ('number'),
-  checked: /** @type {FieldKind} */ ('flag'),
-  imageUrl: /** @type {FieldKind} */ ('data'),
-  calloutIcon: /** @type {FieldKind} */ ('plainText'),
-});
-
-/** What `Block`'s constructor gives those, as a new block holds them */
+/** What `Block`'s constructor gives the fields every type has (fields.js, SHARED_FIELDS), as a new block holds them */
 const SHARED_DEFAULTS = Object.freeze({ content: '', indentLevel: 0, checked: false, imageUrl: null, calloutIcon: '💡' });
 
 /**
@@ -110,7 +101,7 @@ const toVersion1 = (/** @type {BlockRecord} */ record) => Object.freeze({ ...rec
  * @returns {{fields: Readonly<Record<string, FieldKind>>, model: BlockModel}}
  */
 function defineModel(type, parts) {
-  const fields = Object.freeze({ ...SHARED, ...parts.fields });
+  const fields = Object.freeze({ ...SHARED_FIELDS, ...parts.fields });
   const preview = parts.preview || previewOfContent;
   const legacy = Object.freeze({
     id: '1730000000000-a1b2c3d4e',
