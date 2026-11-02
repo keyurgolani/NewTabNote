@@ -29,7 +29,7 @@
 
 ### 🔒 Privacy & Performance First
 - **100% Local Storage**: Your data stays in your browser (IndexedDB). No servers, no tracking.
-- **Offline Ready**: Works perfectly without an internet connection (except AI features).
+- **Offline Ready**: Your notes work without an internet connection. AI features, bookmark icons, web images and videos need one, and so does semantic search the first time it downloads its model.
 - **Export/Import**: Full control over your data with JSON and Markdown export options.
 
 ---
@@ -105,7 +105,7 @@ npm run test:extension
 
 ## 🔒 Privacy
 - All notes are stored locally in your browser's IndexedDB.
-- No data is sent to any server except when using AI features.
+- Your notes stay on your device. AI features, bookmark icons, web images, YouTube and Vimeo videos, and the semantic search model's one-time download from Hugging Face and jsDelivr use the network. Bookmark icons come from Google's favicon service, which sees the bookmarked site's domain. The [Privacy Policy](PRIVACY_POLICY.md) lists every request.
 - AI requests go directly to your configured provider with your API key.
 - API keys are stored locally and never transmitted elsewhere.
 
