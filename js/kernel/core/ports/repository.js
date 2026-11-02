@@ -141,7 +141,8 @@ export const LATER_STORES = Object.freeze(/** @type {StoreName[]} */ (['conflict
 
 /**
  * Where a settings effect writes, under the keys 1.4.x's Storage.setSetting wrote: the
- * preferences, the workspace session, `jobs` (the bookkeeping the auto-title and insights jobs
+ * preferences (and, beside the two background jobs' switches, the marker of their one-time
+ * switch-off, NTN-21), the workspace session, `jobs` (the bookkeeping the auto-title and insights jobs
  * keep: when each last ran, and which note's insights are being extracted), `chat` (AI chat's
  * histories and prompt templates), `onboarding` (whether the first run finished), `backup`
  * (when the last backup and full export were made, and the pre-migration export notice's

@@ -41,13 +41,33 @@ class OnboardingManager {
   }
 
   /**
-   * Configure default settings for first-run users, in one write through the page's settings
-   * port (js/kernel/composition/settings.js).
-   * @param {{setPreferences: (values: Object) => Promise<unknown>}} settings
+   * Configure default settings for first-run users, through the page's settings port
+   * (js/kernel/composition/settings.js): embeddings on, then both background AI jobs, titles and
+   * insights, off, with their one-time switch-off marked as done, in one write. The user turns
+   * the jobs on in Settings.
+   * @param {{setPreferences: (values: Object) => Promise<unknown>, turnOffBackgroundJobs: () => Promise<unknown>}} settings
    * @returns {Promise<void>}
    */
   static async setupFirstRun(settings) {
-    await settings.setPreferences({ embeddingsEnabled: true, autoTitleEnabled: true, insightsEnabled: true });
+    await settings.setPreferences({ embeddingsEnabled: true });
+    await settings.turnOffBackgroundJobs();
+  }
+
+  /**
+   * Turn both background AI jobs, titles and insights, off once, through the page's settings
+   * port: at the first start without the switch-off's marker, before either job can start. Both
+   * switches and the marker land in one write, and the marker keeps it from running again, so a
+   * job the user turns back on in Settings stays on. A marker it can't read rejects with nothing
+   * written, so a failed read never turns off a job the user chose.
+   * @param {{workspaceData: (keys: Array<string>) => Promise<{backgroundJobsOffOnce?: unknown}>,
+   *   turnOffBackgroundJobs: () => Promise<unknown>}} settings
+   * @returns {Promise<boolean>} Whether it turned them off at this start
+   */
+  static async turnBackgroundJobsOffOnce(settings) {
+    const { backgroundJobsOffOnce } = await settings.workspaceData(['backgroundJobsOffOnce']);
+    if (backgroundJobsOffOnce === true) return false;
+    await settings.turnOffBackgroundJobs();
+    return true;
   }
 
   /**

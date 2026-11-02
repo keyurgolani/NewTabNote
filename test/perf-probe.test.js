@@ -301,6 +301,8 @@ describe("ref-desktop's fixture profiles (scripts/perf/profiles.js)", () => {
     for (const name of ['typical', 'maximal']) {
       const profile = await profileFixture(name);
       assert.equal(profile.fixture.chromeStorageLocal.setting_hasCompletedOnboarding, true, name);
+      // The background AI jobs' one-time switch-off marked as done, so a start runs the jobs as stored (NTN-21)
+      assert.equal(profile.fixture.chromeStorageLocal.setting_backgroundJobsOffOnce, true, name);
       assert.deepEqual(profile.fixture.databases.map(db => [db.name, db.version]), [['CanvasTabDB', 8]], name);
       assert.equal((await profileFixture(name)).digest, profile.digest, `${name} is the same from one call to the next`);
     }

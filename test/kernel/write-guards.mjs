@@ -192,6 +192,7 @@ export const WRITE_GUARDS = Object.freeze({
   savePromptTemplates: none("AI chat's prompt templates"),
   saveTheme: none('a custom theme'),
   completeOnboarding: none('settings'),
+  turnOffBackgroundJobs: none('settings'),
   recordBackup: none("the backups' bookkeeping"),
   recordExportNotice: none("the export notice's outcome"),
   snoozeSpaceNotice: none("the space notice's snooze"),

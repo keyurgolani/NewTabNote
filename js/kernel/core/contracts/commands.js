@@ -60,6 +60,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/save-prompt-templates.js').SavePromptTemplates} SavePromptTemplates */
 /** @typedef {import('./operations/save-theme.js').SaveTheme} SaveTheme */
 /** @typedef {import('./operations/complete-onboarding.js').CompleteOnboarding} CompleteOnboarding */
+/** @typedef {import('./operations/turn-off-background-jobs.js').TurnOffBackgroundJobs} TurnOffBackgroundJobs */
 /** @typedef {import('./operations/record-backup.js').RecordBackup} RecordBackup */
 /** @typedef {import('./operations/record-export-notice.js').RecordExportNotice} RecordExportNotice */
 /** @typedef {import('./operations/snooze-space-notice.js').SnoozeSpaceNotice} SnoozeSpaceNotice */
@@ -82,7 +83,8 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | ConvertNoteToTemplate | ConvertTemplateToNote | DeleteNotePermanently | EmptyTrash | RunTrashCleanup
  *   | SetPreferences | SaveWorkspaceSession | RunStartupMaintenance | RunIntegrityCheck | SetInsightsPending | RecordJobRun
  *   | SaveSnapshot | RestoreSnapshot | InsertBlocks | SaveChatHistory | SavePromptTemplates | SaveTheme
- *   | CompleteOnboarding | RecordBackup | RecordExportNotice | SnoozeSpaceNotice | CreateAutoBackup | ImportBackup
+ *   | CompleteOnboarding | TurnOffBackgroundJobs | RecordBackup | RecordExportNotice | SnoozeSpaceNotice
+ *   | CreateAutoBackup | ImportBackup
  *   | UpdateSearchIndex | SaveVector | ApplyRemoteChanges | ApplyRemoteContent | ApplyRemotePlacement
  *   | ApplyCloseDraft | CatchUpNoteRecords} Command
  */
@@ -239,6 +241,8 @@ export const COMMANDS = Object.freeze({
   savePromptTemplates: entry('save-prompt-templates', 'chat', ['newtab'], { entityTypes: [], maxBytes: LARGE }),
   saveTheme: entry('save-theme', 'theme', ['newtab'], { entityTypes: [] }),
   completeOnboarding: entry('complete-onboarding', 'onboarding', ['newtab'], { entityTypes: [] }),
+  // Both background AI jobs off, with the one-time switch-off's marker, in one write (NTN-21)
+  turnOffBackgroundJobs: entry('turn-off-background-jobs', 'preferences', ['newtab'], { entityTypes: [] }),
   recordBackup: entry('record-backup', 'backup', ['newtab'], { entityTypes: [] }),
   recordExportNotice: entry('record-export-notice', 'backup', ['newtab'], { entityTypes: [] }),
   // The space notice's put-off (#17 PR 1b), beside the export notice's outcome

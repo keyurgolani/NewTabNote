@@ -116,6 +116,8 @@ export class SettingsWriteError extends Error {
  * @property {(theme: {name: string, properties: Record<string, string>}) => Promise<string>} saveTheme
  *   Saves a new custom theme, under an id taken now, and answers the id
  * @property {() => Promise<Committed>} completeOnboarding
+ * @property {() => Promise<Committed>} turnOffBackgroundJobs
+ *   Both background AI jobs off, with the one-time switch-off's marker, in one write (NTN-21)
  * @property {(what: {fullExport: boolean, backup: boolean}) => Promise<Committed>} recordBackup
  * @property {(version: number, outcome: 'exported' | 'dismissed' | 'not-needed') => Promise<Committed>} recordExportNotice
  * @property {() => Promise<Committed>} snoozeSpaceNotice - puts the space notice off, from the kernel clock's now
@@ -237,6 +239,8 @@ export function createSettingsClient(client, { onSettingsChange = noChanges } = 
     },
 
     completeOnboarding: () => write('completeOnboarding', {}),
+
+    turnOffBackgroundJobs: () => write('turnOffBackgroundJobs', {}),
 
     recordBackup: ({ fullExport, backup }) => write('recordBackup', { fullExport, backup }),
 

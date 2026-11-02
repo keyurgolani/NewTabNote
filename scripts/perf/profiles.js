@@ -9,9 +9,10 @@
  *   over the welcome note.
  * - `typical`: what 1.4.0's own code wrote for a synthetic seed (recorded/v8.v1.4.0.json):
  *   eight notes in a folder, archived, trashed, a Daily Note and a template, with media, a
- *   snapshot, backups and settings, the welcome note last opened. Onboarded.
+ *   snapshot, backups and settings, the welcome note last opened. Onboarded, with the background
+ *   AI jobs' one-time switch-off marked as done.
  * - `maximal`: #73's maximal profile (generate.mjs), every record type at sizes past #17's copy
- *   bounds, made from this tree's block types and default settings. Onboarded.
+ *   bounds, made from this tree's block types and default settings. Onboarded, with the same mark.
  *
  * Canaries fill with the loader's placeholders (`canary-<slot>`), so the AI key is a fake one
  * and the network is off anyway.
@@ -26,14 +27,26 @@ const ROOT = path.join(__dirname, '..', '..');
 const STORAGE = path.join(ROOT, 'test', 'fixtures', 'storage');
 const ONBOARDED = { setting_hasCompletedOnboarding: true };
 
+/**
+ * The background AI jobs' one-time switch-off (NTN-21), marked as done, so each start measures
+ * the jobs as the profile stores them: `typical` has both on, and `maximal` both off. Without the
+ * mark, the start would turn `typical`'s off before they run. The budget should cover the heavier
+ * case, someone who turns AI back on, and readings that drop because the measurement changed
+ * would read like a gain we didn't make. The switch-off's own upgrade tests prove it runs
+ * (test/ai-settings.test.js, e2e/ai-settings.spec.js); these profiles don't. `first-run` is a new
+ * install, so its start shows the new default.
+ */
+const JOBS_SWITCH_OFF_DONE = { setting_backgroundJobsOffOnce: true };
+
 const PROFILES = Object.freeze(['first-run', 'typical', 'maximal']);
 
 /**
- * `fixture` with onboarding marked complete
+ * `fixture` with onboarding marked complete, and the background AI jobs' one-time switch-off
+ * marked as done
  * @param {any} fixture
  */
 function onboarded(fixture) {
-  return { ...fixture, chromeStorageLocal: { ...fixture.chromeStorageLocal, ...ONBOARDED } };
+  return { ...fixture, chromeStorageLocal: { ...fixture.chromeStorageLocal, ...ONBOARDED, ...JOBS_SWITCH_OFF_DONE } };
 }
 
 /**

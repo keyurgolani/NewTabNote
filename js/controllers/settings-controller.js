@@ -20,10 +20,18 @@
  *   js/ui/part-state.js); null for the browser's
  * @param {(() => Promise<void>)|null} [deps.onOpened] - Runs each time Settings opens, for sections
  *   that read their state then (#17 PR 1b)
+ * @param {(() => Promise<void>)|null} [deps.showAISettings] - Shows the AI section's settings in
+ *   effect each time Settings opens, with no request and no write
+ *   (AIChatController.updateLLMSettingsUI, NTN-21)
  */
 class SettingsController {
-  constructor({ settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null, partReload = null, onOpened = null }) {
+  constructor({
+    settings, documentClient, validateBackup, domRefs, logger, loadLibrary = null, partReload = null, onOpened = null,
+    showAISettings = null,
+  }) {
     this.settings = settings;
+    /** @type {(() => Promise<void>)|null} */
+    this.showAISettings = showAISettings;
     this.loadLibrary = loadLibrary;
     this.partReload = partReload;
     /** @type {any} The Markdown export's row in its section (#27 slice 3b), made at init */
@@ -618,6 +626,9 @@ class SettingsController {
         dailyNoteTemplateSelect.appendChild(option);
       });
     }
+
+    // AI: the provider, the key, the model, and both background jobs, as in effect
+    if (this.showAISettings) await this.showAISettings();
 
     if (this.onRenderAIPromptTemplateSettings) {
       this.onRenderAIPromptTemplateSettings();

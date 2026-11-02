@@ -1,9 +1,10 @@
 /**
  * What the new tab keeps beside its preferences (#12 slices 6 and 7), by the keys 1.4.x's
  * Storage.setSetting wrote: AI chat's conversations and prompt templates, the first run's end,
- * and the backup bookkeeping, and since #17 PR 1b what the page reads of the storage upgrade.
- * Slice 6's commands write them (application/workspace-data.js), and getWorkspaceData reads them
- * back, each from the settings area its command writes, or the worker, for the upgrade's record.
+ * and the backup bookkeeping, since #17 PR 1b what the page reads of the storage upgrade, and
+ * since NTN-21 whether the background jobs' one-time switch-off has run. Slice 6's commands write
+ * them (application/workspace-data.js), and getWorkspaceData reads them back, each from the
+ * settings area its command writes, or the worker, for the upgrade's record.
  */
 
 /**
@@ -39,8 +40,18 @@ export const UPGRADE_KEYS = Object.freeze({
 });
 
 /**
+ * The key that says the background jobs' one-time switch-off has run (NTN-21), as 1.4.4 keeps it
+ * (`setting_backgroundJobsOffOnce`). It's kept in the preferences area beside the two switches
+ * it turned off, so turnOffBackgroundJobs writes all three in one write, and no preference
+ * command writes it.
+ */
+export const JOBS_OFF_KEY = 'backgroundJobsOffOnce';
+
+/** @typedef {'chat' | 'onboarding' | 'backup' | 'upgrade' | 'preferences'} WorkspaceDataArea */
+
+/**
  * Each key getWorkspaceData reads, to the settings area it's kept in
- * @type {Readonly<Record<string, 'chat' | 'onboarding' | 'backup' | 'upgrade'>>}
+ * @type {Readonly<Record<string, WorkspaceDataArea>>}
  */
 const AREAS = Object.freeze({
   [CHAT_KEYS.note[0]]: 'chat',
@@ -54,6 +65,7 @@ const AREAS = Object.freeze({
   [BACKUP_KEYS.exportNotice]: 'backup',
   [UPGRADE_KEYS.record]: 'upgrade',
   [UPGRADE_KEYS.spaceNotice]: 'upgrade',
+  [JOBS_OFF_KEY]: 'preferences',
 });
 
 /** Every key getWorkspaceData reads */
@@ -62,7 +74,7 @@ export const WORKSPACE_DATA_KEYS = Object.freeze(/** @type {string[]} */ (Object
 /**
  * The settings area `key` is kept in
  * @param {string} key - one of WORKSPACE_DATA_KEYS
- * @returns {'chat' | 'onboarding' | 'backup' | 'upgrade'}
+ * @returns {WorkspaceDataArea}
  */
 export function workspaceDataArea(key) {
   return AREAS[key];

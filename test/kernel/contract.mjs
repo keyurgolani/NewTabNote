@@ -3093,6 +3093,29 @@ export function runContractSuite(fixture) {
         });
       });
 
+      it('turnOffBackgroundJobs sets both background jobs off with the one-time switch-off marker, together, and getWorkspaceData reads the marker back (NTN-21)', async () => {
+        await run(cmd('setPreferences', { values: { autoTitleEnabled: true, insightsEnabled: true } }));
+        const off = await run(cmd('turnOffBackgroundJobs', {}));
+        assert.deepEqual(off.changedIds, ['autoTitleEnabled', 'insightsEnabled', 'backgroundJobsOffOnce']);
+        // In the preferences area, beside the switches, so the three land in one write
+        assert.deepEqual(await settingsIn('preferences', ['autoTitleEnabled', 'insightsEnabled', 'backgroundJobsOffOnce']), {
+          autoTitleEnabled: false,
+          insightsEnabled: false,
+          backgroundJobsOffOnce: true,
+        });
+        const read = await kernel.query({ type: 'getWorkspaceData', keys: ['backgroundJobsOffOnce'] });
+        assert.equal(read.kind, 'ready');
+        assert.deepEqual(/** @type {any} */ (read).data, { backgroundJobsOffOnce: true });
+        const switches = await kernel.query({ type: 'getPreferences', keys: ['autoTitleEnabled', 'insightsEnabled'] });
+        assert.deepEqual(/** @type {any} */ (switches).data, { autoTitleEnabled: false, insightsEnabled: false });
+        // Nothing but the switch-off sets the marker
+        assertRejected(
+          await kernel.execute(cmd('setPreferences', /** @type {any} */ ({ values: { backgroundJobsOffOnce: true } }))),
+          'validation',
+          'unknown-preference',
+        );
+      });
+
       it("snoozeSpaceNotice puts the space notice off from the kernel clock's now, and getWorkspaceData reads it back (#17 PR 1b)", async () => {
         assert.deepEqual((await run(cmd('snoozeSpaceNotice', {}))).changedIds, ['spaceNoticeSnoozedAt']);
         assert.deepEqual(await settingsIn('upgrade', ['spaceNoticeSnoozedAt']), { spaceNoticeSnoozedAt: NOW });
@@ -3798,6 +3821,7 @@ export function runContractSuite(fixture) {
           'setPreferences',
           'snoozeSpaceNotice',
           'trashNote',
+          'turnOffBackgroundJobs',
           'unarchiveNote',
           'updateSearchIndex',
         ]);

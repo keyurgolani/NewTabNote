@@ -115,7 +115,7 @@ describe('the settings port (#12 slice 6)', () => {
     assert.equal(plain(await release.getCustomThemes())[0].name, 'Dusk');
   });
 
-  it("onboarding's first run switches its three features on in one write, and its end is recorded", async () => {
+  it("onboarding's first run switches embeddings on, then both background jobs off with their switch-off's marker in one write, and its end is recorded", async () => {
     const { env } = await openTab();
     const Onboarding = env.get('Onboarding');
     const before = env.chrome.writes().length;
@@ -124,7 +124,16 @@ describe('the settings port (#12 slice 6)', () => {
 
     assert.deepEqual(
       env.chrome.writes().slice(before).map((write) => write.keys.slice().sort()),
-      [['setting_autoTitleEnabled', 'setting_embeddingsEnabled', 'setting_insightsEnabled'], ['setting_hasCompletedOnboarding']],
+      [
+        ['setting_embeddingsEnabled'],
+        ['setting_autoTitleEnabled', 'setting_backgroundJobsOffOnce', 'setting_insightsEnabled'],
+        ['setting_hasCompletedOnboarding'],
+      ],
+    );
+    assert.deepEqual(
+      ['setting_embeddingsEnabled', 'setting_autoTitleEnabled', 'setting_insightsEnabled', 'setting_backgroundJobsOffOnce']
+        .map((key) => env.chrome.local[key]),
+      [true, false, false, true],
     );
     assert.equal(await Onboarding.hasCompleted(env.settingsClient), true);
   });

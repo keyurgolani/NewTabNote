@@ -2425,6 +2425,90 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     });
   }
 
+  /**
+   * Show the AI settings in effect, each time Settings opens. The provider, its key (masked,
+   * and only the key saved for that provider), the model and the Ollama URL are LLMService's,
+   * which read them from storage as the page started and reads them again on each change
+   * another tab makes. Both background jobs, with their intervals, are as stored, read through
+   * the settings port. Then come the rows those settings turn on. It sends no request and writes
+   * no setting: the stored model shows as the selected option, and the model list loads only on
+   * the user's own actions, a provider change or the refresh button.
+   * @returns {Promise<void>}
+   */
+  async updateLLMSettingsUI() {
+    const { provider, model, ollamaUrl } = this.llm;
+    const jobs = await this.settings.preferencesOr({
+      autoTitleEnabled: false,
+      autoTitleInterval: 15,
+      insightsEnabled: false,
+      insightsInterval: 360,
+    });
+    /** An interval as its select's value: the stored minutes, or `fallback` for none that's whole and positive */
+    const minutes = (stored, fallback) => String(Number.isSafeInteger(stored) && stored > 0 ? stored : fallback);
+
+    const providerSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('llm-provider-select'));
+    if (providerSelect) providerSelect.value = provider;
+
+    const key = this.llm.keyFor(provider);
+    /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#llm-api-key')).forEach(input => {
+      input.value = key;
+      this.maskApiKey(input);
+    });
+
+    const ollamaUrlInput = /** @type {HTMLInputElement|null} */ (document.getElementById('ollama-url'));
+    if (ollamaUrlInput) ollamaUrlInput.value = ollamaUrl;
+
+    this.showStoredModel(provider, model);
+
+    const autoTitleEnabled = /** @type {HTMLInputElement|null} */ (document.getElementById('auto-title-enabled'));
+    const autoTitleInterval = /** @type {HTMLSelectElement|null} */ (document.getElementById('auto-title-interval'));
+    if (autoTitleEnabled) autoTitleEnabled.checked = jobs.autoTitleEnabled === true;
+    if (autoTitleInterval) autoTitleInterval.value = minutes(jobs.autoTitleInterval, 15);
+
+    const insightsEnabled = /** @type {HTMLInputElement|null} */ (document.getElementById('insights-enabled'));
+    const insightsInterval = /** @type {HTMLSelectElement|null} */ (document.getElementById('insights-interval'));
+    if (insightsEnabled) insightsEnabled.checked = jobs.insightsEnabled === true;
+    if (insightsInterval) insightsInterval.value = minutes(jobs.insightsInterval, 360);
+
+    // After the switches, so each interval row follows its switch
+    this.updateLLMSettingsVisibility(provider);
+  }
+
+  /**
+   * Draw the key field masked, with its reveal button back on "Show API key"
+   * @param {HTMLInputElement} input
+   * @returns {void}
+   */
+  maskApiKey(input) {
+    input.type = 'password';
+    const reveal = /** @type {HTMLElement|null} */ (input.closest('.api-key-input-group')?.querySelector('.api-key-toggle-btn') || null);
+    if (!reveal) return;
+    reveal.title = 'Show API key';
+    reveal.querySelector('.eye-icon')?.classList.remove('hidden');
+    reveal.querySelector('.eye-off-icon')?.classList.add('hidden');
+  }
+
+  /**
+   * The stored model as the model list's one option, selected, with the name the provider's
+   * built-in list gives it, and no request for the list. With none stored, the option says so.
+   * @param {string} provider
+   * @param {string} model
+   * @returns {void}
+   */
+  showStoredModel(provider, model) {
+    const modelSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('llm-model-select'));
+    if (!modelSelect) return;
+    modelSelect.innerHTML = '';
+    if (provider === 'none') return;
+    const known = model ? this.llm.getFallbackModels(provider).find(m => m.id === model) : null;
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model ? (known ? known.name : model) : 'No model selected';
+    option.selected = true;
+    modelSelect.appendChild(option);
+    modelSelect.value = model;
+  }
+
   updateLLMSettingsVisibility(provider) {
     const apiKeyRows = document.querySelectorAll('.llm-api-key-row');
     const modelRow = document.querySelector('.llm-model-row');

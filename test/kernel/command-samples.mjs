@@ -128,6 +128,7 @@ export const COMMAND_SAMPLES = {
   savePromptTemplates: { templates: [{ id: 't1', label: 'Sum', prompt: 'Summarize' }] },
   saveTheme: { themeId: 'th1', name: 'Dusk', properties: { '--bg-primary': '#101010' } },
   completeOnboarding: {},
+  turnOffBackgroundJobs: {},
   recordBackup: { fullExport: true, backup: true },
   recordExportNotice: { version: 1, outcome: 'exported' },
   snoozeSpaceNotice: {},
