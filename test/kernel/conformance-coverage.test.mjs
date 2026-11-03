@@ -57,6 +57,7 @@ describe('conformance coverage', () => {
       'messaging-transport',
       'registry-family',
       'chrome-storage-local',
+      'journal-store',
       'trust-store',
     ]);
     for (const row of rows) assert.ok(row.runs.length > 0, row.id);
@@ -157,9 +158,10 @@ describe('conformance coverage finds an implementation', () => {
   });
 
   it("that implements a contract with no suite, and a contract that's neither listed nor a port's", () => {
+    // A second policy, as #21's would be, which comes with a suite (the journal's came with #35 slice 3)
     assertFlags(
-      problemsWith({ 'js/kernel/adapters/indexeddb/journal.js': 'export function openJournal() { return { inFlight: async () => [] }; }\n' }),
-      /^js\/kernel\/adapters\/indexeddb\/journal\.js exports openJournal, which is a JournalReader, and js\/kernel\/core\/ports\/journal\.js has no shared suite/,
+      problemsWith({ 'js/kernel/adapters/policy/strict.js': "export function createStrictPolicy() { return { authorize: () => ({ allowed: false, code: 'strict' }) }; }\n" }),
+      /^js\/kernel\/adapters\/policy\/strict\.js exports createStrictPolicy, which is a PolicyPort, and js\/kernel\/core\/ports\/policy\.js has no shared suite/,
     );
     assertFlags(problemsWith({ 'js/kernel/core/ports/search.js': 'export {};\n' }), /^js\/kernel\/core\/ports\/search\.js is a contract that's neither a port in PORTS nor listed in WITHOUT_SUITE/);
   });
