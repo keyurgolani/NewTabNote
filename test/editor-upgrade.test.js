@@ -3,13 +3,15 @@
 // #14 slice 3, the upgrade from every 1.4.x profile, through the editor: each version-8
 // fixture a release could leave that the upgrade migrates (the synthesized ones, and the
 // recorded v1.3.0, v1.4.0 and v1.4.0.blocks) goes through the shipped worker's run and
-// transforms, and then each of its notes opens in the editor and is saved untouched. Every
-// field a block held is then as the upgrade left it, apart from the order a save gives it, and
-// each block decode reads as known is at schemaVersion 1. A save adds to a known block only
-// fields Block.serialize writes for its type, which a block another writer made (the
-// onboarding note, a capture) can lack or hold as undefined, as 1.4.x's save added them. A
-// block in a safe state, which v8.opaque-blocks holds one of each kind of, is as the upgrade
-// left it, order included there, and so is every block of no note.
+// transforms, and then each of its notes opens in the editor, gets an edit to its first block
+// decode reads as known, and is saved. A save writes only the blocks its pane changed (#17, the
+// per-pane save), so the edited block keeps every other field it held, is at schemaVersion 1,
+// and gains only fields Block.serialize writes for its type, which a block another writer made
+// (the onboarding note, a capture) can lack or hold as undefined, as 1.4.x's save added them.
+// Every other block is as the upgrade left it, apart from the order a save may give it: the
+// save doesn't rewrite it, so it gains no schemaVersion. A block in a safe state, which
+// v8.opaque-blocks holds one of each kind of, is as the upgrade left it, order included there,
+// and so is every block of no note.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -64,7 +66,7 @@ describe('the upgrade from every 1.4.x profile keeps every block through the edi
 
   for (const fixture of FIXTURES) {
     const { id } = fixture.header;
-    it(`${id}: each note opened and saved untouched keeps its blocks, at schemaVersion 1 where decode reads them as known`, OPTIONS, async () => {
+    it(`${id}: each note opened, its first known block edited, and saved keeps its blocks: that one at schemaVersion 1, and every other as stored`, OPTIONS, async () => {
       const worker = await upgraded(fixture);
       const before = plain(recordsOf(await dumpDatabase(worker.indexedDB), 'elements'));
       const notes = Object.keys(recordsOf(await dumpDatabase(worker.indexedDB), 'canvases'));
@@ -73,8 +75,16 @@ describe('the upgrade from every 1.4.x profile keeps every block through the edi
       page.load(...FILES);
       await startEditorClient(page);
       const editor = makeEditor(page);
+      /** @type {Map<string, string>} The text each edited block was given, by its id */
+      const edited = new Map();
       for (const noteId of notes) {
         assert.equal(await runUntil(page, editor.loadNote(noteId)), true, `${id}: ${noteId} opens`);
+        // The first block that edits as usual and is stored, not the empty one a note with none shows
+        const first = editor.blocks.find(b => !b.safeState() && Object.prototype.hasOwnProperty.call(before, b.id));
+        if (first) {
+          first.content = `${first.content || ''} (edited)`;
+          edited.set(first.id, first.content);
+        }
         await runUntil(page, editor.save());
       }
 
@@ -90,13 +100,15 @@ describe('the upgrade from every 1.4.x profile keeps every block through the edi
         const { state } = decodeBlock(record);
         const known = state === 'current' || state === 'upcast';
         if (!known) safe += 1;
-        if (!saved.has(record.canvasId) || !known) {
-          // Written back as loaded: only a save's order can differ, and in v8.opaque-blocks it doesn't
+        if (!edited.has(blockId)) {
+          // Not rewritten, or a card written back as loaded: only the order a save gives it can
+          // differ, and in v8.opaque-blocks or on a note no editor saved it doesn't
           const exact = id === 'v8.opaque-blocks' || !saved.has(record.canvasId);
-          assert.deepEqual(exact ? stored : without(stored, 'order'), exact ? record : without(record, 'order'), `${id}: ${blockId}, ${state}`);
+          assert.deepEqual(exact ? stored : without(stored, 'order'), exact ? record : without(record, 'order'), `${id}: ${blockId}, ${state}, as stored`);
           continue;
         }
-        for (const [name, value] of Object.entries(without(record, 'order'))) {
+        assert.equal(stored.content, edited.get(blockId), `${id}: ${blockId}'s edit`);
+        for (const [name, value] of Object.entries(without(record, 'order', 'content'))) {
           // A field holding undefined reads as absent, as a missing one does (the capture's
           // bookmark with no title), and a save writes it at the type's default, as 1.4.x's did
           if (value === undefined) continue;

@@ -115,7 +115,7 @@ describe('a block in a safe state shows a read-only card in its place (#14 slice
     assert.equal(elementOf(editor, 'l1').querySelector('.block-safe-title').children.length, 0, 'set as text');
   });
 
-  it('the rest of the note edits and saves as usual, and each card is written back as it was loaded', OPTIONS, async () => {
+  it('the rest of the note edits and saves as usual, and a save leaves each card, and each block it didn\'t change, as stored', OPTIONS, async () => {
     const { env, editor, loaded } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, { ...RELATIVE, order: 2 }, block('a4', 'N', 3, 'After')]);
     assert.equal(loaded && loaded.threw, undefined, 'the load finishes');
     assert.equal(elementOf(editor, 'a4').querySelector('.block-content').textContent, 'After');
@@ -123,9 +123,11 @@ describe('a block in a safe state shows a read-only card in its place (#14 slice
     await runUntil(env, editor.save());
     const after = await stored(env);
     assert.equal(after.a4.content, 'After, edited');
+    assert.equal(after.a4.schemaVersion, 1, 'the block the save writes says its version');
     assert.deepEqual(plain(after.k1), plain(KANBAN));
-    // A known block whose view threw is saved like any other: its fields, at its version
-    assert.deepEqual(plain(after.r1), plain({ ...RELATIVE, order: 2, schemaVersion: 1 }));
+    // A known block whose view threw is like any other: left alone, it isn't rewritten, so it
+    // stays as stored, with no version
+    assert.deepEqual(plain(after.r1), plain({ ...RELATIVE, order: 2 }));
   });
 
   it("a note holding a block whose text can't be read opens and saves", OPTIONS, async () => {

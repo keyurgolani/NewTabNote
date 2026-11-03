@@ -454,7 +454,7 @@ describe("the stack's close-time draft writer", () => {
     assert.equal(rows.d3.content, 'from another writer');
   });
 
-  it('a 1.4.x block with no schemaVersion and a field only it holds, left as it is: the close writes no draft, before a save of the note or after one that stamps the block', async () => {
+  it('a 1.4.x block with no schemaVersion and a field only it holds, left as it is: the close writes no draft, before a save of the note or after one of another block, which leaves it as stored', async () => {
     const legacy = () => ({
       notes: [note('D', { name: 'Delta' })],
       blocks: [block('d1', 'D', 0, 'delta', { legacyField: 'kept' }), block('d2', 'D', 1, 'delta two')],
@@ -470,9 +470,11 @@ describe("the stack's close-time draft writer", () => {
     await other.loadNote('D');
     type(other, 'delta two, edited', 1);
     assert.equal(await runUntil(saved, other.flushSave()), true);
+    // A save puts only the blocks its pane changed (#17, the per-pane save), so it doesn't rewrite d1
     const d1 = (await storedRows(saved)).blocks.d1;
-    assert.equal(d1.schemaVersion, 1, "the save stamps d1's version");
-    assert.equal(d1.legacyField, 'kept', 'and writes its field back as loaded');
+    assert.equal(Object.prototype.hasOwnProperty.call(d1, 'schemaVersion'), false, 'the save of d2 leaves d1 with no version');
+    assert.equal(d1.legacyField, 'kept', 'and with its field');
+    assert.deepEqual(plain(d1), plain(legacy().blocks[0]), 'd1 as stored');
     closePage(saved);
     assert.deepEqual(drafts(saved), [], 'every edit committed, so no draft');
   });
