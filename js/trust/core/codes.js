@@ -96,13 +96,15 @@ export const ERROR_CODES = Object.freeze([
   'migration-running',
   // #35 slice 3's journal drain: why an entry can't replay as written (journal-drain.js), a
   // newer build's, one naming an operation this build doesn't journal, one it can't read, one
-  // the kernel refused, or one whose note isn't there or was deleted for a reason it keeps for
+  // the kernel refused, or one whose note isn't there or was deleted for a reason it keeps for;
+  // and the stop at an entry that threw, which would stop every drain there
   'unsupported-version',
   'unknown-operation',
   'invalid-payload',
   'replay-refused',
   'note-not-found',
   'note-deleted',
+  'drain-failed',
   // #17's recovery points (recovery-points.js): a database it refuses, and why a point failed
   // re-verification
   'recovery-unavailable',

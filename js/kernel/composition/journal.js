@@ -16,8 +16,11 @@
  *   A profile with no journal database opens nothing and makes none.
  * - What the drain can't replay is `journal.entry-unreplayable` (#20, the lead's answer to the
  *   plan's Q8), on the coordinator's provider, and a capture among them is told to `notify`, with
- *   why. A capture it adds is `capture.committed`, as one the worker adds at once is, so it
- *   resolves the capture incident its failure raised.
+ *   why. A stop for good at a capture raises the incident and tells it nothing, since it's still
+ *   kept (the lead's call on #182). What its drains raised the worker keeps for its life, so a
+ *   mark the journal can't write doesn't raise it again. A capture it adds is
+ *   `capture.committed`, as one the worker adds at once is, so it resolves the capture incident
+ *   its failure raised.
  *
  * Building it opens nothing, and nothing here throws into the worker: a journal that can't be
  * written leaves the capture to run as it did before slice 3, and says so on the console.
@@ -134,6 +137,9 @@ export function createWorkerJournal({
   let owner = null;
   /** @type {number | null} */
   let oldest = null;
+  /** What this worker's drains raised, by entry and code, for its life (journal-drain.js) */
+  /** @type {Set<string>} */
+  const raised = new Set();
 
   /**
    * Takes this instance's owner lock once, and holds it for as long as the worker lives.
@@ -188,18 +194,20 @@ export function createWorkerJournal({
   };
 
   /**
-   * An entry the drain can't replay as written, to the journal and, for a capture, to `notify`
+   * An entry the drain can't replay as written, to the journal and, for a capture, to `notify`,
+   * but for a stop at an entry that's still kept
    * @param {JournalRecord} entry
    * @param {string} code
+   * @param {{stop?: boolean}} [how]
    */
-  const unreplayable = (entry, code) => {
+  const unreplayable = (entry, code, how = {}) => {
     const surface = entry && SURFACES.includes(entry.surface) ? { surface: entry.surface } : {};
     try {
       if (events) events.event('journal.entry-unreplayable', surface, { code });
     } catch {
       // Best effort: a journal that can't be written changes nothing the drain does
     }
-    if (notify && isCapture(entry)) notify(entry, code);
+    if (notify && !how.stop && isCapture(entry)) notify(entry, code);
   };
 
   /**
@@ -234,6 +242,7 @@ export function createWorkerJournal({
         own: { sessionId: instanceId, inFlight: () => new Set(inFlight) },
         clock,
         unreplayable,
+        raised,
         replayed,
       });
     };

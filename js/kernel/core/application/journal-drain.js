@@ -33,12 +33,15 @@
  *      (the lead's answer to Q6);
  *    - unavailable, or no answer: the drain stops, and every entry left stays for the next one.
  *      A stop it can't retry, an `unavailable` that says so or a throw (`drain-failed`), would
- *      stop every drain at that entry, so it raises the entry's incident too. It still stops
- *      there, since going past it would break oldest first.
+ *      stop every drain at that entry, so it raises the entry's incident too, as a stop: the
+ *      entry is still kept, so a capture is told nothing more. It still stops there, since going
+ *      past it would break oldest first.
  *
  * An incident is raised once for each entry and code: the entry keeps the code it was raised for
- * (`unreplayable`), and a drain that finds the same one again says nothing more. The mark never
- * keeps an entry from replaying: a build that can read it replays it.
+ * (`unreplayable`), and a drain that finds the same one again says nothing more. Where that mark
+ * can't be written, as on a full disk, the context remembers what it raised for its life
+ * (`raised`), so its next drain doesn't raise it again. The mark never keeps an entry from
+ * replaying: a build that can read it replays it.
  *
  * What it answers holds counts and codes. `oldestOrphanedEntryAt` is when the oldest entry it
  * left whose owner is gone was written, an editor save's the pages haven't taken yet included,
@@ -74,9 +77,12 @@ import { SWEPT_REASONS, isJournalRecord } from '../domain/journal.js';
  * @property {{sessionId: string, inFlight: () => ReadonlySet<string>}} own
  *   The coordinator's own session, whose entries it replays unless their command is in flight
  * @property {{now(): number}} clock
- * @property {(entry: JournalRecord, code: string) => void} [unreplayable]
- *   Told once for each entry and code that keeps it from replaying as written. Never in the
- *   drain's way: what it throws is dropped.
+ * @property {(entry: JournalRecord, code: string, how?: {stop?: boolean}) => void} [unreplayable]
+ *   Told once for each entry and code that keeps it from replaying as written, with `stop` when
+ *   it's a stop for good at an entry that's still kept. Never in the drain's way: what it throws
+ *   is dropped.
+ * @property {{has(key: string): boolean, add(key: string): unknown}} [raised]
+ *   What this context raised already, by entry and code, which it keeps for its life
  * @property {(entry: JournalRecord) => void} [replayed]
  *   Told of each entry whose command is in now, once it's gone from the journal, as unreplayable
  *   is told
@@ -143,7 +149,17 @@ const stopCode = error =>
  * @param {DrainPorts} ports
  * @returns {Promise<DrainResult>}
  */
-export async function drainJournal({ journal, client, lookup, liveOwners, own, clock, unreplayable, replayed }) {
+export async function drainJournal({
+  journal,
+  client,
+  lookup,
+  liveOwners,
+  own,
+  clock,
+  unreplayable,
+  raised,
+  replayed,
+}) {
   /** @type {DrainResult} */
   const result = {
     status: 'drained',
@@ -184,15 +200,19 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
 
   /**
    * Raises `entry`'s incident for `code` once, and keeps the code on the entry so a later drain
-   * doesn't raise it again. Only an entry no live context holds is marked, so a mark never puts
-   * back an entry its owner removed meanwhile.
+   * doesn't raise it again, and in `raised`, where the mark can't be written. Only an entry no
+   * live context holds is marked, so a mark never puts back an entry its owner removed meanwhile.
    * @param {JournalRecord} entry
    * @param {string} code
+   * @param {{stop?: boolean}} [how] - `stop` for a stop for good at an entry that's still kept
    */
-  const raise = async (entry, code) => {
+  const raise = async (entry, code, how = {}) => {
     if (entry.unreplayable && entry.unreplayable.code === code) return;
+    const key = JSON.stringify([entry.opId, code]);
+    if (raised && raised.has(key)) return;
+    if (raised) raised.add(key);
     try {
-      if (unreplayable) unreplayable(entry, code);
+      if (unreplayable) unreplayable(entry, code, how);
     } catch {
       // The incident is best effort, and the entry stays either way
     }
@@ -222,7 +242,7 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
     if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
       // One it can't retry would stop every drain here
       if (outcome.kind === 'unavailable' && !outcome.retryable && isJournalRecord(entry))
-        await raise(entry, outcome.code);
+        await raise(entry, outcome.code, { stop: true });
       result.status = 'stopped';
       result.code = outcome.code;
       return false;
@@ -306,7 +326,7 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
       const outcome = await client.execute(sent);
       if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
         // One it can't retry would stop every drain here
-        if (outcome.kind === 'unavailable' && !outcome.retryable) await raise(entry, outcome.code);
+        if (outcome.kind === 'unavailable' && !outcome.retryable) await raise(entry, outcome.code, { stop: true });
         result.status = 'stopped';
         result.code = outcome.code;
         break;
@@ -331,7 +351,7 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
     result.status = 'stopped';
     result.code = stopCode(error);
     // A throw at an entry would stop every drain there, unless it says it may get through
-    if (deciding && !retryable(error)) await raise(deciding, result.code);
+    if (deciding && !retryable(error)) await raise(deciding, result.code, { stop: true });
   }
 
   // What it leaves, and the oldest of that no live context holds
