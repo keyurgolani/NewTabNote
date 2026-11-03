@@ -202,6 +202,28 @@ test("a card whose record is a list item takes Tab as every card does: Tab goes 
   await expectNoUncaught(extension, page);
 });
 
+test('a focused card moved by Mod+Shift+ArrowDown keeps focus, so a second press moves it again', async ({ extension }) => {
+  const { fixture } = opaqueBlocks();
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const newer = page.locator('#blocks-container > .block[data-id="opaque-blocks-newer"] .block-safe-card');
+  const placeOfNewer = () => page.locator('#blocks-container > .block').evaluateAll(list => list.map(el => el.dataset.id).indexOf('opaque-blocks-newer'));
+
+  await page.locator('#blocks-container > .block[data-id="opaque-blocks-before"] .block-content').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Tab');
+  await expect(newer).toBeFocused();
+  const start = await placeOfNewer();
+  for (const step of [1, 2]) {
+    await page.keyboard.press('ControlOrMeta+Shift+ArrowDown');
+    await expect.poll(placeOfNewer, `move ${step}`).toBe(start + step);
+    await expect(newer, `move ${step}`).toBeFocused();
+  }
+  await expectNoUncaught(extension, page);
+});
+
 test("turning a table into text asks first: Cancel keeps it and puts focus in it, a yes keeps its cells a row per line, and Undo brings it back", async ({ extension }) => {
   const { fixture, held } = opaqueBlocks();
   await fixtureHost(extension.worker).loadFixture(fixture);

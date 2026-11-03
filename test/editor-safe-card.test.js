@@ -252,6 +252,21 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
     assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
   });
 
+  it('Mod+Shift+ArrowDown moves a focused card and keeps focus on it, so a second press moves it again', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After'), block('a4', 'N', 3, 'Last')]);
+    asOnAMac(env, editor);
+    env.load('js/shortcut-utils.js');
+    // The editor's own focus, with no caret in the fake window to place
+    delete editor.focusBlock;
+    editor.placeCaretAtEnd = () => {};
+    cardOf(editor, 'k1').focus();
+    for (const order of [['a1', 'a3', 'k1', 'a4'], ['a1', 'a3', 'a4', 'k1']]) {
+      press(editor, editor.doc.activeElement, 'ArrowDown', { code: 'ArrowDown', metaKey: true, shiftKey: true });
+      assert.deepEqual(plain(editor.blocks.map(b => b.id)), order);
+      assert.ok(editor.doc.activeElement === cardOf(editor, 'k1'), 'focus is on the card, drawn again where it moved');
+    }
+  });
+
   // A card's record can name a list type, which the block shortcuts read for Tab and Mod+Enter
   for (const type of ['bullet', 'numbered', 'todo']) {
     it(`Tab and Shift+Tab from the card of a newer ${type} keep their own way, and its indent and record stay as loaded`, OPTIONS, async () => {
