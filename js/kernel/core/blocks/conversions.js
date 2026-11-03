@@ -9,8 +9,9 @@
  * - `content`: the new block's text. A type that keeps no lines keeps its content as it is; one
  *   that does keeps its content first, unless that's blank, then its lines, one per line.
  * - `removes`: what goes, in STRUCTURE's order: a table's `grid`, an `image` (every type's
- *   `imageUrl`, unless it turns into an image), a `video`'s embed, an attached `file`, and a
- *   toggle's `arrow` when it hides something. The editor asks before any of them goes.
+ *   `imageUrl` that holds one, unless it turns into an image), a `video`'s embed, an attached
+ *   `file`, and a toggle's `arrow` when it hides something. The editor asks before any of them
+ *   goes.
  * - `after`: new text blocks to add right after it, a toggle's hidden content.
  *
  * Only a block decode reads as known (current or upcast) converts, into a type with a
@@ -19,7 +20,7 @@
  * isn't well formed.
  */
 
-import { isBlankText } from './meaningful.js';
+import { holdsImage, isBlankText } from './meaningful.js';
 
 /** @typedef {import('./catalog.js').Catalog} Catalog */
 
@@ -64,8 +65,9 @@ export function conversionOn(catalog, record, target) {
   const content = typeof block.content === 'string' ? block.content : '';
   const lines = part.text.length === 0 ? [content] : [...(isBlankText(content) ? [] : [content]), ...part.text];
   const removed = new Set(part.removes);
-  // Every type has an imageUrl, which only an image keeps
-  if (typeof block.imageUrl === 'string' && block.imageUrl !== '' && target !== 'image') removed.add('image');
+  // Every type has an imageUrl, which only an image keeps. It's an image to ask about only when it
+  // holds one, by the rule the merges and the empty-note check read (meaningful.js, holdsImage)
+  if (holdsImage(block.imageUrl) && target !== 'image') removed.add('image');
   return Object.freeze({
     content: lines.join('<br>'),
     removes: Object.freeze(STRUCTURE.filter(item => removed.has(item))),

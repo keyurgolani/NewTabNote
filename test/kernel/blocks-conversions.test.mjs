@@ -85,6 +85,16 @@ describe('what a conversion keeps and removes (#14 slice 3)', () => {
     assert.deepEqual(plan(block('image', { imageUrl: null }), 'text'), { content: '', removes: [], after: [] });
   });
 
+  it("an imageUrl holding no image, by the merges' and the empty-note check's rule, goes without a word, and one holding an image still asks (#14)", { timeout: 30_000 }, () => {
+    for (const imageUrl of ['data:,', 'data:image/png;base64,', '  ', ' data:image/png, ']) {
+      assert.deepEqual(plan(block('text', { content: 'Some text', imageUrl }), 'h1').removes, [], JSON.stringify(imageUrl));
+    }
+    for (const imageUrl of ['https://a.test/x.png', 'data:,,', 'data:image/png;base64,iVBORw0KGgo=', 'blob:https://a.test/1']) {
+      assert.deepEqual(plan(block('text', { content: 'Some text', imageUrl }), 'h1').removes, ['image'], imageUrl);
+    }
+    assert.deepEqual(plan(block('text', { imageUrl: 'https://a.test/x.png' }), 'image').removes, [], 'an image keeps it');
+  });
+
   it('a toggle keeps its heading, its hidden content goes to a new text block after it, and its arrow goes', { timeout: 30_000 }, () => {
     assert.deepEqual(plan(block('toggle', { content: 'Heading', children: 'Inside <i>it</i>' }), 'h1'), {
       content: 'Heading',
