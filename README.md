@@ -1,10 +1,8 @@
 # NewTabNote: Transform Your New Tab into an AI-Powered Second Brain
 
-![NewTabNote Hero](assets/marquee_promo_tile.png)
+![NewTabNote on a new tab: folders and notes in the sidebar, a checklist open](assets/store/readme-hero.png)
 
 **NewTabNote** replaces your blank new tab page with a professional, block-based editor inspired by Notion and Obsidian. Whether you're capturing quick ideas, managing complex projects, or using AI to summarize your thoughts, NewTabNote is designed for speed, privacy, and productivity.
-
-![NewTabNote new tab](docs/screenshots/01-newtab-overview.png)
 
 > 📸 **[See the full visual showcase »](SHOWCASE.md)** — the block editor, slash-command menu, and settings, captured live.
 
