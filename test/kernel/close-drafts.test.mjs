@@ -19,6 +19,7 @@ import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 import { createKernel } from './test-kernel.mjs';
 
 /** @typedef {import('../../js/kernel/core/domain/close-draft.js').CloseDraft} CloseDraft */
+/** @typedef {import('../../js/kernel/core/domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */
 /** @typedef {import('../../js/kernel/core/ports/repository.js').KernelAdapter} KernelAdapter */
@@ -444,6 +445,24 @@ for (const fixture of FIXTURES) {
         assert.equal((await recordOf(ctx, 'blocks', 'gone')).record, undefined, 'no block is made for a move of one no note holds');
       });
 
+      it("leaves the note's links as stored for moves alone, and writes the closing page's for deletes alone and for a rename alone, as before", async () => {
+        await profileOf(ctx);
+        const link = { id: 'link-1', fromNoteId: 'A', toNoteId: 'B', createdAt: T0 };
+        await seed(ctx, 'links', [link]);
+        const pairs = async () => (await allOf(ctx, 'links')).map(row => [row.fromNoteId, row.toNoteId]);
+        const revision = async () => (await recordOf(ctx, 'notes', 'A')).versions?.revision ?? 0;
+        const moves = stackDraft({ blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } });
+        assert.deepEqual(said(await apply(ctx, moves)), ['close-draft-saved', ['A']]);
+        assert.deepEqual(await pairs(), [['A', 'B']], 'moves change no text, so the link another tab saved stays');
+        const deletes = stackDraft({ id: 'draft-2', revision: await revision(), blocks: [], deletedBlockIds: ['a2'] });
+        assert.deepEqual(said(await apply(ctx, deletes)), ['close-draft-saved', ['A']]);
+        assert.deepEqual(await pairs(), [], 'a delete can take a link with it, so the closing page\'s names go in');
+        await seed(ctx, 'links', [link]);
+        const renamed = stackDraft({ id: 'draft-3', revision: await revision(), blocks: [], name: 'Alpha plan, renamed', titleOrigin: 'typed' });
+        assert.deepEqual(said(await apply(ctx, renamed)), ['close-draft-saved', ['A']]);
+        assert.deepEqual(await pairs(), [], 'and so do they with a rename');
+      });
+
       it("writes nothing for a draft whose only move is of another note's block", async () => {
         await profileOf(ctx);
         const before = await recordOf(ctx, 'notes', 'A');
@@ -718,5 +737,25 @@ describe('decide, on its own', () => {
     const draft = /** @type {CloseDraft} */ (/** @type {unknown} */ (legacyDraft({ blocks: [block('a1', 'A', 0, 'alpha, edited')] })));
     assert.deepEqual(decide({ draft, note: undefined, madeBefore: false, stored: new Map(), versions: undefined }), { kind: 'gone' });
     assert.deepEqual(decide({ draft, note: undefined, madeBefore: true, stored: new Map(), versions: undefined }), { kind: 'recovered-before' }, 'rule 0 first');
+  });
+
+  const noteA = /** @type {NoteRecord} */ (/** @type {unknown} */ ({ id: 'A', name: 'Alpha plan' }));
+
+  it('skips a move of a block the page knows no order for, as a draft some other writer made could carry', () => {
+    const stored = new Map([['a1', { id: 'a1', canvasId: 'A', order: 0, content: 'alpha' }]]);
+    const draft = stackDraft({ blocks: [], orders: [{ id: 'a1', order: 3 }], baseBlocks: [] });
+    assert.equal(decide({ draft, note: noteA, madeBefore: false, stored, versions: { revision: 0, placementVersion: 0 } }).kind, 'dropped');
+  });
+
+  it('drops moves that come with a generated title and no deletes over a note changed since, as it drops the title alone (Q5), and saves moves alone there', () => {
+    const stored = new Map([
+      ['a1', { id: 'a1', canvasId: 'A', order: 0, content: 'alpha' }],
+      ['a2', { id: 'a2', canvasId: 'A', order: 1, content: 'alpha two, from another tab' }],
+    ]);
+    const moves = { blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } };
+    const versions = { revision: 2, placementVersion: 0 };
+    assert.equal(decide({ draft: stackDraft(moves), note: noteA, madeBefore: false, stored, versions }).kind, 'save');
+    const withTitle = stackDraft({ ...moves, name: 'Alpha, by the AI', titleOrigin: 'generated' });
+    assert.equal(decide({ draft: withTitle, note: noteA, madeBefore: false, stored, versions }).kind, 'dropped');
   });
 });

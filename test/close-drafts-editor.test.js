@@ -938,13 +938,14 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
     assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['added in the main pane', 1], ['charlie two, from the pop-out', 2]]);
   });
 
-  it('the same with the closing save committed: the note is stored as the main pane shows it, in its order, with no recovered note', async () => {
+  it('the same with the closing save committed: the note is stored as the main pane shows it, in its order, with no recovered note, and the next start saves nothing', async () => {
     const { env, main } = await popOutSavedC2();
     const saves = watchSaves(env);
     main.insertBlockAfter('c1', 'text', 'added in the main pane');
     closePage(env);
     assert.equal((await saves[saves.length - 1].done).kind, 'committed', 'the closing save committed');
-    await nextStart(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, [], 'its draft finds every block where the closing save put it');
     assert.deepEqual(await recoveredNames(env), []);
     assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['added in the main pane', 1], ['charlie two, from the pop-out', 2]]);
   });
@@ -1010,6 +1011,53 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
     assert.deepEqual(drafts(env).map((draft) => draft.orders), [[{ id: 'c1', order: 0 }, { id: 'c2', order: 1 }]], 'the draft moves both back');
     await nextStart(env);
     assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['charlie two', 1]]);
+  });
+
+  it('a move whose save was in flight at the close and committed as the page went: the next start finds each block at its order and writes nothing', async () => {
+    const env = await setup();
+    const main = editing(makeEditor(env));
+    await main.loadNote('C');
+    // The first save commits at once, as the page goes, and the editor never hears of it. Every
+    // save after it goes with the page.
+    const client = env.documentClient;
+    const real = client.saveContent;
+    let calls = 0;
+    let first = null;
+    client.saveContent = (save, options) => {
+      calls += 1;
+      if (calls === 1) first = real(save, options);
+      return new Promise(() => {});
+    };
+    main.moveBlockByDirection('c2', -1);
+    env.clock.tick(500);
+    for (let i = 0; i < 100 && calls < 1; i++) {
+      env.frames();
+      await settle(2);
+    }
+    assert.equal(calls, 1, 'the move went');
+    assert.equal((await first).kind, 'committed');
+    closePage(env);
+    assert.deepEqual(drafts(env).map((draft) => draft.orders), [[{ id: 'c2', order: 0 }, { id: 'c1', order: 1 }]], 'the draft holds the move again');
+    const before = (await storedRows(env)).notes.C;
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, [], 'nothing was left to save');
+    assert.equal((await storedRows(env)).notes.C.updatedAt, before.updatedAt, 'the record stays as the commit left it');
+  });
+
+  it("the pop-out's committed reorder of a block is the page's own: the main pane's later move of it and a lost close put it where the main pane did", async () => {
+    const env = await setup({ blocks: [block('c3', 'C', 2, 'charlie three')] });
+    const main = editing(makeEditor(env));
+    await main.loadNote('C');
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    editing(pip);
+    pip.moveBlockByDirection('c2', -1);
+    assert.equal(await runWithPiP(env, pipWindow, pip.flushSave()), true);
+    // The main pane, on its base (c1 c2 c3), moves c2 below c3 and closes, every save lost
+    watchSaves(env, { hold: lostWithThePage });
+    main.moveBlockByDirection('c2', 1);
+    closePage(env);
+    await nextStart(env);
+    assert.equal((await storedRows(env)).blocks.c2.order, 2, "c2 where the main pane put it, over the order the pop-out's save gave it");
   });
 
   /**

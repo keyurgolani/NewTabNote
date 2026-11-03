@@ -250,7 +250,9 @@ const isEmpty = residue =>
 
 /**
  * Q5's case: deletes alone, maybe with a generated title, which hold no text to recover. Moves
- * go with them, since they only close the gaps the deletes leave. Moves alone aren't Q5's.
+ * go with them, since they only close the gaps the deletes leave. Moves alone aren't Q5's, but
+ * moves with a generated title and no deletes are: they drop with the title, as the lead kept it
+ * (#6).
  * @param {NoteRecord} note
  * @param {Residue} residue
  * @param {CloseDraft} draft
