@@ -15,9 +15,9 @@
  *   more after it, as the recovery-point purge does, so an entry written meanwhile is read too.
  *   A profile with no journal database opens nothing and makes none.
  * - What the drain can't replay is `journal.entry-unreplayable` (#20, the lead's answer to the
- *   plan's Q8), on the coordinator's provider, and a capture among them is told to `notify`. A
- *   capture it adds is `capture.committed`, as one the worker adds at once is, so it resolves the
- *   capture incident its failure raised.
+ *   plan's Q8), on the coordinator's provider, and a capture among them is told to `notify`, with
+ *   why. A capture it adds is `capture.committed`, as one the worker adds at once is, so it
+ *   resolves the capture incident its failure raised.
  *
  * Building it opens nothing, and nothing here throws into the worker: a journal that can't be
  * written leaves the capture to run as it did before slice 3, and says so on the console.
@@ -109,7 +109,7 @@ function combined(first, then) {
  *   locks?: JournalLocks | null,
  *   clock?: {now(): number},
  *   events?: {event(code: string, fields?: Record<string, unknown>, failure?: unknown): void} | null,
- *   notify?: ((entry: JournalRecord) => void) | null,
+ *   notify?: ((entry: JournalRecord, code: string) => void) | null,
  *   warn?: (event: string, error: unknown) => void,
  * }} options - `locks` is navigator.locks, read when first needed, unless a test passes one
  * @returns {WorkerJournal}
@@ -201,7 +201,7 @@ export function createWorkerJournal({
     } catch {
       // Best effort: a journal that can't be written changes nothing the drain does
     }
-    if (notify && isCapture(entry)) notify(entry);
+    if (notify && isCapture(entry)) notify(entry, code);
   };
 
   /**

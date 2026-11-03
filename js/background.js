@@ -206,15 +206,25 @@ const CAPTURE_REFUSALS = {
 
 /**
  * A capture the notes couldn't take, kept in the journal for the drain (#35 slice 3, the lead's
- * words for the plan's Q2), and one the drain then couldn't add
+ * words for the plan's Q2), and one the drain then couldn't add. A kept capture says what will
+ * add it when that's up to the user (the director's words for #182): an update, for a database a
+ * newer build upgraded, or closing the older build's tabs and windows that hold the upgrade.
  */
 const KEPT_CAPTURE = Object.freeze({
   title: "Kept for today's note",
   message: "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added when your notes open.",
+  newerSchema: "Update NewTabNote to add this. A newer version upgraded your notes. It's kept on this device until then.",
+  blockedUpgrade: "Close or reload your open NewTabNote tabs and windows to finish an update and add this. It's kept on this device until then.",
+  missingStores: 'Open a new tab to export a copy. Your notes database is incomplete. What you added is kept on this device.',
 });
 const UNREPLAYABLE_CAPTURE = Object.freeze({
   title: 'Not captured',
   message: "NewTabNote couldn't add a kept capture to today's note.",
+});
+/** A capture a newer build kept, which the drain holds for that build (the lead's Q6) */
+const HELD_CAPTURE = Object.freeze({
+  title: 'Kept for your notes',
+  message: "Update NewTabNote to add a capture from a newer version. It's kept on this device until then.",
 });
 
 /**
@@ -228,6 +238,19 @@ function captureRefusal({ cause, code }) {
   if (code === 'missing-core-stores') return CAPTURE_REFUSALS.missingCoreStores;
   if (code === 'blocked-upgrade') return CAPTURE_REFUSALS.blockedUpgrade;
   return null;
+}
+
+/**
+ * What a kept capture says for the answer that kept it: what will add it, when that's up to
+ * the user, and otherwise that it's added when the notes open
+ * @param {{cause?: string, code?: string}} answer
+ * @returns {string}
+ */
+function keptMessage({ cause, code }) {
+  if (cause === 'newer-schema') return KEPT_CAPTURE.newerSchema;
+  if (code === 'blocked-upgrade') return KEPT_CAPTURE.blockedUpgrade;
+  if (code === 'missing-core-stores') return KEPT_CAPTURE.missingStores;
+  return KEPT_CAPTURE.message;
 }
 
 /**
@@ -365,12 +388,12 @@ function notifyCapture(title, message) {
  * kernel's captureToDailyNote command. Its journal entry is written first, before the
  * coordinator starts (#35 slice 3), and goes once the capture is answered for good: saved, or
  * refused for what it holds. A capture the notes can't take now (they won't open, an older
- * build's page holds their upgrade, or a write failed) is kept, says so, and the coordinator's
- * drain adds it to the Daily Note of the day it was made once they can. Without an entry, as
- * when the journal can't be written, it ends as it did before slice 3: saved, refused (the
- * database can't be opened safely), or failed, each with a notification. A refused or failed
- * one, kept or not, is also a `capture.failed` event, which holds the outcome's cause and code
- * and never what was captured.
+ * build's page holds their upgrade, or a write failed) is kept, says so and what will add it
+ * (keptMessage), and the coordinator's drain adds it to the Daily Note of the day it was made
+ * once they can. Without an entry, as when the journal can't be written, it ends as it did
+ * before slice 3: saved, refused (the database can't be opened safely), or failed, each with a
+ * notification. A refused or failed one, kept or not, is also a `capture.failed` event, which
+ * holds the outcome's cause and code and never what was captured.
  * @param {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} item
  * @returns {Promise<void>}
  */
@@ -389,11 +412,16 @@ async function captureToDailyNote(item) {
     at: Date.now(),
   };
   const kept = captureJournal ? await captureJournal.keep(command, { noteId: command.noteId }) : false;
-  /** The notes can't take it now: kept for the drain, or today's words without an entry */
-  const notTaken = (words) => {
+  /**
+   * The notes can't take it now, for `answer`: kept for the drain, saying what will add it, or
+   * today's words without an entry
+   * @param {string} words
+   * @param {{cause?: string, code?: string}} answer
+   */
+  const notTaken = (words, answer) => {
     if (kept) {
       captureJournal.release(command.commandId);
-      notifyCapture(KEPT_CAPTURE.title, KEPT_CAPTURE.message);
+      notifyCapture(KEPT_CAPTURE.title, keptMessage(answer));
     } else {
       notifyCapture('Not captured', words);
     }
@@ -406,7 +434,7 @@ async function captureToDailyNote(item) {
       const refusal = captureRefusal(failure);
       // Its cause and code: a refusal warns, as 1.4.x did at open, and any other failure is an error
       (refusal ? console.warn : console.error)('Storage not opened in background:', failure);
-      notTaken(refusal || "NewTabNote couldn't open your notes, so nothing was saved.");
+      notTaken(refusal || "NewTabNote couldn't open your notes, so nothing was saved.", failure);
       failureEvents.event('capture.failed', {}, failure);
       return;
     }
@@ -419,7 +447,7 @@ async function captureToDailyNote(item) {
       const words = refusal || `Saving to today's note failed: ${reason}`;
       // Unavailable or unanswered, it may land later; refused for what it holds, it never will
       if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
-        notTaken(words);
+        notTaken(words, outcome);
       } else {
         if (kept) await captureJournal.settle(command.commandId);
         notifyCapture('Not captured', words);
@@ -434,7 +462,7 @@ async function captureToDailyNote(item) {
     failureEvents.event('capture.committed', { commandId: command.commandId });
   } catch (error) {
     console.error('Failed to capture to daily note:', error);
-    notTaken(`Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`);
+    notTaken(`Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`, {});
     failureEvents.event('capture.failed', {}, error);
   }
 }
@@ -486,7 +514,11 @@ try {
   captureJournal = createWorkerJournal({
     instanceId,
     events: failureEvents,
-    notify: () => notifyCapture(UNREPLAYABLE_CAPTURE.title, UNREPLAYABLE_CAPTURE.message),
+    // A capture a newer build wrote waits for it; one no build can read is kept as a conflict record
+    notify: (entry, code) => {
+      const words = code === 'unsupported-version' ? HELD_CAPTURE : UNREPLAYABLE_CAPTURE;
+      notifyCapture(words.title, words.message);
+    },
   });
 } catch (error) {
   // Captures run as they did before slice 3, unjournaled
