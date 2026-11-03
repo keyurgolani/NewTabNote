@@ -1077,6 +1077,30 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
       .map((row) => `${row.id}@${row.order}`);
     assert.deepEqual(shown, ['p0@0', 'p1@1', 'p3@2', 'p2@3'], "the other tab's order, as it saved it");
   });
+
+  it("a move alone leaves the note's links as stored: another tab's newer link stays through the closing tab's lost close", async () => {
+    const linksOfC = async (env) => Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'links'))
+      .filter((row) => row.fromNoteId === 'C')
+      .map((row) => row.toNoteId)
+      .sort();
+    const env = await setup();
+    const tabA = editing(makeEditor(env));
+    await tabA.loadNote('C');
+    const other = await secondTab(env);
+    const tabB = editing(makeEditor(other));
+    await tabB.loadNote('C');
+    type(tabB, 'charlie two, see [[Alpha]]', 1);
+    assert.equal(await runUntil(other, tabB.flushSave()), true);
+    assert.deepEqual(await linksOfC(env), ['A'], "tab B's save links C to Alpha");
+    // Tab A, on its base, moves c2 above c1 and closes, every save lost
+    watchSaves(env, { hold: lostWithThePage });
+    tabA.moveBlockByDirection('c2', -1);
+    closePage(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['C'], 'the move went in');
+    assert.deepEqual(await storedInOrder(env), [['charlie two, see [[Alpha]]', 0], ['charlie', 1]]);
+    assert.deepEqual(await linksOfC(env), ['A'], "and tab B's link stays");
+  });
 });
 
 describe('a close-time draft takes a block a save in flight put, as the next save does (#17, the per-pane save)', () => {
