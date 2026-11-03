@@ -260,11 +260,18 @@ describe('schemaVersion, written the next time a block is saved (#14 slice 3)', 
   it('a block from a newer version is never written below its version', OPTIONS, async () => {
     const newer = { ...block('n1', 'N', 0, 'Newer'), schemaVersion: 9 };
     const { env, editor } = await openNote([newer, block('n2', 'N', 1, 'Mine')]);
-    const mine = editor.getBlockById('n2');
-    mine.content = 'Mine, edited';
+    // Deleted with a yes to the question and brought back, so the next save writes it
+    env.global.confirmDialog = async () => true;
+    Object.assign(editor, { focusBlock() {} });
+    editor.selectedBlockIds = new Set(['n1']);
+    await editor.deleteSelectedBlocks();
+    await runUntil(env, editor.save());
+    assert.equal((await stored(env)).n1, undefined, 'deleted');
+    editor.undo();
+    editor.getBlockById('n2').content = 'Mine, edited';
     await runUntil(env, editor.save());
     const after = await stored(env);
-    assert.equal(after.n1.schemaVersion, 9);
+    assert.deepEqual(plain(after.n1), plain(newer), 'written back as loaded, at its version');
     assert.equal(after.n2.content, 'Mine, edited');
   });
 });

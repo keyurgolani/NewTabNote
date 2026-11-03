@@ -826,23 +826,29 @@ describe('BlockEditor saves put only what their own pane changed (#17, the per-p
     assert.deepEqual(await storedC(env), [['c1', 'charlie, its save failed', 0], ['c2', 'charlie two, typed after', 1]]);
   });
 
-  it("the base's revision stays the stored one through the pane's own saves, and goes unknown once another pane's commit comes between", async () => {
+  it("the pane's own saves: the close's draft has the stored revision as its base's", async () => {
     const { env, main } = await pageOnC();
     type(main, 'charlie, saved once');
     await debounceSave(env, main);
     type(main, 'charlie, saved twice');
     await debounceSave(env, main);
     const { revision } = await env.documentClient.openNote('C');
-    assert.equal(main._seen.get('C').revision, revision, 'nothing else committed');
+    assert.equal(revisionAtClose(env, main), revision, 'nothing else committed');
+  });
+
+  it("another pane's commit between the pane's own saves: the close's draft says its base's revision isn't known", async () => {
+    const { env, main } = await pageOnC();
+    type(main, 'charlie, saved once');
+    await debounceSave(env, main);
     const { pip } = await popOut(env);
     type(pip, 'charlie two, from the pop-out', 1);
     assert.equal(await runUntil(env, pip.flushSave()), true);
     type(main, 'charlie, saved after the pop-out');
     await debounceSave(env, main);
-    assert.equal(main._seen.get('C').revision, null, "the pop-out's commit came between");
+    assert.equal(revisionAtClose(env, main), null, "the pop-out's commit came between");
   });
 
-  it("the base's revision stays the stored one through the pane's own delete", async () => {
+  it("the pane's own delete after its save: the close's draft has the stored revision as its base's", async () => {
     const { env, main } = await pageOnC();
     type(main, 'charlie, saved');
     await debounceSave(env, main);
@@ -850,7 +856,7 @@ describe('BlockEditor saves put only what their own pane changed (#17, the per-p
     await waitFor(async () => !(await storedC(env)).some(([id]) => id === 'c2'));
     await settle();
     const { revision } = await env.documentClient.openNote('C');
-    assert.equal(main._seen.get('C').revision, revision, 'the delete committed right after the save');
+    assert.equal(revisionAtClose(env, main), revision, 'the delete committed right after the save');
   });
 
   it("a pane's save after its own Enter keeps the pop-out's newer text in the block the Enter moved", async () => {
