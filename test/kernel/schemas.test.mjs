@@ -165,6 +165,7 @@ const folderTypesMatch = true;
  *   listLinks: typeof import('../../js/kernel/core/contracts/operations/list-links.js').result,
  *   listVectors: typeof import('../../js/kernel/core/contracts/operations/list-vectors.js').result,
  *   getSyncData: typeof import('../../js/kernel/core/contracts/operations/get-sync-data.js').result,
+ *   findTombstones: typeof import('../../js/kernel/core/contracts/operations/find-tombstones.js').result,
  * }} ResultSchemas
  */
 
@@ -199,6 +200,7 @@ const queryDataMatches = {
   listLinks: true,
   listVectors: true,
   getSyncData: true,
+  findTombstones: true,
 };
 
 /**

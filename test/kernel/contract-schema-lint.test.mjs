@@ -377,6 +377,8 @@ describe('the contract schema lint (#13, AC5)', () => {
       insertBlocks: ['blocks.[]'],
       // A closing tab's edit, blocks and name and the names its links read
       applyCloseDraft: ['draft'],
+      // A journal entry the worker's drain couldn't replay, whole, as the user wrote it (#35 slice 3)
+      keepJournalEntry: ['command'],
       // AI chat's conversations and prompt templates, a theme's name, and a backup file
       saveChatHistory: ['history', 'messages'],
       savePromptTemplates: ['templates'],

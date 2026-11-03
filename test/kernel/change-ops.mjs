@@ -56,6 +56,8 @@ export const CHANGE_OPS = Object.freeze({
   // which writes nothing
   updateSearchIndex: [],
   saveVector: [],
+  // A conflict record of a journal entry the worker's drain couldn't replay, which changes no note (#35 slice 3)
+  keepJournalEntry: [],
   setPreferences: [],
   saveWorkspaceSession: [],
   runStartupMaintenance: [],

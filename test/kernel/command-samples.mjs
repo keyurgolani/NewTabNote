@@ -95,12 +95,19 @@ export const COMMAND_SAMPLES = {
       linkedNames: [],
     },
   },
+  // A journal entry the worker's drain couldn't replay, kept as a conflict record of n1 (#35 slice 3)
+  keepJournalEntry: {
+    opId: 'c-unreplayed',
+    noteId: 'n1',
+    command: { type: 'saveNoteContent', commandId: 'c-unreplayed', noteId: 'n1', blocks: [] },
+  },
   // The worker's catch-up of the records 1.4.x left behind their blocks, over n1 and a note it has no record of
   catchUpNoteRecords: { noteIds: ['n1', 'n-gone'] },
   captureToDailyNote: {
     noteId: 'd1',
     blockId: 'b9',
     capture: { type: 'text', content: 'Quote', source: 'https://example.test/' },
+    at: NOW,
   },
   ensureDailyNote: { noteId: 'd2', dateStr: '2026-10-19' },
   archiveNote: { noteId: 'n1' },

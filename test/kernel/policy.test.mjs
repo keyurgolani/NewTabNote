@@ -19,8 +19,11 @@ const READS = ['listNotes', 'getNote', 'getNoteBlocks', 'listFolders', 'getPrefe
 /** @type {Record<Surface, {commands: string[] | 'all', queries: string[] | 'all'}>} */
 const TODAY = {
   newtab: {
-    // Every command but the integrity check and the records' catch-up, which only the service worker runs (#35, #33)
-    commands: COMMAND_TYPES.filter(type => type !== 'runIntegrityCheck' && type !== 'catchUpNoteRecords'),
+    // Every command but the integrity check, the records' catch-up, and the journal drain's keep of an
+    // entry, which only the service worker runs (#35, #33)
+    commands: COMMAND_TYPES.filter(
+      type => type !== 'runIntegrityCheck' && type !== 'catchUpNoteRecords' && type !== 'keepJournalEntry',
+    ),
     queries: [
       ...READS,
       'getBacklinks',
@@ -45,9 +48,21 @@ const TODAY = {
   popup: { commands: ['createNote', 'applyCloseDraft'], queries: [...READS, 'getPopupInsightsEnabled'] },
   sidepanel: { commands: ['applyCloseDraft'], queries: READS },
   offscreen: { commands: [], queries: [] },
+  // Since #35 slice 3 its drain also replays what a page journaled: a note's creation, an append,
+  // and an editor's save as the close-time draft it applies, keeps one it can't replay, and reads
+  // which notes were deleted for good first
   'worker-internal': {
-    commands: ['captureToDailyNote', 'runStartupMaintenance', 'runIntegrityCheck', 'catchUpNoteRecords'],
-    queries: [],
+    commands: [
+      'captureToDailyNote',
+      'runStartupMaintenance',
+      'runIntegrityCheck',
+      'catchUpNoteRecords',
+      'createNote',
+      'insertBlocks',
+      'applyCloseDraft',
+      'keepJournalEntry',
+    ],
+    queries: ['findTombstones'],
   },
   recovery: { commands: [], queries: [] },
 };
