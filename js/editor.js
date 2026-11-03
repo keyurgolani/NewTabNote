@@ -4031,8 +4031,9 @@ class BlockEditor {
    * @param {string} url
    */
   insertBookmarkBlockAfterCurrent(url) {
+    // activeBlock is the focused block's id (onBlockFocus), so the bookmark goes right after it (#14)
     const afterId = this.activeBlock
-      ? this.activeBlock.id
+      ? this.activeBlock
       : this.blocks[this.blocks.length - 1]?.id;
 
     const block = this.insertBlockAfter(afterId, 'bookmark', '', {
@@ -4123,9 +4124,9 @@ class BlockEditor {
       const block = this.createBlock('image');
       block.imageUrl = dataUrl;
 
-      // Add after active block or at end
+      // Add after the focused block, whose id activeBlock holds (onBlockFocus), or at the end (#14)
       if (this.activeBlock) {
-        const index = this.blocks.findIndex(b => b.id === this.activeBlock.id);
+        const index = this.blocks.findIndex(b => b.id === this.activeBlock);
         this.blocks.splice(index + 1, 0, block);
       } else {
         this.blocks.push(block);
