@@ -12,11 +12,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import * as v from '../../js/lib/valibot/index.mjs';
-import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
-import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
 import { SURFACES } from '../../js/kernel/core/contracts/surfaces.js';
 import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { checkRequest, checkResult } from '../../js/kernel/core/contracts/validate.js';
+import { WORKER_COMMANDS, WORKER_QUERIES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { encode } from '../../js/kernel/core/contracts/codec.js';
 import { createLookup } from '../../js/kernel/core/messaging/operations.js';
 import { TRUST_COMMANDS, TRUST_QUERIES } from '../../js/trust/core/contracts.js';
@@ -73,7 +72,7 @@ describe('the trust catalog (#20 slice 1, AC1)', () => {
     for (const [name, entry] of ENTRIES) {
       assert.equal(entry.version, 1, name);
       assert.ok(
-        !(name in COMMANDS) && !(name in QUERIES) && !(name in SYSTEM_QUERIES),
+        !(name in WORKER_COMMANDS) && !(name in WORKER_QUERIES) && !(name in SYSTEM_QUERIES),
         `${name} is already an operation`,
       );
       assert.equal(

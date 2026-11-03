@@ -35,8 +35,9 @@ import {
   TRANSFORM_RETRY_AFTER_MS,
   TRANSFORM_STOP_KEY,
 } from '../../js/kernel/adapters/indexeddb/transforms.js';
-import { createKernel } from './test-kernel.mjs';
+import { catalogFor, createKernel } from './test-kernel.mjs';
 import { PLACEMENT_FIELDS, withoutPlacement } from '../../js/kernel/core/domain/placement.js';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { placementOf } from '../../js/product/placement.js';
 import {
@@ -259,12 +260,14 @@ async function withCommands(of, body, clock = later, caller = CALLERS.newtab) {
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
     clock,
+    // The worker's root keys its own commands too (composition/background.js)
+    ...(caller.surface === 'worker-internal' ? { commands: WORKER_COMMANDS } : {}),
   });
   await adapter.open();
   try {
     // Ids no other call's commands took, so the ledger never answers one with an earlier outcome
     const ids = { next: () => `t-${(commandCount += 1)}` };
-    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller, ids, clock });
+    const kernel = createKernel({ adapter, policy: createBaselinePolicy(catalogFor(caller)), caller, ids, clock });
     return await body(async fields => {
       const outcome = await kernel.execute(/** @type {any} */ ({ commandId: ids.next(), ...fields }));
       assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
@@ -1329,12 +1332,13 @@ describe('below version 10, where 1.4.1 still opens the database, no command wri
       clock: later,
       mode: 'existing',
       requireCore: true,
+      commands: WORKER_COMMANDS,
     });
     await adapter.open();
     const ids = { next: () => `p3-${(commandCount += 1)}` };
     const worker = createKernel({
       adapter,
-      policy: createBaselinePolicy(),
+      policy: createBaselinePolicy(catalogFor(CALLERS['worker-internal'])),
       caller: CALLERS['worker-internal'],
       ids,
       clock: later,

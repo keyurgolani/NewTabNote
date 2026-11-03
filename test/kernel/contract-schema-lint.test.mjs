@@ -18,17 +18,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import * as v from '../../js/lib/valibot/index.mjs';
-import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import * as entities from '../../js/kernel/core/contracts/entities.js';
 import * as envelope from '../../js/kernel/core/contracts/envelope.js';
 import { content, count, entityId, id } from '../../js/kernel/core/contracts/fields.js';
 import * as hintChannel from '../../js/kernel/core/contracts/hint-channel.js';
 import { commandPayload } from '../../js/kernel/core/contracts/operation.js';
 import { bulkResultSchema, failedSchema, outcomeSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
-import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
 import * as settings from '../../js/kernel/core/contracts/settings.js';
 import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { isContent, walk } from '../../js/kernel/core/contracts/schema-walk.js';
+import { WORKER_COMMANDS, WORKER_QUERIES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import * as intelligenceEvents from '../../js/kernel/core/intelligence/events.js';
 import * as intelligenceInvalidation from '../../js/kernel/core/intelligence/invalidation.js';
 import * as intelligenceOperations from '../../js/kernel/core/intelligence/operations.js';
@@ -283,11 +282,13 @@ export function lint(root, { role, carriesSecret = false, checkedElsewhere = [] 
 
 const CATALOG_URL = new URL('../../js/kernel/core/contracts/commands.js', import.meta.url);
 
+// Every operation of the shared catalog and of the worker's part (contracts/worker-catalog.js),
+// whose entries name their schemas from the same folder
 /** @type {Array<{name: string, entry: Record<string, unknown>, payload: unknown, result: unknown}>} */
 const operations = [];
 for (const [name, entry] of [
-  ...Object.entries(COMMANDS),
-  ...Object.entries(QUERIES),
+  ...Object.entries(WORKER_COMMANDS),
+  ...Object.entries(WORKER_QUERIES),
   ...Object.entries(SYSTEM_QUERIES),
 ]) {
   const { payload, result } = await import(new URL(entry.schema, CATALOG_URL).href);
@@ -319,7 +320,7 @@ describe('the contract schema lint (#13, AC5)', () => {
   it('passes every operation payload', () => {
     assert.equal(
       operations.length,
-      Object.keys(COMMANDS).length + Object.keys(QUERIES).length + Object.keys(SYSTEM_QUERIES).length,
+      Object.keys(WORKER_COMMANDS).length + Object.keys(WORKER_QUERIES).length + Object.keys(SYSTEM_QUERIES).length,
     );
     for (const { name, entry, payload } of operations) {
       assert.deepEqual(lint(payload, { role: 'payload', carriesSecret: entry.carriesSecret === true }), [], name);

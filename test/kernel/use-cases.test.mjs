@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createKernel } from './test-kernel.mjs';
+import { captureCommands } from '../../js/kernel/core/application/capture.js';
 import { indexCommands } from '../../js/kernel/core/application/indexing.js';
 import { noteCommands } from '../../js/kernel/core/application/notes.js';
 import { remoteCommands } from '../../js/kernel/core/application/remote.js';
@@ -367,7 +368,7 @@ describe('units an adapter runs again', () => {
       blockId: 'k1',
       capture: { type: 'text', content: 'Quote' },
     });
-    const work = /** @type {Work} */ (await noteCommands.captureToDailyNote(command, context));
+    const work = /** @type {Work} */ (await captureCommands.captureToDailyNote(command, context));
     // The first run makes the Daily Note and fails to commit. Before the run that commits,
     // another context made today's.
     await runUnits(work, { notes: {} });

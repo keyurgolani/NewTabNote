@@ -4,9 +4,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
-import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
 import { JOURNAL_UPCASTERS, upcastJournalEntry } from '../../js/kernel/core/contracts/upcast.js';
+// Both parts of the catalog, so the worker's capture is here, and has its steps checked too
+import {
+  WORKER_COMMANDS as COMMANDS,
+  WORKER_QUERIES as QUERIES,
+} from '../../js/kernel/core/contracts/worker-catalog.js';
 
 /** @typedef {import('../../js/kernel/core/contracts/validate.js').Operation} Operation */
 /** @typedef {import('../../js/kernel/core/contracts/upcast.js').Upcasters} Upcasters */

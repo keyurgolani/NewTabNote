@@ -7,7 +7,6 @@ import assert from 'node:assert/strict';
 
 import * as v from '../../js/lib/valibot/index.mjs';
 import { encode } from '../../js/kernel/core/contracts/codec.js';
-import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import {
   cancelSchema,
   cancelledSchema,
@@ -23,7 +22,6 @@ import {
 import { MAX_DEPTH, MAX_MESSAGE_BYTES, SMALL_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { failedSchema, outcomeSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
 import { bulk, committed, rejected } from '../../js/kernel/core/contracts/outcomes.js';
-import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
 import {
   NO_ANSWER_CODES,
   POLICY_CODES,
@@ -33,6 +31,11 @@ import {
   queryFailure,
 } from '../../js/kernel/core/contracts/transport-codes.js';
 import { check, checkRequest, checkResult, readFrame } from '../../js/kernel/core/contracts/validate.js';
+// Both parts of the catalog, so the worker's capture is one of the operations framed here
+import {
+  WORKER_COMMANDS as COMMANDS,
+  WORKER_QUERIES as QUERIES,
+} from '../../js/kernel/core/contracts/worker-catalog.js';
 import { NOW } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/contracts/validate.js').Operation} Operation */

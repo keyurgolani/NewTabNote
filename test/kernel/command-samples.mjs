@@ -1,9 +1,22 @@
 // A payload for every catalog command (#13, AC1), which the catalog test and #17's AC1 test
 // (write-guards.test.mjs) both run, so one sample set holds each schema and each use case.
+// It covers the worker's part of the catalog too (contracts/worker-catalog.js).
 
-import { NOW } from './support.mjs';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
+import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').CommandType} CommandType */
+
+/**
+ * Who sends `type`'s sample: the new tab, or the service worker for a command whose entry
+ * doesn't list the new tab, as the worker's part's own don't
+ * @param {string} type
+ */
+export const senderOf = type =>
+  Object.hasOwn(WORKER_COMMANDS, type) &&
+  !WORKER_COMMANDS[/** @type {CommandType} */ (type)].surfaces.includes('newtab')
+    ? CALLERS['worker-internal']
+    : CALLERS.newtab;
 
 /**
  * @template {CommandType} T
