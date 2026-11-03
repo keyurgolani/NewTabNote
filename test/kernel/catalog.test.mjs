@@ -22,6 +22,7 @@ import { entityTypesIn, walk } from '../../js/kernel/core/contracts/schema-walk.
 import { importGraph } from './import-graph.mjs';
 import { COMMAND_SAMPLES } from './command-samples.mjs';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
+import { JOURNALED_OPERATIONS } from '../../js/kernel/core/messaging/journaled-operations.js';
 
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */
 /** @typedef {import('../../js/kernel/core/contracts/queries.js').Query} Query */
@@ -70,6 +71,7 @@ const QUERY_SAMPLES = {
   listLinks: {},
   listVectors: {},
   getSyncData: {},
+  findTombstones: { noteIds: ['n1', 'gone'] },
 };
 
 /** The coordinator's own queries, which take no field */
@@ -214,11 +216,37 @@ describe('the catalog (#13, "Desired behavior")', () => {
       );
       assert.deepEqual(entry.destinations, [], `${name}: no destinations until #21 adds them`);
     }
-    // Nothing is journaled until #35 sets it on its content saves, note creation, appends, and captures
+    // #35 slice 3 journals content saves, note creation, appends, and captures (the plan's Q5), and
+    // nothing else: a lost delete brings a block back and a lost rename keeps the old name, neither
+    // an older text over a newer edit
     assert.deepEqual(
-      Object.entries(COMMANDS).filter(([, entry]) => entry.journaled),
-      [],
+      Object.entries(COMMANDS)
+        .filter(([, entry]) => entry.journaled)
+        .map(([type]) => type)
+        .sort(),
+      ['captureToDailyNote', 'createNote', 'insertBlocks', 'saveNoteContent'],
     );
+  });
+
+  it("gives the worker's drain each journaled command as an operation, with its own entry and schemas (#35 slice 3)", () => {
+    assert.deepEqual(
+      Object.keys(JOURNALED_OPERATIONS).sort(),
+      Object.entries(COMMANDS)
+        .filter(([, entry]) => entry.journaled)
+        .map(([type]) => type)
+        .sort(),
+    );
+    for (const [type, operation] of Object.entries(JOURNALED_OPERATIONS)) {
+      assert.equal(operation.entry, COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)], type);
+      assert.equal(operation.payload, moduleOf(type).payload, type);
+      assert.equal(operation.result, moduleOf(type).result, type);
+    }
+    // And the worker replays them, a journaled editor save as the close-time draft it applies
+    for (const type of ['createNote', 'insertBlocks', 'captureToDailyNote', 'applyCloseDraft', 'keepJournalEntry']) {
+      assert.ok(COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].surfaces.includes('worker-internal'), type);
+    }
+    assert.deepEqual(QUERIES.findTombstones.surfaces, ['worker-internal']);
+    assert.deepEqual(COMMANDS.keepJournalEntry.surfaces, ['worker-internal']);
   });
 
   it("names each operation's own schema module, whose payload is that operation's and nothing more", () => {

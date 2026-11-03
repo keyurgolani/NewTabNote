@@ -40,14 +40,16 @@ import { OPERATIONS, VERSION, lookup, settle, testScheduler } from './messaging-
 /** @typedef {import('../../js/kernel/core/ports/journal.js').JournalEntry} JournalEntry */
 
 /**
- * The lookup a client builds once #35 sets createNote journaled (#13, "Desired behavior"):
- * no catalog entry is journaled yet, so these tests mark it
+ * A lookup whose createNote isn't journaled, as a command the catalog doesn't journal is. The
+ * catalog journals createNote since #35 slice 3, so the client's own lookup resends one it
+ * finds no record of (#13, "Desired behavior"), and the case of a command a client must never
+ * resend marks it unjournaled.
  */
-const journaledLookup = createLookup({
+const unjournaledLookup = createLookup({
   ...OPERATIONS,
   ...SYSTEM_OPERATIONS,
   createNote: operationOf(
-    /** @type {CommandEntry} */ ({ ...OPERATIONS.createNote.entry, journaled: true }),
+    /** @type {CommandEntry} */ ({ ...OPERATIONS.createNote.entry, journaled: false }),
     OPERATIONS.createNote,
   ),
 });
@@ -135,17 +137,17 @@ function harness() {
    * A page of `surface` with a client to the worker over the runtime port, the ledger, and,
    * when given, a journal double
    * @param {'newtab' | 'popup'} surface
-   * @param {{journal?: JournalEntry[], journaled?: boolean}} [options] - `journaled` false keeps
-   *   createNote unjournaled, as the catalog has it today, even with a journal
+   * @param {{journal?: JournalEntry[], journaled?: boolean}} [options] - `journaled` false makes
+   *   createNote unjournaled, as a command the catalog doesn't journal is, even with a journal
    */
-  const open = (surface, { journal, journaled = journal !== undefined } = {}) => {
+  const open = (surface, { journal, journaled = true } = {}) => {
     const context = fake.page(surface);
     documents += 1;
     const client = createClient({
       transport: createRuntimePortTransport({ runtime: context.chrome.runtime }),
       surface,
       extensionVersion: VERSION,
-      lookup: journaled ? journaledLookup : lookup,
+      lookup: journaled ? lookup : unjournaledLookup,
       ids: testIds(`${surface}-${documents}`),
       ...scheduler,
       ledger,
