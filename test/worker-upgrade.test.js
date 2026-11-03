@@ -109,7 +109,7 @@ describe('the worker upgrades the database and answers the pages that wait on it
         type: 'basic',
         iconUrl: 'icons/icon48.png',
         title: "Kept for today's note",
-        message: "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added when your notes open.",
+        message: "Close or reload your open NewTabNote tabs and windows to finish an update and add this. It's kept on this device until then.",
       });
       // (A dump would wait behind the blocked upgrade, so the database is read once it lands)
       blocker.close();
