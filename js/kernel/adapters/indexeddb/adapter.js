@@ -170,6 +170,9 @@ import { createVersionTracker } from './versions.js';
  *   Web Locks, which that copy's check and write hold so tabs that open together write one
  * @property {Clock} [clock] - when a ledger row, a conflict record, and a tombstone are written
  * @property {typeof IDBKeyRange} [keyRange] - for the change log's reads, the global one unless given
+ * @property {Readonly<Record<string, import('../../core/contracts/commands.js').CommandEntry>>} [commands]
+ *   The catalog's commands, whose ledger rows it keeps: the shared catalog's unless the service
+ *   worker's root names its own (contracts/worker-catalog.js)
  */
 
 /**
@@ -269,10 +272,11 @@ function booksOf(db) {
  * such as #20's storage probe, which writes and deletes a record of its own, keeps no ledger
  * row and never replays one, so each run of it runs, and it leaves CanvasTabDB as it found it.
  * @param {Work} work
+ * @param {Readonly<Record<string, unknown>>} commands - the catalog's
  */
-const isCatalogCommand = work => {
+const isCatalogCommand = (work, commands) => {
   const { type } = /** @type {{type?: unknown}} */ (work.command);
-  return typeof type === 'string' && Object.hasOwn(COMMANDS, type);
+  return typeof type === 'string' && Object.hasOwn(commands, type);
 };
 
 /**
@@ -280,10 +284,11 @@ const isCatalogCommand = work => {
  * undefined: none for work that isn't a catalog command, or on a database below version 10
  * @param {IDBDatabase} db
  * @param {Work} work
+ * @param {Readonly<Record<string, unknown>>} commands - the catalog's
  * @returns {Promise<import('./ledger.js').LedgerRow | undefined>}
  */
-async function keptRow(db, work) {
-  if (!isCatalogCommand(work) || !db.objectStoreNames.contains(OPERATIONS_STORE)) return undefined;
+async function keptRow(db, work, commands) {
+  if (!isCatalogCommand(work, commands) || !db.objectStoreNames.contains(OPERATIONS_STORE)) return undefined;
   const store = db.transaction(OPERATIONS_STORE, 'readonly').objectStore(OPERATIONS_STORE);
   return /** @type {import('./ledger.js').LedgerRow | undefined} */ (await result(store.get(work.commandId)));
 }
@@ -531,6 +536,7 @@ export function createIndexedDbAdapter({
   locks = null,
   clock = systemClock,
   keyRange,
+  commands = COMMANDS,
 }) {
   const connection = createConnection({
     indexedDB,
@@ -669,7 +675,7 @@ export function createIndexedDbAdapter({
    */
   const keepConflict = async (tx, books, work, conflict) => {
     const at = clock.now();
-    if (books.ledger && isCatalogCommand(work))
+    if (books.ledger && isCatalogCommand(work, commands))
       tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, conflict, at));
     if (!books.conflicts) return;
     const record = conflictRecord(work, conflict, at);
@@ -719,7 +725,7 @@ export function createIndexedDbAdapter({
     // Core's deletion put each tombstone in this transaction (#17 PR 2b); it gets the note's last
     // revision and this commit's seq here (deletion.js)
     if (books.tombstones) finishTombstones(tx.objectStore(TOMBSTONES_STORE), tracker.tombstones(), { deleted, seq });
-    if (books.ledger && isCatalogCommand(work) && outcome.kind === 'committed') {
+    if (books.ledger && isCatalogCommand(work, commands) && outcome.kind === 'committed') {
       tx.objectStore(OPERATIONS_STORE).put(ledgerRow(work.command, outcome, clock.now()));
     }
     return outcome;
@@ -770,7 +776,7 @@ export function createIndexedDbAdapter({
     // Asked for before any unit runs, so the units' requests still go out in the calling task
     /** @type {Promise<{value: unknown} | {error: unknown} | null>} */
     const kept =
-      tx && books.ledger && isCatalogCommand(work)
+      tx && books.ledger && isCatalogCommand(work, commands)
         ? settled(tx.objectStore(OPERATIONS_STORE).get(work.commandId))
         : Promise.resolve(null);
     const headRead =
@@ -972,7 +978,7 @@ export function createIndexedDbAdapter({
         return { outcome: work.done(), replayed: false };
       }
       if (task.mode === 'replace') {
-        const row = await keptRow(db, work);
+        const row = await keptRow(db, work, commands);
         if (row) return replayFrom(row, work.command);
       }
       const prepared = await prepareImport({ db, settings: backupStore, clock, backup: task.backup, mode: task.mode });
@@ -1038,7 +1044,8 @@ export function createIndexedDbAdapter({
       if (reserved !== undefined) {
         return reserved === digestOf(command) ? undefined : rejected('validation', 'idempotency-key-reuse');
       }
-      if (COMMANDS[command.type].bulk) bulkKeys.set(command.commandId, digestOf(command));
+      if (Object.hasOwn(commands, command.type) && commands[command.type].bulk)
+        bulkKeys.set(command.commandId, digestOf(command));
       return undefined;
     },
 

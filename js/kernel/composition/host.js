@@ -186,7 +186,8 @@ const consoleLogger = Object.freeze({
 export function kernelClient({ adapter, surface, handlers, maintainOnOpen = false, ready = adapter.open() }) {
   const kernel = createKernel({
     adapter,
-    policy: createBaselinePolicy(),
+    // On the catalog its table runs on: the shared one on every page, the worker's on the worker
+    policy: createBaselinePolicy(handlers.catalog),
     caller: Object.freeze({ surface, contextId: `${surface}-${randomIds.next()}` }),
     handlers,
     ids: randomIds,

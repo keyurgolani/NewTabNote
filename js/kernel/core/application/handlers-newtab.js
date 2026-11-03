@@ -3,9 +3,9 @@
  * the page and its storage maintenance run, since the new tab sends nearly every command and
  * query. The close-time drafts' apply loads its handler at its first use
  * (close-drafts-on-demand.js), as on Popup and Side Panel, so the new tab's start holds none of
- * the applier (#33). The service worker's journal drain's own handlers (journal.js, #35 slice 3)
- * aren't here, so the new tab's start loads none of them either: handlers-all.js adds them to
- * the table the tests run on.
+ * the applier (#33). The service worker's own handlers, its capture (capture.js) and its journal
+ * drain's (journal.js, #35 slice 3), aren't here, so the new tab's start loads none of them
+ * either: handlers-all.js adds them to the table the tests run on.
  */
 
 import { applyCloseDraftOnDemand } from './close-drafts-on-demand.js';
@@ -25,8 +25,8 @@ import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js
 /** @typedef {import('./handlers.js').HandlerTable} HandlerTable */
 
 /**
- * Every handler but the journal drain's: what the pages, the startup maintenance and the
- * worker's catch-up run
+ * Every handler but the worker's capture and its journal drain's: what the pages, the startup
+ * maintenance and the worker's catch-up run
  * @type {HandlerTable}
  */
 export const CONTEXT_HANDLERS = handlerTable({

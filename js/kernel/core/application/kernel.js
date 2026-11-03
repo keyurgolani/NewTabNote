@@ -23,7 +23,7 @@
 
 import { isId, isRecord } from '../contracts/checks.js';
 import { clone } from '../contracts/clone.js';
-import { COMMANDS, isCommandType } from '../contracts/commands.js';
+import { COMMANDS } from '../contracts/commands.js';
 import {
   UnavailableError,
   failed,
@@ -34,7 +34,7 @@ import {
   unavailable,
   unavailableFrom,
 } from '../contracts/outcomes.js';
-import { isQueryType } from '../contracts/queries.js';
+import { QUERIES } from '../contracts/queries.js';
 import { silentLogger, systemClock } from '../ports/runtime.js';
 import { createCommitFeed } from './feed.js';
 
@@ -186,6 +186,20 @@ export function createKernel({
 }) {
   // A root that builds a kernel with no table is a bug in the root, found as it starts
   if (!isHandlerTable(handlers)) throw new TypeError("createKernel takes its context's handler table (handlers.js)");
+  // The catalog the table runs on: the shared one on every page, the worker's composed with it
+  // on the service worker (contracts/worker-catalog.js)
+  /** @type {import('../contracts/commands.js').Catalog} */
+  const catalog = isRecord(handlers.catalog) ? handlers.catalog : { commands: COMMANDS, queries: QUERIES };
+  /**
+   * @param {unknown} type
+   * @returns {type is string}
+   */
+  const isCommandType = type => typeof type === 'string' && Object.hasOwn(catalog.commands, type);
+  /**
+   * @param {unknown} type
+   * @returns {type is string}
+   */
+  const isQueryType = type => typeof type === 'string' && Object.hasOwn(catalog.queries, type);
   const feed = createCommitFeed(logger);
   /** @type {'opening' | 'ready' | 'failed'} */
   let status = ready === undefined && !maintainOnOpen ? 'ready' : 'opening';
@@ -318,7 +332,7 @@ export function createKernel({
       /** @type {(command: Command, context: UseCaseContext) => UseCaseResult | PromiseLike<UseCaseResult>} */ (
         handlers.commands[command.type]
       );
-    const { aggregate, bulk } = COMMANDS[command.type];
+    const { aggregate, bulk } = catalog.commands[command.type];
     // recall reserves a bulk command's key, so one refused for its payload, such as its action
     // or notes, is refused first, and leaves no record
     const refusal =
@@ -414,7 +428,7 @@ export function createKernel({
       return Promise.resolve(failed('policy', NOT_REGISTERED));
     }
     const handler = /** @type {(query: Query, context: UseCaseContext) => Promise<QueryState<QueryData[T]>>} */ (
-      handlers.queries[copy.type]
+      handlers.queries[/** @type {QueryType} */ (copy.type)]
     );
     const accepted = /** @type {Query} */ (copy);
     return Promise.resolve()

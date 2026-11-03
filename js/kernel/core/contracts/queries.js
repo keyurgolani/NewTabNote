@@ -63,6 +63,11 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  */
 /** @typedef {Query['type']} QueryType */
 
+/** The query only the service worker reads, which its part of the catalog holds (worker-catalog.js) */
+/** @typedef {'findTombstones'} WorkerOnlyQueryType */
+
+/** @typedef {Exclude<QueryType, WorkerOnlyQueryType>} PageQueryType */
+
 /**
  * @template {QueryType} T
  * @typedef {Extract<Query, {type: T}>} QueryOf
@@ -117,13 +122,11 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  */
 
 /**
- * The new tab, Popup, and Side Panel read notes, folders, and preferences today, and the
- * service worker reads only what its journal drain needs (#35 slice 3).
+ * The new tab, Popup, and Side Panel read notes, folders, and preferences today. The service
+ * worker reads only what its journal drain needs, which its part of the catalog holds
+ * (worker-catalog.js, #35 slice 3).
  */
 const READERS = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup', 'sidepanel']));
-
-/** Only the service worker reads it */
-const WORKER = Object.freeze(/** @type {Surface[]} */ (['worker-internal']));
 
 /** Only the new tab reads it */
 const NEW_TAB = Object.freeze(/** @type {Surface[]} */ (['newtab']));
@@ -151,7 +154,14 @@ const entry = (module, entityTypes, surfaces = READERS, maxBytes = SMALL_MESSAGE
     destinations: Object.freeze([]),
   });
 
-/** @type {Readonly<Record<QueryType, QueryEntry>>} */
+/** The entry builder, which the service worker's part of the catalog builds its own with */
+export { entry as queryEntry };
+
+/**
+ * The shared catalog's queries, which every page's kernel and policy run on. It names no
+ * `worker-internal`: the service worker's part (worker-catalog.js) holds what only it reads.
+ * @type {Readonly<Record<PageQueryType, QueryEntry>>}
+ */
 export const QUERIES = Object.freeze({
   listNotes: entry('list-notes', []),
   getNote: entry('get-note', ['note']),
@@ -186,17 +196,16 @@ export const QUERIES = Object.freeze({
   listVectors: entry('list-vectors', [], NEW_TAB),
   // What #19's sync uploads, which only the new tab's sync service reads (#17 PR 4b)
   getSyncData: entry('get-sync-data', [], NEW_TAB),
-  // Which notes the journal's entries name were deleted for good, which the drain reads before
-  // it replays any (#35 slice 3). A journal can name as many notes as the user had open.
-  findTombstones: entry('find-tombstones', ['note'], WORKER, MAX_MESSAGE_BYTES),
 });
 
-/** @type {readonly QueryType[]} */
-export const QUERY_TYPES = Object.freeze(/** @type {QueryType[]} */ (Object.keys(QUERIES)));
+/** The shared catalog's query types: what a page may read, by its own surface */
+/** @type {readonly PageQueryType[]} */
+export const QUERY_TYPES = Object.freeze(/** @type {PageQueryType[]} */ (Object.keys(QUERIES)));
 
 /**
+ * Whether `type` is a query of the shared catalog
  * @param {unknown} type
- * @returns {type is QueryType}
+ * @returns {type is PageQueryType}
  */
 export function isQueryType(type) {
   return typeof type === 'string' && Object.hasOwn(QUERIES, type);
