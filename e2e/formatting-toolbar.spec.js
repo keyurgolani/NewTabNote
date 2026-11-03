@@ -7,6 +7,9 @@
  *   or End in a text block whose caret is already at the end, leaves the page where it is.
  *   Before, it sat below the app, so the page was 42 px taller than the window, and either one
  *   moved the whole app by that much.
+ * - Hidden, it takes no focus and isn't in the accessibility tree, so Tab past the app's last
+ *   control never stops on its buttons. Before, it hid by opacity alone, so Tab went through
+ *   both toolbars' twelve buttons, and a screen reader found two "Text formatting" toolbars.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -52,6 +55,21 @@ test('hidden, it adds no height: the page is as tall as the window, and a wheel 
   await page.keyboard.press('End');
   await page.waitForTimeout(400);
   expect.soft(await pageTop(), 'End at the end of a line').toBe(0);
+  await expectNoUncaught(extension, page);
+});
+
+test("hidden, it takes no focus and isn't in the accessibility tree, so Tab past the app's last control never stops on its buttons", async ({ extension }) => {
+  const page = await shortNote(extension);
+  await expect(page.locator('.formatting-toolbar').first()).toBeAttached();
+  await expect.soft(page.getByRole('toolbar', { name: 'Text formatting' })).toHaveCount(0);
+  await expect.soft(page.getByRole('button', { name: 'Bold', exact: true })).toHaveCount(0);
+
+  // The AI chat button is the app's last control
+  await page.getByRole('button', { name: 'Open AI Chat' }).focus();
+  for (let i = 1; i <= 3; i++) {
+    await page.keyboard.press('Tab');
+    expect.soft(await page.evaluate(() => !!document.activeElement.closest('.formatting-toolbar')), `Tab ${i}`).toBe(false);
+  }
   await expectNoUncaught(extension, page);
 });
 
