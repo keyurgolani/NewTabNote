@@ -34,6 +34,12 @@
  * which raises the `coordinator` provider's incident, and a start that opens is
  * `coordinator.started`, which resolves it. What it journals is best effort: a journal that
  * throws changes nothing it answers, and no start, and no wait on a run, ever rejects.
+ *
+ * Once it's ready it drains #35's journal (slice 3, ./journal.js), as it runs the integrity
+ * check: after the start, never inside it, so a hello held while it starts never waits for a
+ * drain, and one that comes during a drain is welcomed `ready` at once. drain() runs one more
+ * when a page wakes the worker for it. system.coordinatorHealth says when the oldest entry the
+ * last drain left with no live owner was written.
  */
 
 import { failed, ready, unavailable } from '../core/contracts/outcomes.js';
@@ -50,6 +56,11 @@ import { randomIds } from './messaging.js';
  * What the coordinator journals through: the worker's failure events (./trust.js's
  * createFailureEvents), which never throw, though a stand-in might
  * @typedef {{event(code: string, fields?: Record<string, unknown>, error?: unknown): void}} Events
+ */
+
+/**
+ * The worker's journal, as the coordinator drains it (./journal.js)
+ * @typedef {{drain(client: Client): Promise<unknown>, oldestOrphanedEntryAt(): number | null}} CoordinatorJournal
  */
 
 /**
@@ -81,6 +92,9 @@ import { randomIds } from './messaging.js';
  *   Starts it for an onInstalled event, and after an install or an update runs the read-only
  *   integrity check once, after the transforms and the catch-up the start set off: when the
  *   start opens, or while the upgrade is blocked, once the run's end lets it open
+ * @property {() => Promise<unknown>} drain
+ *   Starts it, and once it's ready drains the journal, answering what the drain did; null when
+ *   it isn't ready, since it drains once it is. It never rejects.
  */
 
 /** The reason a welcome gives, and the code every command answers, when the kernel can't be built */
@@ -212,6 +226,7 @@ export function unavailableCoordinator(instanceId) {
     }),
     client: () => client,
     installed: start,
+    drain: () => Promise.resolve(null),
   });
 }
 
@@ -220,12 +235,14 @@ export function unavailableCoordinator(instanceId) {
  * as it's built, so it's called on the first start, never before, and synchronously: start()
  * awaits nothing before it. A throw from it leaves the coordinator unavailable for this
  * instance, is `coordinator.start-failed`, and goes to `report`.
+ * `journal` is the worker's journal, which it drains once it's ready (#35 slice 3).
  * @param {{
  *   instanceId: string,
  *   makeKernel: () => Client,
  *   events?: Events | null,
  *   clock?: {now(): number},
  *   report?: (error: unknown) => void,
+ *   journal?: CoordinatorJournal | null,
  * }} options
  * @returns {Coordinator}
  */
@@ -235,6 +252,7 @@ export function createCoordinator({
   events = null,
   clock = systemClock,
   report = reportUnbuilt,
+  journal: entries = null,
 }) {
   /** @type {'idle' | 'starting' | 'ready' | 'degraded' | 'unavailable'} */
   let state = 'idle';
@@ -252,6 +270,19 @@ export function createCoordinator({
   const outcomes = new Map();
   /** Whether an install or an update asked for the integrity check while the upgrade was blocked */
   let checkWhenReady = false;
+
+  /**
+   * Drains the journal on `built`, in the background of whatever asked: never inside a start,
+   * and never rejecting, whatever the journal does
+   * @param {Client} built
+   * @returns {Promise<unknown>}
+   */
+  const drainOn = built => {
+    if (!entries) return Promise.resolve(null);
+    return Promise.resolve()
+      .then(() => entries.drain(built))
+      .catch(() => null);
+  };
 
   /**
    * `built`, counting each command's outcome by kind for system.coordinatorHealth
@@ -316,6 +347,9 @@ export function createCoordinator({
       reason = '';
       // A start that opened resolves a coordinator.start-failed an earlier instance raised
       journal(events, 'coordinator.started', {});
+      // What a context journaled and didn't live to see answered, after the start, which
+      // nothing that waits on the start waits for (#35 slice 3)
+      drainOn(built);
       if (checkWhenReady) {
         checkWhenReady = false;
         await check(built);
@@ -389,6 +423,19 @@ export function createCoordinator({
     return null;
   };
 
+  /**
+   * When the oldest entry the last drain left with no live owner was written, or null
+   * @returns {number | null}
+   */
+  const oldestOrphaned = () => {
+    try {
+      const at = entries ? entries.oldestOrphanedEntryAt() : null;
+      return Number.isSafeInteger(at) && /** @type {number} */ (at) >= 0 ? at : null;
+    } catch {
+      return null;
+    }
+  };
+
   /** @returns {CoordinatorStatus} */
   const status = () => {
     if (state === 'ready') return { status: 'ready' };
@@ -408,8 +455,7 @@ export function createCoordinator({
         outcome: /** @type {CoordinatorHealth['commands'][number]['outcome']} */ (outcome),
         count,
       })),
-      // Until #35's journal (slice 3) there are no journal entries to replay
-      oldestOrphanedEntryAt: null,
+      oldestOrphanedEntryAt: oldestOrphaned(),
       migration: migrationNow(),
     }),
     client: () => kernel || unbuilt,
@@ -422,6 +468,11 @@ export function createCoordinator({
       }
       // While the upgrade is blocked, the check runs once the run's end lets the kernel open
       if (state === 'degraded' && reason === MIGRATING) checkWhenReady = true;
+    },
+    async drain() {
+      await start();
+      if (state !== 'ready' || !kernel) return null;
+      return drainOn(kernel);
     },
   });
 }

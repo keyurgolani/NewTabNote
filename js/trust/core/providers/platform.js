@@ -6,7 +6,10 @@
  *   client. `verified` when it's ready, and `degraded` with a `start-failed` incident when the
  *   worker couldn't build its kernel, so no capture is saved. One whose database won't open, or
  *   that doesn't answer, is `degraded` with no incident of its own, since the storage provider
- *   and messaging report those. One still starting is `unverified`.
+ *   and messaging report those. One still starting is `unverified`. A ready one's evidence says
+ *   when the oldest journal entry its last drain left with no live owner was written (`at`, #35
+ *   slice 3), while there's one; the drain's `journal.entry-unreplayable` raises this provider's
+ *   incident for an entry it can't replay.
  * - Messaging asks #13's coordinator for `system.messagingHealth` through the context's client,
  *   a real round trip over whichever transport its root chose. `verified` when it answers with
  *   counters its schema takes, and `degraded` with an `unreachable` incident when the
@@ -92,11 +95,10 @@ export const coordinator = Object.freeze({
     const looked = [{ faultCode: 'start-failed', subjectId: null }];
     if (health.status === 'ready') {
       const count = health.commands.reduce((sum, outcome) => sum + outcome.count, 0);
-      return {
-        status: 'verified',
-        evidence: health.startedAt === null ? { count } : { count, since: health.startedAt },
-        looked,
-      };
+      /** @type {Record<string, number>} */
+      const evidence = health.startedAt === null ? { count } : { count, since: health.startedAt };
+      if (health.oldestOrphanedEntryAt !== null) evidence.at = health.oldestOrphanedEntryAt;
+      return { status: 'verified', evidence, looked };
     }
     if (health.reason === 'coordinator-unavailable') {
       return {
