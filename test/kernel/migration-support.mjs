@@ -13,7 +13,8 @@ import { startMigrations } from '../../js/kernel/adapters/indexeddb/migrate.js';
 import { purgeRecoveryPoints } from '../../js/kernel/adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { runTransforms } from '../../js/kernel/adapters/indexeddb/transforms.js';
-import { createKernel } from './test-kernel.mjs';
+import { catalogFor, createKernel } from './test-kernel.mjs';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
 import { faultyFactory } from './storage-faults.mjs';
@@ -138,7 +139,9 @@ export function transform(of, options = {}) {
 /**
  * Commits on #17's adapter over `of`, opened as the worker opens it at this build's version,
  * that leave a row in each of step 10's stores: ledger rows, changes, a conflict record, and
- * a tombstone (#17 PR 2a). Answers each command's outcome.
+ * a tombstone (#17 PR 2a). Answers each command's outcome. The adapter keys the worker's own
+ * commands, and each kernel's policy is on the catalog its root builds on: the shared one for
+ * the new tab, and the worker's composed with it for the capture (contracts/worker-catalog.js).
  * @param {Profile} of
  * @returns {Promise<string[]>} each command's outcome kind, in order
  */
@@ -148,15 +151,18 @@ export async function writeHistory(of) {
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
     clock: { now: () => NOW },
+    commands: WORKER_COMMANDS,
   });
   await adapter.open();
   try {
     let count = 0;
     const ids = { next: () => `history-${(count += 1)}` };
     const clock = { now: () => NOW };
-    const policy = createBaselinePolicy();
-    const tab = createKernel({ adapter, policy, caller: CALLERS.newtab, ids, clock });
-    const worker = createKernel({ adapter, policy, caller: CALLERS['worker-internal'], ids, clock });
+    /** @param {import('./support.mjs').Caller} caller */
+    const kernelFor = caller =>
+      createKernel({ adapter, policy: createBaselinePolicy(catalogFor(caller)), caller, ids, clock });
+    const tab = kernelFor(CALLERS.newtab);
+    const worker = kernelFor(CALLERS['worker-internal']);
     const block = (/** @type {string} */ content) => ({ id: 'history-block', type: 'text', content, order: 0 });
     /** @type {Array<[typeof tab, Record<string, unknown>]>} */
     const commands = [
