@@ -744,7 +744,7 @@ describe('decide, on its own', () => {
   it('skips a move of a block the page knows no order for, as a draft some other writer made could carry', () => {
     const stored = new Map([['a1', { id: 'a1', canvasId: 'A', order: 0, content: 'alpha' }]]);
     const draft = stackDraft({ blocks: [], orders: [{ id: 'a1', order: 3 }], baseBlocks: [] });
-    assert.equal(decide({ draft, note: noteA, madeBefore: false, stored, versions: { revision: 0, placementVersion: 0 } }).kind, 'dropped');
+    assert.equal(decide({ draft, note: noteA, madeBefore: false, stored, versions: { revision: 0, placementVersion: 0, sourceRevision: 0 } }).kind, 'dropped');
   });
 
   it('drops moves that come with a generated title and no deletes over a note changed since, as it drops the title alone (Q5), and saves moves alone there', () => {
@@ -753,7 +753,7 @@ describe('decide, on its own', () => {
       ['a2', { id: 'a2', canvasId: 'A', order: 1, content: 'alpha two, from another tab' }],
     ]);
     const moves = { blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } };
-    const versions = { revision: 2, placementVersion: 0 };
+    const versions = { revision: 2, placementVersion: 0, sourceRevision: 0 };
     assert.equal(decide({ draft: stackDraft(moves), note: noteA, madeBefore: false, stored, versions }).kind, 'save');
     const withTitle = stackDraft({ ...moves, name: 'Alpha, by the AI', titleOrigin: 'generated' });
     assert.equal(decide({ draft: withTitle, note: noteA, madeBefore: false, stored, versions }).kind, 'dropped');
