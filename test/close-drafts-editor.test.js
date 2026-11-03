@@ -801,11 +801,14 @@ describe("two tabs, and a block stored in a shape the editor doesn't write (R160
     return { env, closing, other, otherEditor };
   }
 
-  it("another tab's save puts it back unchanged, as the editor writes it: the closing tab's edit to it is saved, with no recovered note", async () => {
-    const { env, closing, other, otherEditor } = await twoTabsOnD();
-    // The other tab edits d2, and its whole save puts d1 back as the editor writes it
-    type(otherEditor, 'delta two, from the other tab', 1);
-    assert.equal(await runUntil(other, otherEditor.flushSave()), true);
+  it("another writer's whole save puts it back unchanged, as the editor writes it: the closing tab's edit to it is saved, with no recovered note", async () => {
+    const { env, closing, otherEditor } = await twoTabsOnD();
+    // A whole save, as an editor with no base of the note makes one (1.4.x's, say): d1 as the
+    // editor writes it, unchanged, and an edit to d2. An editor with a base puts back no block it
+    // didn't change (#17, the per-pane save), so the other tab's own save isn't this writer
+    const whole = Array.from(otherEditor._serializedBlocks('D'), (b) => (b.id === 'd2' ? { ...b, content: 'delta two, from the other tab' } : b));
+    const saved = await env.kernel.execute({ type: 'saveNoteContent', commandId: 'another-writer-whole-save', noteId: 'D', blocks: whole });
+    assert.equal(saved.kind, 'committed');
     const resaved = (await storedRows(env)).blocks.d1;
     assert.equal(resaved.indentLevel, 0, 'd1 is stored as the editor writes it now, with the fields it fills in');
     assert.equal(resaved.source, 'https://example.test/', 'and with its source as loaded');
