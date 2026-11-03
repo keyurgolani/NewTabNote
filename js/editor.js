@@ -4732,8 +4732,10 @@ class BlockEditor {
   }
 
   /**
-   * `blocks` less the ones that are as this editor last saw them commit, moved ones included:
-   * what a close-time draft holds (#33). All of them when it holds no base of the note.
+   * `blocks` less the ones that are as this editor last saw them commit, and less the ones it
+   * only moved: what a close-time draft holds (#33). A draft holds each block whole, as this
+   * pane has it, so a block it only moved stays out, and a lost close costs that move, never
+   * another pane's newer text in the block (#17). All of them when it holds no base of the note.
    * @param {string} noteId
    * @param {Array<Object>} blocks - serialized, as a save writes them
    * @returns {Array<Object>}
@@ -4741,7 +4743,7 @@ class BlockEditor {
   _changedSinceCommit(noteId, blocks) {
     const seen = this._drafts() ? this._seen.get(noteId) : null;
     if (!seen || !Array.isArray(blocks)) return blocks;
-    return blocks.filter((block) => this._changeOf(seen, block, noteId) !== null);
+    return blocks.filter((block) => this._changeOf(seen, block, noteId) === 'put');
   }
 
   /**

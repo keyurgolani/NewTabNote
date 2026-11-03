@@ -838,23 +838,26 @@ describe("two tabs, and a block stored in a shape the editor doesn't write (R160
   });
 });
 
-describe("the base's revision after a delete that deleted nothing (#17, the per-pane save)", () => {
-  /**
-   * Tab A on note C, and tab B on the same profile saving its edit to c2 once: the one commit
-   * since tab A's load. Tab A's editor adds and deletes blocks as an Enter and a Backspace do.
-   */
-  async function tabBSavedOnce() {
-    const env = await setup();
-    const tabA = Object.assign(makeEditor(env), { insertBlockDOM() {}, removeBlockDOM() {}, focusBlock() {} });
-    await tabA.loadNote('C');
-    const other = await secondTab(env);
-    const tabB = makeEditor(other);
-    await tabB.loadNote('C');
-    type(tabB, 'charlie two, from tab B', 1);
-    assert.equal(await runUntil(other, tabB.flushSave()), true);
-    return { env, tabA };
-  }
+/** Stub the DOM-only parts of adding and deleting a block, as an Enter and a Backspace do */
+const editing = (editor) => Object.assign(editor, { insertBlockDOM() {}, removeBlockDOM() {}, focusBlock() {} });
 
+/**
+ * Tab A on note C, and tab B on the same profile saving its edit to c2 once: the one commit
+ * since tab A's load
+ */
+async function tabBSavedOnce() {
+  const env = await setup();
+  const tabA = editing(makeEditor(env));
+  await tabA.loadNote('C');
+  const other = await secondTab(env);
+  const tabB = makeEditor(other);
+  await tabB.loadNote('C');
+  type(tabB, 'charlie two, from tab B', 1);
+  assert.equal(await runUntil(other, tabB.flushSave()), true);
+  return { env, tabA };
+}
+
+describe("the base's revision after a delete that deleted nothing (#17, the per-pane save)", () => {
   /** Tab A adds a block and deletes it before its first save, inside the debounce. Answers the delete's outcome once it settles. */
   async function addAndDelete(env, tabA) {
     const client = env.documentClient;
@@ -891,6 +894,64 @@ describe("the base's revision after a delete that deleted nothing (#17, the per-
     assert.deepEqual(result.recovered.map((entry) => entry.noteId), ['C']);
     assert.equal((await storedRows(env)).blocks.c2.content, 'charlie two, from tab B', "tab B's edit stays on the note");
     assert.equal((await recoveredNames(env)).length, 1, "and tab A's is kept beside it");
+  });
+});
+
+describe('a block the closing pane only moved stays out of its draft (#17, the per-pane save)', () => {
+  /** C's blocks as stored, in note order, by their text */
+  async function storedTexts(env) {
+    return Object.values((await storedRows(env)).blocks)
+      .filter((row) => row.canvasId === 'C')
+      .sort((a, b) => a.order - b.order)
+      .map((row) => row.content);
+  }
+
+  /** The page's main pane and pop-out on C, and the pop-out's edit to c2 stored */
+  async function popOutSavedC2() {
+    const env = await setup();
+    const main = editing(makeEditor(env));
+    await main.loadNote('C');
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    type(pip, 'charlie two, from the pop-out', 1);
+    assert.equal(await runWithPiP(env, pipWindow, pip.flushSave()), true);
+    return { env, main };
+  }
+
+  it("two panes: the main pane's Enter puts a block above the one the pop-out saved, and its closing save is lost: the next start keeps both panes' text, with no recovered note", async () => {
+    const { env, main } = await popOutSavedC2();
+    watchSaves(env, { hold: closingSave });
+    const added = main.insertBlockAfter('c1', 'text', 'added in the main pane');
+    closePage(env);
+    const [draft] = drafts(env);
+    // The Enter only moved c2, so the draft leaves it out, and the main pane's stale copy of it
+    assert.deepEqual(draft.blocks.map((b) => b.id), [added.id]);
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['C']);
+    assert.deepEqual(await recoveredNames(env), []);
+    // The lost close can cost the move, never the text
+    assert.deepEqual((await storedTexts(env)).sort(), ['added in the main pane', 'charlie', 'charlie two, from the pop-out']);
+  });
+
+  it('the same with the closing save committed: the note is stored as the main pane shows it, in its order, with no recovered note', async () => {
+    const { env, main } = await popOutSavedC2();
+    const saves = watchSaves(env);
+    main.insertBlockAfter('c1', 'text', 'added in the main pane');
+    closePage(env);
+    assert.equal((await saves[saves.length - 1].done).kind, 'committed', 'the closing save committed');
+    await nextStart(env);
+    assert.deepEqual(await recoveredNames(env), []);
+    assert.deepEqual(await storedTexts(env), ['charlie', 'added in the main pane', 'charlie two, from the pop-out']);
+  });
+
+  it("two tabs: tab A's Enter puts a block above the one tab B saved, and A's closing save is lost: A's new block goes into the note beside B's text, with no recovered note", async () => {
+    const { env, tabA } = await tabBSavedOnce();
+    watchSaves(env, { hold: closingSave });
+    tabA.insertBlockAfter('c1', 'text', 'added in tab A');
+    closePage(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['C']);
+    assert.deepEqual(await recoveredNames(env), []);
+    assert.deepEqual((await storedTexts(env)).sort(), ['added in tab A', 'charlie', 'charlie two, from tab B']);
   });
 });
 
