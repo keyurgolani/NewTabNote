@@ -258,16 +258,21 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       "built.type = 'trashNote';",
     ].join('\n');
     const kernel = "dispatch({ type: 'runStartupMaintenance', commandId: ids.next() });";
-    // A schema module names the operation it defines, and sends nothing
+    // A schema module names the operation it defines, which isn't a send, and a send in it is
+    // read as anywhere else
     const contract = path.join(CONTRACTS, 'operations', 'create-note.js');
     const read = sendsIn(['page.js', KERNEL, contract], {
       readFile: file => {
         if (file === contract)
-          return "export const payload = commandPayload('createNote', {}); kernel.execute({ type: 'getNote' });";
+          return [
+            "export const payload = commandPayload('createNote', { op: v.literal('createFolder') });",
+            "export const read = queryPayload('getNote', {});",
+            "kernel.query({ type: 'getNoteBlocks' });",
+          ].join('\n');
         return file === KERNEL ? kernel : page;
       },
     });
-    assert.deepEqual([...read.types].sort(), ['createNote', 'listNotes']);
+    assert.deepEqual([...read.types].sort(), ['createNote', 'getNoteBlocks', 'listNotes']);
     assert.deepEqual([...read.own], ['runStartupMaintenance']);
     // The spread, the shorthand type, the type read from a name, its call and its string, and a
     // type set on an object after it's built
