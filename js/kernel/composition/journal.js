@@ -25,8 +25,8 @@
 
 import { inContextStores } from '../adapters/in-context.js';
 import { drainJournal } from '../core/application/journal-drain.js';
-import { COMMANDS } from '../core/contracts/commands.js';
 import { SURFACES } from '../core/contracts/surfaces.js';
+import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
 import { DRAIN_MESSAGE, OWNER_LOCK_PREFIX, REPLAY_LOCK, journalEntry, ownerLock } from '../core/domain/journal.js';
 import { journaledLookup } from '../core/messaging/journaled-operations.js';
 import { systemClock } from '../core/ports/runtime.js';
@@ -85,7 +85,7 @@ const warnOf = (event, error) => {
 };
 
 /**
- * Two drains in a row as one answer: the later one's status and code, both's counts and lists
+ * Two drains in a row as one answer: the later one's status and code, and both's counts
  * @param {DrainResult} first
  * @param {DrainResult} then
  * @returns {DrainResult}
@@ -97,8 +97,6 @@ function combined(first, then) {
     replayed: first.replayed + then.replayed,
     swept: first.swept + then.swept,
     kept: first.kept + then.kept,
-    recovered: [...first.recovered, ...then.recovered],
-    savedInTrash: [...first.savedInTrash, ...then.savedInTrash],
   };
 }
 
@@ -256,7 +254,7 @@ export function createWorkerJournal({
       try {
         await owned();
         const journal = await opened();
-        const { version } = COMMANDS[command.type];
+        const { version } = WORKER_COMMANDS[command.type];
         seq += 1;
         await journal.put(
           journalEntry({

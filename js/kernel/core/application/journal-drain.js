@@ -17,15 +17,15 @@
  *    committed already with its outcome and nothing runs twice:
  *    - a note's creation, an append, and a capture as written; a capture lands in the Daily Note
  *      of the day it was made (its `at`), and a block already stored is refused;
- *    - an editor's save as the close-time draft its entry holds, by #33's rules (the lead's
- *      answer to the plan's Q1), under `<opId>-apply`: dropped when the note holds it already,
- *      saved where its blocks are as the editor saw them, and one recovered note where another
- *      writer changed them since. A save with no draft can't be replayed safely, so it's kept.
+ *    - an editor's save is the pages': they apply the close-time draft its entry holds, by #33's
+ *      rules, under `<opId>-apply` (slice 3b, the lead's call on #182), so the worker carries
+ *      none of the applier. The drain leaves it, and still sweeps it after a delete for good. A
+ *      save with no draft can't be replayed safely by anyone, so it's kept as a conflict record.
  * 3. What each answer does with its entry:
  *    - committed, a conflict (whose command the kernel kept), or a refusal that says the work is
  *      in (`note-exists`, `duplicate-block`, `block-of-another-note`): the entry goes;
- *    - the note isn't there (`note-not-found`, or a draft's `close-draft-gone` with no tombstone
- *      found), or a policy refusal: the entry stays, and its incident is raised;
+ *    - the note isn't there (`note-not-found`), or a policy refusal: the entry stays, and its
+ *      incident is raised;
  *    - any other refusal, or an entry this build can't read (`invalid-payload`): the entry is kept
  *      as a #17 conflict record (keepJournalEntry), its incident raised, and then it goes;
  *    - an entry a newer build wrote (`unsupported-version`), or one naming an operation this build
@@ -37,15 +37,13 @@
  * (`unreplayable`), and a drain that finds the same one again says nothing more. The mark never
  * keeps an entry from replaying: a build that can read it replays it.
  *
- * What it answers holds counts, codes, and the ids of the notes a draft entry recovered or saved
- * into a note in the Trash, which slice 3's page wake shows as the close-time drafts' are shown.
- * `oldestOrphanedEntryAt` is when the oldest entry it left whose owner is gone was written, which
- * system.coordinatorHealth says.
+ * What it answers holds counts and codes. `oldestOrphanedEntryAt` is when the oldest entry it
+ * left whose owner is gone was written, an editor save's the pages haven't taken yet included,
+ * which system.coordinatorHealth says.
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
 import { upcastJournalEntry } from '../contracts/upcast.js';
-import { isCloseDraft } from '../domain/close-draft.js';
 import { SWEPT_REASONS, isJournalRecord } from '../domain/journal.js';
 
 /** @typedef {import('../domain/journal.js').JournalRecord} JournalRecord */
@@ -90,8 +88,6 @@ import { SWEPT_REASONS, isJournalRecord } from '../domain/journal.js';
  * @property {number} swept - entries of notes deleted for good
  * @property {number} kept - entries kept as conflict records
  * @property {number} left - entries still in the journal
- * @property {Array<{id: string, of: string}>} recovered - each recovered note a draft entry made, and its original
- * @property {string[]} savedInTrash - each note in the Trash a draft entry was saved into
  * @property {number | null} oldestOrphanedEntryAt
  */
 
@@ -104,27 +100,21 @@ const ALREADY_IN = Object.freeze(['note-exists', 'duplicate-block', 'block-of-an
 /** What a refusal of a replay keeps in the journal: the note isn't there to write to */
 const NOT_THERE = 'note-not-found';
 
-/** A draft entry whose note is gone with no tombstone found */
-const DRAFT_GONE = 'close-draft-gone';
-
-/** A draft entry that made its recovered note now, or that an earlier apply made */
-const DRAFT_RECOVERED = 'close-draft-recovered';
-
-/** A draft entry saved into a note in the Trash */
-const DRAFT_IN_TRASH = 'close-draft-saved-in-trash';
+/**
+ * The journaled commands the pages replay, by type, which the drain leaves to them: an editor's
+ * save, as the close-time draft its entry holds (slice 3b)
+ */
+const PAGES_REPLAY = Object.freeze({ saveNoteContent: true });
 
 /**
- * How the drain replays each journaled command, by its type: as written, under its own key,
- * but an editor's save, which goes as the close-time draft its entry holds (#33's rules), or not
- * at all without one. A type this table lacks has no replay in this build.
- * @type {Readonly<Record<string, (command: Record<string, unknown>, entry: JournalRecord) => Command | null>>}
+ * How the drain replays each journaled command, by its type: as written, under its own key. A
+ * type this table lacks has no replay in the worker.
+ * @type {Readonly<Record<string, (command: Record<string, unknown>) => Command>>}
  */
 const REPLAYS = Object.freeze({
   createNote: command => /** @type {Command} */ ({ ...command, type: 'createNote' }),
   insertBlocks: command => /** @type {Command} */ ({ ...command, type: 'insertBlocks' }),
   captureToDailyNote: command => /** @type {Command} */ ({ ...command, type: 'captureToDailyNote' }),
-  saveNoteContent: (command, { opId, draft }) =>
-    isCloseDraft(draft) ? { type: 'applyCloseDraft', commandId: `${opId}-apply`, draft } : null,
 });
 
 /**
@@ -152,8 +142,6 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
     swept: 0,
     kept: 0,
     left: 0,
-    recovered: [],
-    savedInTrash: [],
     oldestOrphanedEntryAt: null,
   };
   /** @type {unknown[]} */
@@ -272,6 +260,11 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
         continue;
       }
       if (gone.has(entry.opId) || entry.state !== 'submitted' || !orphaned(entry)) continue;
+      // An editor's save is the pages' to replay, but one with no draft, which no one can
+      if (Object.hasOwn(PAGES_REPLAY, String(entry.command.type))) {
+        if (!isRecord(entry.draft) && !(await keep(entry, 'invalid-payload'))) break;
+        continue;
+      }
       if (tombstones.has(entry.noteId)) {
         await raise(entry, 'note-deleted');
         continue;
@@ -287,7 +280,7 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
       }
       const { command } = upcast;
       const replay = Object.hasOwn(REPLAYS, String(command.type)) ? REPLAYS[String(command.type)] : null;
-      const sent = command.commandId === entry.opId && replay ? replay(command, entry) : null;
+      const sent = command.commandId === entry.opId && replay ? replay(command) : null;
       if (!sent) {
         if (!(await keep(entry, 'invalid-payload'))) break;
         continue;
@@ -298,19 +291,11 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
         result.code = outcome.code;
         break;
       }
-      if (outcome.kind === 'committed' && outcome.code === DRAFT_GONE) {
-        await raise(entry, NOT_THERE);
-        continue;
-      }
       if (outcome.kind === 'rejected' && !ALREADY_IN.includes(outcome.code)) {
         if (outcome.code === NOT_THERE || outcome.reason === 'policy') await raise(entry, outcome.code);
         else if (!(await keep(entry, 'replay-refused'))) break;
         continue;
       }
-      if (outcome.kind === 'committed' && outcome.code === DRAFT_RECOVERED && isId(outcome.changedIds[0])) {
-        result.recovered.push({ id: outcome.changedIds[0], of: entry.noteId });
-      }
-      if (outcome.kind === 'committed' && outcome.code === DRAFT_IN_TRASH) result.savedInTrash.push(entry.noteId);
       await journal.remove([entry.opId]);
       gone.add(entry.opId);
       result.replayed += 1;

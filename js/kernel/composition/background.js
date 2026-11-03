@@ -35,6 +35,7 @@ import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { WORKER_HANDLERS } from '../core/application/handlers-worker.js';
 import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
 import { unavailable } from '../core/contracts/outcomes.js';
+import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
@@ -765,6 +766,8 @@ export function createWorkerClient(host = workerHost()) {
         settings: host.settings,
         mode: upgraded ? 'versioned' : 'existing',
         requireCore: true,
+        // Its ledger keys the worker's own commands too (contracts/worker-catalog.js)
+        commands: WORKER_COMMANDS,
       });
       if (replaced) replaced.close();
       const built = kernelClient({
