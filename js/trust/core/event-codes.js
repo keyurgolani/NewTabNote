@@ -8,7 +8,7 @@
  * raises: its provider, fault, and severity, keyed with the event's `subjectId` when it has
  * one, so a repeat updates the one incident. The failure sites #20 slice 1b moves here are
  * background capture, embedding load, worker storage init, auto-backup, and indexer start, and
- * #35 adds the coordinator's start.
+ * #35 adds the coordinator's start and its journal drain's entries it can't replay.
  *
  * A code that stands for a success at one of those sites names the failure code whose incident
  * it resolves (`resolves`): the indexer's first answer, an auto-backup that saved, a capture
@@ -98,6 +98,18 @@ export const EVENT_CODES = Object.freeze({
       preserved: Object.freeze(['editing', 'reading']),
     }),
     quietWhileOpen: true,
+  }),
+  // #35 slice 3's journal drain: an entry it can't replay as written, kept in the journal for a
+  // build that can or as a conflict record, by why (journal-drain.js) and the surface that wrote
+  // it. Nothing was lost, and what it held isn't in the notes yet
+  'journal.entry-unreplayable': Object.freeze({
+    fields: Object.freeze([...ERROR, 'surface']),
+    incident: Object.freeze({
+      providerId: 'coordinator',
+      faultCode: 'entry-unreplayable',
+      severity: 'data-risk',
+      preserved: Object.freeze(['capture', 'editing', 'reading']),
+    }),
   }),
   // The successes at those sites, each resolving its site's incident
   'capture.committed': Object.freeze({ fields: Object.freeze(['surface', 'commandId']), resolves: 'capture.failed' }),
