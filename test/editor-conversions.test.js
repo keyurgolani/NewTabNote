@@ -464,3 +464,54 @@ describe('no paste removes what a block holds: a paste turns its block only when
     }
   });
 });
+
+describe('a URL or an image pasted into a block in the middle of a note goes right after that block, on screen and as saved (#14)', () => {
+  const MARKUP = '<img src="data:image/png;base64,iVBORw0KGgo=">';
+  const named = (editor, id) => (['p1', 'p2', 'p3'].includes(id) ? id : editor.getBlockById(id).type);
+  /** The note's blocks by name, in the model, on screen, and as saved */
+  async function places(env, editor) {
+    await runUntil(env, editor.save());
+    const saved = Object.values(await stored(env)).filter(r => r.canvasId === 'N').sort((a, b) => a.order - b.order);
+    return plain({
+      model: editor.blocks.map(b => named(editor, b.id)),
+      screen: editor.container.querySelectorAll('.block').map(el => named(editor, el.dataset.id)),
+      saved: saved.map(r => named(editor, r.id)),
+    });
+  }
+  /** Focus in p2, as its text taking focus records it, then a paste there */
+  function pasteInto(editor, text, items = []) {
+    editor.doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
+    // The fake DOM has no prepend, which draws a block given no block to go after at the top
+    const c = editor.container;
+    if (typeof c.prepend !== 'function') {
+      c.prepend = el => {
+        if (el.parentNode) el.parentNode.removeChild(el);
+        c.children.unshift(el);
+        el.parentNode = c;
+      };
+    }
+    editor.onBlockFocus({ target: contentEl(editor, 'p2') });
+    editor.onPaste({ target: contentEl(editor, 'p2'), clipboardData: { items, getData: () => text }, preventDefault() {} });
+  }
+
+  for (const [what, content] of [['text', 'two'], ['only markup', MARKUP]]) {
+    it(`a URL pasted into a block holding ${what} makes a bookmark right after it`, OPTIONS, async () => {
+      const { env, editor } = await openNote([block('p1', 'N', 0, 'one'), block('p2', 'N', 1, content), block('p3', 'N', 2, 'three')]);
+      editor.fetchLinkPreview = () => {};
+      pasteInto(editor, 'https://example.test/page');
+      const order = ['p1', 'p2', 'bookmark', 'p3'];
+      assert.deepEqual(await places(env, editor), { model: order, screen: order, saved: order });
+      assert.equal(editor.getBlockById('p2').content, content, 'the block pasted into keeps what it holds');
+    });
+  }
+
+  it('an image pasted into a block makes an image block right after it', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('p1', 'N', 0, 'one'), block('p2', 'N', 1, 'two'), block('p3', 'N', 2, 'three')]);
+    env.global.Utils.readFileAsDataURL = async () => 'data:image/png;base64,iVBORw0KGgo=';
+    const file = { type: 'image/png', name: 'x.png' };
+    pasteInto(editor, '', [{ type: 'image/png', getAsFile: () => file }]);
+    await runUntil(env, new Promise(resolve => setTimeout(resolve, 50)));
+    const order = ['p1', 'p2', 'image', 'p3'];
+    assert.deepEqual(await places(env, editor), { model: order, screen: order, saved: order });
+  });
+});
