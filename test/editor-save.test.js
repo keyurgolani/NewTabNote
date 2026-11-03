@@ -789,6 +789,32 @@ describe('BlockEditor saves put only what their own pane changed (#17, the per-p
     assert.equal(main._seen.get('C').revision, null, "the pop-out's commit came between");
   });
 
+  it("the base's revision stays the stored one through the pane's own delete", async () => {
+    const { env, main } = await pageOnC();
+    type(main, 'charlie, saved');
+    await debounceSave(env, main);
+    main.deleteBlock('c2');
+    await waitFor(async () => !(await storedC(env)).some(([id]) => id === 'c2'));
+    await settle();
+    const { revision } = await env.documentClient.openNote('C');
+    assert.equal(main._seen.get('C').revision, revision, 'the delete committed right after the save');
+  });
+
+  it("a pane's save after its own Enter keeps the pop-out's newer text in the block the Enter moved", async () => {
+    const { env, main } = await pageOnC();
+    const { pip } = await popOut(env);
+    main.insertBlockAfter('c1', 'text', 'added in the main pane');
+    await debounceSave(env, main);
+    // The pop-out didn't see the Enter, and saves its edit to the block it moved
+    type(pip, 'charlie two, from the pop-out', 1);
+    assert.equal(await runUntil(env, pip.flushSave()), true);
+    type(main, 'charlie, from the main pane');
+    await debounceSave(env, main);
+    const rows = Object.fromEntries((await storedC(env)).map(([id, content]) => [id, content]));
+    assert.equal(rows.c1, 'charlie, from the main pane');
+    assert.equal(rows.c2, 'charlie two, from the pop-out', "the main pane's base has c2 at the order its Enter gave it");
+  });
+
   it("one pane: after typing, an Enter, a delete, a move and an undo, the stored blocks are the editor's, text and order", async () => {
     const { env, main } = await pageOnC();
     type(main, 'charlie, typed');
