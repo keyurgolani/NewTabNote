@@ -309,6 +309,52 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
       assert.equal(env.global.BlockProjections.decodeBlock(saved[id]).state, 'current', id);
     }
   });
+
+  it('a digit or a punctuation key on a focused card does nothing too', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    const focused = [];
+    editor.focusBlock = (id) => focused.push(id);
+    for (const key of ['7', '.', ',', '-']) {
+      assert.equal(press(editor, cardOf(editor, 'k1'), key).defaultPrevented, true, key);
+    }
+    assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
+  });
+
+  // The guard reads the state, not the type: a newer block's card and a card in place of a block
+  // whose view throws hold nothing to type in either
+  for (const [state, record] of [['newer', NEWER], ['render-failed', RELATIVE]]) {
+    it(`on the card of a ${state} block too, a letter or Space does nothing, Enter, Backspace and Delete change nothing, and the card stays as loaded`, OPTIONS, async () => {
+      const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), record, block('a3', 'N', 2, 'After')]);
+      asOnAMac(env, editor);
+      const focused = [];
+      editor.focusBlock = (id) => focused.push(id);
+      const card = cardOf(editor, record.id);
+      for (const key of ['x', ' ']) {
+        assert.equal(press(editor, card, key).defaultPrevented, true, `${state}: ${JSON.stringify(key)}`);
+      }
+      for (const key of ['Enter', 'Backspace', 'Delete']) {
+        assert.doesNotThrow(() => press(editor, card, key), `${state}: ${key}`);
+      }
+      assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
+      assert.deepEqual(shownIds(editor), ['a1', record.id, 'a3']);
+      await runUntil(env, editor.save());
+      assert.deepEqual(plain((await stored(env))[record.id]), plain(record), 'the card stays as loaded');
+    });
+  }
+
+  it('a card drawn twice, as two panes draw it, gets a description id of its own each time, which its own detail holds', OPTIONS, async () => {
+    const { editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN]);
+    const k1 = editor.getBlockById('k1');
+    const drawn = [k1.createElement(), k1.createElement()].map(el => {
+      const card = el.querySelector('.block-safe-card');
+      return { describedBy: card.getAttribute('aria-describedby'), detail: card.querySelector('.block-safe-detail').id };
+    });
+    for (const { describedBy, detail } of drawn) {
+      assert.ok(typeof describedBy === 'string' && describedBy !== '' && describedBy === detail, 'described by its own detail');
+    }
+    assert.notEqual(drawn[0].describedBy, drawn[1].describedBy);
+  });
 });
 
 describe('deleting a selection that holds a card asks first (#14 slice 3)', () => {
