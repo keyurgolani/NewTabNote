@@ -448,6 +448,14 @@ class Block {
     const detail = document.createElement('p');
     detail.className = 'block-safe-detail';
     detail.textContent = SAFE_DETAILS[state] || SAFE_DETAILS.invalid;
+    // A group a keyboard reaches by Tab, named by its title and described by its detail, so a
+    // screen reader says what it is and why (#14). Its detail's id is made fresh, since two panes
+    // on one note show the same block in one document.
+    card.tabIndex = 0;
+    card.role = 'group';
+    card.ariaLabel = title.textContent;
+    detail.id = Utils.generateId();
+    card.setAttribute('aria-describedby', detail.id);
     card.appendChild(title);
     card.appendChild(detail);
     block.appendChild(card);

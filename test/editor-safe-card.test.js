@@ -169,6 +169,76 @@ describe('the editor leaves a card alone (#14 slice 3)', () => {
   });
 });
 
+describe('a card is a group a keyboard reaches, with nothing in it to type into (#14)', () => {
+  const cardOf = (editor, id) => elementOf(editor, id).querySelector('.block-safe-card');
+
+  it('each card is a group named by its title and described by its detail, and takes focus, Tab included', OPTIONS, async () => {
+    const { editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, { ...NEWER, order: 2 }]);
+    const ids = [];
+    for (const id of ['k1', 'n1']) {
+      const card = cardOf(editor, id);
+      const [title, detail] = cardWords(elementOf(editor, id));
+      assert.deepEqual([card.tabIndex, card.role, card.ariaLabel], [0, 'group', title], id);
+      const describedBy = card.getAttribute('aria-describedby');
+      const detailEl = card.querySelector('.block-safe-detail');
+      assert.ok(typeof describedBy === 'string' && describedBy !== '' && describedBy === detailEl.id, `${id}: described by its detail`);
+      assert.equal(detailEl.textContent, detail);
+      ids.push(describedBy);
+    }
+    assert.notEqual(ids[0], ids[1], "each card's detail has its own id");
+  });
+
+  /** The page as a Mac's, with no caret in the fake window, as a focused card leaves none */
+  function asOnAMac(env, editor) {
+    env.global.navigator.platform = 'MacIntel';
+    editor.doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
+  }
+
+  /** A keydown of `key` at `target`, as the browser dispatches it to the editor's container and then its document */
+  function press(editor, target, key, more = {}) {
+    const event = {
+      key, code: '', target, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, defaultPrevented: false, ...more,
+      preventDefault() { this.defaultPrevented = true; },
+    };
+    editor.onBlockKeyDown(event);
+    editor.onGlobalKeyDown(event);
+    return event;
+  }
+
+  it('Enter, Backspace and Delete on a focused card do nothing, and a letter or Space does nothing either: the note never takes the key', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    const focused = [];
+    editor.focusBlock = (id) => focused.push(id);
+    const card = cardOf(editor, 'k1');
+    for (const key of ['Enter', 'Backspace', 'Delete']) {
+      assert.doesNotThrow(() => press(editor, card, key), key);
+    }
+    for (const key of ['x', ' ']) {
+      assert.equal(press(editor, card, key).defaultPrevented, true, `${JSON.stringify(key)} is kept from the note, and Space from scrolling`);
+    }
+    assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
+    assert.deepEqual(shownIds(editor), ['a1', 'k1', 'a3']);
+    await runUntil(env, editor.save());
+    assert.deepEqual(plain((await stored(env)).k1), plain(KANBAN), 'the card stays as loaded');
+  });
+
+  it('Tab and the arrow keys keep their own way from a focused card, and the block shortcuts still move it', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    // The editor's own shortcuts, as the new tab loads them
+    env.load('js/shortcut-utils.js');
+    editor.renderBlocks = () => {};
+    const card = cardOf(editor, 'k1');
+    for (const key of ['Tab', 'ArrowDown', 'ArrowUp']) {
+      assert.equal(press(editor, card, key, { code: key }).defaultPrevented, false, key);
+    }
+    assert.equal(press(editor, card, 'x', { metaKey: true }).defaultPrevented, false, "a chord isn't typing");
+    press(editor, card, 'ArrowDown', { code: 'ArrowDown', metaKey: true, shiftKey: true });
+    assert.deepEqual(plain(editor.blocks.map(b => b.id)), ['a1', 'a3', 'k1'], 'Mod+Shift+ArrowDown moved it down');
+  });
+});
+
 describe('deleting a selection that holds a card asks first (#14 slice 3)', () => {
   const overlay = env => env.document.querySelector('.confirm-dialog-overlay');
   const press = (env, label) => overlay(env).querySelectorAll('button').find(button => button.textContent === label).click();
