@@ -81,12 +81,24 @@ function pageModules(entries) {
 /** The kernel's own module, whose one send is the startup maintenance a root that maintains runs */
 const KERNEL = path.join(ROOT, 'js', 'kernel', 'core', 'application', 'kernel.js');
 
-/**
- * The contracts, whose modules name the operations they define (a schema's `type`, a change op's
- * name) and send none: the service worker loads the journaled commands' schemas since #35 slice
- * 3, to read a journal entry before its drain replays it
- */
+/** The contracts, where the planted case puts a schema module */
 const CONTRACTS = path.join(ROOT, 'js', 'kernel', 'core', 'contracts') + path.sep;
+
+/**
+ * Whether `node` is a schema's own name for what it defines, which isn't a send: the first
+ * argument of commandPayload() or queryPayload(), a schema's `type`, or of v.literal(), as a
+ * change op's name. The service worker loads the journaled commands' schemas since #35 slice 3,
+ * to read a journal entry before its drain replays it.
+ * @param {ts.Node} node
+ * @returns {boolean}
+ */
+const isSchemaName = node => {
+  const { parent } = node;
+  if (!ts.isCallExpression(parent) || parent.arguments[0] !== node) return false;
+  const called = parent.expression;
+  if (ts.isIdentifier(called)) return called.text === 'commandPayload' || called.text === 'queryPayload';
+  return ts.isPropertyAccessExpression(called) && called.name.text === 'literal';
+};
 
 /**
  * @param {ts.PropertyName | undefined} name
@@ -107,10 +119,10 @@ const unwrapped = node => (ts.isParenthesizedExpression(node) ? unwrapped(node.e
  * isn't a string (computed, shorthand, or behind a spread), and a catalog type's name in any
  * other string but another property's key or value, which names something else: a table's key,
  * BULK_ACTIONS' item commands, a change op's name. A call handed a variable is read where its
- * object is built, as the worker's client forwards what js/background.js builds. A contract
- * module (CONTRACTS) is read for none of it, since it names what it defines. It finds a send a
- * table lacks by accident, not one written to get past it. `readFile` reads a module's text,
- * from disk unless given, so a test can plant a send.
+ * object is built, as the worker's client forwards what js/background.js builds. A schema's own
+ * name for what it defines (isSchemaName) is read for none of it. It finds a send a table lacks
+ * by accident, not one written to get past it. `readFile` reads a module's text, from disk
+ * unless given, so a test can plant a send.
  * @param {string[]} files
  * @param {{readFile?: (file: string) => string}} [options]
  * @returns {{types: Set<string>, own: Set<string>, unread: string[]}}
@@ -123,7 +135,6 @@ function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {
   /** @type {string[]} */
   const unread = [];
   for (const file of files) {
-    if (file.startsWith(CONTRACTS)) continue;
     const text = readFile(file);
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
     /** @param {ts.Node} node */
@@ -131,7 +142,7 @@ function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {
       `${path.relative(ROOT, file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`;
     /** @param {ts.Node} node */
     const walk = node => {
-      if (ts.isStringLiteralLike(node) && CATALOG_TYPES.has(node.text)) {
+      if (ts.isStringLiteralLike(node) && CATALOG_TYPES.has(node.text) && !isSchemaName(node)) {
         const { parent } = node;
         if (!ts.isPropertyAssignment(parent)) unread.push(at(node));
         else if (parent.initializer === node && isTypeName(parent.name)) (file === KERNEL ? own : types).add(node.text);
