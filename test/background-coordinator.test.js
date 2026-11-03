@@ -53,6 +53,12 @@ const KEPT = Object.freeze([
   "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added when your notes open.",
 ]);
 
+/** And one an older build's open page keeps from the notes, which says what will add it */
+const KEPT_BLOCKED = Object.freeze([
+  "Kept for today's note",
+  "Close or reload your open NewTabNote tabs and windows to finish an update and add this. It's kept on this device until then.",
+]);
+
 /**
  * Every chrome.* listener the worker registers, and whether it needs storage, so starts the
  * coordinator. A listener added to js/background.js fails the first test until it's listed
@@ -143,6 +149,16 @@ function failingOpen(env) {
   const open = factory.open.bind(factory);
   factory.open = (name, ...rest) => {
     if (name === 'CanvasTabDB') throw new DOMException('test: the disk is gone', 'UnknownError');
+    return open(name, ...rest);
+  };
+}
+
+/** A NewTabNoteJournal IndexedDB can't open either, so no capture's entry can be written */
+function failingJournal(env) {
+  const factory = env.indexedDB;
+  const open = factory.open.bind(factory);
+  factory.open = (name, ...rest) => {
+    if (name === 'NewTabNoteJournal') throw new DOMException('test: the disk is gone', 'UnknownError');
     return open(name, ...rest);
   };
 }
@@ -371,6 +387,25 @@ describe('a worker whose storage can\'t be reached', () => {
     // The run that couldn't read the database first, as its own migration event (#20, which
     // raises no incident), then the coordinator's failed open, then the capture
     assert.deepEqual(seen.events, ['storage.migration-failed', 'storage.open-failed', 'capture.failed']);
+  });
+
+  it("says a capture whose entry can't be written isn't captured, in today's words, and never that it's kept (#35 slice 3)", async () => {
+    const worker = await loadBackground({
+      start: false,
+      opens: false,
+      setup: (env) => {
+        failingOpen(env);
+        failingJournal(env);
+      },
+    });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    assert.deepEqual(plain(worker.env.chrome.notifications), [{
+      type: 'basic',
+      iconUrl: 'icons/icon48.png',
+      title: 'Not captured',
+      message: "NewTabNote couldn't open your notes, so nothing was saved.",
+    }]);
   });
 });
 
@@ -637,7 +672,7 @@ function localDate(at) {
  * @param {any} env
  * @param {{opId: string, at: number, v?: number}} entry
  */
-async function keptEarlier(env, { opId, at, v = 1 }) {
+async function keptEarlier(env, { opId, at, v = 1, extra = {} }) {
   const journals = await journalModules();
   const store = journals.createJournalDatabase({ indexedDB: env.indexedDB });
   await store.open();
@@ -649,6 +684,7 @@ async function keptEarlier(env, { opId, at, v = 1 }) {
       blockId: `${opId}-block`,
       capture: { type: 'bookmark', url: 'https://example.test/kept', title: 'Kept page' },
       at,
+      ...extra,
     },
     v,
     noteId: `${opId}-daily`,
@@ -700,20 +736,36 @@ describe("captures through the worker's journal (#35 slice 3)", () => {
     assert.deepEqual(worker.env.chrome.notifications, []);
   });
 
-  it("says once that it couldn't add a kept capture this build can't read, raises its incident, and keeps it for a build that can", async () => {
+  it('says once that a capture a newer build kept waits for an update, raises its incident, and keeps it for a build that can add it', async () => {
     const at = Date.now() - DAY;
     const worker = await loadBackground({ start: false, setup: (env) => keptEarlier(env, { opId: 'c-newer', at, v: 2 }) });
     await worker.dispatch('runtime.onStartup');
     await worker.drain();
     assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [[
-      'Not captured',
-      "NewTabNote couldn't add a kept capture to today's note.",
+      'Kept for your notes',
+      "Update NewTabNote to add a capture from a newer version. It's kept on this device until then.",
     ]]);
     const [entry, ...rest] = await journalOf(worker.indexedDB);
     assert.deepEqual([entry.opId, entry.unreplayable && entry.unreplayable.code, rest], ['c-newer', 'unsupported-version', []]);
     const seen = await trustOf(worker.indexedDB);
     assert.ok(seen.events.includes('journal.entry-unreplayable'), JSON.stringify(seen.events));
     assert.deepEqual(seen.incidents.filter(([providerId]) => providerId === 'coordinator'), [['coordinator', 'entry-unreplayable']]);
+  });
+
+  it("says a kept capture no build can read isn't captured, once, and keeps its text as a conflict record", async () => {
+    const at = Date.now() - DAY;
+    // A field its version's schema doesn't hold: malformed, whatever wrote it
+    const worker = await loadBackground({
+      start: false,
+      setup: (env) => keptEarlier(env, { opId: 'c-malformed', at, extra: { later: true } }),
+    });
+    await worker.dispatch('runtime.onStartup');
+    await worker.drain();
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [[
+      'Not captured',
+      "NewTabNote couldn't add a kept capture to today's note.",
+    ]]);
+    assert.deepEqual(await journalOf(worker.indexedDB), []);
   });
 
   it('welcomes a hello at once while its drain waits, which no welcome holds for', async () => {
@@ -834,7 +886,7 @@ describe("an older build's page that keeps the upgrade blocked (#17 PR 1b)", () 
       // A capture meanwhile answers at once: it's kept until the upgrade is in (#35 slice 3)
       await worker.dispatch('commands.onCommand', 'capture-page');
       await waitFor(() => worker.env.chrome.notifications.length === 1, { withinMs: 10_000, message: 'the capture notification' });
-      assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [[...KEPT]]);
+      assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [[...KEPT_BLOCKED]]);
       // Its event lands in the journal in its own time, before the clock below races ahead of
       // the journal's reads
       await waitFor(async () => (await trustOf(worker.indexedDB)).events.includes('capture.failed'), {
