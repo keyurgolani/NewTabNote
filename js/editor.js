@@ -4124,12 +4124,13 @@ class BlockEditor {
       const block = this.createBlock('image');
       block.imageUrl = dataUrl;
 
-      // Add after the focused block, whose id activeBlock holds (onBlockFocus), or at the end (#14)
-      if (this.activeBlock) {
-        const index = this.blocks.findIndex(b => b.id === this.activeBlock);
-        this.blocks.splice(index + 1, 0, block);
-      } else {
+      // Add after the focused block, whose id activeBlock holds (onBlockFocus), or at the end when
+      // there's none or it names no block of the note, as a URL's bookmark goes (#14)
+      const index = this.blocks.findIndex(b => b.id === this.activeBlock);
+      if (index === -1) {
         this.blocks.push(block);
+      } else {
+        this.blocks.splice(index + 1, 0, block);
       }
 
       this.renderBlocks();
