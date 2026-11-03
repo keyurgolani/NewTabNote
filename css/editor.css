@@ -847,6 +847,12 @@ body.focus-mode .block:focus-within {
   opacity: 1;
 }
 
+/* A block this build can't show is a card as wide as the block, so it shows no time, which would
+   draw inside the card and, at 800 px wide, on its detail (#14) */
+.block-safe > .block-metadata {
+  display: none;
+}
+
 .block.dragging {
   opacity: 0.5;
 }
