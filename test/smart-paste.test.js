@@ -13,7 +13,6 @@ const assert = require('node:assert/strict');
 const {
   createLegacyEnv, FakeDocument, createDatabase, dumpDatabase, recordsOf, settle, makeEditor, startEditorClient, note, block,
 } = require('./helpers/legacy-env');
-const { expectFailure } = require('./helpers/expect-failure');
 
 const FILES = [
   'js/utils.js', 'js/core/storage-error.js', 'js/storage.js', 'js/sidebar-utils.js', 'js/blocks.js',
@@ -177,7 +176,7 @@ describe('smart paste with focus in the first of two blocks with text', () => {
 });
 
 describe('smart paste of a URL with focus in the last block with text', () => {
-  // Where a URL lands from a block in the middle is KD-008, below
+  // Where a URL lands from a block in the middle is below
   for (const [label, text, url] of URLS) {
     it(`${label} becomes a bookmark after it`, async () => {
       const { paste, shown, saved } = await noteWith(['eggs', 'milk']);
@@ -189,7 +188,7 @@ describe('smart paste of a URL with focus in the last block with text', () => {
   }
 });
 
-expectFailure('KD-008 a URL pasted with focus in a block with text becomes a bookmark right after that block', async () => {
+it('a URL pasted with focus in a block with text becomes a bookmark right after that block', async () => {
   const { paste, shown, saved } = await noteWith(['eggs', 'milk']);
   if (!paste('https://example.com/a')) throw new Error('the editor left the URL to the browser');
   const bookmark = { type: 'bookmark', content: '', url: 'https://example.com/a' };
