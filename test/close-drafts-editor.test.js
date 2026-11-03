@@ -955,6 +955,38 @@ describe('a block the closing pane only moved stays out of its draft (#17, the p
   });
 });
 
+describe('a close-time draft takes a block a save in flight put, as the next save does (#17, the per-pane save)', () => {
+  it("typed back to the base's text inside the debounce, the save in flight committing as the page goes and the closing save lost: the next start stores the block as the editor shows it", async () => {
+    const env = await setup();
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    // Every save commits at once. The editor never hears of the first, which commits as the
+    // page goes, and the closing save is lost with the page.
+    const client = env.documentClient;
+    const real = client.saveContent;
+    let calls = 0;
+    client.saveContent = (save, options) => {
+      if (closingSave(save, options)) return new Promise(() => {});
+      calls += 1;
+      const done = real(save, options);
+      return calls === 1 ? new Promise(() => {}) : done;
+    };
+    type(editor, 'alpha, typed');
+    env.clock.tick(500);
+    for (let i = 0; i < 100 && calls < 1; i++) {
+      env.frames();
+      await settle(2);
+    }
+    assert.equal(calls, 1, 'the save went');
+    type(editor, 'alpha');
+    closePage(env);
+    assert.deepEqual(drafts(env).map((draft) => draft.blocks.map((b) => [b.id, b.content])), [[['a1', 'alpha']]], 'the draft holds a1 as the editor shows it');
+    await nextStart(env);
+    assert.equal((await storedRows(env)).blocks.a1.content, 'alpha', 'stored as the editor shows it, not as the save in flight sent it');
+    assert.deepEqual(await recoveredNames(env), []);
+  });
+});
+
 describe("the saves a page keeps for a pane that no longer shows the note (R160's S1)", () => {
   it('split view showed B on the right, then closed keeping B on the left: none of the 40 saves the left pane makes of B is kept for the right one', async () => {
     const env = await setup();

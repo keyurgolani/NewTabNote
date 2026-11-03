@@ -4735,7 +4735,9 @@ class BlockEditor {
    * `blocks` less the ones that are as this editor last saw them commit, and less the ones it
    * only moved: what a close-time draft holds (#33). A draft holds each block whole, as this
    * pane has it, so a block it only moved stays out, and a lost close costs that move, never
-   * another pane's newer text in the block (#17). All of them when it holds no base of the note.
+   * another pane's newer text in the block (#17). A block a save of this editor still in flight
+   * put goes in, as the next save sends it, so it ends stored as shown even when that save
+   * commits as the page goes. All of them when it holds no base of the note.
    * @param {string} noteId
    * @param {Array<Object>} blocks - serialized, as a save writes them
    * @returns {Array<Object>}
@@ -4743,7 +4745,27 @@ class BlockEditor {
   _changedSinceCommit(noteId, blocks) {
     const seen = this._drafts() ? this._seen.get(noteId) : null;
     if (!seen || !Array.isArray(blocks)) return blocks;
-    return blocks.filter((block) => this._changeOf(seen, block, noteId) === 'put');
+    const inFlight = this._sentInFlight(noteId);
+    return blocks.filter((block) => this._changeOf(seen, block, noteId) === 'put' || inFlight.get(block.id) === 'put');
+  }
+
+  /**
+   * What this editor's saves of `noteId` in flight sent, all but `except`, and how: 'put' for a
+   * block any of them put, and 'move' for one they only moved
+   * @param {string} noteId
+   * @param {EditorSaveState} [except]
+   * @returns {Map<string, 'put'|'move'>}
+   */
+  _sentInFlight(noteId, except) {
+    /** @type {Map<string, 'put'|'move'>} */
+    const inFlight = new Map();
+    for (const { state: other } of this._inFlightSaves) {
+      if (other === except || other.noteId !== noteId || !other.written || !other.issued) continue;
+      for (const id of other.issued.blocks.keys()) {
+        if (inFlight.get(id) !== 'put') inFlight.set(id, other.issued.moved.has(id) ? 'move' : 'put');
+      }
+    }
+    return inFlight;
   }
 
   /**
@@ -4757,14 +4779,7 @@ class BlockEditor {
    */
   _saveChanges(state) {
     const seen = this._seen.get(state.noteId);
-    /** @type {Map<string, 'put'|'move'>} What this editor's saves in flight sent of the note, and how */
-    const inFlight = new Map();
-    for (const { state: other } of this._inFlightSaves) {
-      if (other === state || other.noteId !== state.noteId || !other.written || !other.issued) continue;
-      for (const id of other.issued.blocks.keys()) {
-        if (inFlight.get(id) !== 'put') inFlight.set(id, other.issued.moved.has(id) ? 'move' : 'put');
-      }
-    }
+    const inFlight = this._sentInFlight(state.noteId, state);
     const put = [];
     const moves = [];
     for (const block of state.blocks) {
