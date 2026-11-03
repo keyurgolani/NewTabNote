@@ -7,6 +7,8 @@
  *   with nothing to type in.
  * - Each card is a group a keyboard reaches by Tab, named by its title and described by its
  *   detail. A key typed on one does nothing, and the app's own shortcuts still hear it (#14).
+ *   A selected card with the focus ring shows the ring without the selection's outline, and the
+ *   outline comes back once focus moves on.
  * - The blocks around the cards edit and save as usual, and each card's record, like a known
  *   block's field its type doesn't own, is written back as it was loaded. A save writes only
  *   the blocks it changed, each at schemaVersion 1, so a block it leaves alone stays as stored.
@@ -136,6 +138,41 @@ test('each card is a group a keyboard reaches: Tab stops on each in turn, named 
   await cardOf('opaque-blocks-typeless').focus();
   await page.keyboard.press('Tab');
   await expect(page.locator('#blocks-container > .block[data-id="opaque-blocks-table"] th').first()).toBeFocused();
+  await expectNoUncaught(extension, page);
+});
+
+test("a selected card with the focus ring shows the ring without the selection's outline, and the outline comes back once focus moves on", async ({ extension }) => {
+  const { fixture } = opaqueBlocks();
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const kanban = page.locator('#blocks-container > .block[data-id="opaque-blocks-unknown"]');
+  const card = kanban.locator('.block-safe-card');
+  const tint = 'rgba(45, 140, 255, 0.08)';
+
+  // Selected by Cmd/Ctrl+click, the block shows the selection's outline and tint
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await card.click({ modifiers: [mod] });
+  await expect(kanban).toHaveClass(/block-selected/);
+  await expect(kanban).toHaveCSS('outline-style', 'solid');
+  await expect(kanban).toHaveCSS('background-color', tint);
+
+  // Back a card and forward again, so the focus is the keyboard's: the card's ring shows, the
+  // block's outline doesn't, and the block stays selected, in its tint
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(card).toBeFocused();
+  await expect(card).toHaveCSS('outline-style', 'solid');
+  await expect(kanban).toHaveClass(/block-selected/);
+  await expect(kanban).toHaveCSS('outline-style', 'none');
+  await expect(kanban).toHaveCSS('background-color', tint);
+
+  // Once focus moves on to the next card, the outline comes back
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#blocks-container > .block[data-id="opaque-blocks-invalid"] .block-safe-card')).toBeFocused();
+  await expect(kanban).toHaveClass(/block-selected/);
+  await expect(kanban).toHaveCSS('outline-style', 'solid');
   await expectNoUncaught(extension, page);
 });
 
