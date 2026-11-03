@@ -1149,6 +1149,51 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
     assert.deepEqual(await storedInOrder(env), [['charlie two, see [[Alpha]]', 0], ['charlie', 1]]);
     assert.deepEqual(await linksOfC(env), ['A'], "and tab B's link stays");
   });
+
+  // R181's P11: what's left of the draft to save decides whether the links are rewritten, not the
+  // whole draft. Tab A's first save commits as the page goes, so its put of c1 is stored already,
+  // and only its move is left
+  it("a put stored as the page went, then a move: the move alone is left, so another tab's newer link stays through the closing tab's lost close", async () => {
+    const linksOfC = async (env) => Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'links'))
+      .filter((row) => row.fromNoteId === 'C')
+      .map((row) => row.toNoteId)
+      .sort();
+    const env = await setup({ blocks: [block('c3', 'C', 2, 'charlie three')] });
+    const tabA = editing(makeEditor(env));
+    await tabA.loadNote('C');
+    const other = await secondTab(env);
+    const tabB = editing(makeEditor(other));
+    await tabB.loadNote('C');
+    // Tab A's first save commits at once, as the page goes, and the editor never hears of it.
+    // Every save after it goes with the page.
+    const client = env.documentClient;
+    const real = client.saveContent;
+    let calls = 0;
+    let first = null;
+    client.saveContent = (save, options) => {
+      calls += 1;
+      if (calls === 1) first = real(save, options);
+      return new Promise(() => {});
+    };
+    type(tabA, 'charlie, from tab A', 0);
+    env.clock.tick(500);
+    for (let i = 0; i < 100 && calls < 1; i++) {
+      env.frames();
+      await settle(2);
+    }
+    assert.equal(calls, 1, "tab A's edit went");
+    assert.equal((await first).kind, 'committed');
+    type(tabB, 'charlie two, see [[Alpha]]', 1);
+    assert.equal(await runUntil(other, tabB.flushSave()), true);
+    const before = await linksOfC(env);
+    assert.deepEqual(before, ['A'], "tab B's save links C to Alpha");
+    // Tab A moves c3 above c2 and closes, every later save lost
+    tabA.moveBlockByDirection('c3', -1);
+    closePage(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.saved, ['C'], 'the move went in');
+    assert.deepEqual(await linksOfC(env), before, "tab B's link stays");
+  });
 });
 
 describe('a close-time draft takes a block a save in flight put, as the next save does (#17, the per-pane save)', () => {
