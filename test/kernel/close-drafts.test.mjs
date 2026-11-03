@@ -434,6 +434,15 @@ for (const fixture of FIXTURES) {
         assert.equal((await recordOf(ctx, 'blocks', 'gone')).record, undefined, 'no block is made for a move of one no note holds');
       });
 
+      it("writes nothing for a draft whose only move is of another note's block", async () => {
+        await profileOf(ctx);
+        const before = await recordOf(ctx, 'notes', 'A');
+        const draft = stackDraft({ blocks: [], orders: [{ id: 'b1', order: 3 }], base: { orders: { b1: 0 } } });
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        assert.deepEqual(await recordOf(ctx, 'notes', 'A'), before);
+        assert.equal((await recordOf(ctx, 'blocks', 'b1')).record?.order, 0);
+      });
+
       it('leaves out a move of a block the draft puts, even when that put is in already', async () => {
         await profileOf(ctx);
         const draft = stackDraft({ blocks: [block('a1', 'A', 0, 'alpha')], orders: [{ id: 'a1', order: 5 }], base: { orders: { a1: 0 } } });
