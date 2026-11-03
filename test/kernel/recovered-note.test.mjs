@@ -13,7 +13,7 @@ import { TEXT, linkable, recoveredNote, wikiLink } from '../../js/kernel/core/do
 import { legacyEnv } from './storage-fixture.mjs';
 
 /** @typedef {import('../../js/kernel/core/domain/close-draft.js').CloseDraft} CloseDraft */
-/** @typedef {import('../../js/kernel/core/domain/close-draft.js').Residue} Residue */
+/** @typedef {import('../../js/kernel/core/domain/recovered-note.js').Residue} Residue */
 /** @typedef {any} Row */
 
 const T0 = 1700000000000;
