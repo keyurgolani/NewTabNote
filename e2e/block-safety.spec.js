@@ -102,10 +102,16 @@ test('each card is a group a keyboard reaches: Tab stops on each in turn, named 
     ['opaque-blocks-typeless', "This block can't be shown", "Its saved data isn't in a form this version can read. Its content is kept as it is."],
   ];
 
-  // Tab from the block before the cards stops on each card, then goes on to the block after them
+  // Tab from the block before the cards stops on each card in note order: three cards, the known
+  // block after them, then the fourth card, then the table after it
+  const extra = page.locator('#blocks-container > .block[data-id="opaque-blocks-extra"] .block-content');
   await page.locator('#blocks-container > .block[data-id="opaque-blocks-before"] .block-content').click();
   await page.keyboard.press('End');
   for (const [id, name, description] of cards) {
+    if (id === 'opaque-blocks-typeless') {
+      await page.keyboard.press('Tab');
+      await expect(extra).toBeFocused();
+    }
     await page.keyboard.press('Tab');
     await expect(cardOf(id), id).toBeFocused();
     await expect(cardOf(id)).toHaveRole('group');
@@ -129,7 +135,7 @@ test('each card is a group a keyboard reaches: Tab stops on each in turn, named 
 
   await cardOf('opaque-blocks-typeless').focus();
   await page.keyboard.press('Tab');
-  await expect(page.locator('#blocks-container > .block[data-id="opaque-blocks-extra"] .block-content')).toBeFocused();
+  await expect(page.locator('#blocks-container > .block[data-id="opaque-blocks-table"] th').first()).toBeFocused();
   await expectNoUncaught(extension, page);
 });
 
