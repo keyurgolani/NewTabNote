@@ -12,8 +12,8 @@
  * - Hidden, it takes no focus and isn't in the accessibility tree, so Tab past the app's last
  *   control never stops on its buttons. Before, it hid by opacity alone, so Tab went through
  *   both toolbars' twelve buttons, and a screen reader found two "Text formatting" toolbars.
- * - It opens at once, in place, and once a selection ends it still shows while it fades, for
- *   0.12 s, then hides.
+ * - It opens at once, in place, and once a selection ends it still shows where it was while
+ *   it fades, for 0.12 s, then hides.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -129,7 +129,7 @@ test("hidden, it takes no focus and isn't in the accessibility tree, so Tab past
   await expectNoUncaught(extension, page);
 });
 
-test('it opens at once, in place, and once the selection ends it still shows while it fades, then hides', async ({ extension }) => {
+test('it opens at once, in place, and once the selection ends it still shows where it was while it fades, then hides', async ({ extension }) => {
   const page = await shortNote(extension);
   // The top toolbar right after the toolbars handle a select or an unselect in the first block.
   // Each reading is in the same task as their own selectionchange handlers, which run first, so
@@ -144,7 +144,8 @@ test('it opens at once, in place, and once the selection ends it still shows whi
     const bar = bars[bars.length - 1];
     const hide = bar.getAnimations().find(animation => animation.transitionProperty === 'visibility');
     const reading = { visibility: getComputedStyle(bar).visibility, hidesAfter: hide ? hide.effect.getTiming().delay : null };
-    if (change !== 'select') return reading;
+    // While it fades, it stays where it was, at its inline top, and moves to the page's top only after
+    if (change !== 'select') return { ...reading, inPlace: getComputedStyle(bar).top === bar.style.top };
     // A selection made in one go, as a double-click makes one, is placed from the toolbar's first measure
     const word = getSelection().getRangeAt(0).getBoundingClientRect();
     const box = bar.getBoundingClientRect();
@@ -153,7 +154,7 @@ test('it opens at once, in place, and once the selection ends it still shows whi
   await blockContent(page, 0).click();
   await page.waitForTimeout(200);
   expect(await after('select'), 'open at once, in place').toEqual({ visibility: 'visible', hidesAfter: null, gap: 8, offCentre: 0 });
-  expect(await after('unselect'), 'still showing while it fades').toEqual({ visibility: 'visible', hidesAfter: 120 });
+  expect(await after('unselect'), 'still showing where it was while it fades').toEqual({ visibility: 'visible', hidesAfter: 120, inPlace: true });
   await expect(page.locator('.formatting-toolbar').last()).toBeHidden();
   await expectNoUncaught(extension, page);
 });
