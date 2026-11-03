@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { inContextStores } from '../../js/kernel/adapters/in-context.js';
 import { createWorkerJournal } from '../../js/kernel/composition/journal.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
+import { WORKER_CATALOG } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -91,7 +92,7 @@ function worker({ factory } = {}) {
   const adapter = createMemoryAdapter();
   const kernel = createKernel({
     adapter,
-    policy: createBaselinePolicy(),
+    policy: createBaselinePolicy(WORKER_CATALOG),
     caller: CALLERS['worker-internal'],
     handlers: WORKER_HANDLERS,
     ids: testIds('worker'),

@@ -10,8 +10,8 @@ import { createHash } from 'node:crypto';
 
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
-import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import { committed, conflict } from '../../js/kernel/core/contracts/outcomes.js';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { digestOf } from '../../js/kernel/core/memory/fingerprint.js';
 import { adapterOn, closeAll, kernelOn, legacyEnv, profile, recordsOf } from './storage-fixture.mjs';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
@@ -447,12 +447,12 @@ describe('no shipped path reaches a conflict before #17 PR 4 (#17 PR 2a, plan se
   const AS_A_PAGE_SENT = { insertBlocks: ['expectedRevision'] };
 
   it("no command Popup, Side Panel, or the worker may run carries an expected version or a source revision, but the one a page's insert holds", async () => {
-    const shipped = Object.entries(COMMANDS).filter(([, entry]) =>
+    // The worker's catalog holds the shared one's entries, its grants on them, and its own
+    const shipped = Object.entries(WORKER_COMMANDS).filter(([, entry]) =>
       entry.surfaces.some(surface => ['popup', 'sidepanel', 'worker-internal'].includes(surface)),
     );
     assert.deepEqual(shipped.map(([type]) => type).sort(), [
-      // A closing tab's edit, whose base the command checks in its own transaction (#33), and an
-      // editor's save the worker's drain replays by the same rules (#35 slice 3)
+      // A closing tab's edit, whose base the command checks in its own transaction (#33)
       'applyCloseDraft',
       'captureToDailyNote',
       // The worker's one-time catch-up of 1.4.x's lagging records, a derived write with no source revision (#33)

@@ -1,6 +1,6 @@
 // The kernel's dispatcher: the policy before any adapter call, for every command and query
-// in the catalog; saveNoteContent's transaction opening in the calling task; deferred init;
-// and the logger never hearing a payload.
+// in the catalog, the worker's part with it; saveNoteContent's transaction opening in the
+// calling task; deferred init; and the logger never hearing a payload.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,9 +8,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createKernel } from './test-kernel.mjs';
-import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import { UnavailableError, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
-import { QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
+import {
+  WORKER_COMMANDS as COMMANDS,
+  WORKER_COMMAND_TYPES as COMMAND_TYPES,
+  WORKER_QUERY_TYPES as QUERY_TYPES,
+} from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { CALLERS, testClock, testIds } from './support.mjs';

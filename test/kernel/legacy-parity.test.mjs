@@ -21,8 +21,9 @@ import vm from 'node:vm';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { filledByLogical2 } from '../../js/kernel/adapters/indexeddb/transforms.js';
 import { VERSION_FIELDS } from '../../js/kernel/adapters/indexeddb/versions.js';
-import { createKernel } from './test-kernel.mjs';
+import { catalogFor, createKernel } from './test-kernel.mjs';
 import { createNoteList } from '../../js/kernel/core/application/note-list.js';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
@@ -71,26 +72,29 @@ after(() => adapters.forEach(adapter => adapter.close()));
 /**
  * The kernel on #17's adapter over `context`'s profile, opened as the new tab's root opens a
  * database the worker's run didn't reach: as it is, with the backup tasks (composition/newtab.js),
- * and the real clock, as Storage's is, unless a case gives one
+ * and the real clock, as Storage's is, unless a case gives one. The worker's, for a capture, is
+ * opened as its root opens it there: as it is, keying its own commands too (composition/background.js).
  * @param {PageContext} context
  * @param {import('../../js/kernel/core/ports/runtime.js').Clock} [clock]
+ * @param {import('../../js/kernel/core/ports/policy.js').Caller} [caller]
  * @returns {Promise<Kernel>}
  */
-async function kernelOver(context, clock = { now: () => Date.now() }) {
+async function kernelOver(context, clock = { now: () => Date.now() }, caller = CALLERS.newtab) {
+  const worker = caller.surface === 'worker-internal';
   const adapter = createIndexedDbAdapter({
     indexedDB: context.env.indexedDB,
     settings: context.env.chrome.api.storage.local,
     keyRange: KeyRange,
     mode: 'existing',
-    backups: true,
+    ...(worker ? { commands: WORKER_COMMANDS } : { backups: true }),
   });
   adapters.push(adapter);
   await adapter.open();
   return createKernel({
     adapter,
-    policy: createBaselinePolicy(),
-    caller: CALLERS.newtab,
-    ids: testIds('k'),
+    policy: createBaselinePolicy(catalogFor(caller)),
+    caller,
+    ids: testIds(worker ? 'w' : 'k'),
     clock,
   });
 }
@@ -372,7 +376,7 @@ describe("the kernel's copies of production rules, run both ways", () => {
 
   it("a capture's new Daily Note is the note, search entry, and template blocks Storage.ensureDailyNote makes", async () => {
     // At an instant of one day in UTC and here, on both sides (SAME_DAY)
-    const { viaStorage, viaKernel, kernel } = await twin(
+    const { viaStorage, viaKernel } = await twin(
       {
         canvases: [legacyEnv.note('t1', { name: 'Daily template', isTemplate: true })],
         elements: [
@@ -390,8 +394,10 @@ describe("the kernel's copies of production rules, run both ways", () => {
     );
     for (const { storage } of [viaStorage, viaKernel]) await storage.setSetting('dailyNoteTemplate', 't1');
     const daily = legacyEnv.plain(await viaStorage.storage.ensureDailyNote());
+    // Only the worker captures (#35 slice 3)
+    const worker = await kernelOver(viaKernel, { now: () => SAME_DAY }, CALLERS['worker-internal']);
     assertCommitted(
-      await kernel.execute({
+      await worker.execute({
         type: 'captureToDailyNote',
         commandId: 'c1',
         noteId: daily.id,
@@ -432,7 +438,8 @@ describe("the kernel's copies of production rules, run both ways", () => {
       );
       const day = await workerHarness.readTodaysDailyNote(worker);
 
-      const { viaKernel, kernel } = await twin();
+      const { viaKernel } = await twin();
+      const kernel = await kernelOver(viaKernel, undefined, CALLERS['worker-internal']);
       /** @type {import('../../js/kernel/core/domain/note.js').Capture[]} */
       const captures = [
         { type: 'bookmark', url: tab.url, title: tab.title },

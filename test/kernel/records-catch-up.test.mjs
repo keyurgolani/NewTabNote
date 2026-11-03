@@ -12,6 +12,7 @@ import { RECORDS_CAUGHT_UP_KEY, createWorkerClient } from '../../js/kernel/compo
 import { CATCH_UP_BYTES, CATCH_UP_NOTES, recordCatchUpCommands } from '../../js/kernel/core/application/record-catch-up.js';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
+import { WORKER_CATALOG } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { inBlockOrder, noteSaveMetadata } from '../../js/kernel/core/domain/note.js';
 import { VERSION_FIELDS } from '../../js/kernel/adapters/indexeddb/versions.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
@@ -61,7 +62,13 @@ const CONTEXTS = [
     async start() {
       const adapter = createMemoryAdapter();
       const ids = testIds();
-      const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: WORKER, ids, clock: testClock() });
+      const kernel = createKernel({
+        adapter,
+        policy: createBaselinePolicy(WORKER_CATALOG),
+        caller: WORKER,
+        ids,
+        clock: testClock(),
+      });
       return { adapter, ids, kernel, close: () => {} };
     },
   },

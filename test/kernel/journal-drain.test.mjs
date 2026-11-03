@@ -1,8 +1,8 @@
 // #35 slice 3's drain (js/kernel/core/application/journal-drain.js), on the in-memory adapter
 // and journal, through the worker's own kernel and table: what it replays and in what order,
-// whose entries it leaves alone, the sweep of notes deleted for good, an editor save replayed by
-// #33's rules (the lead's answer to the plan's Q1), what it keeps and raises for an entry it
-// can't replay (Q6), and that storage it can't reach stops it with every entry left.
+// whose entries it leaves alone, an editor save among them, which the pages replay (slice 3b,
+// the lead's call on #182), the sweep of notes deleted for good, what it keeps and raises for an
+// entry it can't replay (Q6), and that storage it can't reach stops it with every entry left.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,6 +14,7 @@ import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
 import { journaledLookup } from '../../js/kernel/core/messaging/journaled-operations.js';
+import { WORKER_CATALOG } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 import { createKernel } from './test-kernel.mjs';
@@ -42,11 +43,17 @@ const YESTERDAY = NOW - 24 * 60 * 60 * 1000;
 function world({ live = [LIVE], inFlight = [] } = {}) {
   const adapter = createMemoryAdapter();
   const clock = testClock();
-  const policy = createBaselinePolicy();
-  const page = createKernel({ adapter, policy, caller: CALLERS.newtab, ids: testIds('page'), clock });
+  // Each on the policy its root builds: the page's on the shared catalog, the worker's on its own
+  const page = createKernel({
+    adapter,
+    policy: createBaselinePolicy(),
+    caller: CALLERS.newtab,
+    ids: testIds('page'),
+    clock,
+  });
   const worker = createKernel({
     adapter,
-    policy,
+    policy: createBaselinePolicy(WORKER_CATALOG),
     caller: CALLERS['worker-internal'],
     handlers: WORKER_HANDLERS,
     ids: testIds('worker'),
@@ -368,61 +375,34 @@ describe('the journal drain (#35 slice 3)', () => {
     assert.equal(await kept.recordOf('notes', 'n2'), undefined);
   });
 
-  it("replays an editor's save by #33's rules: dropped when it's in, saved where its blocks are as the page saw them, recovered where they changed", async () => {
-    // In already: the save committed, and its page went before it removed the entry
-    const inAlready = world();
-    await noteA(inAlready);
-    const first = await saveOfA(inAlready, 'c-save-1', 'alpha, edited');
-    assert.equal((await inAlready.page.execute(/** @type {any} */ (first.command))).kind, 'committed');
-    await inAlready.journal.put(entryOf(first.command, { draft: first.draft }));
-    const dropped = await inAlready.drain();
-    assert.deepEqual([dropped.replayed, dropped.left, dropped.recovered], [1, 0, []]);
-    assert.deepEqual(inAlready.sent, ['applyCloseDraft']);
-
-    // Not in, on blocks as the page saw them: saved
-    const saved = world();
-    await noteA(saved);
-    const second = await saveOfA(saved, 'c-save-2', 'alpha, edited');
-    await saved.journal.put(entryOf(second.command, { draft: second.draft }));
-    const savedResult = await saved.drain();
-    assert.deepEqual([savedResult.replayed, savedResult.left, savedResult.recovered], [1, 0, []]);
-    const [a1] = (await saved.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === 'a1');
-    assert.equal(a1.content, 'alpha, edited');
-
-    // Another writer changed a1 since the page saw it: one recovered note, and the newer text stays
-    const changed = world();
-    await noteA(changed);
-    const third = await saveOfA(changed, 'c-save-3', 'alpha, the older edit');
-    const newer = await changed.page.execute({
-      type: 'saveNoteContent',
-      commandId: 'c-other-tab',
-      noteId: 'A',
-      blocks: [{ id: 'a1', type: 'text', content: 'alpha, a newer edit', order: 0 }],
-      deriveFromStored: true,
-    });
-    assert.equal(newer.kind, 'committed');
-    await changed.journal.put(entryOf(third.command, { draft: third.draft }));
-    const recovered = await changed.drain();
-    assert.deepEqual([recovered.replayed, recovered.left], [1, 0]);
-    assert.deepEqual(recovered.recovered, [{ id: 'c-save-3-recovered', of: 'A' }]);
-    const [kept] = (await changed.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === 'a1');
-    assert.equal(kept.content, 'alpha, a newer edit');
-    assert.ok(await changed.recordOf('notes', 'c-save-3-recovered'));
-  });
-
-  it("saves an editor's save into its note in the Trash, as #33's rules do, and names that note", async () => {
+  it("leaves an editor's save to the pages, sweeps it once its note is deleted for good, and keeps one with no draft as a conflict record", async () => {
+    // With its draft, the pages apply it by #33's rules (slice 3b): the worker sends nothing for it,
+    // and it stays, orphaned, for them
     const w = world();
     await noteA(w);
-    const save = await saveOfA(w, 'c-save-trash', 'alpha, edited');
-    const trashed = await w.page.execute({ type: 'trashNote', commandId: 'c-trash-a', noteId: 'A' });
-    assert.equal(trashed.kind, 'committed', JSON.stringify(trashed));
-    await w.journal.put(entryOf(save.command, { draft: save.draft }));
-    const result = await w.drain();
-    assert.deepEqual([result.replayed, result.left, result.recovered, result.savedInTrash], [1, 0, [], ['A']]);
-    assert.deepEqual(w.answers, [['applyCloseDraft', 'committed', 'close-draft-saved-in-trash']]);
+    const save = await saveOfA(w, 'c-save', 'alpha, edited');
+    await w.journal.put(entryOf(save.command, { draft: save.draft, createdAt: NOW - 5 }));
+    const left = await w.drain();
+    assert.deepEqual([left.status, left.replayed, left.kept, left.left], ['drained', 0, 0, 1]);
+    assert.equal(left.oldestOrphanedEntryAt, NOW - 5);
+    assert.deepEqual([w.sent, w.told], [[], []]);
     const [a1] = (await w.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === 'a1');
-    assert.equal(a1.content, 'alpha, edited');
-    assert.deepEqual(w.told, []);
+    assert.equal(a1.content, 'alpha', 'nothing applied');
+
+    // Its note deleted for good: swept, as every entry of that note is
+    await w.page.execute({ type: 'trashNote', commandId: 'c-trash-a', noteId: 'A' });
+    await w.page.execute({ type: 'deleteNotePermanently', commandId: 'c-delete-a', noteId: 'A' });
+    const swept = await w.drain();
+    assert.deepEqual([swept.swept, swept.left], [1, 0]);
+
+    // With no draft, no one can apply it: kept as a conflict record, and its text with it
+    const bare = world();
+    await noteA(bare);
+    await bare.journal.put(entryOf((await saveOfA(bare, 'c-bare', 'alpha, edited')).command));
+    const kept = await bare.drain();
+    assert.deepEqual([kept.kept, kept.left], [1, 0]);
+    assert.deepEqual(bare.sent, ['keepJournalEntry']);
+    assert.ok(await bare.recordOf('conflicts', 'c-bare'));
   });
 
   it("keeps an entry whose note isn't there, raising its incident once", async () => {
@@ -441,14 +421,6 @@ describe('the journal drain (#35 slice 3)', () => {
     assert.deepEqual(w.journal.entries()[0].unreplayable, { code: 'note-not-found', at: NOW });
     await w.drain();
     assert.deepEqual(w.told, [['c-orphan', 'note-not-found']], 'raised once');
-    // An editor's save whose note is gone with no tombstone found stays too
-    const gone = world();
-    await noteA(gone);
-    const save = await saveOfA(gone, 'c-save', 'alpha, edited');
-    await gone.journal.put(entryOf({ ...save.command, noteId: 'B' }, { draft: { ...save.draft, noteId: 'B' } }));
-    const kept = await gone.drain();
-    assert.deepEqual([kept.replayed, kept.left], [0, 1]);
-    assert.deepEqual(gone.told, [['c-save', 'note-not-found']]);
   });
 
   it("keeps a newer build's entry and one naming an operation it doesn't journal, for a build that can replay them (the lead's Q6)", async () => {

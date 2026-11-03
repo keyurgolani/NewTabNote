@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createKernel } from './test-kernel.mjs';
+import { catalogFor, createKernel } from './test-kernel.mjs';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryCommitLog } from '../../js/kernel/core/memory/commit-log.js';
@@ -35,7 +35,8 @@ const memoryFixture = {
     const clock = testClock();
     const ids = testIds();
     /** @param {import('./support.mjs').Caller} caller */
-    const kernel = caller => createKernel({ adapter, policy: createBaselinePolicy(), caller, ids, clock });
+    const kernel = caller =>
+      createKernel({ adapter, policy: createBaselinePolicy(catalogFor(caller)), caller, ids, clock });
     return {
       adapter,
       clock,

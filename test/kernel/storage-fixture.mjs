@@ -6,8 +6,9 @@ import { createRequire } from 'node:module';
 
 import { IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
-import { createKernel } from './test-kernel.mjs';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
+import { catalogFor, createKernel } from './test-kernel.mjs';
 import { faultyFactory } from './storage-faults.mjs';
 import { CALLERS, isSettingsArea, testClock, testIds } from './support.mjs';
 
@@ -52,6 +53,8 @@ export function adapterOn(of, options = {}) {
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
+    // Its ledger keys every command a test sends, the service worker's own too
+    commands: WORKER_COMMANDS,
     ...options,
   });
   of.adapters.push(adapter);
@@ -96,7 +99,7 @@ export function recordsOf(of, store) {
  * @returns {Kernel}
  */
 export function kernelOn(adapter, { ids = testIds(), clock = testClock() } = {}, caller = CALLERS.newtab) {
-  return createKernel({ adapter, policy: createBaselinePolicy(), caller, ids, clock });
+  return createKernel({ adapter, policy: createBaselinePolicy(catalogFor(caller)), caller, ids, clock });
 }
 
 /** @param {Profile} of */

@@ -154,6 +154,87 @@ describe('each composition root', () => {
     closeAll([tab]);
   });
 
+  it("refuses the worker's own operations on every page, whose root builds its policy on the shared catalog, and runs them on the worker's root, with its grants and nothing more (#35 slice 3)", async () => {
+    const tab = legacyContext();
+    const { client: newtab } = newTabOf(tab);
+    assert.equal(await newtab.whenReady(), null);
+    const popup = createPopupClient(pageHostOf(tab));
+    const panel = createSidePanelClient(pageHostOf(tab));
+    const worker = createWorkerClient(workerHostOf(tab));
+    const created = await newtab.execute({
+      type: 'createNote',
+      commandId: newtab.ids.next(),
+      noteId: 'n1',
+      name: 'Plan',
+    });
+    assert.equal(created.kind, 'committed');
+    const entry = { type: 'saveNoteContent', commandId: 'c-entry', noteId: 'n1', blocks: [] };
+    const capture = /** @type {const} */ ({ type: 'text', content: 'From a page' });
+    // A page's kernel and policy are on the shared catalog, which doesn't have them, so each is
+    // refused as unknown before any handler
+    for (const [page, client] of /** @type {Array<[string, Client]>} */ ([
+      ['the new tab', newtab],
+      ['Popup', popup],
+      ['Side Panel', panel],
+    ])) {
+      const kept = await client.execute({
+        type: 'keepJournalEntry',
+        commandId: client.ids.next(),
+        opId: 'c-entry',
+        noteId: 'n1',
+        command: entry,
+      });
+      assert.deepEqual(policyRefusal(kept), ['policy', 'unknown-command'], page);
+      assert.deepEqual(
+        await client.query({ type: 'findTombstones', noteIds: ['n1'] }),
+        { kind: 'failed', cause: 'policy', code: 'unknown-query' },
+        page,
+      );
+      const captured = await client.execute({
+        type: 'captureToDailyNote',
+        commandId: client.ids.next(),
+        noteId: client.ids.next(),
+        blockId: client.ids.next(),
+        capture,
+      });
+      assert.deepEqual(policyRefusal(captured), ['policy', 'unknown-command'], page);
+    }
+    // The worker runs its own, and the shared commands it's granted
+    const kept = await worker.execute({
+      type: 'keepJournalEntry',
+      commandId: worker.ids.next(),
+      opId: 'c-entry',
+      noteId: 'n1',
+      command: entry,
+    });
+    assert.equal(kept.kind, 'committed');
+    assert.equal((await worker.query({ type: 'findTombstones', noteIds: ['n1'] })).kind, 'empty');
+    const inserted = await worker.execute({
+      type: 'insertBlocks',
+      commandId: worker.ids.next(),
+      noteId: 'n1',
+      blocks: [{ id: 'w1', type: 'text', content: 'Replayed' }],
+    });
+    assert.equal(inserted.kind, 'committed');
+    // And no other: an editor's close-time draft is the pages' to apply (slice 3b)
+    const applied = /** @type {Outcome} */ (
+      await worker.execute(/** @type {any} */ ({ type: 'applyCloseDraft', commandId: worker.ids.next(), draft: {} }))
+    );
+    assert.deepEqual(policyRefusal(applied), ['policy', 'not-on-surface']);
+    // Its adapter keys its own commands in the ledger too, so a capture sent again answers as it did
+    const once = {
+      type: 'captureToDailyNote',
+      commandId: worker.ids.next(),
+      noteId: worker.ids.next(),
+      blockId: 'k-once',
+      capture: { type: 'text', content: 'Once' },
+    };
+    const first = await worker.execute(/** @type {any} */ (once));
+    assert.equal(first.kind, 'committed');
+    assert.deepEqual(await worker.execute(/** @type {any} */ (once)), first);
+    closeAll([tab]);
+  });
+
   it('runs what its page sends through its table, and refuses as not-registered, with an error, a read the policy allows that its page never sends (#17 PR 4b)', async () => {
     const tab = legacyContext();
     const { client: newtab } = newTabOf(tab);

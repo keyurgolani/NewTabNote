@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 
 import * as v from '../../js/lib/valibot/index.mjs';
 import { createKernel } from './test-kernel.mjs';
-import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
+import { WORKER_CATALOG, WORKER_COMMAND_TYPES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { FOLDER_OP_FIELDS, NOTE_OP_FIELDS, changeOp, changeRecord } from '../../js/kernel/core/contracts/entities.js';
 import { blocksByNote, folderOps, noteOps, sameValue } from '../../js/kernel/core/domain/changes.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
@@ -32,7 +32,7 @@ import {
 } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { CHANGE_OPS } from './change-ops.mjs';
-import { COMMAND_SAMPLES } from './command-samples.mjs';
+import { COMMAND_SAMPLES, senderOf } from './command-samples.mjs';
 import { KeyRange, adapterOn, closeAll, kernelOn, legacyEnv, profile, recordsOf } from './storage-fixture.mjs';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 
@@ -58,7 +58,8 @@ import { CALLERS, NOW, testClock, testIds } from './support.mjs';
  * @property {() => Promise<Row[]>} rows
  * @property {Map<number, CommandType>} commandAt
  * @property {(type: string, fields: Record<string, unknown>) => Promise<any>} run
- *   Sends one command under a commandId of its own, and answers its outcome
+ *   Sends one command under a commandId of its own, from the new tab, or from the service
+ *   worker when its catalog entry doesn't list the new tab, and answers its outcome
  * @property {() => Promise<void>} close
  */
 
@@ -79,13 +80,16 @@ const recording = (inner, commandAt) => ({
 });
 
 /**
- * @param {Kernel} kernel
+ * @param {Kernel} page - the new tab's kernel
+ * @param {Kernel} worker - the service worker's, on the same adapter
  * @returns {World['run']}
  */
-const runner = kernel => {
+const runner = (page, worker) => {
   let sent = 0;
   return (type, fields) =>
-    kernel.execute(/** @type {Command} */ ({ ...fields, type, commandId: `${type}-${(sent += 1)}` }));
+    (senderOf(type) === CALLERS.newtab ? page : worker).execute(
+      /** @type {Command} */ ({ ...fields, type, commandId: `${type}-${(sent += 1)}` }),
+    );
 };
 
 /** @returns {Promise<World>} */
@@ -94,12 +98,15 @@ async function memoryWorld() {
   /** @type {Map<number, CommandType>} */
   const commandAt = new Map();
   const adapter = recording(createMemoryAdapter({ commitLog: log }), commandAt);
-  const kernel = createKernel({
+  const ids = testIds();
+  const clock = testClock();
+  const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+  const worker = createKernel({
     adapter,
-    policy: createBaselinePolicy(),
-    caller: CALLERS.newtab,
-    ids: testIds(),
-    clock: testClock(),
+    policy: createBaselinePolicy(WORKER_CATALOG),
+    caller: CALLERS['worker-internal'],
+    ids,
+    clock,
   });
   return {
     name: 'memory',
@@ -107,7 +114,7 @@ async function memoryWorld() {
     kernel,
     commitLog: log,
     commandAt,
-    run: runner(kernel),
+    run: runner(kernel, worker),
     rows: async () =>
       log.rows().map(({ commitSeq, entityType, entityId, revision, ops }) => ({
         seq: commitSeq,
@@ -131,7 +138,9 @@ async function indexedDbWorld({ of = profile() } = {}) {
   /** @type {Map<number, CommandType>} */
   const commandAt = new Map();
   const adapter = recording(inner, commandAt);
-  const kernel = kernelOn(/** @type {any} */ (adapter), { ids: testIds(), clock });
+  const ids = testIds();
+  const kernel = kernelOn(/** @type {any} */ (adapter), { ids, clock });
+  const worker = kernelOn(/** @type {any} */ (adapter), { ids, clock }, CALLERS['worker-internal']);
   return {
     name: 'indexeddb',
     of,
@@ -139,7 +148,7 @@ async function indexedDbWorld({ of = profile() } = {}) {
     kernel,
     commitLog: /** @type {any} */ (inner).commitLog,
     commandAt,
-    run: runner(kernel),
+    run: runner(kernel, worker),
     rows: async () =>
       /** @type {Array<Row & {position: number}>} */ (await recordsOf(of, 'changes'))
         .sort((a, b) => a.seq - b.seq || a.position - b.position)
@@ -269,7 +278,8 @@ describe("#17 PR 4c: domain/changes.js's differ, on records made by hand", () =>
 
 describe("#17 PR 4c: every catalog command's change ops", () => {
   it('names every catalog command once', () => {
-    assert.deepEqual(Object.keys(CHANGE_OPS).sort(), [...COMMAND_TYPES].sort());
+    // The shared catalog's, and the worker's part's (contracts/worker-catalog.js)
+    assert.deepEqual(Object.keys(CHANGE_OPS).sort(), [...WORKER_COMMAND_TYPES].sort());
   });
 
   for (const make of WORLDS) {
