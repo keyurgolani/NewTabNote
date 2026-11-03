@@ -2562,6 +2562,9 @@ class BlockEditor {
       }
     }
 
+    // A card in a safe state is no list item to the block shortcuts, whatever type its record
+    // names, so Tab moves on from it, and a block added below it is text at no indent (#14)
+    const safe = block.safeState();
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     const modKey = isMac ? e.metaKey : e.ctrlKey;
     const shortcutAction = typeof ShortcutUtils !== 'undefined'
@@ -2571,7 +2574,7 @@ class BlockEditor {
         modKey,
         shiftKey: e.shiftKey,
         altKey: e.altKey,
-        blockType: block.type,
+        blockType: safe ? '' : block.type,
       })
       : null;
 
@@ -2579,9 +2582,9 @@ class BlockEditor {
       e.preventDefault();
 
       if (shortcutAction.type === 'insert-below') {
-        const nextType = ['bullet', 'numbered', 'todo'].includes(block.type) ? block.type : 'text';
+        const nextType = !safe && ['bullet', 'numbered', 'todo'].includes(block.type) ? block.type : 'text';
         this.insertBlockAfter(block.id, nextType, '', {
-          indentLevel: block.indentLevel || 0,
+          indentLevel: (!safe && block.indentLevel) || 0,
         });
         return;
       }
@@ -2606,7 +2609,7 @@ class BlockEditor {
     // nothing: its default is prevented, so the note doesn't take it and Space doesn't scroll, but
     // it goes on, so the app's shortcuts still hear it. Enter, Backspace, Delete, Tab and the arrow
     // keys are the browser's, which do nothing on a card but move focus.
-    if (block.safeState()) {
+    if (safe) {
       if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) e.preventDefault();
       return;
     }
