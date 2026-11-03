@@ -103,6 +103,14 @@ describe('Turn into keeps what it can as text (#14 slice 3)', () => {
     assert.ok(overlay(doc) === null, 'no question');
     assert.deepEqual(typesOf(editor), ['text', 'h2']);
   });
+
+  it("a block whose imageUrl holds no image, a data URL with nothing after its comma, turns at once too, as its merges and the empty-note check read it (#14)", OPTIONS, async () => {
+    const { editor, doc } = await openNote([{ ...block('e1', 'N', 0, 'Some text'), imageUrl: 'data:,' }]);
+    const turning = editor.turnInto('e1', 'h1');
+    assert.ok(overlay(doc) === null, 'no question about an image');
+    assert.equal(await turning, true);
+    assert.deepEqual([typesOf(editor), editor.blocks[0].content], [['h1'], 'Some text']);
+  });
 });
 
 describe('a conversion that removes structure asks first (#14 slice 3)', () => {
