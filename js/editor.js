@@ -1437,7 +1437,7 @@ class BlockEditor {
     }
 
     this.renderBlocks();
-    this.focusBlock(blockId, true);
+    this.focusBlock(blockId, true, true);
     this.scheduleSave();
   }
 
@@ -1777,13 +1777,15 @@ class BlockEditor {
   }
 
   /**
-   * Focus a block
+   * Focus a block. With `card`, a card in a safe state takes focus itself, as a keyboard move
+   * leaves it (#14); every other caller still finds nothing to focus in a card, so the arrow keys
+   * still stop above and below one.
    */
-  focusBlock(blockId, atEnd = false) {
+  focusBlock(blockId, atEnd = false, card) {
     const el = this.getBlockElement(blockId);
     if (!el) return;
 
-    const content = el.querySelector('.block-content');
+    const content = el.querySelector('.block-content') || (card && el.querySelector('.block-safe-card'));
     if (content) {
       content.focus();
       // Only where focus went: a caret in a hidden pane's block would swallow every key typed after it
