@@ -63,6 +63,8 @@ function world({ live = [LIVE], inFlight = [] } = {}) {
   const journal = createMemoryJournal();
   /** @type {Array<[string, string]>} each incident the drain raised, by opId and code */
   const told = [];
+  /** @type {string[]} each entry whose incident a stop raised, which a kept capture isn't told */
+  const stops = [];
   /** @type {string[]} each entry it replayed */
   const replayed = [];
   /** @type {string[]} the types of the commands it sent */
@@ -91,7 +93,10 @@ function world({ live = [LIVE], inFlight = [] } = {}) {
       liveOwners: async () => holders,
       own: { sessionId: OWN, inFlight: () => flying },
       clock,
-      unreplayable: (entry, code) => told.push([entry.opId, code]),
+      unreplayable: (entry, code, how) => {
+        told.push([entry.opId, code]);
+        if (how?.stop) stops.push(entry.opId);
+      },
       replayed: entry => replayed.push(entry.opId),
       ...overrides,
     });
@@ -116,6 +121,7 @@ function world({ live = [LIVE], inFlight = [] } = {}) {
     worker,
     journal,
     told,
+    stops,
     replayed,
     sent,
     answers,
@@ -460,6 +466,8 @@ describe('the journal drain (#35 slice 3)', () => {
       ['c-bare', 'invalid-payload'],
       ['c-filed', 'replay-refused'],
     ]);
+    // None of them is a stop: each is told as what it is
+    assert.deepEqual(w.stops, []);
     for (const opId of ['c-odd', 'c-bare', 'c-filed']) {
       const record = await w.recordOf('conflicts', opId);
       assert.ok(record, opId);
@@ -524,7 +532,7 @@ describe('the journal drain (#35 slice 3)', () => {
       ['c2', 'c3'],
     );
     // A stop it can retry raises nothing: the next drain may get through
-    assert.deepEqual(w.told, []);
+    assert.deepEqual([w.told, w.stops], [[], []]);
     // A journal it can't read stops it before anything runs
     w.journal.failNext('list');
     const unread = await w.drain();
@@ -579,6 +587,8 @@ describe('the journal drain (#35 slice 3)', () => {
       // Once, though two drains stopped at it, so a capture says "Not captured" once; and the
       // stop keeps the replay oldest first, so nothing after it went
       assert.deepEqual(w.told, [['c-stuck', code]], stop);
+      // Raised as a stop, which leaves a kept capture kept, so its worker tells it nothing
+      assert.deepEqual(w.stops, ['c-stuck'], stop);
       assert.deepEqual(sent, ['c-stuck', 'c-stuck'], stop);
       assert.equal(await w.recordOf('notes', 'n-later'), undefined, stop);
       assert.deepEqual(w.journal.entries().find(entry => entry.opId === 'c-stuck')?.unreplayable?.code, code, stop);
@@ -603,7 +613,24 @@ describe('the journal drain (#35 slice 3)', () => {
       );
     }
     assert.deepEqual(w.told, [['c-odd', 'not-cloneable']]);
+    assert.deepEqual(w.stops, ['c-odd']);
     assert.equal(await w.recordOf('notes', 'n-later'), undefined);
+
+    // A removal that fails for good once the entry's command is in raises nothing, since the
+    // next drain's ledger answers it
+    const removing = world();
+    await removing.journal.put(entryOf(quickNote('c-in', 'n-in')));
+    const failingRemove = {
+      ...removing.journal,
+      remove: async () => {
+        throw new UnavailableError('quota', 'quota', false);
+      },
+    };
+    const first = await removing.drain({ journal: failingRemove });
+    assert.deepEqual([first.status, first.code, first.replayed, removing.told], ['stopped', 'quota', 0, []]);
+    assert.ok(await removing.recordOf('notes', 'n-in'), 'its command is in');
+    const next = await removing.drain();
+    assert.deepEqual([next.status, next.replayed, next.left, removing.told], ['drained', 1, 0, []]);
 
     // A throw that says it may get through raises nothing, as a stop it can retry doesn't
     const busy = world();
