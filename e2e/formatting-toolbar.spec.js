@@ -10,6 +10,8 @@
  * - Hidden, it takes no focus and isn't in the accessibility tree, so Tab past the app's last
  *   control never stops on its buttons. Before, it hid by opacity alone, so Tab went through
  *   both toolbars' twelve buttons, and a screen reader found two "Text formatting" toolbars.
+ * - It opens at once, in place, and once a selection ends it still shows while it fades, for
+ *   0.12 s, then hides.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -70,6 +72,35 @@ test("hidden, it takes no focus and isn't in the accessibility tree, so Tab past
     await page.keyboard.press('Tab');
     expect.soft(await page.evaluate(() => !!document.activeElement.closest('.formatting-toolbar')), `Tab ${i}`).toBe(false);
   }
+  await expectNoUncaught(extension, page);
+});
+
+test('it opens at once, in place, and once the selection ends it still shows while it fades, then hides', async ({ extension }) => {
+  const page = await shortNote(extension);
+  // The top toolbar right after the toolbars handle a select or an unselect in the first block.
+  // Each reading is in the same task as their own selectionchange handlers, which run first, so
+  // no frame passes and no timing enters
+  const after = change => page.evaluate(async change => {
+    const node = document.querySelector('#blocks-container > .block .block-content').firstChild;
+    const handled = new Promise(resolve => document.addEventListener('selectionchange', resolve, { once: true }));
+    if (change === 'select') getSelection().setBaseAndExtent(node, 0, node, 6);
+    else getSelection().collapseToEnd();
+    await handled;
+    const bars = document.querySelectorAll('.formatting-toolbar');
+    const bar = bars[bars.length - 1];
+    const hide = bar.getAnimations().find(animation => animation.transitionProperty === 'visibility');
+    const reading = { visibility: getComputedStyle(bar).visibility, hidesAfter: hide ? hide.effect.getTiming().delay : null };
+    if (change !== 'select') return reading;
+    // A selection made in one go, as a double-click makes one, is placed from the toolbar's first measure
+    const word = getSelection().getRangeAt(0).getBoundingClientRect();
+    const box = bar.getBoundingClientRect();
+    return { ...reading, gap: Math.round(word.top - box.bottom), offCentre: Math.round(Math.abs((box.left + box.right) / 2 - (word.left + word.right) / 2)) };
+  }, change);
+  await blockContent(page, 0).click();
+  await page.waitForTimeout(200);
+  expect(await after('select'), 'open at once, in place').toEqual({ visibility: 'visible', hidesAfter: null, gap: 8, offCentre: 0 });
+  expect(await after('unselect'), 'still showing while it fades').toEqual({ visibility: 'visible', hidesAfter: 120 });
+  await expect(page.locator('.formatting-toolbar').last()).toBeHidden();
   await expectNoUncaught(extension, page);
 });
 
