@@ -404,3 +404,63 @@ describe("a paste never puts a block's new type over what it holds (#14 slice 3)
     assert.equal(editor.blocks[0].id, 'p2');
   });
 });
+
+describe('no paste removes what a block holds: a paste turns its block only when it holds nothing, by the empty-note rule (#14)', () => {
+  const paste = (editor, id, text) => {
+    // No caret in the fake window, so a re-render keeps none
+    editor.doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
+    editor.onPaste({ target: contentEl(editor, id), clipboardData: { items: [], getData: () => text }, preventDefault() {} });
+  };
+  /** Each kind of paste that can turn a block, and the types its blocks take after the one pasted into */
+  const PASTES = [
+    ['Markdown', '# Heading\n\nSome text', ['h1', 'text']],
+    ['fenced code', '```\nconst a = 1;\n```', ['code']],
+    ['a URL', 'https://example.test/page', ['bookmark']],
+    ['a table', 'a\tb\nc\td', ['table']],
+  ];
+  const MARKUP = '<img src="data:image/png;base64,iVBORw0KGgo=">';
+
+  it('a text block holding only markup, an image tag and no text, keeps it: each paste goes after it', OPTIONS, async () => {
+    for (const [kind, text, after] of PASTES) {
+      const { editor } = await openNote([block('p1', 'N', 0, MARKUP)]);
+      paste(editor, 'p1', text);
+      assert.deepEqual(typesOf(editor), ['text', ...after], kind);
+      assert.deepEqual([editor.blocks[0].id, editor.blocks[0].content], ['p1', MARKUP], kind);
+    }
+  });
+
+  it('an empty text block whose imageUrl holds an image keeps it through a URL or a table paste too', OPTIONS, async () => {
+    const holder = { ...block('p1', 'N', 0, ''), imageUrl: 'data:image/png;base64,iVBORw0KGgo=' };
+    for (const [kind, text, after] of PASTES.slice(2)) {
+      const { editor } = await openNote([holder]);
+      paste(editor, 'p1', text);
+      assert.deepEqual(typesOf(editor), ['text', ...after], kind);
+      assert.equal(editor.blocks[0].imageUrl, holder.imageUrl, kind);
+    }
+  });
+
+  it("an empty text block holding a field its type doesn't own stays as it is: each paste goes after it", OPTIONS, async () => {
+    for (const [kind, text, after] of PASTES) {
+      const { editor } = await openNote([{ ...block('p1', 'N', 0, ''), futureField: 'kept' }]);
+      paste(editor, 'p1', text);
+      assert.deepEqual(typesOf(editor), ['text', ...after], kind);
+      assert.deepEqual(editor.blocks[0].serialize().futureField, 'kept', kind);
+    }
+  });
+
+  it("a block that holds nothing still turns for each paste: one empty, one of spaces, line breaks and no-break spaces, and one whose imageUrl holds no image", OPTIONS, async () => {
+    const empties = [
+      block('p1', 'N', 0, ''),
+      block('p1', 'N', 0, ' <br>&nbsp;<br/> '),
+      { ...block('p1', 'N', 0, ''), imageUrl: 'data:,' },
+    ];
+    for (const record of empties) {
+      for (const [kind, text, after] of PASTES) {
+        const { editor } = await openNote([record]);
+        paste(editor, 'p1', text);
+        assert.deepEqual(typesOf(editor), after, `${kind} into ${JSON.stringify(record.content)}`);
+        assert.equal(editor.blocks[0].id, 'p1', 'the block pasted into is the one that turned');
+      }
+    }
+  });
+});

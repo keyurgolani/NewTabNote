@@ -18,6 +18,61 @@ async function paste(page, text) {
   await page.keyboard.press('ControlOrMeta+KeyV');
 }
 
+/**
+ * #14: a paste turns the block it's in only when that block holds nothing, by the empty-note
+ * rule. A line the user cleared in Chromium holds nothing, whichever way it was cleared and
+ * whether its text was bold, so each kind of paste still turns it. Each cleared line's markup
+ * is printed, for the case where one doesn't.
+ */
+test('a line cleared in Chromium, by selecting its text or by Backspace to its start, plain or bold, still turns on each kind of paste', async ({ extension }) => {
+  const kinds = [
+    ['fenced code', PASTES[1], ['code']],
+    ['a URL', PASTES[2], ['bookmark']],
+    ['CSV', PASTES[3], ['table']],
+    ['Markdown', PASTES[4], ['h1', 'bullet']],
+  ];
+  const clears = [
+    ['its text selected and Backspace', async page => {
+      await page.keyboard.press('Shift+Home');
+      await page.keyboard.press('Backspace');
+    }],
+    ['Backspace to its start', async page => {
+      for (let i = 0; i < 'milk'.length; i += 1) await page.keyboard.press('Backspace');
+    }],
+  ];
+  const styles = [['plain', false], ['bold', true]];
+  const cases = [];
+  for (const [how, clear] of clears) {
+    for (const [style, bold] of styles) {
+      for (const [kind, text, turned] of kinds) cases.push({ name: `${kind}, ${style}, ${how}`, clear, bold, text, turned });
+    }
+  }
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, cases.map(({ name }) => ({ name, blocks: [{ type: 'text', content: 'start' }] })));
+  const page = await driver.openNewTab(extension);
+  await extension.context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const results = [];
+  for (const { name, clear, bold, text, turned } of cases) {
+    await driver.openNote(page, name);
+    await driver.clickBlock(page, 0);
+    await page.keyboard.press('Enter');
+    if (bold) await page.keyboard.press('ControlOrMeta+KeyB');
+    await page.keyboard.type('milk');
+    await clear(page);
+    const left = await page.locator('#blocks-container > .block .block-content').nth(1).innerHTML();
+    await paste(page, text);
+    const typesNow = async () => (await driver.blocks(page)).map(block => block.type);
+    // The paste has landed once the blocks are more than the line and the one before it
+    await expect.poll(typesNow).not.toEqual(['text', 'text']);
+    results.push({ name, left, types: await typesNow(), turned });
+  }
+  console.log('#14 cleared lines:', JSON.stringify(results.map(({ name, left, types }) => ({ name, left, types }))));
+  for (const { name, left, types, turned } of results) {
+    expect(types, `${name}: the cleared line held ${JSON.stringify(left)}`).toEqual(['text', ...turned]);
+  }
+  await expectNoUncaught(extension, page);
+});
+
 for (const [left, leave] of [
   ['the caret left in the note', page => driver.clickBlock(page, 1)],
   ['text selected in the note', async page => {

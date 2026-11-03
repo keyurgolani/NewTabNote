@@ -3749,8 +3749,10 @@ class BlockEditor {
     // Determine the current block context
     const blockEl = e.target.closest('.block');
     const currentBlock = blockEl ? this.getBlockById(blockEl.dataset.id) : null;
-    const currentBlockContent = currentBlock ? this.extractBlockTextContent(currentBlock) : '';
-    const isEmptyBlock = currentBlock && currentBlock.type === 'text' && !currentBlockContent.trim();
+    // No paste removes what a block holds (#14): a paste turns the block it's in only when that
+    // block holds nothing, by the empty-note rule, so a text block with no text, no markup, no
+    // image and no field its type doesn't own. Otherwise what it makes goes after the block.
+    const isEmptyBlock = currentBlock && !globalThis.BlockProjections.isMeaningful(currentBlock.serialize());
 
     // (Req 34.1) URL detection → bookmark block
     if (this.isUrl(trimmed)) {
