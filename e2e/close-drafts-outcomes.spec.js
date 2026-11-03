@@ -8,9 +8,9 @@
  *   no recovered note, and says so (V3).
  * - The main pane and the pop-out on one note, each with its own block: both are kept.
  * - The pop-out saves its edit to a block, and the main pane's Enter puts a block above it, which
- *   only moves it: the next start keeps both panes' text, with no recovered note, since the
- *   draft leaves out a block its pane only moved (#17, the per-pane save). It may show the
- *   moved block where it was.
+ *   only moves it: the next start keeps both panes' text, in the main pane's order, with no
+ *   recovered note, since the draft holds that block's move and not the main pane's copy of it
+ *   (#17, #6).
  * The closing write waits behind the Popup's hold on the blocks and goes with the page, so the
  * edit reaches the next start through its draft alone. The tests also fail on an uncaught
  * exception that test/known-defects.json doesn't list.
@@ -167,7 +167,7 @@ test('the main pane and the pop-out on one note, each with an edit to its own bl
   await expectNoUncaught(extension, next);
 });
 
-test("the pop-out's saved edit to a block, then the main pane's Enter above it and a close inside the debounce, the closing write lost: both panes' text kept, with no recovered note", async ({ extension }) => {
+test("the pop-out's saved edit to a block, then the main pane's Enter above it and a close inside the debounce, the closing write lost: both panes' text kept, in the main pane's order, with no recovered note", async ({ extension }) => {
   test.setTimeout(90_000);
   const popup = await extension.openSurface('popup');
   const page = await openShared(extension);
@@ -197,8 +197,8 @@ test("the pop-out's saved edit to a block, then the main pane's Enter above it a
   await popup.waitForTimeout(HOLD_MS + 200);
 
   const next = await driver.openNewTab(extension);
-  // A lost close can cost the move, never the text: the moved block may stay where it was stored
-  await expect.poll(async () => (await contentsOf(next, noteId)).sort()).toEqual(['first', 'main', 'start pop-out']);
+  // The draft carries the moved block's move, so the next start has the main pane's order too (#6)
+  await expect.poll(() => contentsOf(next, noteId)).toEqual(['first', 'main', 'start pop-out']);
   expect(Object.keys(await notesByName(next)).filter(name => name.startsWith('Recovered:'))).toEqual([]);
   await expectNoUncaught(extension, next);
 });
