@@ -4394,6 +4394,12 @@ class BlockEditor {
      */
     this._seen = new Map();
     /**
+     * @type {Set<string>} The blocks whose delete this editor issued and hasn't seen settle. One
+     * the editor shows again before its delete commits (an undo) goes whole with the next save,
+     * which commits after the delete, so it ends stored as shown (#17, the per-pane save)
+     */
+    this._deleting = new Set();
+    /**
      * @type {Map<string, string>} The id of each note's close-time draft, which its closing save
      * issued at the same close takes as its commandId (#33)
      */
@@ -4456,7 +4462,12 @@ class BlockEditor {
   _deleteStoredBlocks(blockIds) {
     if (!this.noteId || blockIds.length === 0) return Promise.resolve();
     const noteId = this.noteId;
+    for (const id of blockIds) this._deleting.add(id);
+    const settled = () => {
+      for (const id of blockIds) this._deleting.delete(id);
+    };
     return this.documentClient.deleteBlocks(noteId, blockIds).then((outcome) => {
+      settled();
       if (outcome.kind === 'committed') {
         // They're gone as stored, so a close-time draft no longer lists them (#33). The base's
         // revision moves only to the delete's own, one past it, since nothing else committed then
@@ -4477,6 +4488,9 @@ class BlockEditor {
       }
       // Codes only, never what the blocks hold
       console.error('Failed to delete blocks:', outcome.kind, outcome.code);
+    }, (error) => {
+      settled();
+      throw error;
     });
   }
 
@@ -4571,14 +4585,17 @@ class BlockEditor {
 
   /**
    * How a block of the loaded note stands against the note's base (#17, the per-pane save):
-   * 'put' when its fields differ from the base's at the order the base has it at, or the base
-   * has no such block, 'move' when only its order differs, and null when neither
+   * 'put' when its fields differ from the base's at the order the base has it at, when the base
+   * has no such block, or when its delete is still in flight, so an undo that brings it back
+   * before the delete commits still stores it; 'move' when only its order differs; and null
+   * when neither
    * @param {{stored: Map<string, string>, sent: Map<string, string>, orders: Map<string, number>}} seen
    * @param {Object} block - serialized, as a save writes it
    * @param {string} noteId
    * @returns {'put'|'move'|null}
    */
   _changeOf(seen, block, noteId) {
+    if (this._deleting.has(block.id)) return 'put';
     const was = seen.sent.has(block.id) ? seen.sent.get(block.id) : seen.stored.get(block.id);
     if (was === undefined) return 'put';
     const at = seen.orders.get(block.id);

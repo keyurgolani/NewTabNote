@@ -714,6 +714,15 @@ describe('BlockEditor saves put only what their own pane changed (#17, the per-p
     assert.deepEqual(await storedC(env), [['c2', 'charlie two, from the pop-out', 0]]);
   });
 
+  it('a delete undone before the delete commits ends with the block stored as the editor shows it', async () => {
+    const { env, main } = await pageOnC();
+    main.deleteBlock('c1');
+    // The undo comes before the delete's commit, so the next save has to put c1 back after it
+    main.undo();
+    await debounceSave(env, main);
+    assert.deepEqual(await storedC(env), [['c1', 'charlie', 0], ['c2', 'charlie two', 1]]);
+  });
+
   it('an edit undone while its save is in flight ends stored as the editor shows it', async () => {
     const { env, main } = await pageOnC();
     // Each save commits at once, and the editor hears of the first one only when the test says
