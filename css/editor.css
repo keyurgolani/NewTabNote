@@ -145,6 +145,13 @@ body {
   height: 100vh;
 }
 
+/* The formatting toolbars (js/ui/formatting-toolbar.js) sit in the body, absolutely placed, and
+   a selection places each by its inline top and left. Hidden, one sits at the page's top, so it
+   adds no height below the app, where End or a wheel would move the whole page. */
+.formatting-toolbar {
+  top: 0;
+}
+
 body.focus-mode .sidebar,
 body.focus-mode #header,
 body.focus-mode #ai-floating-btn,
