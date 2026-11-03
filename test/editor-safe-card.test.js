@@ -238,6 +238,20 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
     assert.deepEqual(plain(editor.blocks.map(b => b.id)), ['a1', 'a3', 'k1'], 'Mod+Shift+ArrowDown moved it down');
   });
 
+  // Type anywhere takes no Alt key, so preventing one on a card would keep it only from the
+  // browser: Alt+F and Alt+E open Chrome's menu on Windows and Linux, Alt+Shift+T and Alt+Shift+B
+  // focus its toolbar and bookmarks bar
+  it('an Alt chord on a focused card is left to the browser, as type anywhere leaves it, and the note takes nothing', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    const focused = [];
+    editor.focusBlock = (id) => focused.push(id);
+    for (const [key, shiftKey] of [['f', false], ['e', false], ['T', true], ['B', true], [' ', false]]) {
+      assert.equal(press(editor, cardOf(editor, 'k1'), key, { altKey: true, shiftKey }).defaultPrevented, false, `Alt+${shiftKey ? 'Shift+' : ''}${key}`);
+    }
+    assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
+  });
+
   // A card's record can name a list type, which the block shortcuts read for Tab and Mod+Enter
   for (const type of ['bullet', 'numbered', 'todo']) {
     it(`Tab and Shift+Tab from the card of a newer ${type} keep their own way, and its indent and record stay as loaded`, OPTIONS, async () => {
