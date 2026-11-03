@@ -79,13 +79,14 @@ test("a selected word still opens it 8 px above the word, centred on it, and Bol
   // Each editor has its own toolbar, and both open at the same place, so this reads the one on top
   const bar = page.locator('.formatting-toolbar.visible').last();
   await expect(bar).toBeVisible();
-  const word = await page.evaluate(() => {
-    const r = getSelection().getRangeAt(0).getBoundingClientRect();
-    return { top: r.top, centre: r.left + r.width / 2 };
-  });
-  const box = await bar.boundingBox();
-  expect(box.y + box.height).toBeCloseTo(word.top - 8, 0);
-  expect(box.x + box.width / 2).toBeCloseTo(word.centre, 0);
+  // It moves on each selectionchange, which can come after the last key, so this waits for its place
+  // over the whole word: the gap below it and how far its centre is off the word's, to the pixel
+  await expect.poll(() => page.evaluate(() => {
+    const word = getSelection().getRangeAt(0).getBoundingClientRect();
+    const bars = document.querySelectorAll('.formatting-toolbar.visible');
+    const box = bars[bars.length - 1].getBoundingClientRect();
+    return { gap: Math.round(word.top - box.bottom), offCentre: Math.round(Math.abs((box.left + box.right) / 2 - (word.left + word.right) / 2)) };
+  })).toEqual({ gap: 8, offCentre: 0 });
 
   // A click at Bold's centre reaches the toolbar on top, as a user's does
   const bold = await bar.locator('.formatting-toolbar-btn[data-id="bold"]').boundingBox();
