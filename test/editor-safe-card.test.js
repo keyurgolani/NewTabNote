@@ -267,6 +267,43 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
     }
   });
 
+  // Only a keyboard move takes focus to a card. Every other way between blocks finds nothing in a
+  // card to focus, so the arrows and Enter stop above and below one, until slice 4 changes them
+  it('the arrows and Enter stop at a card: from the block before it, the block after it and the title, focus stays where it was', OPTIONS, async () => {
+    /** The editor's own focus, with the caret at each block's edge and none in the fake window to place */
+    const ownFocus = (editor) => {
+      delete editor.focusBlock;
+      editor.placeCaretAtEnd = () => {};
+      editor.isCaretAtStart = () => true;
+      editor.isCaretAtEnd = () => true;
+    };
+    const contentOf = (editor, id) => elementOf(editor, id).querySelector('.block-content');
+
+    // Where focus is after each key: still where it was, each one checked on its own
+    const stayed = [];
+    const between = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(between.env, between.editor);
+    ownFocus(between.editor);
+    for (const [id, key] of [['a1', 'ArrowDown'], ['a3', 'ArrowUp']]) {
+      const content = contentOf(between.editor, id);
+      content.focus();
+      press(between.editor, content, key);
+      stayed.push([`${key} from ${id}`, between.editor.doc.activeElement === content]);
+    }
+
+    // The card first in the note, right under the title
+    const first = await openNote([{ ...KANBAN, order: 0 }, block('a2', 'N', 1, 'After')]);
+    asOnAMac(first.env, first.editor);
+    ownFocus(first.editor);
+    for (const key of ['ArrowDown', 'Enter']) {
+      first.editor.titleEl.focus();
+      first.editor.onTitleKeyDown({ key, preventDefault() {} });
+      stayed.push([`${key} from the title`, first.editor.doc.activeElement === first.editor.titleEl]);
+    }
+
+    assert.deepEqual(stayed, [['ArrowDown from a1', true], ['ArrowUp from a3', true], ['ArrowDown from the title', true], ['Enter from the title', true]]);
+  });
+
   // A card's record can name a list type, which the block shortcuts read for Tab and Mod+Enter
   for (const type of ['bullet', 'numbered', 'todo']) {
     it(`Tab and Shift+Tab from the card of a newer ${type} keep their own way, and its indent and record stay as loaded`, OPTIONS, async () => {
