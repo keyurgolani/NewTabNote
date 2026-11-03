@@ -500,12 +500,15 @@ describe('the journal drain (#35 slice 3)', () => {
     const w = world();
     await w.journal.put(entryOf(quickNote('c1', 'n1')));
     await w.journal.put(entryOf(quickNote('c2', 'n2'), { createdAt: NOW + 1 }));
-    let calls = 0;
+    // A later entry, which the stop at c2 keeps from going before it
+    await w.journal.put(entryOf(quickNote('c3', 'n3'), { createdAt: NOW + 2 }));
+    /** @type {string[]} */
+    const sent = [];
     const result = await w.drain({
       client: {
         execute: async command => {
-          calls += 1;
-          if (calls === 1) return w.worker.execute(command);
+          sent.push(command.commandId);
+          if (sent.length === 1) return w.worker.execute(command);
           return {
             kind: 'unavailable',
             cause: 'storage',
@@ -520,11 +523,12 @@ describe('the journal drain (#35 slice 3)', () => {
     });
     assert.deepEqual(
       [result.status, result.code, result.replayed, result.left],
-      ['stopped', 'transaction-failed', 1, 1],
+      ['stopped', 'transaction-failed', 1, 2],
     );
+    assert.deepEqual(sent, ['c1', 'c2'], 'nothing after the stop is sent');
     assert.deepEqual(
       w.journal.entries().map(entry => entry.opId),
-      ['c2'],
+      ['c2', 'c3'],
     );
     // A journal it can't read stops it before anything runs
     w.journal.failNext('list');
@@ -537,7 +541,7 @@ describe('the journal drain (#35 slice 3)', () => {
         query: async () => ({ kind: 'failed', cause: 'storage', code: 'unreadable' }),
       },
     });
-    assert.deepEqual([blind.status, blind.code, blind.replayed, blind.left], ['stopped', 'unreadable', 0, 1]);
+    assert.deepEqual([blind.status, blind.code, blind.replayed, blind.left], ['stopped', 'unreadable', 0, 2]);
   });
 
   it('answers empty for an empty journal, and sends nothing', async () => {

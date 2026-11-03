@@ -367,7 +367,9 @@ describe('a worker whose storage can\'t be reached', () => {
     await worker.dispatch('runtime.onInstalled', { reason: 'install' });
     assert.deepEqual(worker.contextMenus().map((menu) => menu.id), ['capture-page', 'capture-selection']);
 
+    const clickedFrom = Date.now();
     await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    const clickedBy = Date.now();
     await worker.drain();
     // Its entry is kept for the drain, and it says so (#35 slice 3)
     assert.deepEqual(plain(worker.env.chrome.notifications), [{
@@ -381,6 +383,8 @@ describe('a worker whose storage can\'t be reached', () => {
       [kept.command.type, kept.command.capture, kept.state, kept.surface],
       ['captureToDailyNote', { type: 'bookmark', url: worker.tab.url, title: worker.tab.title }, 'submitted', 'worker-internal'],
     );
+    // It carries the click's time, whose day it lands in however late the drain adds it
+    assert.ok(kept.command.at >= clickedFrom && kept.command.at <= clickedBy, String(kept.command.at));
     assert.deepEqual(await welcomeOf(worker, 'session-1'), { status: 'degraded', reason: 'storage-unavailable' });
 
     const seen = await trustOf(worker.indexedDB);
