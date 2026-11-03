@@ -21,7 +21,7 @@
 import { BUILT_IN_BLOCKS } from './builtins.js';
 import { createCatalog } from './catalog.js';
 import { conversionOn } from './conversions.js';
-import { holdsImage } from './meaningful.js';
+import { holdsImage, isMeaningful } from './meaningful.js';
 import { replaceTags, stripTags } from './strip-tags.js';
 import { wikiLinkNames } from './wiki-links.js';
 
@@ -118,6 +118,11 @@ export function pageReaders(catalog) {
      * leave alone (#14 slice 3)
      */
     holdsImage,
+    /**
+     * Whether a stored block holds anything, by the empty-note rule (meaningful.js): a paste
+     * turns the block it's in only when it holds nothing (#14)
+     */
+    isMeaningful,
   });
 }
 
