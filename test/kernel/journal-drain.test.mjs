@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { drainJournal } from '../../js/kernel/core/application/journal-drain.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
+import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
 import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
@@ -466,6 +467,26 @@ describe('the journal drain (#35 slice 3)', () => {
       assert.equal(record.expected, null);
     }
     assert.equal((await w.recordOf('conflicts', 'c-bare')).noteId, 'n1');
+
+    // A damaged entry with a null command, or none: kept as a conflict record, and the entry
+    // after it still replays
+    for (const command of [null, undefined]) {
+      const damaged = world();
+      /** @type {Record<string, unknown>} */
+      const bad = { ...entryOf(quickNote('c-damaged', 'n-damaged')), command };
+      if (command === undefined) delete bad.command;
+      await damaged.journal.put(/** @type {any} */ (bad));
+      await damaged.journal.put(entryOf(quickNote('c-after', 'n-after'), { createdAt: NOW + 1 }));
+      const drained = await damaged.drain();
+      assert.deepEqual(
+        [drained.status, drained.kept, drained.replayed, drained.left],
+        ['drained', 1, 1, 0],
+        String(command),
+      );
+      assert.deepEqual(damaged.told, [['c-damaged', 'invalid-payload']], String(command));
+      assert.deepEqual((await damaged.recordOf('conflicts', 'c-damaged'))?.command, {}, String(command));
+      assert.ok(await damaged.recordOf('notes', 'n-after'), String(command));
+    }
   });
 
   it("stops when the kernel can't answer, leaving every entry it hadn't removed", async () => {
@@ -502,6 +523,8 @@ describe('the journal drain (#35 slice 3)', () => {
       w.journal.entries().map(entry => entry.opId),
       ['c2', 'c3'],
     );
+    // A stop it can retry raises nothing: the next drain may get through
+    assert.deepEqual(w.told, []);
     // A journal it can't read stops it before anything runs
     w.journal.failNext('list');
     const unread = await w.drain();
@@ -514,6 +537,87 @@ describe('the journal drain (#35 slice 3)', () => {
       },
     });
     assert.deepEqual([blind.status, blind.code, blind.replayed, blind.left], ['stopped', 'unreadable', 0, 2]);
+  });
+
+  it("raises an entry's incident once when it stops every drain there, on a code it can't retry or a throw, and still stops there", async () => {
+    /** @type {import('../../js/kernel/core/contracts/outcomes.js').Unavailable} */
+    const cannotRetry = {
+      kind: 'unavailable',
+      cause: 'adapter',
+      code: 'not-cloneable',
+      retryable: false,
+      messageKey: 'unavailable.not-cloneable',
+      severity: 'error',
+    };
+    for (const stop of /** @type {const} */ (['cannot-retry', 'throws'])) {
+      const w = world();
+      // A capture an earlier worker kept, and a note made after it
+      await w.journal.put(entryOf(capture('c-stuck'), { owner: 'coordinator-0' }));
+      await w.journal.put(entryOf(quickNote('c-later', 'n-later'), { createdAt: NOW + 1 }));
+      /** @type {string[]} */
+      const sent = [];
+      const client = {
+        /** @param {any} command */
+        execute: async command => {
+          sent.push(command.commandId);
+          if (command.commandId !== 'c-stuck') return w.worker.execute(command);
+          if (stop === 'throws') throw new Error('A bug that throws on this entry');
+          return cannotRetry;
+        },
+        /** @param {any} query */
+        query: query => w.worker.query(query),
+      };
+      const code = stop === 'throws' ? 'drain-failed' : 'not-cloneable';
+      for (const run of [1, 2]) {
+        const result = await w.drain({ client });
+        assert.deepEqual(
+          [result.status, result.code, result.replayed, result.left],
+          ['stopped', code, 0, 2],
+          `${stop}, drain ${run}`,
+        );
+      }
+      // Once, though two drains stopped at it, so a capture says "Not captured" once; and the
+      // stop keeps the replay oldest first, so nothing after it went
+      assert.deepEqual(w.told, [['c-stuck', code]], stop);
+      assert.deepEqual(sent, ['c-stuck', 'c-stuck'], stop);
+      assert.equal(await w.recordOf('notes', 'n-later'), undefined, stop);
+      assert.deepEqual(w.journal.entries().find(entry => entry.opId === 'c-stuck')?.unreplayable?.code, code, stop);
+    }
+
+    // The same when the conflict record that would keep an entry can't be written for good
+    const w = world();
+    await w.journal.put(entryOf({ ...quickNote('c-odd', 'n-odd'), color: 'red' }));
+    await w.journal.put(entryOf(quickNote('c-later', 'n-later'), { createdAt: NOW + 1 }));
+    const client = {
+      /** @param {any} command */
+      execute: async command => (command.type === 'keepJournalEntry' ? cannotRetry : w.worker.execute(command)),
+      /** @param {any} query */
+      query: query => w.worker.query(query),
+    };
+    for (const run of [1, 2]) {
+      const result = await w.drain({ client });
+      assert.deepEqual(
+        [result.status, result.code, result.left],
+        ['stopped', 'not-cloneable', 2],
+        `keep, drain ${run}`,
+      );
+    }
+    assert.deepEqual(w.told, [['c-odd', 'not-cloneable']]);
+    assert.equal(await w.recordOf('notes', 'n-later'), undefined);
+
+    // A throw that says it may get through raises nothing, as a stop it can retry doesn't
+    const busy = world();
+    await busy.journal.put(entryOf(quickNote('c-busy', 'n-busy')));
+    const stopped = await busy.drain({
+      client: {
+        execute: async () => {
+          throw new UnavailableError('storage', 'transaction-aborted', true);
+        },
+        /** @param {any} query */
+        query: query => busy.worker.query(query),
+      },
+    });
+    assert.deepEqual([stopped.status, stopped.code, busy.told], ['stopped', 'transaction-aborted', []]);
   });
 
   it('answers empty for an empty journal, and sends nothing', async () => {

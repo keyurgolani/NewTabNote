@@ -2,17 +2,23 @@
 // level (#13, "Topology"): a page's port reaches it on the Chrome fake, and it serves the
 // handshake, system.messagingHealth, and the system.coordinatorHealth handler #35's
 // coordinator gives it, and nothing else until #35 adds the kernel's. Installing it never
-// throws, since a throw while the worker evaluates would stop every listener it registers.
+// throws, since a throw while the worker evaluates would stop every listener it registers. Its
+// policy is the shared catalog's, so no page reaches what only the worker runs
+// (contracts/worker-catalog.js), once slice 4 serves commands over the port too.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 
 import { PORT_NAME } from '../../js/kernel/adapters/messaging/runtime-port.js';
 import { installWorkerRouter } from '../../js/kernel/composition/background.js';
 import { coordinatorHandlers } from '../../js/kernel/composition/coordinator.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
-import { createChromeFake } from './chrome-fake.mjs';
+import { WORKER_ONLY_COMMANDS, WORKER_ONLY_QUERIES } from '../../js/kernel/core/contracts/worker-catalog.js';
+import { PAGE_FILES, createChromeFake } from './chrome-fake.mjs';
 import { hello, request, settle } from './messaging-support.mjs';
 
 /** @typedef {keyof typeof import('./chrome-fake.mjs').PAGE_FILES} PageSurface */
@@ -206,6 +212,78 @@ describe('the worker\'s router (#13, "Topology")', () => {
       'ready',
       health,
     ]);
+  });
+
+  it("serves no page what only the worker runs, even with a handler for each (the catalog split's sixth rule)", async () => {
+    const workerOnly = [...Object.keys(WORKER_ONLY_COMMANDS), ...Object.keys(WORKER_ONLY_QUERIES)];
+    /** @type {string[]} */
+    const ran = [];
+    const handlers = Object.fromEntries(
+      workerOnly.map(type => [
+        type,
+        async () => {
+          ran.push(type);
+          return { kind: 'ready', asOf: 0, data: {} };
+        },
+      ]),
+    );
+    for (const surface of /** @type {PageSurface[]} */ (Object.keys(PAGE_FILES))) {
+      const fake = createChromeFake();
+      fake.worker.install(chrome => {
+        installWorkerRouter({ runtime: chrome.runtime, handlers: /** @type {any} */ (handlers) });
+      });
+      const port = fake.page(surface).chrome.runtime.connect({ name: PORT_NAME });
+      /** @type {Array<Record<string, any>>} */
+      const frames = [];
+      port.onMessage.addListener((/** @type {string} */ text) => {
+        frames.push(/** @type {Record<string, any>} */ (decode(text)));
+      });
+      port.postMessage(encode(hello(surface, `${surface}-1`)));
+      for (const [index, type] of workerOnly.entries())
+        port.postMessage(encode(request(`r${index}`, { type }, soon())));
+      await settle();
+      await settle();
+      assert.deepEqual(
+        frames.filter(frame => frame.frame === 'error').map(frame => [frame.requestId, frame.code]),
+        workerOnly.map((_, index) => [`r${index}`, 'unknown-operation']),
+        surface,
+      );
+    }
+    assert.deepEqual(ran, []);
+  });
+
+  it("builds its router's policy on the shared catalog alone, which a page's grants come from once slice 4 serves commands over the port (the catalog split's sixth rule)", () => {
+    const file = path.join(import.meta.dirname, '..', '..', 'js', 'kernel', 'composition', 'background.js');
+    const source = ts.createSourceFile(
+      file,
+      fs.readFileSync(file, 'utf8'),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    /** @type {string[]} each createRouter call's policy, as written */
+    const policies = [];
+    /** @param {ts.Node} node */
+    const walk = node => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'createRouter') {
+        const [options] = node.arguments;
+        if (options && ts.isObjectLiteralExpression(options)) {
+          for (const property of options.properties) {
+            if (
+              ts.isPropertyAssignment(property) &&
+              ts.isIdentifier(property.name) &&
+              property.name.text === 'policy'
+            ) {
+              policies.push(property.initializer.getText(source));
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, walk);
+    };
+    walk(source);
+    // The baseline policy with no catalog given is the shared catalog's (ports/policy.js)
+    assert.deepEqual(policies, ['createBaselinePolicy()']);
   });
 
   it("never throws, where the runtime can't take its listener, and reports why", () => {
