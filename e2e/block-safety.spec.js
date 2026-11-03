@@ -176,6 +176,32 @@ test("a selected card with the focus ring shows the ring without the selection's
   await expectNoUncaught(extension, page);
 });
 
+test("a card whose record is a list item takes Tab as every card does: Tab goes on from it, Shift+Tab goes back, and its record stays as loaded", async ({ extension }) => {
+  const { fixture, held } = opaqueBlocks();
+  // The newer block's record made a to-do, a list type the block shortcuts would read
+  held['opaque-blocks-newer'].type = 'todo';
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const cardOf = id => page.locator(`#blocks-container > .block[data-id="${id}"] .block-safe-card`);
+  const before = page.locator('#blocks-container > .block[data-id="opaque-blocks-before"] .block-content');
+  await expect(cardOf('opaque-blocks-newer')).toHaveAccessibleName("This to-do block can't be shown");
+
+  await before.click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Tab');
+  await expect(cardOf('opaque-blocks-newer')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(cardOf('opaque-blocks-unknown')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(cardOf('opaque-blocks-newer')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(before).toBeFocused();
+  expect((await storedBlocks(page))['opaque-blocks-newer']).toEqual(held['opaque-blocks-newer']);
+  await expectNoUncaught(extension, page);
+});
+
 test("turning a table into text asks first: Cancel keeps it and puts focus in it, a yes keeps its cells a row per line, and Undo brings it back", async ({ extension }) => {
   const { fixture, held } = opaqueBlocks();
   await fixtureHost(extension.worker).loadFixture(fixture);
