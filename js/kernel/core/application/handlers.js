@@ -3,7 +3,7 @@
  * Panel's start). Each composition root hands its kernel the table of the commands and
  * queries its page sends, and no others, so a page loads only the handler modules it runs:
  * Popup's and Side Panel's start holds no remote apply or index command while #19 isn't live.
- * The new tab's table is every handler the catalog allows there (handlers-all.js), Popup's,
+ * The new tab's table is every handler the catalog allows there (handlers-newtab.js), Popup's,
  * Side Panel's and the worker's their own files. test/kernel/handlers.test.mjs holds each
  * table to what its page's code sends.
  *

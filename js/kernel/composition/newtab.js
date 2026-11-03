@@ -12,7 +12,7 @@ import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { validateBackup } from '../adapters/indexeddb/backups.js';
 import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { exportRawStores } from '../adapters/indexeddb/raw-export.js';
-import { NEWTAB_HANDLERS } from '../core/application/handlers-all.js';
+import { NEWTAB_HANDLERS } from '../core/application/handlers-newtab.js';
 import { createNoteList } from '../core/application/note-list.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import {
