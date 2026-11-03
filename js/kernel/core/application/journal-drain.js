@@ -32,6 +32,9 @@
  *      doesn't journal (`unknown-operation`): it stays for that build, and its incident is raised
  *      (the lead's answer to Q6);
  *    - unavailable, or no answer: the drain stops, and every entry left stays for the next one.
+ *      A stop it can't retry, an `unavailable` that says so or a throw (`drain-failed`), would
+ *      stop every drain at that entry, so it raises the entry's incident too. It still stops
+ *      there, since going past it would break oldest first.
  *
  * An incident is raised once for each entry and code: the entry keeps the code it was raised for
  * (`unreplayable`), and a drain that finds the same one again says nothing more. The mark never
@@ -116,6 +119,13 @@ const REPLAYS = Object.freeze({
   insertBlocks: command => /** @type {Command} */ ({ ...command, type: 'insertBlocks' }),
   captureToDailyNote: command => /** @type {Command} */ ({ ...command, type: 'captureToDailyNote' }),
 });
+
+/**
+ * Whether a drain stopped by `error` may get through next time: an UnavailableError that says
+ * so. Anything else thrown would stop every drain at the same place.
+ * @param {unknown} error
+ */
+const retryable = error => isRecord(error) && error.retryable === true;
 
 /**
  * The code an UnavailableError, or anything thrown, stops a drain with
@@ -210,6 +220,9 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
       command: isRecord(command) ? command : {},
     });
     if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
+      // One it can't retry would stop every drain here
+      if (outcome.kind === 'unavailable' && !outcome.retryable && isJournalRecord(entry))
+        await raise(entry, outcome.code);
       result.status = 'stopped';
       result.code = outcome.code;
       return false;
@@ -230,6 +243,8 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
     return true;
   };
 
+  /** @type {JournalRecord | null} the entry being replayed or kept, whose incident a throw raises */
+  let deciding = null;
   try {
     // 1. The sweep, before anything replays
     const entries = /** @type {JournalRecord[]} */ (listed.filter(isJournalRecord));
@@ -253,6 +268,7 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
 
     // 2. The replays, oldest first
     for (const entry of listed) {
+      deciding = null;
       if (!isJournalRecord(entry)) {
         // Malformed: kept as a conflict record when it has a key to keep it under
         const opId = isRecord(entry) ? entry.opId : undefined;
@@ -260,8 +276,10 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
         continue;
       }
       if (gone.has(entry.opId) || entry.state !== 'submitted' || !orphaned(entry)) continue;
-      // An editor's save is the pages' to replay, but one with no draft, which no one can
-      if (Object.hasOwn(PAGES_REPLAY, String(entry.command.type))) {
+      deciding = entry;
+      // An editor's save is the pages' to replay, but one with no draft, which no one can. An
+      // entry with no command goes on to the upcast, which reads it as malformed
+      if (isRecord(entry.command) && Object.hasOwn(PAGES_REPLAY, String(entry.command.type))) {
         if (!isRecord(entry.draft) && !(await keep(entry, 'invalid-payload'))) break;
         continue;
       }
@@ -287,6 +305,8 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
       }
       const outcome = await client.execute(sent);
       if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
+        // One it can't retry would stop every drain here
+        if (outcome.kind === 'unavailable' && !outcome.retryable) await raise(entry, outcome.code);
         result.status = 'stopped';
         result.code = outcome.code;
         break;
@@ -296,6 +316,8 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
         else if (!(await keep(entry, 'replay-refused'))) break;
         continue;
       }
+      // Its command is in, so a removal that throws leaves it for the next drain's ledger answer
+      deciding = null;
       await journal.remove([entry.opId]);
       gone.add(entry.opId);
       result.replayed += 1;
@@ -308,6 +330,8 @@ export async function drainJournal({ journal, client, lookup, liveOwners, own, c
   } catch (error) {
     result.status = 'stopped';
     result.code = stopCode(error);
+    // A throw at an entry would stop every drain there, unless it says it may get through
+    if (deciding && !retryable(error)) await raise(deciding, result.code);
   }
 
   // What it leaves, and the oldest of that no live context holds
