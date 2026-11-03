@@ -2602,6 +2602,15 @@ class BlockEditor {
       }
     }
 
+    // A card in a safe state holds nothing to type in (#14). A key typed on it, Space too, does
+    // nothing: its default is prevented, so the note doesn't take it and Space doesn't scroll, but
+    // it goes on, so the app's shortcuts still hear it. Enter, Backspace, Delete, Tab and the arrow
+    // keys are the browser's, which do nothing on a card but move focus.
+    if (block.safeState()) {
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) e.preventDefault();
+      return;
+    }
+
     // Enter - create new block
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();

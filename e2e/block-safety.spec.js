@@ -5,6 +5,8 @@
  * - A block this build doesn't fully read (saved by a newer version, of a type it doesn't have,
  *   with stored data it can't read, or with no type) shows as a read-only card that says so,
  *   with nothing to type in.
+ * - Each card is a group a keyboard reaches by Tab, named by its title and described by its
+ *   detail. A key typed on one does nothing, and the app's own shortcuts still hear it (#14).
  * - The blocks around the cards edit and save as usual, and each card's record, like a known
  *   block's field its type doesn't own, is written back as it was loaded. A save writes only
  *   the blocks it changed, each at schemaVersion 1, so a block it leaves alone stays as stored.
@@ -83,6 +85,51 @@ test('a block this build reads in a safe state shows read-only, and edits around
   // A save writes only the blocks its pane changed (#17, the per-pane save), so a known block
   // left alone, with a field its type doesn't own, stays as stored, with no version
   expect(stored['opaque-blocks-extra']).toEqual(held['opaque-blocks-extra']);
+  await expectNoUncaught(extension, page);
+});
+
+test('each card is a group a keyboard reaches: Tab stops on each in turn, named by its title and described by its detail, and a key typed on one does nothing, while ? still opens the shortcuts', async ({ extension }) => {
+  const { fixture, held } = opaqueBlocks();
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const cardOf = id => page.locator(`#blocks-container > .block[data-id="${id}"] .block-safe-card`);
+  const cards = [
+    ['opaque-blocks-newer', "This text block can't be shown", 'It was saved by a newer version of NewTabNote. Its content is kept as it is.'],
+    ['opaque-blocks-unknown', 'This “kanban” block can\'t be shown', "This version of NewTabNote doesn't have this kind of block. Its content is kept as it is."],
+    ['opaque-blocks-invalid', "This table block can't be shown", "Its saved data isn't in a form this version can read. Its content is kept as it is."],
+    ['opaque-blocks-typeless', "This block can't be shown", "Its saved data isn't in a form this version can read. Its content is kept as it is."],
+  ];
+
+  // Tab from the block before the cards stops on each card, then goes on to the block after them
+  await page.locator('#blocks-container > .block[data-id="opaque-blocks-before"] .block-content').click();
+  await page.keyboard.press('End');
+  for (const [id, name, description] of cards) {
+    await page.keyboard.press('Tab');
+    await expect(cardOf(id), id).toBeFocused();
+    await expect(cardOf(id)).toHaveRole('group');
+    await expect(cardOf(id)).toHaveAccessibleName(name);
+    await expect(cardOf(id)).toHaveAccessibleDescription(description);
+  }
+
+  // On the last card, a letter, Space, Enter, Backspace and Delete change nothing, and focus stays
+  const shown = await driver.blocks(page);
+  for (const key of ['x', 'Space', 'Enter', 'Backspace', 'Delete']) await page.keyboard.press(key);
+  await expect(cardOf('opaque-blocks-typeless')).toBeFocused();
+  expect(await driver.blocks(page)).toEqual(shown);
+  const stored = await storedBlocks(page);
+  for (const [id] of cards) expect(stored[id], id).toEqual(held[id]);
+
+  // The app's own shortcuts still hear a key typed there
+  await page.keyboard.press('Shift+Slash');
+  await expect(page.getByRole('dialog', { name: 'Keyboard Shortcuts' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Keyboard Shortcuts' })).toBeHidden();
+
+  await cardOf('opaque-blocks-typeless').focus();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#blocks-container > .block[data-id="opaque-blocks-extra"] .block-content')).toBeFocused();
   await expectNoUncaught(extension, page);
 });
 
