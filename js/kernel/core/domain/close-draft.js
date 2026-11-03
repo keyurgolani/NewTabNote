@@ -50,11 +50,14 @@
  *    and its name written.
  *
  * A stack draft's moves (#6) go in with a save, and on their own when nothing else of the draft
- * is left. Each goes on the block's record as stored, so its text is never at stake, and only
- * over an order the page knows the block by: the one its base had, or one its own saves gave
- * it. Another writer's reorder since keeps its order, and a block no note holds, another note's,
- * or one the draft puts or deletes, is skipped. A recovered note takes no move, and a residue
- * Q5 drops takes its moves with it.
+ * is left. Each goes on the block's record as stored, so its text is never at stake. They go in
+ * together, and only over orders the page knows the blocks by: the one its base had, or one its
+ * own saves gave. A block at any other order is another writer's reorder since, and then none
+ * goes in, so that writer's order stays whole. A reorder that puts each block back on an order
+ * the page knows, its base's say, reads as the page's own, so the moves go over it: the next
+ * start can't tell a closing save that committed from one that didn't. A block no note holds,
+ * another note's, or one the draft puts or deletes, is skipped. A recovered note takes no move,
+ * and a residue Q5 drops takes its moves with it.
  *
  * Nothing here reads a store or a browser API: the handler reads the records and hands them in.
  */
@@ -227,10 +230,14 @@ export function residueOf(note, stored, draft) {
   const name = writesName(note, draft) && note.name !== draft.name ? draft.name : undefined;
   // A move of a block the draft puts or deletes is left out, since the put carries its order
   const named = new Set([...draft.blocks.map(block => block.id), ...draft.deletedBlockIds]);
-  const orders = movesOf(draft).filter(move => {
+  const moves = movesOf(draft).filter(move => {
     const copy = stored.get(move.id);
-    return !named.has(move.id) && ownCopy(copy, noteId) && copy?.order !== move.order && knownOrders(draft, move.id).includes(copy?.order);
+    return !named.has(move.id) && ownCopy(copy, noteId) && copy?.order !== move.order;
   });
+  // One move shifts the blocks around it too, so the moves go in together or not at all: a block
+  // at an order the page doesn't know it by is another writer's reorder, and that writer's order
+  // stays whole (#6)
+  const orders = moves.every(move => knownOrders(draft, move.id).includes(stored.get(move.id)?.order)) ? moves : [];
   return { blocks, deletedBlockIds, name, orders };
 }
 

@@ -1012,24 +1012,39 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
     assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['charlie two', 1]]);
   });
 
-  it("another tab's reorder since the closing tab's base keeps its order: the closing tab's move of that block is skipped, and its move of another block goes in", async () => {
-    const tango = [block('t1', 'T', 0, 'tango'), block('t2', 'T', 1, 'tango two'), block('t3', 'T', 2, 'tango three'), block('t4', 'T', 3, 'tango four')];
+  /**
+   * Note T's four blocks `ids`, at orders 0 to 3. Tab B moves the third above the second and
+   * saves. Then tab A, on its base, moves the second above the first and closes inside the
+   * debounce, every save lost. Answers T's blocks as the next start leaves them, by order, then
+   * id, as getNoteBlocks shows them.
+   * @param {string[]} ids
+   */
+  async function reorderedSinceTheBase(ids) {
+    const tango = ids.map((id, order) => block(id, 'T', order, `tango ${order}`));
     const env = await setup({ notes: [note('T', { name: 'Tango' })], blocks: tango });
     const tabA = editing(makeEditor(env));
     await tabA.loadNote('T');
-    // Tab B moves t3 above t2, after tab A's base
     const other = await secondTab(env);
     const tabB = editing(makeEditor(other));
     await tabB.loadNote('T');
-    tabB.moveBlockByDirection('t3', -1);
+    tabB.moveBlockByDirection(ids[2], -1);
     assert.equal(await runUntil(other, tabB.flushSave()), true);
-    // Tab A, on its base, moves t2 above t1, and closes inside the debounce
     watchSaves(env, { hold: lostWithThePage });
-    tabA.moveBlockByDirection('t2', -1);
+    tabA.moveBlockByDirection(ids[1], -1);
     closePage(env);
     await nextStart(env);
-    const orders = Object.fromEntries(Object.values((await storedRows(env)).blocks).filter((row) => row.canvasId === 'T').map((row) => [row.id, row.order]));
-    assert.deepEqual(orders, { t1: 1, t2: 2, t3: 1, t4: 3 }, "t2 where tab B put it, and t1 where tab A put it");
+    return Object.values((await storedRows(env)).blocks)
+      .filter((row) => row.canvasId === 'T')
+      .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((row) => `${row.id}@${row.order}`);
+  }
+
+  it("another tab's reorder since the closing tab's base keeps its order whole: one of the closing tab's moves meets it, so none goes in", async () => {
+    assert.deepEqual(await reorderedSinceTheBase(['t1', 't2', 't3', 't4']), ['t1@0', 't3@1', 't2@2', 't4@3'], "tab B's order, as tab B saved it");
+  });
+
+  it('the same with ids that sort the other way, so no tie could show in id order: the next start shows tab B\'s order', async () => {
+    assert.deepEqual(await reorderedSinceTheBase(['z0', 'm1', 'a2', 'm3']), ['z0@0', 'a2@1', 'm1@2', 'm3@3']);
   });
 });
 

@@ -403,6 +403,16 @@ for (const fixture of FIXTURES) {
         assert.deepEqual(await ordersOfA(), { a3: 0, a1: 1, a2: 2 });
       });
 
+      it("keeps every move out when another writer reordered any block the draft moves, even one whose block is still where the page knows it, so that writer's order stays whole", async () => {
+        await profileOf(ctx, { blocks: [block('a3', 'A', 2, 'alpha three')] });
+        // Another tab moved a3 above a2 since the base, which moved a2 down and left a1 where it was
+        await savedElsewhere(ctx, [block('a1', 'A', 0, 'alpha'), block('a3', 'A', 1, 'alpha three'), block('a2', 'A', 2, 'alpha two')]);
+        // The closing tab, on its base, moved a2 above a1: a1 is still at its base order, a2 isn't
+        const draft = stackDraft({ blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } });
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        assert.deepEqual(await ordersOfA(), { a1: 0, a3: 1, a2: 2 });
+      });
+
       it("takes a move over an order one of the page's own saves gave the block, as that save's commit the page never heard of", async () => {
         await profileOf(ctx);
         // The page's own save moved a2 to the top and committed as the page went
