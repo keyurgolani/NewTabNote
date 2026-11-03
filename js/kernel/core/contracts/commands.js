@@ -137,7 +137,11 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  * creation, appends, and captures (slice 3): a context writes each to its journal before it
  * sends it, and the coordinator's drain replays one no context lived to see answered
  * (domain/journal.js). A command moved to a new version keeps a step from the last one in
- * contracts/upcast.js, so a journal entry written before the move still replays.
+ * contracts/upcast.js, so a journal entry written before the move still replays. A journaled
+ * command's payload changes only that way, with a new version and its step: its schema is
+ * strict, so a field added at the same version reads as malformed in a build that doesn't know
+ * it, and that build keeps the entry as a conflict record rather than replay it.
+ * test/kernel/catalog.test.mjs holds each journaled payload as it is at its version.
  * @param {string} module - the schema module's name under contracts/operations/
  * @param {Aggregate} aggregate
  * @param {Surface[]} surfaces
