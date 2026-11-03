@@ -163,7 +163,8 @@ function watchSaves(env) {
     saves.push({
       noteId: save.noteId,
       commandId: options && options.commandId,
-      blocks: save.blocks.map((b) => b.id),
+      // Into the test's own array, since a save's list can come from the page's realm
+      blocks: Array.from(save.blocks, (b) => b.id),
       deriveFromStored: save.deriveFromStored === true,
     });
     return real(save, options);
