@@ -8,10 +8,13 @@
  * isn't journaled keeps its key in memory only, and after a reload its outcome comes from
  * reading the projection again, never a resend.
  *
- * #17's journal client implements it (its slice 2), and tests use a double until then. The
- * journal record's schema stays #17's: this reads only each entry's `v`, the catalog version
- * of its command when it was written, and the command, which contracts/upcast.js takes to the
- * current version. Writing and acknowledging entries are #17's and #35's.
+ * #35's journal implements it (slice 3): `NewTabNoteJournal` on IndexedDB
+ * (adapters/indexeddb/journal.js), and a memory copy for the tests (memory/journal.js). The
+ * client reads only each entry's `v`, the catalog version of its command when it was written,
+ * and the command, which contracts/upcast.js takes to the current version. The entry's other
+ * fields are #35's (domain/journal.js), and so are writing and removing entries
+ * (JournalStore): a context writes one before it sends, and removes it once the command is
+ * answered, and the coordinator's drain replays and removes what no context lived to answer.
  */
 
 /**
@@ -21,6 +24,21 @@
 /**
  * @typedef {object} JournalReader
  * @property {() => Promise<JournalEntry[]>} inFlight - rejects with an UnavailableError when storage fails
+ */
+
+/** @typedef {import('../domain/journal.js').JournalRecord} JournalRecord */
+
+/**
+ * The journal as the contexts that write it, and the drain, use it. Each call is one strict
+ * transaction, and answers once it has committed, or rejects with an UnavailableError.
+ * @typedef {object} JournalStore
+ * @property {() => Promise<void>} open
+ * @property {(entry: JournalRecord) => Promise<void>} put - writes the entry, or replaces the one under its opId
+ * @property {(opIds: readonly string[]) => Promise<void>} remove - the entries under these opIds, those there are
+ * @property {(opId: string, unreplayable: {code: string, at: number}) => Promise<void>} mark
+ *   Sets the entry's `unreplayable` (domain/journal.js) in the transaction that reads it, so an
+ *   entry removed meanwhile stays removed
+ * @property {() => Promise<JournalRecord[]>} list - every entry, oldest first (domain/journal.js, inJournalOrder)
  */
 
 export {};
