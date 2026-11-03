@@ -89,6 +89,17 @@ describe("1.4.3 reads a draft in the stack's format (the lead's Q1)", () => {
     assert.deepEqual(draftKeys(release), []);
   });
 
+  it("saves one carrying the stack's moves (#6): its blocks go in, and the moves stay out, as a field it doesn't know", async () => {
+    const { env, release } = await profileAt8();
+    const draft = stackDraftOfA(release, { updatedAt: T0 });
+    write(release, { ...draft, orders: [{ id: 'a2', order: 0 }], base: { ...draft.base, orders: { a2: 1 } } });
+    assert.deepEqual(plain(release.CloseDrafts.list(release.storage)).map(({ draft: listed }) => listed.id), ['stack-draft-a']);
+    assert.deepEqual(await release.apply({ now: T0 + 100 }), { ...NOTHING, saved: ['A'] });
+    const after = await stored(env);
+    assert.deepEqual([after.blocks.a1.content, after.blocks.a2.order], ['alpha, edited in the stack', 1]);
+    assert.deepEqual(draftKeys(release), []);
+  });
+
   it("saves one whose note's stored updatedAt is a stamp its editor's own save made", async () => {
     const { env, release } = await profileAt8({ A: { updatedAt: T0 + 50 } });
     write(release, stackDraftOfA(release, { updatedAt: T0, issued: [T0 + 50] }));

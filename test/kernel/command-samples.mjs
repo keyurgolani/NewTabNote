@@ -80,7 +80,8 @@ export const COMMAND_SAMPLES = {
     name: 'Plan',
   },
   insertBlocks: { noteId: 'n1', blocks: [{ id: 'b2', type: 'text', content: 'From the chat' }], atOrder: 1 },
-  // A closing tab's edit of b2, in 1.4.3's format, on n1 as the samples before it leave it
+  // A closing tab's edit of b2, in 1.4.3's format, on n1 as the samples before it leave it, with
+  // the stack's moves (#6): one of a block no note holds, which the apply skips
   applyCloseDraft: {
     draft: {
       v: 1,
@@ -89,6 +90,7 @@ export const COMMAND_SAMPLES = {
       at: NOW,
       base: { revision: null, updatedAt: NOW, issued: [] },
       blocks: [{ id: 'b2', type: 'text', content: 'From the chat, edited as the tab closed', order: 1 }],
+      orders: [{ id: 'never-saved', order: 0 }],
       deletedBlockIds: [],
       preview: 'Line',
       todoProgress: null,

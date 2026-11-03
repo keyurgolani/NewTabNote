@@ -5,13 +5,18 @@
  * js/close-drafts.js), every field under its own name, type and meaning, so the 1.4.3 a rollback
  * brings back reads the stack's drafts too, plus the stack's own fields (the lead's Q1):
  *
- *   {v: 1, id, page?, noteId, at, base: {revision, updatedAt, issued, name?, blocks?, issuedSaves?},
- *    blocks, deletedBlockIds, name?, titleOrigin?, preview, todoProgress, linkedNames}
+ *   {v: 1, id, page?, noteId, at, base: {revision, updatedAt, issued, name?, blocks?, orders?, issuedSaves?},
+ *    blocks, orders?, deletedBlockIds, name?, titleOrigin?, preview, todoProgress, linkedNames}
  *
  * - `blocks` holds the blocks changed since the base, as the editor has them, and
  *   `deletedBlockIds` the blocks deleted since. `name` is there only when the title changed,
  *   with `titleOrigin` 'typed' (the user) or 'generated' (the AI). `preview`, `todoProgress` and
  *   `linkedNames` are what the editor read from its whole note.
+ * - A stack draft's `orders` holds each block its pane only moved since the base, as
+ *   `{id, order}` with the order the pane gave it, the shape of saveNoteContent's `orders` (#6).
+ *   `base.orders` holds each such block's order as the page last saw it commit, and an issued
+ *   save's `orders` the one that save gave it. 1.4.3 and 1.5.0 read none of these, so after a
+ *   rollback such a draft applies there without its moves.
  * - `base.revision` is the content revision the page last saw commit, null from 1.4.x.
  *   `base.updatedAt` and `base.issued` are 1.4.3's: the record's `updatedAt` then, and the
  *   stamps the page's saves made since. The stack's writer leaves `issued` empty (QA1).
@@ -44,6 +49,13 @@
  * 4. Otherwise the residue is saved: its blocks put, its deletes deleted, only the note's own,
  *    and its name written.
  *
+ * A stack draft's moves (#6) go in with a save, and on their own when nothing else of the draft
+ * is left. Each goes on the block's record as stored, so its text is never at stake, and only
+ * over an order the page knows the block by: the one its base had, or one its own saves gave
+ * it. Another writer's reorder since keeps its order, and a block no note holds, another note's,
+ * or one the draft puts or deletes, is skipped. A recovered note takes no move, and a residue
+ * Q5 drops takes its moves with it.
+ *
  * Nothing here reads a store or a browser API: the handler reads the records and hands them in.
  */
 
@@ -67,7 +79,8 @@ export { CLOSE_DRAFT_VERSION, blockDigest, digest, fingerprint };
  * @property {number[]} [issued]
  * @property {string} [name]
  * @property {Record<string, string>} [blocks]
- * @property {Array<{name?: string, blocks: Record<string, string>}>} [issuedSaves]
+ * @property {Record<string, number>} [orders]
+ * @property {Array<{name?: string, blocks: Record<string, string>, orders?: Record<string, number>}>} [issuedSaves]
  */
 
 /**
@@ -79,6 +92,7 @@ export { CLOSE_DRAFT_VERSION, blockDigest, digest, fingerprint };
  * @property {number} at
  * @property {DraftBase} base
  * @property {Array<{id: string} & Record<string, unknown>>} blocks
+ * @property {unknown} [orders] - read through movesOf
  * @property {string[]} deletedBlockIds
  * @property {string} [name]
  * @property {'typed' | 'generated'} [titleOrigin]
@@ -89,10 +103,12 @@ export { CLOSE_DRAFT_VERSION, blockDigest, digest, fingerprint };
 
 /**
  * What of a draft the note doesn't hold yet: the blocks it changed that differ from the stored
- * ones, the blocks it deleted that are still the note's, and its name, when the save would
- * write one the note doesn't have
- * @typedef {{blocks: CloseDraft['blocks'], deletedBlockIds: string[], name: string | undefined}} Residue
+ * ones, the blocks it deleted that are still the note's, its name, when the save would write one
+ * the note doesn't have, and the moves that would put a block somewhere else
+ * @typedef {{blocks: CloseDraft['blocks'], deletedBlockIds: string[], name: string | undefined, orders: Move[]}} Residue
  */
+
+/** @typedef {{id: string, order: number}} Move */
 
 /**
  * What the next start does with a draft (decide):
@@ -169,6 +185,32 @@ const writesName = (note, draft) =>
 const ownCopy = (copy, noteId) => Boolean(copy) && /** @type {Record<string, unknown>} */ (copy).canvasId === noteId;
 
 /**
+ * The moves a stack draft carries (#6). An entry this build can't read, one without an id and a
+ * whole order of 0 or more, is left out, and so is a field that isn't a list, so the rest of the
+ * draft still applies.
+ * @param {CloseDraft} draft
+ * @returns {Move[]}
+ */
+export const movesOf = draft =>
+  Array.isArray(draft.orders)
+    ? draft.orders.filter(move => isRecord(move) && isId(move.id) && Number.isSafeInteger(move.order) && Number(move.order) >= 0)
+    : [];
+
+/**
+ * The orders the page knows block `id` by: as it last saw it commit, and as each save it issued
+ * since gave it
+ * @param {CloseDraft} draft
+ * @param {string} id
+ * @returns {unknown[]}
+ */
+function knownOrders(draft, id) {
+  const { orders, issuedSaves = [] } = draft.base;
+  return [orders, ...issuedSaves.map(save => isRecord(save) && save.orders)]
+    .filter(known => isRecord(known) && Object.hasOwn(known, id))
+    .map(known => /** @type {Record<string, unknown>} */ (known)[id]);
+}
+
+/**
  * Rule 2, content first: what of the draft the note doesn't hold yet
  * @param {NoteRecord} note
  * @param {ReadonlyMap<string, Record<string, unknown>>} stored - the stored blocks the draft names, by id
@@ -183,24 +225,34 @@ export function residueOf(note, stored, draft) {
   });
   const deletedBlockIds = [...new Set(draft.deletedBlockIds)].filter(id => ownCopy(stored.get(id), noteId));
   const name = writesName(note, draft) && note.name !== draft.name ? draft.name : undefined;
-  return { blocks, deletedBlockIds, name };
+  // A move of a block the draft puts or deletes is left out, since the put carries its order
+  const named = new Set([...draft.blocks.map(block => block.id), ...draft.deletedBlockIds]);
+  const orders = movesOf(draft).filter(move => {
+    const copy = stored.get(move.id);
+    return !named.has(move.id) && ownCopy(copy, noteId) && copy?.order !== move.order && knownOrders(draft, move.id).includes(copy?.order);
+  });
+  return { blocks, deletedBlockIds, name, orders };
 }
 
 /**
  * @param {Residue} residue
  * @returns {boolean}
  */
-const isEmpty = residue => residue.blocks.length === 0 && residue.deletedBlockIds.length === 0 && residue.name === undefined;
+const isEmpty = residue =>
+  residue.blocks.length === 0 && residue.deletedBlockIds.length === 0 && residue.name === undefined && residue.orders.length === 0;
 
 /**
- * Q5's case: deletes alone, maybe with a generated title, which hold no text to recover
+ * Q5's case: deletes alone, maybe with a generated title, which hold no text to recover. Moves
+ * go with them, since they only close the gaps the deletes leave. Moves alone aren't Q5's.
  * @param {NoteRecord} note
  * @param {Residue} residue
  * @param {CloseDraft} draft
  * @returns {boolean}
  */
 const onlyDeletes = (note, residue, draft) =>
-  residue.blocks.length === 0 && !(renames(note, residue.name) && draft.titleOrigin !== 'generated');
+  residue.blocks.length === 0 &&
+  (residue.deletedBlockIds.length > 0 || residue.name !== undefined) &&
+  !(renames(note, residue.name) && draft.titleOrigin !== 'generated');
 
 /**
  * 1.4.3's rule 3 for a 1.4.3 draft: another writer saved the note after the draft's base. The
