@@ -4470,7 +4470,9 @@ class BlockEditor {
       settled();
       if (outcome.kind === 'committed') {
         // They're gone as stored, so a close-time draft no longer lists them (#33). The base's
-        // revision moves only to the delete's own, one past it, since nothing else committed then
+        // revision moves only to the delete's own, one past it, since nothing else committed then.
+        // A delete that deleted nothing moves none, and answers the note's revision as it is, so
+        // any other one there is another writer's commit
         const seen = this._seen.get(noteId);
         if (seen) {
           for (const id of blockIds) {
@@ -4478,7 +4480,9 @@ class BlockEditor {
             seen.sent.delete(id);
             seen.orders.delete(id);
           }
-          if (seen.revision !== null && outcome.revision !== seen.revision) seen.revision = nextRevision(seen.revision, outcome.revision);
+          if (seen.revision !== null && outcome.revision !== seen.revision) {
+            seen.revision = outcome.changedIds.includes(noteId) ? nextRevision(seen.revision, outcome.revision) : null;
+          }
         }
         return;
       }

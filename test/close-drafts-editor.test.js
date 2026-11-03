@@ -838,6 +838,62 @@ describe("two tabs, and a block stored in a shape the editor doesn't write (R160
   });
 });
 
+describe("the base's revision after a delete that deleted nothing (#17, the per-pane save)", () => {
+  /**
+   * Tab A on note C, and tab B on the same profile saving its edit to c2 once: the one commit
+   * since tab A's load. Tab A's editor adds and deletes blocks as an Enter and a Backspace do.
+   */
+  async function tabBSavedOnce() {
+    const env = await setup();
+    const tabA = Object.assign(makeEditor(env), { insertBlockDOM() {}, removeBlockDOM() {}, focusBlock() {} });
+    await tabA.loadNote('C');
+    const other = await secondTab(env);
+    const tabB = makeEditor(other);
+    await tabB.loadNote('C');
+    type(tabB, 'charlie two, from tab B', 1);
+    assert.equal(await runUntil(other, tabB.flushSave()), true);
+    return { env, tabA };
+  }
+
+  /** Tab A adds a block and deletes it before its first save, inside the debounce. Answers the delete's outcome once it settles. */
+  async function addAndDelete(env, tabA) {
+    const client = env.documentClient;
+    const real = client.deleteBlocks;
+    let deleting = null;
+    client.deleteBlocks = (noteId, blockIds) => (deleting = real(noteId, blockIds));
+    const added = tabA.insertBlockAfter('c1', 'text', '');
+    tabA.deleteBlock(added.id);
+    client.deleteBlocks = real;
+    const outcome = await deleting;
+    await settle();
+    return plain(outcome);
+  }
+
+  it("another tab's one commit, then a delete of a block never stored: the close's draft says its base's revision isn't known", async () => {
+    const { env, tabA } = await tabBSavedOnce();
+    const outcome = await addAndDelete(env, tabA);
+    // A delete that deletes nothing moves no revision, and answers the note's as it is: tab B's
+    assert.deepEqual([outcome.kind, outcome.changedIds], ['committed', []]);
+    watchSaves(env, { hold: closingSave });
+    type(tabA, 'charlie, from tab A');
+    closePage(env);
+    const [draft] = drafts(env);
+    assert.equal(draft.base.revision, null, "tab B's commit is one tab A never saw");
+  });
+
+  it("then tab A's edit to the block tab B changed, its closing save lost: the note keeps tab B's text, and tab A's comes back in a recovered note", async () => {
+    const { env, tabA } = await tabBSavedOnce();
+    await addAndDelete(env, tabA);
+    watchSaves(env, { hold: closingSave });
+    type(tabA, 'charlie two, from tab A', 1);
+    closePage(env);
+    const result = await nextStart(env);
+    assert.deepEqual(result.recovered.map((entry) => entry.noteId), ['C']);
+    assert.equal((await storedRows(env)).blocks.c2.content, 'charlie two, from tab B', "tab B's edit stays on the note");
+    assert.equal((await recoveredNames(env)).length, 1, "and tab A's is kept beside it");
+  });
+});
+
 describe("the saves a page keeps for a pane that no longer shows the note (R160's S1)", () => {
   it('split view showed B on the right, then closed keeping B on the left: none of the 40 saves the left pane makes of B is kept for the right one', async () => {
     const env = await setup();
