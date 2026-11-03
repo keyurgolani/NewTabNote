@@ -11,9 +11,11 @@ import { createRequire } from 'node:module';
 import { inContextStores } from '../../js/kernel/adapters/in-context.js';
 import { createWorkerJournal } from '../../js/kernel/composition/journal.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
+import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { WORKER_CATALOG } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
+import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { faultyFactory } from './storage-faults.mjs';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
@@ -225,6 +227,70 @@ describe("the worker's journal (#35 slice 3)", () => {
       w.manager.log.filter(line => line.endsWith('journal.replay')),
       ['request journal.replay', 'granted journal.replay', 'request journal.replay', 'granted journal.replay'],
     );
+  });
+
+  it("raises a stop's incident once for its life, where the entry's mark can't be written as on a full disk, and tells the kept capture nothing", async () => {
+    const memory = createMemoryJournal();
+    /** @type {import('../../js/kernel/core/ports/journal.js').JournalStore} */
+    const journal = Object.freeze({
+      open: () => memory.open(),
+      put: (/** @type {any} */ entry) => memory.put(entry),
+      list: () => memory.list(),
+      inFlight: () => memory.inFlight(),
+      remove: (/** @type {readonly string[]} */ opIds) => memory.remove(opIds),
+      // A full disk refuses this write too
+      mark: async () => {
+        throw new UnavailableError('quota', 'quota', false);
+      },
+    });
+    // The worker's own capture, which no capture of this instance holds in flight
+    await memory.put(
+      journalEntry({
+        command: /** @type {any} */ (capture('c-kept')),
+        v: 1,
+        noteId: 'daily-c-kept',
+        surface: 'worker-internal',
+        ownerSessionId: INSTANCE,
+        seq: 1,
+        createdAt: NOW,
+      }),
+    );
+    /** @type {Array<[string, unknown]>} */
+    const events = [];
+    /** @type {string[]} */
+    const notified = [];
+    const worked = createWorkerJournal({
+      instanceId: INSTANCE,
+      stores: /** @type {any} */ ({ journal: () => journal, journalExists: async () => true }),
+      locks: null,
+      clock: testClock(),
+      events: { event: (code, fields, failure) => events.push([code, failure]) },
+      notify: entry => notified.push(entry.opId),
+      warn: () => {},
+    });
+    const { kernel } = worker();
+    const full = {
+      kind: 'unavailable',
+      cause: 'quota',
+      code: 'quota',
+      retryable: false,
+      messageKey: 'unavailable.quota',
+      severity: 'error',
+    };
+    const client = {
+      /** @param {any} command */
+      execute: async command => (command.commandId === 'c-kept' ? full : kernel.execute(command)),
+      /** @param {any} query */
+      query: (/** @type {any} */ query) => kernel.query(query),
+    };
+    for (let run = 0; run < 3; run++) {
+      const result = await worked.drain(/** @type {any} */ (client));
+      assert.deepEqual([result?.status, result?.code, result?.left], ['stopped', 'quota', 1], `drain ${run + 1}`);
+    }
+    // Three drains stopped at it, and it was raised once. The capture is still kept, so it hears
+    // nothing more than it heard when it was kept
+    assert.deepEqual(events, [['journal.entry-unreplayable', { code: 'quota' }]]);
+    assert.deepEqual(notified, []);
   });
 
   it("tells the diagnostic journal of an entry it can't replay, by why and the surface that wrote it, and notifies for a capture", async () => {

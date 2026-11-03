@@ -175,6 +175,8 @@ describe('failure events (js/kernel/composition/trust.js)', () => {
       { errorCode: 'version-too-new', cause: 'newer-schema', retryable: false },
     );
     assert.deepEqual(trust.failureEvidence({ cause: TITLE, code: CREDENTIAL, retryable: 'yes' }), {});
+    // The journal drain's stop on a throw, whose incident says why (#35 slice 3)
+    assert.deepEqual(trust.failureEvidence({ code: 'drain-failed' }), { errorCode: 'drain-failed' });
     const hostile = {};
     for (const name of ['name', 'code', 'cause', 'retryable', 'unavailableCause']) {
       Object.defineProperty(hostile, name, {
