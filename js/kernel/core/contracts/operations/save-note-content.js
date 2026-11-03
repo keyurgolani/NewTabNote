@@ -23,8 +23,8 @@
  * is skipped. A block goes in once at most, in `blocks` or in `orders`. A save with `orders`
  * carries only some of the note's blocks, so it takes `deriveFromStored: true`, and one without it
  * is refused: its preview and to-do progress come from the blocks as stored, never from a page's
- * copy of the rest. The field is additive, with nothing to upcast: no command is journaled yet
- * (every catalog entry is `journaled: false`), so no stored entry carries a save at all.
+ * copy of the rest. The field is additive, with nothing to upcast: no command was journaled
+ * before it came (#35 slice 3 journals saves), so no stored entry carries a save from before it.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';

@@ -1,56 +1,23 @@
 /**
- * Every handler the catalog has (handlers.js), and the new tab's table, the part of it the
- * catalog allows there: the new tab sends nearly every command and query. Tests build their
- * kernels on ALL_HANDLERS, so the policy alone decides what a test's caller may send, as it
- * did before each page had its table (#17 PR 4b). The close-time drafts' apply loads its
- * handler at its first use (close-drafts-on-demand.js), as on Popup and Side Panel, so the new
- * tab's start holds none of the applier (#33).
+ * Every handler the catalog has (handlers.js), which tests build their kernels on, so the
+ * policy alone decides what a test's caller may send, as it did before each page had its table
+ * (#17 PR 4b): the new tab's and its storage maintenance's (handlers-newtab.js), and the service
+ * worker's journal drain's own (journal.js, #35 slice 3). No page imports this module, so no
+ * page's start loads the drain's handlers. The new tab's table comes from handlers-newtab.js,
+ * and is here too for the tests that read it.
  */
 
-import { applyCloseDraftOnDemand } from './close-drafts-on-demand.js';
-import { folderCommands, folderQueries } from './folders.js';
-import { forSurface, handlerTable } from './handlers.js';
-import { indexCommands, indexQueries } from './indexing.js';
-import { jobCommands, jobQueries } from './jobs.js';
-import { maintenanceCommands } from './maintenance.js';
-import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
-import { preferenceCommands, preferenceQueries } from './preferences.js';
-import { recordCatchUpCommands } from './record-catch-up.js';
-import { remoteChangesRefusal, remoteCommands } from './remote.js';
-import { sessionCommands, sessionQueries } from './session.js';
-import { snapshotCommands, snapshotQueries } from './snapshots.js';
-import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js';
+import { CONTEXT_HANDLERS, NEWTAB_HANDLERS } from './handlers-newtab.js';
+import { handlerTable } from './handlers.js';
+import { journalCommands, journalQueries } from './journal.js';
 
 /** @typedef {import('./handlers.js').HandlerTable} HandlerTable */
 
 /** @type {HandlerTable} */
 export const ALL_HANDLERS = handlerTable({
-  commands: {
-    ...noteCommands,
-    applyCloseDraft: applyCloseDraftOnDemand,
-    ...folderCommands,
-    ...preferenceCommands,
-    ...sessionCommands,
-    ...maintenanceCommands,
-    ...recordCatchUpCommands,
-    ...jobCommands,
-    ...snapshotCommands,
-    ...workspaceDataCommands,
-    ...indexCommands,
-    ...remoteCommands,
-  },
-  queries: {
-    ...noteQueries,
-    ...folderQueries,
-    ...preferenceQueries,
-    ...sessionQueries,
-    ...jobQueries,
-    ...snapshotQueries,
-    ...workspaceDataQueries,
-    ...indexQueries,
-  },
-  refusals: { runBulkAction: bulkRefusal, applyRemoteChanges: remoteChangesRefusal },
+  commands: { ...CONTEXT_HANDLERS.commands, ...journalCommands },
+  queries: { ...CONTEXT_HANDLERS.queries, ...journalQueries },
+  refusals: CONTEXT_HANDLERS.refusals,
 });
 
-/** The new tab's: every handler the catalog allows on the new tab */
-export const NEWTAB_HANDLERS = forSurface(ALL_HANDLERS, 'newtab');
+export { NEWTAB_HANDLERS };

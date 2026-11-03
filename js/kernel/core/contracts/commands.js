@@ -73,6 +73,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/apply-remote-placement.js').ApplyRemotePlacement} ApplyRemotePlacement */
 /** @typedef {import('./operations/apply-close-draft.js').ApplyCloseDraft} ApplyCloseDraft */
 /** @typedef {import('./operations/catch-up-note-records.js').CatchUpNoteRecords} CatchUpNoteRecords */
+/** @typedef {import('./operations/keep-journal-entry.js').KeepJournalEntry} KeepJournalEntry */
 
 /** @typedef {RunBulkAction['action']} BulkAction */
 
@@ -86,7 +87,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | CompleteOnboarding | TurnOffBackgroundJobs | RecordBackup | RecordExportNotice | SnoozeSpaceNotice
  *   | CreateAutoBackup | ImportBackup
  *   | UpdateSearchIndex | SaveVector | ApplyRemoteChanges | ApplyRemoteContent | ApplyRemotePlacement
- *   | ApplyCloseDraft | CatchUpNoteRecords} Command
+ *   | ApplyCloseDraft | CatchUpNoteRecords | KeepJournalEntry} Command
  */
 
 /** @typedef {Command['type']} CommandType */
@@ -133,12 +134,14 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 
 /**
  * A version 1 entry. #35 (background coordinator) sets `journaled` on its content saves, note
- * creation, appends, and captures. A command moved to a new version keeps a step from the
- * last one in contracts/upcast.js, so a journal entry written before the move still replays.
+ * creation, appends, and captures (slice 3): a context writes each to its journal before it
+ * sends it, and the coordinator's drain replays one no context lived to see answered
+ * (domain/journal.js). A command moved to a new version keeps a step from the last one in
+ * contracts/upcast.js, so a journal entry written before the move still replays.
  * @param {string} module - the schema module's name under contracts/operations/
  * @param {Aggregate} aggregate
  * @param {Surface[]} surfaces
- * @param {{entityTypes: EntityType[], maxBytes?: number, deadlineMs?: number, bulk?: true}} options
+ * @param {{entityTypes: EntityType[], maxBytes?: number, deadlineMs?: number, bulk?: true, journaled?: true}} options
  * @returns {CommandEntry}
  */
 const entry = (module, aggregate, surfaces, { entityTypes, maxBytes = SMALL_MESSAGE_BYTES, ...options }) =>
@@ -161,17 +164,23 @@ const entry = (module, aggregate, surfaces, { entityTypes, maxBytes = SMALL_MESS
 /** What a request that carries content, or a list as long as the user makes it, may encode to */
 const LARGE = MAX_MESSAGE_BYTES;
 
+/** A journaled command's options: journaled, and as large as a message, as each journaled entry declares */
+const JOURNALED = Object.freeze({ maxBytes: LARGE, journaled: true });
+
 /**
  * What each surface could do before the kernel: everything from the new-tab page, a quick
  * note from Popup, nothing from Side Panel, and capture plus startup maintenance from the
  * service worker, which #35 gives the integrity check it ran at every start. Since 1.4.3 a
- * Popup or Side Panel start applies closing tabs' edits too (#33).
+ * Popup or Side Panel start applies closing tabs' edits too (#33). Since #35 slice 3 the
+ * service worker's drain replays what a page journaled and didn't live to see answered: a
+ * note's creation, an append, and an editor's save, as the close-time draft it applies by #33's
+ * rules, and it keeps one it can't replay as a conflict record.
  * @type {Readonly<Record<CommandType, CommandEntry>>}
  */
 export const COMMANDS = Object.freeze({
-  createNote: entry('create-note', 'note', ['newtab', 'popup'], {
+  createNote: entry('create-note', 'note', ['newtab', 'popup', 'worker-internal'], {
     entityTypes: ['note', 'block', 'folder'],
-    maxBytes: LARGE,
+    ...JOURNALED,
   }),
   renameNote: entry('rename-note', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
   setPinned: entry('set-pinned', 'note', ['newtab'], { entityTypes: ['note'] }),
@@ -179,13 +188,13 @@ export const COMMANDS = Object.freeze({
   unarchiveNote: entry('unarchive-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   trashNote: entry('trash-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   restoreNote: entry('restore-note', 'note', ['newtab'], { entityTypes: ['note'] }),
-  saveNoteContent: entry('save-note-content', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
+  saveNoteContent: entry('save-note-content', 'note', ['newtab'], { entityTypes: ['note', 'block'], ...JOURNALED }),
   deleteBlocks: entry('delete-blocks', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
   applyDerivedTitle: entry('apply-derived-title', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
   attachInsights: entry('attach-insights', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
   captureToDailyNote: entry('capture-to-daily-note', 'note', ['newtab', 'worker-internal'], {
     entityTypes: ['note', 'block'],
-    maxBytes: LARGE,
+    ...JOURNALED,
   }),
   // The sidebar's Daily Note button and calendar, the palette, and AI chat's Alt+D, all in the new tab
   ensureDailyNote: entry('ensure-daily-note', 'note', ['newtab'], { entityTypes: ['note'] }),
@@ -230,10 +239,19 @@ export const COMMANDS = Object.freeze({
     entityTypes: ['note', 'snapshot', 'block'],
     maxBytes: LARGE,
   }),
-  insertBlocks: entry('insert-blocks', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
-  // A closing tab's edit, which the next start of the new tab, Popup or Side Panel applies (#33)
-  applyCloseDraft: entry('apply-close-draft', 'note', ['newtab', 'popup', 'sidepanel'], {
+  insertBlocks: entry('insert-blocks', 'note', ['newtab', 'worker-internal'], {
     entityTypes: ['note', 'block'],
+    ...JOURNALED,
+  }),
+  // A closing tab's edit, which the next start of the new tab, Popup or Side Panel applies
+  // (#33), and an editor's save the worker's drain replays by the same rules (#35 slice 3)
+  applyCloseDraft: entry('apply-close-draft', 'note', ['newtab', 'popup', 'sidepanel', 'worker-internal'], {
+    entityTypes: ['note', 'block'],
+    maxBytes: LARGE,
+  }),
+  // A journal entry the drain can't replay as written, kept as a conflict record (#35 slice 3)
+  keepJournalEntry: entry('keep-journal-entry', 'note', ['worker-internal'], {
+    entityTypes: ['note'],
     maxBytes: LARGE,
   }),
   // Preferences' neighbours in chrome.storage.local, which only the new tab has written

@@ -962,16 +962,20 @@ export const noteCommands = {
   },
 
   async captureToDailyNote(command, { adapter, clock, ids }) {
-    const { noteId, blockId, capture } = command;
+    const { noteId, blockId, capture, at } = command;
     if (!isId(noteId) || !isId(blockId) || !isCapture(capture)) return invalid();
+    if (at !== undefined && !(Number.isSafeInteger(at) && at >= 0)) return invalid();
     // The template setting lives outside the note stores, so it's read before any unit runs
     const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);
     const now = clock.now();
     // Today's, keyed and named by its local date in the clock's zone (#17 PR 3b), where 1.4.x's
-    // background.js keyed it by the UTC date
+    // background.js keyed it by the UTC date. Today is the day of `at`, the instant the capture
+    // was made, when it says one, so a capture the drain replays later lands in its own day's
+    // note (#35 slice 3); its block's times are the commit's, as any write's are
     const zone = zoneOf(clock);
-    const dailyName = dailyNoteName(now, zone);
-    const dailyKey = dailyDateStr(now, zone);
+    const today = at === undefined ? now : at;
+    const dailyName = dailyNoteName(today, zone);
+    const dailyKey = dailyDateStr(today, zone);
     let dailyId = noteId;
     let created = false;
     /** @type {Unit[]} */

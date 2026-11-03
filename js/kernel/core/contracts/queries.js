@@ -44,6 +44,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 /** @typedef {import('./operations/list-links.js').ListLinks} ListLinks */
 /** @typedef {import('./operations/list-vectors.js').ListVectors} ListVectors */
 /** @typedef {import('./operations/get-sync-data.js').GetSyncData} GetSyncData */
+/** @typedef {import('./operations/find-tombstones.js').FindTombstones} FindTombstones */
 /** @typedef {import('../ports/repository.js').ExportData} ExportData */
 /** @typedef {import('../domain/note.js').LinkRecord} LinkRecord */
 /** @typedef {import('../domain/note.js').VectorRecord} VectorRecord */
@@ -57,7 +58,8 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  *   | ListFolders
  *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns
  *   | ListSnapshots | GetSnapshot | FindDailyNote
- *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent | ListLinks | ListVectors | GetSyncData} Query
+ *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent | ListLinks | ListVectors | GetSyncData
+ *   | FindTombstones} Query
  */
 /** @typedef {Query['type']} QueryType */
 
@@ -93,6 +95,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @property {LinkRecord[]} listLinks
  * @property {VectorRecord[]} listVectors
  * @property {ExportData} getSyncData
+ * @property {{tombstones: Array<{id: string, reason: string}>}} findTombstones
  */
 
 /**
@@ -115,9 +118,12 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 
 /**
  * The new tab, Popup, and Side Panel read notes, folders, and preferences today, and the
- * service worker reads nothing through the kernel.
+ * service worker reads only what its journal drain needs (#35 slice 3).
  */
 const READERS = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup', 'sidepanel']));
+
+/** Only the service worker reads it */
+const WORKER = Object.freeze(/** @type {Surface[]} */ (['worker-internal']));
 
 /** Only the new tab reads it */
 const NEW_TAB = Object.freeze(/** @type {Surface[]} */ (['newtab']));
@@ -180,6 +186,9 @@ export const QUERIES = Object.freeze({
   listVectors: entry('list-vectors', [], NEW_TAB),
   // What #19's sync uploads, which only the new tab's sync service reads (#17 PR 4b)
   getSyncData: entry('get-sync-data', [], NEW_TAB),
+  // Which notes the journal's entries name were deleted for good, which the drain reads before
+  // it replays any (#35 slice 3). A journal can name as many notes as the user had open.
+  findTombstones: entry('find-tombstones', ['note'], WORKER, MAX_MESSAGE_BYTES),
 });
 
 /** @type {readonly QueryType[]} */
