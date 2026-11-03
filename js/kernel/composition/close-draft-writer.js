@@ -9,8 +9,12 @@
  * The draft is 1.4.3's v1, every field under its own name, type and meaning, so the 1.4.3 a
  * rollback brings back reads it too, plus the stack's own fields (core/domain/close-draft.js):
  *
- *   {v: 1, id, page, noteId, at, base: {revision, updatedAt, issued: [], name?, blocks, issuedSaves},
- *    blocks, deletedBlockIds, name?, titleOrigin?, preview, todoProgress, linkedNames}
+ *   {v: 1, id, page, noteId, at, base: {revision, updatedAt, issued: [], name?, blocks, orders?, issuedSaves},
+ *    blocks, orders?, deletedBlockIds, name?, titleOrigin?, preview, todoProgress, linkedNames}
+ *
+ * `orders` is there only when the pane moved a block it changed nothing else of (#6): each such
+ * block's move, and in the base its order as the page last saw it commit and as each save the
+ * page issued since gave it.
  *
  * Its key is `ntn-close-draft:<id>`, where `id` is the commandId of the closing save the editor
  * issues right after, so the draft and the save it shadows share one id. `base.issued` stays
@@ -36,7 +40,8 @@ import { DRAFT_PREFIX } from '../core/domain/close-draft-keys.js';
  * @property {number | null} updatedAt - the stored `updatedAt` as the page last read it
  * @property {string} [name] - the name as the page last saw it commit
  * @property {Record<string, string>} blocks
- * @property {Array<{name?: string, blocks: Record<string, string>}>} issuedSaves
+ * @property {Record<string, number>} [orders] - each block the draft moves, at its order then
+ * @property {Array<{name?: string, blocks: Record<string, string>, orders?: Record<string, number>}>} issuedSaves
  */
 
 /**
@@ -46,6 +51,7 @@ import { DRAFT_PREFIX } from '../core/domain/close-draft-keys.js';
  * @property {string} noteId
  * @property {DraftBaseFields} base
  * @property {Array<Record<string, unknown> & {id: string}>} blocks - changed since the base, as the editor serializes them
+ * @property {Array<{id: string, order: number}>} [orders] - the blocks only moved since the base, each at its new order
  * @property {string[]} deletedBlockIds - in the base, and no longer the editor's
  * @property {string} [name] - a title set since the base
  * @property {'typed' | 'generated'} [titleOrigin]
@@ -95,9 +101,11 @@ export function closeDraftWriter({ storage, newId, now = () => Date.now(), logge
           issued: [],
           ...(base.name === undefined ? {} : { name: base.name }),
           blocks: base.blocks,
+          orders: base.orders,
           issuedSaves: base.issuedSaves,
         },
         blocks: fields.blocks,
+        orders: fields.orders,
         deletedBlockIds: fields.deletedBlockIds,
         preview: fields.preview,
         todoProgress: fields.todoProgress,

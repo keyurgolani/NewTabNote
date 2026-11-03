@@ -4723,24 +4723,6 @@ class BlockEditor {
   }
 
   /**
-   * `blocks` less the ones that are as this editor last saw them commit, and less the ones it
-   * only moved: what a close-time draft holds (#33). A draft holds each block whole, as this
-   * pane has it, so a block it only moved stays out, and a lost close costs that move, never
-   * another pane's newer text in the block (#17). A block a save of this editor still in flight
-   * put goes in, as the next save sends it, so it ends stored as shown even when that save
-   * commits as the page goes. All of them when it holds no base of the note.
-   * @param {string} noteId
-   * @param {Array<Object>} blocks - serialized, as a save writes them
-   * @returns {Array<Object>}
-   */
-  _changedSinceCommit(noteId, blocks) {
-    const seen = this._drafts() ? this._seen.get(noteId) : null;
-    if (!seen || !Array.isArray(blocks)) return blocks;
-    const inFlight = this._sentInFlight(noteId);
-    return blocks.filter((block) => this._changeOf(seen, block, noteId) === 'put' || inFlight.get(block.id) === 'put');
-  }
-
-  /**
    * What this editor's saves of `noteId` in flight sent, all but `except`, and how: 'put' for a
    * block any of them put, and 'move' for one they only moved
    * @param {string} noteId
@@ -4760,21 +4742,24 @@ class BlockEditor {
   }
 
   /**
-   * What a save of `state` puts and moves, against its note's base (#17, the per-pane save):
-   * each block whose fields changed since, or that the base has none of, whole; each block that
-   * only moved, by its new order; and each block a save of this editor still in flight sent,
-   * again in the form it went in, so a later save never leaves an earlier one's text standing
-   * when it's back to the base's
-   * @param {EditorSaveState} state
+   * What `blocks` of note `noteId` put and move against its base (#17, the per-pane save): each
+   * block whose fields changed since, or that the base has none of, whole; each block that only
+   * moved, by its new order; and each block a save of this editor still in flight sent, but
+   * `except`, again in the form it went in, so a later save never leaves an earlier one's text or
+   * order standing when it's back to the base's. A save sends that, and a close-time draft holds
+   * it the same way, a block the pane only moved as its move, never whole (#33, #6).
+   * @param {string} noteId
+   * @param {Array<Object>} blocks - serialized, as a save writes them
+   * @param {EditorSaveState} [except] - the save they're for
    * @returns {{put: Array<Object>, moves: Array<{id: string, order: number}>}}
    */
-  _saveChanges(state) {
-    const seen = this._seen.get(state.noteId);
-    const inFlight = this._sentInFlight(state.noteId, state);
+  _saveChanges(noteId, blocks, except) {
+    const seen = this._seen.get(noteId);
+    const inFlight = this._sentInFlight(noteId, except);
     const put = [];
     const moves = [];
-    for (const block of state.blocks) {
-      const own = this._changeOf(seen, block, state.noteId);
+    for (const block of blocks) {
+      const own = this._changeOf(seen, block, noteId);
       const before = inFlight.get(block.id);
       const change = own === 'put' || before === 'put' ? 'put' : own || before || null;
       if (change === 'put') put.push(block);
@@ -4785,9 +4770,12 @@ class BlockEditor {
 
   /**
    * The close-time draft of `noteId`'s edit: the blocks changed since the base, the ones deleted
-   * since, and the title when it changed since, with the base the applier reads (the stack's
-   * format, js/kernel/core/domain/close-draft.js). The base names only the draft's own blocks,
-   * which are all the applier reads it for.
+   * since, the moves of the ones it only moved, and the title when it changed since, with the
+   * base the applier reads (the stack's format, js/kernel/core/domain/close-draft.js). The base
+   * names only the draft's own blocks, which are all the applier reads it for: their digests,
+   * and each moved block's order, as the page last saw it commit and as its saves since gave it,
+   * so another writer's reorder since keeps its order (#6). All of the blocks, and no move, when
+   * the editor holds no base of the note.
    * @param {string} noteId
    * @param {Array<Object>} blocks - serialized, as a save writes them
    * @param {EditorTitle|null} title - the title set since the note's last save, if any
@@ -4795,17 +4783,20 @@ class BlockEditor {
    */
   _closeDraftOf(noteId, blocks, title) {
     const seen = this._seen.get(noteId) || null;
-    const changed = this._changedSinceCommit(noteId, blocks);
+    const { put: changed, moves } = seen ? this._saveChanges(noteId, blocks) : { put: blocks, moves: [] };
     const present = new Set(blocks.map((block) => block.id));
     const deleted = seen ? [...seen.stored.keys()].filter((id) => !present.has(id)) : [];
     const named = title && title.noteId === noteId && (!seen || title.name !== seen.name) ? title : null;
-    if (seen && changed.length === 0 && deleted.length === 0 && !named) return null;
+    if (seen && changed.length === 0 && moves.length === 0 && deleted.length === 0 && !named) return null;
     const ids = new Set([...changed.map((block) => block.id), ...deleted]);
+    const moved = new Set(moves.map((move) => move.id));
     /** @param {Map<string, string>} digests - by block id, the draft's own blocks only */
     const ofDraft = (digests) => Object.fromEntries([...digests].filter(([id]) => ids.has(id)));
+    /** @param {Map<string, number>|undefined} orders - by block id: the draft's moved blocks', when it moves any */
+    const ofMoves = (orders) => (moved.size > 0 && orders ? { orders: Object.fromEntries([...orders].filter(([id]) => moved.has(id))) } : {});
     const issuedSaves = (pageSaves.get(noteId) || [])
       .filter((save) => !seen || save.seq > seen.seq)
-      .map((save) => (save.name === undefined ? { blocks: ofDraft(save.blocks) } : { name: save.name, blocks: ofDraft(save.blocks) }));
+      .map((save) => ({ ...(save.name === undefined ? {} : { name: save.name }), blocks: ofDraft(save.blocks), ...ofMoves(save.orders) }));
     // A block stored in a shape the editor doesn't write (a 1.4.x record, a capture) that another
     // tab saved since, unchanged, is stored as the editor writes it: that copy is the base's too
     // (R160's N1)
@@ -4819,9 +4810,11 @@ class BlockEditor {
         updatedAt: seen ? seen.updatedAt : null,
         ...(seen && seen.name !== undefined ? { name: seen.name } : {}),
         blocks: seen ? ofDraft(seen.stored) : {},
+        ...(seen ? ofMoves(seen.orders) : {}),
         issuedSaves,
       },
       blocks: changed,
+      ...(moves.length > 0 ? { orders: moves } : {}),
       deletedBlockIds: deleted,
       preview: meta.preview,
       todoProgress: meta.todoProgress,
@@ -5181,7 +5174,7 @@ class BlockEditor {
     // as stored (#33, #144, #17). It goes when it puts nothing too, so a title saves and the
     // record catches up after a delete. An editor with no base of the note saves the whole note.
     const partial = Boolean(this._drafts()) && this._seen.has(state.noteId);
-    const changes = partial ? this._saveChanges(state) : { put: state.blocks, moves: [] };
+    const changes = partial ? this._saveChanges(state.noteId, state.blocks, state) : { put: state.blocks, moves: [] };
     const save = {
       noteId: state.noteId,
       blocks: changes.put,
