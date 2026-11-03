@@ -141,6 +141,16 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
     ]) {
       assert.ok(EVENT_CODES[code]?.incident, `${code} raises no incident`);
     }
+    // #35 slice 3's drain: an entry it can't replay raises the coordinator's incident, by why
+    assert.deepEqual(EVENT_CODES['journal.entry-unreplayable'], {
+      fields: ['cause', 'errorCode', 'exception', 'retryable', 'surface'],
+      incident: {
+        providerId: 'coordinator',
+        faultCode: 'entry-unreplayable',
+        severity: 'data-risk',
+        preserved: ['capture', 'editing', 'reading'],
+      },
+    });
   });
 
   it('holds only ids, codes, counts, enums, durations, versions, times, revisions, seq, and hashes', () => {

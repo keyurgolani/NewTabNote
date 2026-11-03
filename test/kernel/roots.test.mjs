@@ -129,7 +129,8 @@ describe('each composition root', () => {
     ]);
     const fromPanel = await panel.execute({ type: 'createNote', ...ids(panel) });
     assert.deepEqual(policyRefusal(fromPanel), ['policy', 'not-on-surface']);
-    // The worker captures, and does nothing else
+    // The worker captures, replays a note's creation a page journaled (#35 slice 3), and renames
+    // nothing
     const captured = await worker.execute({
       type: 'captureToDailyNote',
       ...ids(worker),
@@ -137,10 +138,14 @@ describe('each composition root', () => {
       capture: { type: 'text', content: 'Captured' },
     });
     assert.equal(captured.kind, 'committed');
-    assert.deepEqual(policyRefusal(await worker.execute({ type: 'createNote', ...ids(worker) })), [
-      'policy',
-      'not-on-surface',
-    ]);
+    assert.equal((await worker.execute({ type: 'createNote', ...ids(worker), name: 'Replayed' })).kind, 'committed');
+    const fromWorker = await worker.execute({
+      type: 'renameNote',
+      commandId: worker.ids.next(),
+      noteId,
+      name: 'Renamed',
+    });
+    assert.deepEqual(policyRefusal(fromWorker), ['policy', 'not-on-surface']);
     assert.deepEqual(await worker.query({ type: 'listNotes', view: 'active' }), {
       kind: 'failed',
       cause: 'policy',

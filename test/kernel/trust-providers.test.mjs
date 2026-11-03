@@ -292,6 +292,13 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
       }),
     );
     assert.deepEqual(counted.receipt.evidence, { count: 3, since: 1 });
+    // While its last drain left a journal entry no live context holds, when the oldest was written
+    // (#35 slice 3), which raises nothing of its own: an entry it can't replay is the drain's event
+    const orphaned = await checkOf('coordinator', answering({ oldestOrphanedEntryAt: 1700000000000 }));
+    assert.deepEqual(
+      [orphaned.receipt.status, orphaned.receipt.evidence, orphaned.faults],
+      ['verified', { count: 0, since: 1, at: 1700000000000 }, []],
+    );
     // A worker that couldn't build its kernel saves no capture, and every page still edits and reads
     const unbuilt = await checkOf(
       'coordinator',
