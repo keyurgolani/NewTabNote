@@ -231,8 +231,6 @@ const INSIGHTS_PENDING_TIMEOUT_MS = 5 * 60 * 1000;
  * @property {{seq: number, name: (string|undefined), blocks: Map<string, string>, orders: Map<string, number>, moved: Set<string>}} [issued] -
  *   What it sent, as the page's issued saves hold it, once its transaction opened on a page that
  *   keeps close-time drafts (#33): each block's digest and order, and the blocks it only moved
- * @property {boolean} [partial] - It sent only what its editor changed since the last save it saw
- *   commit, as every save of an editor holding the note's base does (#17, the per-pane save)
  * @property {number|null} [committedRevision] - The content revision its committed outcome gave
  */
 
@@ -4610,12 +4608,12 @@ class BlockEditor {
 
   /**
    * A save of `state` committed: what it sent is what's stored now, as far as this editor knows.
-   * A whole save's revision becomes the base's. A save of what the editor changed keeps the
-   * revision known only when it committed right after the base's, so nothing else did in
-   * between (nextRevision). One the connection's close cut short (`'stored'`) has no revision,
-   * so a draft goes by its digests. A block it only moved and that's stored in a shape the
-   * editor doesn't write keeps its stored digest, which the move changed in a way the editor
-   * can't tell, and its own serialization's moves. Only a newer save than the base moves it.
+   * Each block it sent takes the digest and order it sent, and the revision stays known only
+   * when the save committed right after the base's, so nothing else did in between
+   * (nextRevision). One the connection's close cut short (`'stored'`) has no revision, so a
+   * draft goes by its digests. A block it only moved and that's stored in a shape the editor
+   * doesn't write keeps its stored digest, which the move changed in a way the editor can't
+   * tell, and its own serialization's moves. Only a newer save than the base moves it.
    * @param {EditorSaveState} state
    * @param {number|null} revision - the outcome's, null when it gives none
    * @param {{nameKnown?: boolean}} [options] - nameKnown false: the save's generated title was
@@ -4626,24 +4624,17 @@ class BlockEditor {
     const seen = this._seen.get(state.noteId);
     const issued = state.issued;
     if (!seen || !issued || issued.seq <= seen.seq) return;
-    if (state.partial) {
-      for (const [id, digest] of issued.blocks) {
-        if (issued.moved.has(id) && seen.sent.has(id)) {
-          seen.sent.set(id, digest);
-        } else {
-          seen.stored.set(id, digest);
-          seen.sent.delete(id);
-        }
-        const order = issued.orders.get(id);
-        if (order !== undefined) seen.orders.set(id, order);
+    for (const [id, digest] of issued.blocks) {
+      if (issued.moved.has(id) && seen.sent.has(id)) {
+        seen.sent.set(id, digest);
+      } else {
+        seen.stored.set(id, digest);
+        seen.sent.delete(id);
       }
-      seen.revision = nextRevision(seen.revision, revision);
-    } else {
-      seen.stored = new Map(issued.blocks);
-      seen.sent = new Map();
-      seen.orders = new Map(issued.orders);
-      seen.revision = revision;
+      const order = issued.orders.get(id);
+      if (order !== undefined) seen.orders.set(id, order);
     }
+    seen.revision = nextRevision(seen.revision, revision);
     if (!nameKnown) seen.name = undefined;
     else if (issued.name !== undefined) seen.name = issued.name;
     seen.seq = issued.seq;
@@ -5189,12 +5180,12 @@ class BlockEditor {
     // never goes over that save, and the note's preview and to-do progress come from its blocks
     // as stored (#33, #144, #17). It goes when it puts nothing too, so a title saves and the
     // record catches up after a delete. An editor with no base of the note saves the whole note.
-    state.partial = Boolean(this._drafts()) && this._seen.has(state.noteId);
-    const changes = state.partial ? this._saveChanges(state) : { put: state.blocks, moves: [] };
+    const partial = Boolean(this._drafts()) && this._seen.has(state.noteId);
+    const changes = partial ? this._saveChanges(state) : { put: state.blocks, moves: [] };
     const save = {
       noteId: state.noteId,
       blocks: changes.put,
-      ...(state.partial ? { deriveFromStored: true } : { preview: meta.preview, todoProgress: meta.todoProgress }),
+      ...(partial ? { deriveFromStored: true } : { preview: meta.preview, todoProgress: meta.todoProgress }),
       ...(changes.moves.length > 0 ? { orders: changes.moves } : {}),
       linkedNames: globalThis.BlockProjections.wikiLinkNames(meta.text),
     };
