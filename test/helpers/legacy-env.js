@@ -421,16 +421,34 @@ class FakeWindowTarget {
 
 /**
  * Exclusive Web Locks, granted per name in request order. Share one between
- * environments to model pages of the same origin.
+ * environments to model pages of the same origin. `query()` answers the names held now,
+ * and those waiting, as navigator.locks.query() does (#35's journal reads its live owners so).
  */
 function createLockManager() {
   const tails = new Map();
+  /** How many hold each name now (one at most) and wait for it */
+  const holding = new Map();
+  const waiting = new Map();
+  const bump = (counts, name, by) => counts.set(name, (counts.get(name) || 0) + by);
+  const named = (counts) => [...counts].filter(([, count]) => count > 0).map(([name]) => ({ name, mode: 'exclusive', clientId: 'test' }));
   return {
     request(name, optionsOrCallback, maybeCallback) {
       const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
-      const held = (tails.get(name) || Promise.resolve()).then(() => callback({ name, mode: 'exclusive' }));
+      bump(waiting, name, 1);
+      const held = (tails.get(name) || Promise.resolve()).then(() => {
+        bump(waiting, name, -1);
+        bump(holding, name, 1);
+        return callback({ name, mode: 'exclusive' });
+      });
+      // Off to the side, so what the caller awaits settles when it always has, and before the
+      // next request for the name is granted
+      const release = () => bump(holding, name, -1);
+      held.then(release, release);
       tails.set(name, held.catch(() => {}));
       return held;
+    },
+    async query() {
+      return { held: named(holding), pending: named(waiting) };
     },
   };
 }

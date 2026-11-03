@@ -82,6 +82,13 @@ function pageModules(entries) {
 const KERNEL = path.join(ROOT, 'js', 'kernel', 'core', 'application', 'kernel.js');
 
 /**
+ * The contracts, whose modules name the operations they define (a schema's `type`, a change op's
+ * name) and send none: the service worker loads the journaled commands' schemas since #35 slice
+ * 3, to read a journal entry before its drain replays it
+ */
+const CONTRACTS = path.join(ROOT, 'js', 'kernel', 'core', 'contracts') + path.sep;
+
+/**
  * @param {ts.PropertyName | undefined} name
  * @returns {boolean} whether a property so named is an object's `type`
  */
@@ -100,9 +107,10 @@ const unwrapped = node => (ts.isParenthesizedExpression(node) ? unwrapped(node.e
  * isn't a string (computed, shorthand, or behind a spread), and a catalog type's name in any
  * other string but another property's key or value, which names something else: a table's key,
  * BULK_ACTIONS' item commands, a change op's name. A call handed a variable is read where its
- * object is built, as the worker's client forwards what js/background.js builds. It finds a
- * send a table lacks by accident, not one written to get past it. `readFile` reads a module's
- * text, from disk unless given, so a test can plant a send.
+ * object is built, as the worker's client forwards what js/background.js builds. A contract
+ * module (CONTRACTS) is read for none of it, since it names what it defines. It finds a send a
+ * table lacks by accident, not one written to get past it. `readFile` reads a module's text,
+ * from disk unless given, so a test can plant a send.
  * @param {string[]} files
  * @param {{readFile?: (file: string) => string}} [options]
  * @returns {{types: Set<string>, own: Set<string>, unread: string[]}}
@@ -115,6 +123,7 @@ function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {
   /** @type {string[]} */
   const unread = [];
   for (const file of files) {
+    if (file.startsWith(CONTRACTS)) continue;
     const text = readFile(file);
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
     /** @param {ts.Node} node */
@@ -249,7 +258,15 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       "built.type = 'trashNote';",
     ].join('\n');
     const kernel = "dispatch({ type: 'runStartupMaintenance', commandId: ids.next() });";
-    const read = sendsIn(['page.js', KERNEL], { readFile: file => (file === KERNEL ? kernel : page) });
+    // A schema module names the operation it defines, and sends nothing
+    const contract = path.join(CONTRACTS, 'operations', 'create-note.js');
+    const read = sendsIn(['page.js', KERNEL, contract], {
+      readFile: file => {
+        if (file === contract)
+          return "export const payload = commandPayload('createNote', {}); kernel.execute({ type: 'getNote' });";
+        return file === KERNEL ? kernel : page;
+      },
+    });
     assert.deepEqual([...read.types].sort(), ['createNote', 'listNotes']);
     assert.deepEqual([...read.own], ['runStartupMaintenance']);
     // The spread, the shorthand type, the type read from a name, its call and its string, and a
@@ -266,12 +283,23 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     assert.deepEqual(bulkWithoutRefusal(ALL_HANDLERS), []);
   });
 
-  it("the close-time drafts' apply is in the table of each page whose root applies them: the new tab's, Popup's and Side Panel's (#33)", () => {
-    for (const { page, entries, surface, table, maintains } of PAGES) {
-      const applies = surface !== 'worker-internal';
-      assert.equal(sentBy({ entries, maintains }).sent.has('applyCloseDraft'), applies, `${page} ${applies ? 'sends' : "doesn't send"} it`);
-      assert.equal(registered(table).has('applyCloseDraft'), applies, `${page}'s table ${applies ? 'holds' : "doesn't hold"} it`);
+  it("the close-time drafts' apply is in the table of each page whose root applies them, and the worker's, whose drain replays a journaled editor save by the same rules (#33, #35 slice 3)", () => {
+    for (const { page, entries, table, maintains } of PAGES) {
+      assert.equal(sentBy({ entries, maintains }).sent.has('applyCloseDraft'), true, `${page} sends it`);
+      assert.equal(registered(table).has('applyCloseDraft'), true, `${page}'s table holds it`);
     }
+  });
+
+  it("the worker's table holds what its journal drain sends, and the new tab's start loads none of the drain's own (#35 slice 3)", () => {
+    const worker = sentBy({ entries: ['js/background.js'], maintains: true }).sent;
+    for (const type of ['createNote', 'insertBlocks', 'applyCloseDraft', 'keepJournalEntry', 'findTombstones']) {
+      assert.ok(worker.has(type), type);
+    }
+    const loaded = pageModules(['js/entries/newtab.js']).map(file => path.relative(ROOT, file));
+    assert.deepEqual(
+      loaded.filter(file => /^js\/kernel\/core\/application\/(journal|journal-drain|handlers-all)\.js$/.test(file)),
+      [],
+    );
   });
 
   it("neither Popup's nor Side Panel's start loads the remote apply or the index commands while #19 isn't live", () => {
