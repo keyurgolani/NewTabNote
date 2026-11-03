@@ -5,8 +5,9 @@
 // of a type it doesn't have, or with stored data it can't read) is written back as it was
 // loaded, and a known block keeps every field its type doesn't own, through saves, undo and
 // redo, a delete and its undo, Export JSON and Import, version history and Save as a new note.
-// Every known block a save writes says its version, and a load writes nothing. Elements are
-// compared by small fields, never whole.
+// Every known block a save writes says its version, and a load writes nothing. A save writes
+// only the blocks its pane changed (#17, the per-pane save), so a block it leaves alone stays as
+// stored, with no version if it had none. Elements are compared by small fields, never whole.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -38,7 +39,7 @@ const OPAQUE = Object.freeze([
 /** Which of OPAQUE decode reads as a known block, which a save writes at version 1 */
 const KNOWN = new Set(['o1', 'o5', 'o7']);
 
-/** A record as a save of the loaded note should store it: the same, and version 1 on a known block */
+/** A record as a save that writes it should store it: the same, and version 1 on a known block */
 const savedAs = record => (KNOWN.has(record.id) ? { ...record, schemaVersion: 1 } : record);
 
 /** An editor on note N, holding `records` */
@@ -76,15 +77,20 @@ async function storedOf(env, noteId) {
   return plain(blocks.sort((a, b) => a.order - b.order).map(withoutNewFields));
 }
 
-/** OPAQUE as a save of it stores it, without the fields an import gives anew */
-const EXPECTED = plain(OPAQUE.map(savedAs).map(withoutNewFields));
+/**
+ * OPAQUE as loaded, without the fields an import gives anew: what a save that changed nothing
+ * leaves stored, since it writes only the blocks its pane changed (#17, the per-pane save)
+ */
+const LOADED = plain(OPAQUE.map(withoutNewFields));
 
 describe('the opaque rule in load and save (#14 slice 3)', () => {
-  it('a save of the loaded note stores every block as it was loaded, apart from order, and schemaVersion on known ones', OPTIONS, async () => {
+  it('a save stores the block it changed at schemaVersion 1, and leaves every other block as it was loaded, the cards among them', OPTIONS, async () => {
     const { env, editor } = await openNote(OPAQUE);
+    editor.getBlockById('o1').content = 'Before, edited';
     await runUntil(env, editor.save());
     const after = await stored(env);
-    for (const record of OPAQUE) assert.deepEqual(plain(after[record.id]), plain(savedAs(record)), record.id);
+    assert.deepEqual(plain(after.o1), plain({ ...savedAs(OPAQUE[0]), content: 'Before, edited' }), 'o1, the block it changed');
+    for (const record of OPAQUE.slice(1)) assert.deepEqual(plain(after[record.id]), plain(record), `${record.id}, not rewritten`);
   });
 
   it('a note opened and left alone writes nothing: upcasting runs in memory', OPTIONS, async () => {
@@ -152,7 +158,7 @@ describe('the opaque rule in load and save (#14 slice 3)', () => {
     const { tabs, wire } = await bootNewTab(env);
     await runUntil(env, tabs.openNoteInNewTab('N'));
     await runUntil(env, tabs.getEditor().save());
-    assert.deepEqual(await storedOf(env, 'N'), EXPECTED, 'the save before the export');
+    assert.deepEqual(await storedOf(env, 'N'), LOADED, 'the save before the export rewrites nothing');
 
     // The note's own Export JSON reads its blocks as stored (SettingsController.exportCurrentNote)
     const exported = plain(await env.documentClient.blocksAsStored('N'));
@@ -167,7 +173,7 @@ describe('the opaque rule in load and save (#14 slice 3)', () => {
     // Opened, and saved by the editor again
     await runUntil(env, tabs.openNoteInNewTab(copy.id));
     await runUntil(env, tabs.getEditor().save());
-    assert.deepEqual(await storedOf(env, copy.id), EXPECTED);
+    assert.deepEqual(await storedOf(env, copy.id), LOADED);
   });
 
   it('a block the editor holds goes through Export JSON and Import (merge) as it was loaded', OPTIONS, async () => {
@@ -183,7 +189,7 @@ describe('the opaque rule in load and save (#14 slice 3)', () => {
 
     await runUntil(env, editor.loadNote(copyId));
     await runUntil(env, editor.save());
-    assert.deepEqual(await storedOf(env, copyId), EXPECTED);
+    assert.deepEqual(await storedOf(env, copyId), LOADED);
   });
 
   it('a snapshot holds every block as a save stores it, and a revert to it after they were deleted brings each back so', OPTIONS, async () => {
@@ -224,18 +230,25 @@ describe('the opaque rule in load and save (#14 slice 3)', () => {
 });
 
 describe('schemaVersion, written the next time a block is saved (#14 slice 3)', () => {
-  it('a save writes schemaVersion 1 on each known block it writes', OPTIONS, async () => {
-    const { env, editor } = await openNote([block('v1', 'N', 0, 'One'), { ...block('v2', 'N', 1, 'Two'), type: 'todo', checked: true }]);
+  it('a save writes schemaVersion 1 on each known block it writes, and leaves a block it doesn\'t write as stored', OPTIONS, async () => {
+    const untouched = block('v3', 'N', 2, 'Three');
+    const { env, editor } = await openNote([block('v1', 'N', 0, 'One'), { ...block('v2', 'N', 1, 'Two'), type: 'todo', checked: true }, untouched]);
+    editor.getBlockById('v1').content = 'One, edited';
+    editor.getBlockById('v2').content = 'Two, edited';
     await runUntil(env, editor.save());
     const after = await stored(env);
     assert.deepEqual([after.v1.schemaVersion, after.v2.schemaVersion], [1, 1]);
+    assert.deepEqual(plain(after.v3), plain(untouched), 'v3, left alone, is not rewritten, so it gains no version');
   });
 
   it('a version 0 record and the version 1 record a save writes read as the same block', OPTIONS, async () => {
     const v0 = block('s1', 'N', 0, 'Same <b>block</b>');
     const { env, editor } = await openNote([v0]);
     await runUntil(env, editor.save());
-    const v1 = (await stored(env)).s1;
+    assert.deepEqual(plain((await stored(env)).s1), plain(v0), 'left alone, s1 is not rewritten, so it stays at version 0');
+    // The record a save writes of s1 once it writes it: the block as it serializes, in its note and place
+    const v1 = { ...plain(editor.getBlockById('s1').serialize()), canvasId: 'N', order: 0 };
+    assert.equal(v1.schemaVersion, 1);
     const read = record => {
       const decoded = env.global.BlockProjections.decodeBlock(plain(record));
       return plain({ state: decoded.state, type: decoded.type, version: decoded.version, fields: decoded.fields, extra: decoded.extra });
@@ -247,11 +260,18 @@ describe('schemaVersion, written the next time a block is saved (#14 slice 3)', 
   it('a block from a newer version is never written below its version', OPTIONS, async () => {
     const newer = { ...block('n1', 'N', 0, 'Newer'), schemaVersion: 9 };
     const { env, editor } = await openNote([newer, block('n2', 'N', 1, 'Mine')]);
-    const mine = editor.getBlockById('n2');
-    mine.content = 'Mine, edited';
+    // Deleted with a yes to the question and brought back, so the next save writes it
+    env.global.confirmDialog = async () => true;
+    Object.assign(editor, { focusBlock() {} });
+    editor.selectedBlockIds = new Set(['n1']);
+    await editor.deleteSelectedBlocks();
+    await runUntil(env, editor.save());
+    assert.equal((await stored(env)).n1, undefined, 'deleted');
+    editor.undo();
+    editor.getBlockById('n2').content = 'Mine, edited';
     await runUntil(env, editor.save());
     const after = await stored(env);
-    assert.equal(after.n1.schemaVersion, 9);
+    assert.deepEqual(plain(after.n1), plain(newer), 'written back as loaded, at its version');
     assert.equal(after.n2.content, 'Mine, edited');
   });
 });

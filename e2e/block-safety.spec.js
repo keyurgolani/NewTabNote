@@ -6,7 +6,8 @@
  *   with stored data it can't read, or with no type) shows as a read-only card that says so,
  *   with nothing to type in.
  * - The blocks around the cards edit and save as usual, and each card's record, like a known
- *   block's field its type doesn't own, is written back as it was loaded.
+ *   block's field its type doesn't own, is written back as it was loaded. A save writes only
+ *   the blocks it changed, each at schemaVersion 1, so a block it leaves alone stays as stored.
  * - Turning a table into text asks first: Cancel keeps the table and puts focus in its first cell,
  *   a yes keeps its cells a row per line, and Undo brings the table back.
  * - Deleting a selection that holds cards asks first: Cancel keeps the selection and puts focus
@@ -75,10 +76,13 @@ test('a block this build reads in a safe state shows read-only, and edits around
   await page.keyboard.type(', edited');
   const stored = await storedBlocks(page);
   expect(stored['opaque-blocks-before'].content).toBe('Before the cards, edited');
+  expect(stored['opaque-blocks-before'].schemaVersion, 'the block the save writes says its version').toBe(1);
   for (const id of ['opaque-blocks-newer', 'opaque-blocks-unknown', 'opaque-blocks-invalid', 'opaque-blocks-typeless']) {
     expect(stored[id], id).toEqual(held[id]);
   }
-  expect(stored['opaque-blocks-extra']).toEqual({ ...held['opaque-blocks-extra'], schemaVersion: 1 });
+  // A save writes only the blocks its pane changed (#17, the per-pane save), so a known block
+  // left alone, with a field its type doesn't own, stays as stored, with no version
+  expect(stored['opaque-blocks-extra']).toEqual(held['opaque-blocks-extra']);
   await expectNoUncaught(extension, page);
 });
 

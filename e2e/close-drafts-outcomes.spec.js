@@ -7,6 +7,10 @@
  * - The other tab moves the note to the Trash: the next start saves the edit into it there, with
  *   no recovered note, and says so (V3).
  * - The main pane and the pop-out on one note, each with its own block: both are kept.
+ * - The pop-out saves its edit to a block, and the main pane's Enter puts a block above it, which
+ *   only moves it: the next start keeps both panes' text, with no recovered note, since the
+ *   draft leaves out a block its pane only moved (#17, the per-pane save). It may show the
+ *   moved block where it was.
  * The closing write waits behind the Popup's hold on the blocks and goes with the page, so the
  * edit reaches the next start through its draft alone. The tests also fail on an uncaught
  * exception that test/known-defects.json doesn't list.
@@ -159,6 +163,42 @@ test('the main pane and the pop-out on one note, each with an edit to its own bl
 
   const next = await driver.openNewTab(extension);
   await expect.poll(() => contentsOf(next, noteId)).toEqual(['first main', 'start pop-out']);
+  expect(Object.keys(await notesByName(next)).filter(name => name.startsWith('Recovered:'))).toEqual([]);
+  await expectNoUncaught(extension, next);
+});
+
+test("the pop-out's saved edit to a block, then the main pane's Enter above it and a close inside the debounce, the closing write lost: both panes' text kept, with no recovered note", async ({ extension }) => {
+  test.setTimeout(90_000);
+  const popup = await extension.openSurface('popup');
+  const page = await openShared(extension);
+  const [pip] = await Promise.all([extension.context.waitForEvent('page'), page.locator('#pip-toggle').click()]);
+  await expect.poll(() => page.evaluate(() => Boolean(app.tabController.pipEditor && app.tabController.pipEditor.blocks.length > 1))).toBe(true);
+  await driver.afterEditorFocus(page);
+  const noteId = await page.evaluate(() => app.editor.noteId);
+  await pip.locator('.blocks-container .block-content').nth(1).evaluate(content => {
+    content.focus();
+    const range = content.ownerDocument.createRange();
+    range.selectNodeContents(content);
+    range.collapse(false);
+    const selection = content.ownerDocument.defaultView.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  await pip.keyboard.type(' pop-out');
+  expect(await page.evaluate(() => app.tabController.pipEditor.flushSave()), "the pop-out's save is stored").toBe(true);
+  // An Enter at the end of the main pane's first block puts a block above the pop-out's, and only moves it
+  await caretAtEnd(page, 0);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('main');
+  expect(await page.evaluate(() => app.editor.blocks.map(block => block.content))).toEqual(['first', 'main', 'start']);
+  expect(await page.evaluate(() => app.editor.saveTimeout !== null), 'the save is still in its debounce').toBe(true);
+  await holdBlocks(popup, HOLD_MS);
+  await Promise.all([page.waitForEvent('close'), page.close({ runBeforeUnload: true })]);
+  await popup.waitForTimeout(HOLD_MS + 200);
+
+  const next = await driver.openNewTab(extension);
+  // A lost close can cost the move, never the text: the moved block may stay where it was stored
+  await expect.poll(async () => (await contentsOf(next, noteId)).sort()).toEqual(['first', 'main', 'start pop-out']);
   expect(Object.keys(await notesByName(next)).filter(name => name.startsWith('Recovered:'))).toEqual([]);
   await expectNoUncaught(extension, next);
 });
