@@ -2,7 +2,7 @@
 
 Real screenshots of NewTabNote in action — a block-based, Notion-style note editor that replaces your browser's new-tab page. 100% local, privacy-first, with an AI assistant and a fast keyboard-driven editor.
 
-> _Captured from the packaged v1.5.0 build of the extension's new-tab page on Nov 2, 2026, on a fresh profile with made-up sample notes. The store screenshots frame the same kind of views._
+> _Captured from the packaged v1.5.0 build of the extension, on a fresh profile with made-up sample notes and the clock set to Nov 3, 2026. The store screenshots frame the same kind of views._
 
 ---
 
