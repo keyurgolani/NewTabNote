@@ -4774,8 +4774,9 @@ class BlockEditor {
    * base the applier reads (the stack's format, js/kernel/core/domain/close-draft.js). The base
    * names only the draft's own blocks, which are all the applier reads it for: their digests,
    * and each moved block's order, as the page last saw it commit and as its saves since gave it,
-   * so another writer's reorder since keeps its order (#6). All of the blocks, and no move, when
-   * the editor holds no base of the note.
+   * while that save's digest of the block stands, so the next start can tell another writer's
+   * reorder since and keep it (#6). All of the blocks, and no move, when the editor holds no base
+   * of the note.
    * @param {string} noteId
    * @param {Array<Object>} blocks - serialized, as a save writes them
    * @param {EditorTitle|null} title - the title set since the note's last save, if any
@@ -4792,11 +4793,17 @@ class BlockEditor {
     const moved = new Set(moves.map((move) => move.id));
     /** @param {Map<string, string>} digests - by block id, the draft's own blocks only */
     const ofDraft = (digests) => Object.fromEntries([...digests].filter(([id]) => ids.has(id)));
-    /** @param {Map<string, number>|undefined} orders - by block id: the draft's moved blocks', when it moves any */
-    const ofMoves = (orders) => (moved.size > 0 && orders ? { orders: Object.fromEntries([...orders].filter(([id]) => moved.has(id))) } : {});
+    /**
+     * @param {Map<string, number>|undefined} orders - by block id: the draft's moved blocks', when it moves any
+     * @param {Map<string, string>} [standing] - an issued save's digests: its order of a block counts only while
+     *   its digest of the block stands, so not once the page's own later commit wrote the block again
+     */
+    const ofMoves = (orders, standing) => (moved.size > 0 && orders
+      ? { orders: Object.fromEntries([...orders].filter(([id]) => moved.has(id) && (!standing || standing.has(id)))) }
+      : {});
     const issuedSaves = (pageSaves.get(noteId) || [])
       .filter((save) => !seen || save.seq > seen.seq)
-      .map((save) => ({ ...(save.name === undefined ? {} : { name: save.name }), blocks: ofDraft(save.blocks), ...ofMoves(save.orders) }));
+      .map((save) => ({ ...(save.name === undefined ? {} : { name: save.name }), blocks: ofDraft(save.blocks), ...ofMoves(save.orders, save.blocks) }));
     // A block stored in a shape the editor doesn't write (a 1.4.x record, a capture) that another
     // tab saved since, unchanged, is stored as the editor writes it: that copy is the base's too
     // (R160's N1)

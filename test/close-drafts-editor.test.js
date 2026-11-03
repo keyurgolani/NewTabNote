@@ -1046,6 +1046,37 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
   it('the same with ids that sort the other way, so no tie could show in id order: the next start shows tab B\'s order', async () => {
     assert.deepEqual(await reorderedSinceTheBase(['z0', 'm1', 'a2', 'm3']), ['z0@0', 'a2@1', 'm1@2', 'm3@3']);
   });
+
+  it("an order the page's own later commit replaced is no order the page knows: another tab's reorder onto it keeps its order", async () => {
+    const parts = [block('p0', 'T', 0, 'part zero'), block('p1', 'T', 1, 'part one'), block('p2', 'T', 2, 'part two'), block('p3', 'T', 3, 'part three')];
+    const env = await setup({ notes: [note('T', { name: 'Tango' })], blocks: parts });
+    const main = editing(makeEditor(env));
+    await main.loadNote('T');
+    // The pop-out moves p3 up twice, each move its own save: p3 at 2, then at 1
+    const { pip, pipWindow } = await openPiP(env, 'T');
+    editing(pip);
+    pip.moveBlockByDirection('p3', -1);
+    assert.equal(await runWithPiP(env, pipWindow, pip.flushSave()), true);
+    pip.moveBlockByDirection('p3', -1);
+    assert.equal(await runWithPiP(env, pipWindow, pip.flushSave()), true);
+    // Another tab moves p3 back down to 2, the order the pop-out's first save gave it
+    const other = await secondTab(env);
+    const tabB = editing(makeEditor(other));
+    await tabB.loadNote('T');
+    tabB.moveBlockByDirection('p3', 1);
+    assert.equal(await runUntil(other, tabB.flushSave()), true);
+    // The main pane, on its base, moves p3 up twice and closes, every save lost
+    watchSaves(env, { hold: lostWithThePage });
+    main.moveBlockByDirection('p3', -1);
+    main.moveBlockByDirection('p3', -1);
+    closePage(env);
+    await nextStart(env);
+    const shown = Object.values((await storedRows(env)).blocks)
+      .filter((row) => row.canvasId === 'T')
+      .sort((a, b) => a.order - b.order)
+      .map((row) => `${row.id}@${row.order}`);
+    assert.deepEqual(shown, ['p0@0', 'p1@1', 'p3@2', 'p2@3'], "the other tab's order, as it saved it");
+  });
 });
 
 describe('a close-time draft takes a block a save in flight put, as the next save does (#17, the per-pane save)', () => {
