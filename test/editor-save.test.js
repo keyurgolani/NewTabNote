@@ -628,35 +628,61 @@ describe('BlockEditor closing writes beside another pane on the same note (#33)'
 });
 
 describe('BlockEditor saves put only what their own pane changed (#17, the per-pane save)', () => {
-  /** A page with note C (c1, c2), and C open in the page's editor */
-  async function pageOnC() {
+  /** The page's editor, which adds and deletes blocks as an Enter and a Backspace do */
+  const editing = (editor) => Object.assign(editor, { insertBlockDOM() {}, removeBlockDOM() {}, focusBlock() {} });
+
+  /** A page with note `noteId` holding `records`, and that note open in the page's editor */
+  async function pageOn(noteId, records) {
     const env = createLegacyEnv();
-    await createDatabase(env.indexedDB, {
-      records: {
-        canvases: [note('C', { name: 'Charlie' })],
-        elements: [block('c1', 'C', 0, 'charlie'), block('c2', 'C', 1, 'charlie two')],
-      },
-    });
+    await createDatabase(env.indexedDB, { records: { canvases: [note(noteId)], elements: records } });
     env.load(...FILES);
     await startEditorClient(env);
-    const main = Object.assign(makeEditor(env), { insertBlockDOM() {}, removeBlockDOM() {}, focusBlock() {} });
-    await main.loadNote('C');
+    const main = editing(makeEditor(env));
+    await main.loadNote(noteId);
     return { env, main };
   }
 
-  /** A pop-out on C whose frames run with the page's */
-  async function popOut(env) {
-    const { pip, pipWindow } = await openPiP(env, 'C');
+  /** A page with note C (c1, c2), and C open in the page's editor */
+  const pageOnC = () => pageOn('C', [block('c1', 'C', 0, 'charlie'), block('c2', 'C', 1, 'charlie two')]);
+
+  /** A pop-out on `noteId` whose frames run with the page's */
+  async function popOut(env, noteId = 'C') {
+    const { pip, pipWindow } = await openPiP(env, noteId);
     pipWindow.requestAnimationFrame = (fn) => env.global.requestAnimationFrame(fn);
     return { pip, pipWindow };
   }
 
-  /** C's blocks as stored, in order, as [id, content, order] */
-  async function storedC(env) {
+  /** Another tab on `env`'s profile, with C open, that saves its edit to `index` once */
+  async function otherTabSaves(env, text, index) {
+    const other = createLegacyEnv({ indexedDB: env.indexedDB });
+    other.load(...FILES);
+    await startEditorClient(other);
+    const tabB = makeEditor(other);
+    await tabB.loadNote('C');
+    type(tabB, text, index);
+    assert.equal(await runUntil(other, tabB.flushSave()), true);
+  }
+
+  /** `noteId`'s blocks as stored, in order, as [id, content, order] */
+  async function storedOf(env, noteId) {
     return Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
-      .filter((row) => row.canvasId === 'C')
+      .filter((row) => row.canvasId === noteId)
       .sort((a, b) => a.order - b.order)
       .map((row) => [row.id, row.content, row.order]);
+  }
+
+  /** C's blocks as stored, in order, as [id, content, order] */
+  const storedC = (env) => storedOf(env, 'C');
+
+  /**
+   * The revision the base of `editor`'s note had, as the page's close-time draft gives it: an
+   * edit to its first block typed, and the page closed inside the debounce
+   */
+  function revisionAtClose(env, editor) {
+    type(editor, 'typed as the tab closed');
+    env.window.fire('pagehide', { persisted: false });
+    const [draft] = draftsOf(env);
+    return draft.base.revision;
   }
 
   /** `editor`'s debounce save runs, and everything it holds is written */
@@ -724,38 +750,64 @@ describe('BlockEditor saves put only what their own pane changed (#17, the per-p
     assert.deepEqual(await storedC(env), [['c1', 'charlie', 0], ['c2', 'charlie two', 1]]);
   });
 
-  it('an edit undone while its save is in flight ends stored as the editor shows it', async () => {
-    const { env, main } = await pageOnC();
-    // Each save commits at once, and the editor hears of the first one only when the test says
+  /**
+   * Each save of the page commits at once, and the editor hears of the first one only once the
+   * test calls `hear`. `saved(n)` runs the debounce and the frames until the page has issued n
+   * saves.
+   */
+  function holdFirstAnswer(env) {
     const client = env.documentClient;
     const real = client.saveContent;
-    let calls = 0;
-    let hearFirst = null;
+    const held = {
+      calls: 0,
+      hear: () => {},
+      restore: () => { client.saveContent = real; },
+      async saved(count) {
+        env.clock.tick(500);
+        for (let i = 0; i < 100 && held.calls < count; i++) {
+          env.frames();
+          await settle(2);
+        }
+        assert.equal(held.calls, count, `save ${count} went`);
+      },
+    };
     client.saveContent = (save, options) => {
-      calls += 1;
+      held.calls += 1;
       const done = real(save, options);
-      if (calls > 1) return done;
+      if (held.calls > 1) return done;
       return new Promise((resolve) => {
-        hearFirst = () => resolve(done);
+        held.hear = () => resolve(done);
       });
     };
+    return held;
+  }
+
+  it('an edit undone while its save is in flight ends stored as the editor shows it', async () => {
+    const { env, main } = await pageOnC();
+    const held = holdFirstAnswer(env);
     type(main, 'charlie, typed');
-    env.clock.tick(500);
-    for (let i = 0; i < 100 && calls < 1; i++) {
-      env.frames();
-      await settle(2);
-    }
+    await held.saved(1);
     // Undone, back to the text the base has, while the first save is in flight for the editor
     type(main, 'charlie');
-    env.clock.tick(500);
-    for (let i = 0; i < 100 && calls < 2; i++) {
-      env.frames();
-      await settle(2);
-    }
-    assert.equal(calls, 2, 'the second save went while the first was in flight');
-    hearFirst();
+    await held.saved(2);
+    held.hear();
     assert.equal(await runUntil(env, main.flushSave()), true);
-    client.saveContent = real;
+    held.restore();
+    assert.deepEqual(await storedC(env), [['c1', 'charlie', 0], ['c2', 'charlie two', 1]]);
+  });
+
+  it('a move undone while the save that moved it is in flight ends stored in the order the editor shows', async () => {
+    const { env, main } = await pageOnC();
+    const held = holdFirstAnswer(env);
+    main.moveBlockByDirection('c2', -1);
+    await held.saved(1);
+    // Undone, back to the order the base has, while the move's save is in flight for the editor
+    main.undo();
+    await held.saved(2);
+    held.hear();
+    assert.equal(await runUntil(env, main.flushSave()), true);
+    held.restore();
+    assert.deepEqual(Array.from(main.blocks, (b) => b.id), ['c1', 'c2'], 'the editor shows the undo');
     assert.deepEqual(await storedC(env), [['c1', 'charlie', 0], ['c2', 'charlie two', 1]]);
   });
 
@@ -827,6 +879,85 @@ describe('BlockEditor saves put only what their own pane changed (#17, the per-p
     await debounceSave(env, main);
     const shown = Array.from(main.blocks, (b, order) => [b.id, b.content, order]);
     assert.deepEqual(await storedC(env), shown);
+  });
+
+  it("a delete undone after it commits: once the block is stored again, a later save leaves it alone, so the pop-out's newer text in it stays", async () => {
+    const { env, main } = await pageOnC();
+    const { pip } = await popOut(env);
+    main.deleteBlock('c1');
+    await waitFor(async () => !(await storedC(env)).some(([id]) => id === 'c1'));
+    await settle();
+    main.undo();
+    await debounceSave(env, main);
+    assert.deepEqual((await storedC(env)).map(([id]) => id), ['c1', 'c2'], 'c1 is stored again');
+    type(pip, 'charlie, from the pop-out');
+    assert.equal(await runUntil(env, pip.flushSave()), true);
+    type(main, 'charlie two, from the main pane', 1);
+    await debounceSave(env, main);
+    assert.deepEqual(await storedC(env), [['c1', 'charlie, from the pop-out', 0], ['c2', 'charlie two, from the main pane', 1]]);
+  });
+
+  it("two deletes in flight: the first one's commit doesn't end the second's, so an Undo of the second before its commit still stores it", async () => {
+    const { env, main } = await pageOn('T', [block('t1', 'T', 0, 'tango'), block('t2', 'T', 1, 'tango two'), block('t3', 'T', 2, 'tango three')]);
+    // Each delete commits at once, and the editor hears of the second one only when the test says
+    const client = env.documentClient;
+    const real = client.deleteBlocks;
+    let calls = 0;
+    let first = null;
+    let hearSecond = () => {};
+    client.deleteBlocks = (noteId, blockIds) => {
+      calls += 1;
+      const done = real(noteId, blockIds);
+      if (calls !== 2) return (first = done);
+      return new Promise((resolve) => {
+        hearSecond = () => resolve(done);
+      });
+    };
+    main.deleteBlock('t3');
+    main.deleteBlock('t2');
+    await first;
+    await settle();
+    // t2 back, while its delete is in flight for the editor
+    main.undo();
+    await debounceSave(env, main);
+    hearSecond();
+    await settle();
+    client.deleteBlocks = real;
+    assert.deepEqual(await storedOf(env, 'T'), [['t1', 'tango', 0], ['t2', 'tango two', 1]], 't2 stored as the editor shows it, and t3 still deleted');
+  });
+
+  it("another tab's one commit, then this pane's delete of a stored block: the close's draft says its base's revision isn't known", async () => {
+    const { env, main } = await pageOnC();
+    await otherTabSaves(env, 'charlie, from tab B', 0);
+    main.deleteBlock('c2');
+    await waitFor(async () => !(await storedC(env)).some(([id]) => id === 'c2'));
+    await settle();
+    assert.equal(revisionAtClose(env, main), null, "tab B's commit came between");
+  });
+
+  it("a block stored in a capture's shape, edited and saved here: a later save of another block leaves it alone, so the pop-out's newer text in it stays", async () => {
+    // Stored with its text and its source, and none of the fields every block has that the editor fills in
+    const capture = { id: 'd1', canvasId: 'D', order: 0, type: 'text', content: 'delta', source: 'https://example.test/', createdAt: 1700000000000, updatedAt: 1700000000000 };
+    const { env, main } = await pageOn('D', [capture, block('d2', 'D', 1, 'delta two')]);
+    const { pip } = await popOut(env, 'D');
+    type(main, 'delta, from the main pane');
+    await debounceSave(env, main);
+    type(pip, 'delta, from the pop-out');
+    assert.equal(await runUntil(env, pip.flushSave()), true);
+    type(main, 'delta two, from the main pane', 1);
+    await debounceSave(env, main);
+    assert.deepEqual(await storedOf(env, 'D'), [['d1', 'delta, from the pop-out', 0], ['d2', 'delta two, from the main pane', 1]]);
+  });
+
+  it("another tab's one commit, then AI chat's insert into this pane's note: the close's draft says its base's revision isn't known", async () => {
+    const { env, main } = await pageOnC();
+    await otherTabSaves(env, 'charlie, from tab B', 0);
+    const blocks = [{ type: 'text', content: 'from AI chat', id: env.documentClient.newId() }];
+    const inserting = env.documentClient.insertBlocks('C', blocks, 1);
+    main.placeInsertedBlocks('C', blocks, 1, inserting);
+    assert.equal((await inserting).kind, 'committed');
+    await settle();
+    assert.equal(revisionAtClose(env, main), null, "tab B's commit came between");
   });
 });
 
