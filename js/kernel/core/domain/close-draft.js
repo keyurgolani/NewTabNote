@@ -5,7 +5,7 @@
  * js/close-drafts.js), every field under its own name, type and meaning, so the 1.4.3 a rollback
  * brings back reads the stack's drafts too, plus the stack's own fields (the lead's Q1):
  *
- *   {v: 1, id, page?, noteId, at, base: {revision, updatedAt, issued, name?, blocks?, orders?, issuedSaves?},
+ *   {v: 1, id, page?, pane?, noteId, at, base: {revision, updatedAt, issued, name?, blocks?, orders?, issuedSaves?},
  *    blocks, orders?, deletedBlockIds, name?, titleOrigin?, preview, todoProgress, linkedNames}
  *
  * - `blocks` holds the blocks changed since the base, as the editor has them, and
@@ -28,6 +28,11 @@
  *   still the page's own. One more entry, with no name, holds the page's own serialization of a
  *   block stored in a shape the page doesn't write, which is that block as another tab's save
  *   stores it unchanged. `page` names the page load that wrote the draft.
+ * - A stack draft's `pane` names the editor pane whose base of the note the draft was made on, as
+ *   that pane's saves name it for the page's journal (#6). The draft holds everything that pane
+ *   changed within its load of the note, so once it applies, the next start takes that page's
+ *   pane's journal entries for the note (application/close-drafts.js). 1.4.3 and 1.5.0 read none
+ *   of it, and a draft written with no pane takes no entry.
  *
  * Each draft goes by these rules, in this order (decide):
  * 0. Its recovered note is stored already: an earlier start made it, and its page went before
@@ -93,6 +98,7 @@ export { CLOSE_DRAFT_VERSION, blockDigest, digest, fingerprint };
  * @property {1} v
  * @property {string} id
  * @property {string} [page]
+ * @property {string} [pane]
  * @property {string} noteId
  * @property {number} at
  * @property {DraftBase} base

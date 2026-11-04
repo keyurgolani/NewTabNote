@@ -9,7 +9,7 @@
  * The draft is 1.4.3's v1, every field under its own name, type and meaning, so the 1.4.3 a
  * rollback brings back reads it too, plus the stack's own fields (core/domain/close-draft.js):
  *
- *   {v: 1, id, page, noteId, at, base: {revision, updatedAt, issued: [], name?, blocks, orders?, issuedSaves},
+ *   {v: 1, id, page, pane?, noteId, at, base: {revision, updatedAt, issued: [], name?, blocks, orders?, issuedSaves},
  *    blocks, orders?, deletedBlockIds, name?, titleOrigin?, preview, todoProgress, linkedNames}
  *
  * `orders` is there only when the pane moved a block it changed nothing else of (#6): each such
@@ -19,7 +19,9 @@
  * Its key is `ntn-close-draft:<id>`, where `id` is the commandId of the closing save the editor
  * issues right after, so the draft and the save it shadows share one id. `base.issued` stays
  * empty (QA1): the kernel stamps `updatedAt` inside its command, and no outcome reports it.
- * `page` is this page load's id, the same on each of its drafts.
+ * `page` is this page load's id, the same on each of its drafts, and `pane` the editor pane whose
+ * base the draft was made on, when the editor gives one (#6). A draft with no pane is byte for
+ * byte what the writer wrote before it had one.
  *
  * A draft that doesn't fit, typically QuotaExceededError, is skipped: the closing save stands,
  * and nothing throws out of `pagehide`. It's logged by the error's name alone, never the edit.
@@ -58,6 +60,7 @@ import { DRAFT_PREFIX } from '../core/domain/close-draft-keys.js';
  * @property {string} preview
  * @property {unknown} todoProgress
  * @property {string[]} linkedNames
+ * @property {string} [pane] - the pane whose base the draft was made on, as its saves name it
  */
 
 /**
@@ -94,6 +97,7 @@ export function closeDraftWriter({ storage, newId, now = () => Date.now(), logge
       v: CLOSE_DRAFT_VERSION,
       id: fields.id,
       page,
+      pane: fields.pane,
       noteId: fields.noteId,
       at: now(),
       base: {

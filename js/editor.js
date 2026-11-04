@@ -4864,7 +4864,9 @@ class BlockEditor {
    * failed, or refused because the page lost its connection (V7). Each draft's id is the
    * commandId the closing save of its note takes, if the editor issues one. A draft that doesn't
    * fit is skipped, and the closing write still runs. Nothing for a note the editor found deleted,
-   * or one whose blocks a revert is replacing, whose typing goes to version history instead.
+   * or one whose blocks a revert is replacing, whose typing goes to version history instead. Each
+   * draft names the pane id of its note's base, which the saves drafted on that base name, so once
+   * it applies, the next start can take that load's journal entries for the note (#6).
    * @returns {void}
    */
   _writeCloseDraft() {
@@ -4889,8 +4891,9 @@ class BlockEditor {
     for (const fields of edits) {
       if (!fields) continue;
       const id = this.documentClient.newId();
+      const pane = this._seen.get(fields.noteId)?.pane;
       // Its note's closing save takes its id, and goes covered by it, only once it's written
-      if (drafts.write({ id, ...fields })) this._closingIds.set(fields.noteId, id);
+      if (drafts.write({ id, ...fields, pane })) this._closingIds.set(fields.noteId, id);
     }
   }
 
