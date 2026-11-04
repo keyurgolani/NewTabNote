@@ -35,5 +35,9 @@ export function createPopupClient(
   const client = applyingCloseDrafts(kernelClient({ adapter, surface: 'popup', handlers: POPUP_HANDLERS }), drafts, {
     load,
   });
-  return journalingClient(client, { surface: 'popup', load: () => import('./journal-chunk.js') });
+  return journalingClient(client, {
+    surface: 'popup',
+    load: () => import('./journal-chunk.js'),
+    requestIdle: globalThis.requestIdleCallback,
+  });
 }

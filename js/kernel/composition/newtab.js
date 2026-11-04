@@ -498,6 +498,7 @@ export function createNewTabPageClient(
   const page = journalingClient(applyingCloseDrafts(client, drafts, { load: telling, holds: holdsNewTabWork }), {
     surface: 'newtab',
     load: journal,
+    requestIdle: globalThis.requestIdleCallback,
   });
   return Object.freeze({
     ...page,

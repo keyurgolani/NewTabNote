@@ -227,16 +227,6 @@ export function kernelClient({ adapter, surface, handlers, maintainOnOpen = fals
 const JOURNAL_IDLE_CAP_MS = 2000;
 
 /**
- * The page's idle callback. A page without one, as a test's, loads its journal on its first
- * journaled command alone.
- * @param {() => void} callback
- * @param {{timeout: number}} options
- */
-const whenIdle = (callback, options) => {
-  if (typeof globalThis.requestIdleCallback === 'function') globalThis.requestIdleCallback(callback, options);
-};
-
-/**
  * `client` with its journal (#35 slice 3b): the shim every page's root hands out. The journal's
  * chunk loads on the page's first journaled command, or at idle once its first read is in, with a
  * 2 s cap, whichever comes first, so no page's start holds it. No command waits for it: until it's
@@ -248,10 +238,12 @@ const whenIdle = (callback, options) => {
  * @template {Client} C
  * @param {C} client
  * @param {{surface: Surface, load: () => Promise<JournalChunk<C>>, sessionId?: string, requestIdle?: (callback: () => void, options: {timeout: number}) => void}} options
- *   `sessionId` is the page's, which its owner lock and entries name, new for each page load
+ *   `sessionId` is the page's, which its owner lock and entries name, new for each page load.
+ *   `requestIdle` is the page's idle callback, `globalThis.requestIdleCallback` from its root. A
+ *   page without one, as in Node, loads its journal on its first journaled command alone.
  * @returns {C & {execute: (command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>}}
  */
-export function journalingClient(client, { surface, load, sessionId = randomIds.next(), requestIdle = whenIdle }) {
+export function journalingClient(client, { surface, load, sessionId = randomIds.next(), requestIdle }) {
   /** @type {PageJournal | null} */
   let journal = null;
   /** @type {Promise<void> | null} */
@@ -281,7 +273,7 @@ export function journalingClient(client, { surface, load, sessionId = randomIds.
     const answer = client.query(request);
     if (!read) {
       read = true;
-      const idle = () => requestIdle(start, { timeout: JOURNAL_IDLE_CAP_MS });
+      const idle = () => requestIdle?.(start, { timeout: JOURNAL_IDLE_CAP_MS });
       answer.then(idle, idle);
     }
     return answer;

@@ -36,5 +36,9 @@ export function createSidePanelClient(
     drafts,
     { load },
   );
-  return journalingClient(client, { surface: 'sidepanel', load: () => import('./journal-chunk.js') });
+  return journalingClient(client, {
+    surface: 'sidepanel',
+    load: () => import('./journal-chunk.js'),
+    requestIdle: globalThis.requestIdleCallback,
+  });
 }
