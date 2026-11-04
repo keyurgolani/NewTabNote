@@ -345,7 +345,7 @@ class BlockEditor {
 
     // Floating formatting toolbar (Req 9.1–9.5)
     if (typeof FormattingToolbar !== 'undefined') {
-      this.formattingToolbar = new FormattingToolbar({ doc: this.doc });
+      this.formattingToolbar = new FormattingToolbar({ doc: this.doc, root: this.root });
     }
 
     // Touch device detection (Req 10.1)

@@ -5,6 +5,7 @@
  *
  * @typedef {Object} FormattingToolbarConfig
  * @property {Document} [doc] - Document to use (defaults to window.document)
+ * @property {Node} [root] - The editor pane whose selections it shows for (defaults to the document)
  */
 
 /**
@@ -20,6 +21,9 @@ class FormattingToolbar {
   constructor(config = {}) {
     /** @type {Document} */
     this.doc = config.doc || document;
+
+    /** @type {Node} Its editor's pane: a selection anywhere else, as in the other pane, hides it */
+    this.root = config.root || this.doc;
 
     /** @type {HTMLDivElement|null} */
     this.el = null;
@@ -171,13 +175,13 @@ class FormattingToolbar {
     const range = sel.getRangeAt(0);
     const container = range.commonAncestorContainer;
 
-    // Only show inside .block-content elements
+    // Only show inside .block-content elements of its own pane
     const ancestor = container.nodeType === Node.ELEMENT_NODE
       ? /** @type {Element} */ (container)
       : container.parentElement;
     const blockContent = ancestor?.closest('.block-content');
 
-    if (!blockContent) {
+    if (!blockContent || !this.root.contains(blockContent)) {
       this.hide();
       return;
     }

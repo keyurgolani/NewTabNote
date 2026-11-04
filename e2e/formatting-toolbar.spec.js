@@ -1,7 +1,7 @@
 /**
  * The formatting toolbar, hidden and open, on a short note at 1440 by 900. Each editor builds
- * one in the body, absolutely placed, and a selection in a block places it by inline top and
- * left and shows it. #14's shots found the hidden one moving the page.
+ * one in the body, absolutely placed, and a selection in a block of its own pane places it by
+ * inline top and left and shows it. #14's shots found the hidden one moving the page.
  *
  * - Hidden, it adds no height: the page is as tall as the window, so a wheel over the header,
  *   or End in a text block whose caret is already at the end, leaves the page where it is.
@@ -17,6 +17,9 @@
  * - A selection whose box is empty, in text that isn't drawn, opens no toolbar, since nothing on
  *   screen is there to point at. Before, one showed anyway: below the app, where the page grew
  *   by 42 px, or where it last opened, over words no longer selected.
+ * - A selection shows its own pane's toolbar alone, in the main pane and in split view's right
+ *   pane. Before, any selection showed both panes' toolbars, one over the other, so a screen
+ *   reader found two "Text formatting" toolbars.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -136,17 +139,16 @@ test("hidden, it takes no focus and isn't in the accessibility tree, so Tab past
 
 test('it opens at once, in place, and once the selection ends it still shows where it was while it fades, then hides', async ({ extension }) => {
   const page = await shortNote(extension);
-  // The top toolbar right after the toolbars handle a select or an unselect in the first block.
-  // Each reading is in the same task as their own selectionchange handlers, which run first, so
-  // no frame passes and no timing enters
+  // The main pane's toolbar right after the toolbars handle a select or an unselect in its first
+  // block. Each reading is in the same task as their own selectionchange handlers, which run
+  // first, so no frame passes and no timing enters
   const after = change => page.evaluate(async change => {
     const node = document.querySelector('#blocks-container > .block .block-content').firstChild;
     const handled = new Promise(resolve => document.addEventListener('selectionchange', resolve, { once: true }));
     if (change === 'select') getSelection().setBaseAndExtent(node, 0, node, 6);
     else getSelection().collapseToEnd();
     await handled;
-    const bars = document.querySelectorAll('.formatting-toolbar');
-    const bar = bars[bars.length - 1];
+    const bar = app.editor.formattingToolbar.el;
     const hide = bar.getAnimations().find(animation => animation.transitionProperty === 'visibility');
     const reading = { visibility: getComputedStyle(bar).visibility, hidesAfter: hide ? hide.effect.getTiming().delay : null };
     // While it fades, it stays where it was, at its inline top, and moves to the page's top only after
@@ -160,7 +162,7 @@ test('it opens at once, in place, and once the selection ends it still shows whe
   await page.waitForTimeout(200);
   expect(await after('select'), 'open at once, in place').toEqual({ visibility: 'visible', hidesAfter: null, gap: 8, offCentre: 0 });
   expect(await after('unselect'), 'still showing where it was while it fades').toEqual({ visibility: 'visible', hidesAfter: 120, inPlace: true });
-  await expect(page.locator('.formatting-toolbar').last()).toBeHidden();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(app.editor.formattingToolbar.el).visibility), 'then hidden').toBe('hidden');
   await expectNoUncaught(extension, page);
 });
 
@@ -194,10 +196,39 @@ test('a selection whose box is empty opens no toolbar, and the page stays as tal
   await expectNoUncaught(extension, page);
 });
 
+test("a selection in one pane shows that pane's toolbar alone, in the main pane and in split view's right pane", async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [NOTE, { name: 'Other', blocks: [{ type: 'text', content: 'A line in the other note' }] }]);
+  const page = await driver.openNewTab(extension);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const toolbars = page.getByRole('toolbar', { name: 'Text formatting' });
+  // Whether the main pane's toolbar and the right pane's show
+  const shown = () => page.evaluate(() => [app.editor, app.secondaryEditor].map(editor => editor.formattingToolbar.el.classList.contains('visible')));
+  /** Select the first four characters of the pane's first block, from the keyboard */
+  const selectIn = async pane => {
+    await page.locator(`${pane} .block-content`).first().click();
+    await page.keyboard.press('Home');
+    for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowRight');
+  };
+
+  // The toolbars move on each selectionchange, which can come after the last key, and a hidden one
+  // stays in the tree through its 0.12 s fade. So this waits until the selection's pane's toolbar
+  // shows and the other's doesn't, then for the tree to hold one
+  await selectIn('#editor-container');
+  await expect.poll(shown, "the main pane's").toEqual([true, false]);
+  await expect(toolbars, 'one toolbar for a selection in the main pane').toHaveCount(1);
+
+  await driver.openSplitView(page);
+  await selectIn('#secondary-editor-container');
+  await expect.poll(shown, "the right pane's").toEqual([false, true]);
+  await expect(toolbars, 'one toolbar for a selection in the right pane').toHaveCount(1);
+  await expectNoUncaught(extension, page);
+});
+
 test("a selected word still opens it 8 px above the word, centred on it, and Bold by the mouse or the editor's Cmd/Ctrl+B bolds a word", async ({ extension }) => {
   const page = await shortNote(extension);
   await selectStart(page, 0, 'Before'.length);
-  // Each editor has its own toolbar, and both open at the same place, so this reads the one on top
+  // Each editor has its own toolbar, and the open one is the selection's pane's
   const bar = page.locator('.formatting-toolbar.visible').last();
   await expect(bar).toBeVisible();
   // It moves on each selectionchange, which can come after the last key, so this waits for its place
