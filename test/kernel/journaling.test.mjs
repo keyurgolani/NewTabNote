@@ -368,6 +368,51 @@ describe("a page's journaling (#35 slice 3b)", () => {
     );
   });
 
+  it("removes only the entries its pane issued before a save that commits, by the save's own count, so a newer save's entry stays when an older save's answer comes after it (the lead's call on R191)", async () => {
+    const w = await page();
+    const made = await w.journaling.execute(quickNote('c-make'), w.send);
+    assert.equal(made.kind, 'committed');
+    const noteId = 'note-c-make';
+    /**
+     * An editor save of the note's block
+     * @param {string} commandId
+     * @param {string} content
+     * @returns {any}
+     */
+    const save = (commandId, content) => ({
+      type: 'saveNoteContent',
+      commandId,
+      noteId,
+      blocks: [{ id: 'block-c-make', type: 'text', content, order: 0 }],
+    });
+    /** @param {string} id */
+    const draftOf = id => /** @type {any} */ ({ v: 1, id, noteId, blocks: [], deletedBlockIds: [] });
+    // The main pane's save of the note, still out, then its newer save of the note, which answered
+    // it may land later, then a quick note, which the page journals after both
+    /** @type {() => void} */
+    let answerOlder = () => {};
+    const older = w.journaling.execute(
+      save('c-older', 'a'),
+      (/** @type {any} */ command) =>
+        new Promise(resolve => {
+          answerOlder = () => resolve(w.kernel.execute(command));
+        }),
+      { draft: draftOf('c-older'), pane: 'main' },
+    );
+    await w.journaling.execute(save('c-newer', 'ab'), async () => unavailable('storage', 'transaction-aborted', true), {
+      draft: draftOf('c-newer'),
+      pane: 'main',
+    });
+    assert.equal((await w.journaling.execute(quickNote('c-quick'), w.send)).kind, 'committed');
+    // The older save commits last. It carries nothing of the newer one, whose entry stays.
+    answerOlder();
+    assert.equal((await older).kind, 'committed');
+    assert.deepEqual(
+      w.journal.entries().map(entry => entry.opId),
+      ['c-newer'],
+    );
+  });
+
   it("removes its pane's entries for a note that it issued before a covered save of the note once that save commits, kept or still out, and leaves another pane's, another note's, one issued after it, and every one when the covered save doesn't commit (R191's finding 1)", async () => {
     const w = await page();
     const made = await w.journaling.execute(quickNote('c-make'), w.send);
