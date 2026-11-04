@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, startChunksOf, WORKER_ONLY_MODULES } = require('../scripts/build/budgets.js');
+const { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, startChunksOf, WORKER_ONLY_MODULES, LAZY_ONLY_MODULES } = require('../scripts/build/budgets.js');
 const { fromMap } = require('../scripts/build/package-files.js');
 const { gateReport } = require('../scripts/perf/gate-report.js');
 const { fixtureProblems } = require('../scripts/perf-probe.js');
@@ -276,6 +276,34 @@ describe('the budget gate', () => {
       run(budgetsFor({ sidepanel: sidePanelRow }), fixture),
       ['newtab', 'popup', 'sidepanel'].map(page => workerOnly(page, 'js/kernel/adapters/indexeddb/integrity.js')),
     );
+  });
+
+  // The modules that load only at their first use, as the test's own copy: the gate's list is
+  // pinned to it, and the case puts each one on each page's start and in a lazy chunk
+  const LAZY_ONLY = ['js/ui/menu-keys.js'];
+  const lazyOnly = (/** @type {string} */ page, /** @type {string} */ file) => `budget/lazy-only ${page}: its start holds ${file}, which loads only at its first use, through the page's loader`;
+
+  it("fails a page's start that holds a module that loads only at its first use, by the module and the page, and passes the lazy chunk that holds it (#14 slice 4)", () => {
+    // The gate's list is the copy above, each a file of the tree: the block menus' roles and
+    // keys, which load at a menu's first open
+    assert.deepEqual(LAZY_ONLY_MODULES, LAZY_ONLY);
+    for (const file of LAZY_ONLY_MODULES) assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} is in the tree`);
+    const budgets = budgetsFor({ sidepanel: sidePanelRow });
+    for (const file of LAZY_ONLY) {
+      // Imported statically: on the new tab's start, through the chunk its root boots, and on
+      // Popup's and Side Panel's, in their own chunks
+      for (const [page, holder] of [['newtab', 'assets/workspace.js'], ['popup', 'assets/popup.js'], ['sidepanel', 'assets/sidepanel.js']]) {
+        const fixture = bundleFixture({ sidePanel: true });
+        fixture.chunks = fixture.chunks.map(entry => (entry.fileName === holder ? { ...entry, moduleIds: [...entry.moduleIds, id(file)] } : entry));
+        assert.deepEqual(run(budgets, fixture), [lazyOnly(page, file)], `${file} on ${page}'s start`);
+      }
+      // In a chunk the new tab's start loads with import(), it's lazy, and passes
+      const lazy = bundleFixture({ sidePanel: true });
+      lazy.chunks = lazy.chunks.map(entry => (entry.fileName === 'assets/trust.js' ? { ...entry, moduleIds: [...entry.moduleIds, id(file)] } : entry));
+      const graph = analyze({ ...lazy, budgets }).newtab;
+      assert.ok(graph.lazy.modules.includes(file) && !graph.start.modules.includes(file), `${file} is lazy`);
+      assert.deepEqual(run(budgets, lazy), []);
+    }
   });
 
   it("fails a package its row doesn't allow, and an allowed one its graph no longer holds", () => {

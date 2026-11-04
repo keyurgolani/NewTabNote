@@ -26,6 +26,8 @@
  *                      entry's start path
  *   budget/worker-only a module only the service worker runs (WORKER_ONLY_MODULES) on a page's
  *                      or a loader chunk's start, by the module and the entry
+ *   budget/lazy-only   a module that loads only at its first use (LAZY_ONLY_MODULES) on a
+ *                      page's or a loader chunk's start, by the module and the entry
  *   budget/dependency  a third-party package in the entry's graph (start, lazy, workers) that
  *                      its row doesn't allow, or an allowed one it no longer has
  *   budget/file        build/budgets.json doesn't read as a budget file
@@ -58,6 +60,13 @@ const WORKER_ONLY_MODULES = Object.freeze([
   'js/kernel/adapters/indexeddb/worker-tasks.js',
   'js/kernel/core/application/integrity-check.js',
   'js/kernel/core/application/record-catch-up.js',
+]);
+/**
+ * These load only at their first use, through the page's loader, so no page's start holds one: the
+ * block menus' roles and keys, at a menu's first open (#14 slice 4)
+ */
+const LAZY_ONLY_MODULES = Object.freeze([
+  'js/ui/menu-keys.js',
 ]);
 
 /** @typedef {{raw: number, gzip: number}} Limit */
@@ -488,6 +497,9 @@ function checkBudgets(graphs, budgets, { loaderChunks, files }) {
       for (const file of graph.start.modules.filter((source) => WORKER_ONLY_MODULES.includes(source))) {
         problems.push(problem('budget/worker-only', name, `its start holds ${file}, which only the service worker runs`));
       }
+      for (const file of graph.start.modules.filter((source) => LAZY_ONLY_MODULES.includes(source))) {
+        problems.push(problem('budget/lazy-only', name, `its start holds ${file}, which loads only at its first use, through the page's loader`));
+      }
     }
     const allowed = new Set(entry.dependencies || []);
     const held = new Set([...graph.start.packages, ...graph.lazy.packages, ...graph.workers.packages]);
@@ -518,4 +530,4 @@ function readBudgets(root = ROOT) {
   }
 }
 
-module.exports = { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE, WORKER_ONLY_MODULES };
+module.exports = { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE, WORKER_ONLY_MODULES, LAZY_ONLY_MODULES };
