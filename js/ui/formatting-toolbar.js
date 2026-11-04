@@ -182,7 +182,8 @@ class FormattingToolbar {
       return;
     }
 
-    this._positionAbove(range);
+    // A selection with an empty box is in text that isn't drawn, with no place to show it at
+    if (!this._positionAbove(range)) return;
     this._updateActiveStates();
     this.show();
   }
@@ -192,12 +193,13 @@ class FormattingToolbar {
   /**
    * Position the toolbar above the given Range.
    * @param {Range} range
+   * @returns {boolean} Whether it was placed: a range with an empty box hides it instead
    */
   _positionAbove(range) {
     const rect = range.getBoundingClientRect();
     if (!rect || (rect.width === 0 && rect.height === 0)) {
       this.hide();
-      return;
+      return false;
     }
 
     const toolbarHeight = this.el.offsetHeight || 36;
@@ -221,6 +223,7 @@ class FormattingToolbar {
 
     this.el.style.top = `${top}px`;
     this.el.style.left = `${left}px`;
+    return true;
   }
 
   // ── Show / Hide ───────────────────────────────────────────────────

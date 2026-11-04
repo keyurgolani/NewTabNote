@@ -14,6 +14,9 @@
  *   both toolbars' twelve buttons, and a screen reader found two "Text formatting" toolbars.
  * - It opens at once, in place, and once a selection ends it still shows where it was while
  *   it fades, for 0.12 s, then hides.
+ * - A selection whose box is empty, in text that isn't drawn, opens no toolbar, since nothing on
+ *   screen is there to point at. Before, one showed anyway: below the app, where the page grew
+ *   by 42 px, or where it last opened, over words no longer selected.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -158,6 +161,36 @@ test('it opens at once, in place, and once the selection ends it still shows whe
   expect(await after('select'), 'open at once, in place').toEqual({ visibility: 'visible', hidesAfter: null, gap: 8, offCentre: 0 });
   expect(await after('unselect'), 'still showing where it was while it fades').toEqual({ visibility: 'visible', hidesAfter: 120, inPlace: true });
   await expect(page.locator('.formatting-toolbar').last()).toBeHidden();
+  await expectNoUncaught(extension, page);
+});
+
+test('a selection whose box is empty opens no toolbar, and the page stays as tall as the window', async ({ extension }) => {
+  const page = await shortNote(extension);
+  // Text that isn't drawn, here a hidden span in the first block, gives a selection an empty box,
+  // so nothing on screen is there for a toolbar to point at. Read after the toolbars' own handlers.
+  const selectUnseen = () => blockContent(page, 0).evaluate(async el => {
+    let span = el.querySelector('span[hidden]');
+    if (!span) {
+      span = el.ownerDocument.createElement('span');
+      span.hidden = true;
+      span.textContent = 'unseen';
+      el.append(span);
+    }
+    const handled = new Promise(resolve => document.addEventListener('selectionchange', resolve, { once: true }));
+    getSelection().setBaseAndExtent(span.firstChild, 0, span.firstChild, 6);
+    await handled;
+  });
+  const shown = () => page.locator('.formatting-toolbar.visible').count();
+
+  // With no toolbar placed yet, one would show at its place below the app
+  await selectUnseen();
+  expect.soft(await shown(), 'no toolbar shows, with none placed yet').toBe(0);
+  expect.soft(await pageHeight(page), 'the page is as tall as the window').toBe(900);
+
+  // With one placed over a word, it would show there, over words no longer selected
+  await selectInOneGo(page, 1, 0, 6);
+  await selectUnseen();
+  expect.soft(await shown(), 'no toolbar shows, after one was placed').toBe(0);
   await expectNoUncaught(extension, page);
 });
 
