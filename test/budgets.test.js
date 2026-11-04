@@ -399,7 +399,8 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
       [{ failures: [{ round: 3, message: 'the page never marked ready' }] }, 'candidate round 3 failed: the page never marked ready'],
       [{ problems: ["the typical fixture isn't the one build/budgets.json measured (aaaa, not bbbb), so its numbers don't compare"] }, "the probe: the typical fixture isn't the one build/budgets.json measured (aaaa, not bbbb), so its numbers don't compare"],
       [{ rounds: 9 }, '9 rounds, fewer than the 12 build/budgets.json takes'],
-      // 12 asked, and a package, on either side, recorded 11 with no failure listed
+      // 12 asked, and a package, on either side, recorded 11 with no failure listed. The row's 12
+      // already caught this one
       [{ paired: 11 }, '11 rounds, fewer than the 12 build/budgets.json takes'],
       // Past the 12 the row takes, every round asked still counts
       [{ rounds: 15, paired: 14 }, 'only 14 of the 15 rounds asked have a run of every package'],
@@ -413,8 +414,8 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     }
   });
 
-  it('calls a profile the rows gate invalid when the run has no rounds of it, so a run that measured nothing fails a gate', () => {
-    const missing = { profile: 'maximal', valid: false, timing: 'invalid', heap: 'invalid', problems: ['the run has no rounds of this profile, which build/budgets.json gates'] };
+  it('calls a profile the rows take invalid when the run has no rounds of it, so a run that measured nothing fails a gate', () => {
+    const missing = { profile: 'maximal', valid: false, timing: 'invalid', heap: 'invalid', problems: ['the run has no rounds of this profile, which build/budgets.json takes'] };
     // The run measured typical alone
     const typicalOnly = probe(1.01, 1.05, 2.7);
     delete typicalOnly.timing.profiles.maximal;
@@ -422,7 +423,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.deepEqual(reported.verdicts, [{ profile: 'typical', valid: true, timing: 'pass', heap: 'pass', problems: [] }, missing]);
     assert.equal(reported.failed, false, 'report mode fails nothing');
     assert.match(reported.markdown, /\| maximal \| 0 \| n\/a \| \*\*no\*\* \| n\/a \| invalid \| n\/a \| invalid \|/);
-    assert.ok(reported.markdown.includes('- maximal: the run has no rounds of this profile, which build/budgets.json gates'));
+    assert.ok(reported.markdown.includes('- maximal: the run has no rounds of this profile, which build/budgets.json takes'));
     assert.equal(gateReport(typicalOnly, BUDGETS).failed, true);
     // A run with no profiles, and one with no timing at all: both profiles are invalid
     const noProfiles = probe(1.01, 1.05, 2.7);
@@ -432,6 +433,40 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
       assert.deepEqual(report.verdicts, [{ ...missing, profile: 'typical' }, missing]);
       assert.equal(report.failed, true);
     }
+  });
+
+  it('fails each row only on the profiles it takes', () => {
+    // Heap takes typical alone, and timing reports: maximal's heap can't fail the job, nor can its absence
+    const heapTypical = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'report' }, heap: { ...BUDGETS.heap, profiles: ['typical'] } };
+    const heavyMaximal = probe(1.01, 1.05, 2.7);
+    heavyMaximal.timing.profiles.maximal.packages.candidate.heapBytes = ratio(3.5 * 1048576);
+    const heavy = gateReport(heavyMaximal, heapTypical);
+    assert.deepEqual(heavy.verdicts.map(verdict => [verdict.profile, verdict.heap]), [['typical', 'pass'], ['maximal', 'fail']]);
+    assert.equal(heavy.failed, false);
+    const typicalOnly = probe(1.01, 1.05, 2.7);
+    delete typicalOnly.timing.profiles.maximal;
+    assert.equal(gateReport(typicalOnly, heapTypical).failed, false);
+    // Timing takes both, so as a gate it fails on the missing profile
+    assert.equal(gateReport(typicalOnly, { ...heapTypical, timing: BUDGETS.timing }).failed, true);
+    // Heap still fails on the profile it takes
+    const heavyTypical = probe(1.01, 1.05, 2.7);
+    heavyTypical.timing.profiles.typical.packages.candidate.heapBytes = ratio(3.5 * 1048576);
+    assert.equal(gateReport(heavyTypical, heapTypical).failed, true);
+  });
+
+  it('fails the job when a gate row names no profile, however little the run measured', () => {
+    const nothing = { ...probe(1.01, 1.05, 2.7), timing: null };
+    for (const profiles of [[], undefined]) {
+      const unnamed = { ...BUDGETS, timing: { ...BUDGETS.timing, profiles }, heap: { ...BUDGETS.heap, profiles } };
+      const report = gateReport(nothing, unnamed);
+      assert.deepEqual(report.verdicts, []);
+      assert.equal(report.failed, true, String(profiles));
+      assert.ok(report.markdown.includes("- build/budgets.json's timing row names no profile"));
+      assert.ok(report.markdown.includes("- build/budgets.json's heap row names no profile"));
+    }
+    // A report row that names none fails nothing
+    const reportOnly = { ...REPORTING, timing: { ...REPORTING.timing, profiles: [] }, heap: { ...REPORTING.heap, profiles: [] } };
+    assert.equal(gateReport(nothing, reportOnly).failed, false);
   });
 
   it("calls a profile invalid when build/budgets.json's timing row doesn't say how many rounds it takes", () => {
@@ -517,9 +552,16 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     }
   });
 
-  it('has CI time the rounds and profiles the rows take', () => {
+  it("has CI's probe step ask for at least the rounds the timing row takes, and every profile either row takes", () => {
     const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/perf.yml'), 'utf8');
-    assert.ok(workflow.includes(`--timing --runs ${BUDGETS.timing.rounds} --profiles ${BUDGETS.timing.profiles.join(',')} `), 'the probe step asks what build/budgets.json takes');
+    const start = workflow.indexOf('- name: Time 1.4.0');
+    const step = workflow.slice(start, workflow.indexOf('- name:', start + 1));
+    const command = step.slice(step.indexOf('npm run perf:probe'));
+    const runs = /--runs (\d+)/.exec(command);
+    const profiles = /--profiles (\S+)/.exec(command);
+    assert.ok(runs && Number(runs[1]) >= BUDGETS.timing.rounds, 'the probe step asks for the rounds');
+    assert.ok(profiles, 'the probe step names its profiles');
+    for (const name of [...BUDGETS.timing.profiles, ...BUDGETS.heap.profiles]) assert.ok(profiles[1].split(',').includes(name), name);
   });
 
   it('lets npm run perf:probe --baseline read build/budgets.json', () => {
