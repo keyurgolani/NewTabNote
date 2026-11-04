@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 
 import { IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { WORKER_TASKS } from '../../js/kernel/adapters/indexeddb/worker-tasks.js';
 import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { catalogFor, createKernel } from './test-kernel.mjs';
@@ -53,8 +54,10 @@ export function adapterOn(of, options = {}) {
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
-    // Its ledger keys every command a test sends, the service worker's own too
+    // Its ledger keys every command a test sends, the service worker's own too, and it runs the
+    // worker's own storage tasks, as the worker's root passes them
     commands: WORKER_COMMANDS,
+    workerTasks: WORKER_TASKS,
     ...options,
   });
   of.adapters.push(adapter);
