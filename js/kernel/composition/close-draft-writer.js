@@ -66,6 +66,10 @@ import { DRAFT_PREFIX } from '../core/domain/close-draft-keys.js';
  * @property {(block: Record<string, unknown>, noteId: string) => string} digest
  *   A block's digest as note `noteId` stores it, which the draft's base names it by
  * @property {(fields: DraftFields) => boolean} write - whether the draft was written
+ * @property {(fields: DraftFields) => import('../core/domain/close-draft.js').CloseDraft} draftOf
+ *   The draft `write` would write, written nowhere: an editor save's, for the page's journal (#35
+ *   slice 3b), which the next page applies by the same rules if this one closes before the save
+ *   is answered
  */
 
 /** Tells of a draft that didn't fit, by the error's name alone */
@@ -82,36 +86,43 @@ const consoleLogger = Object.freeze({
  */
 export function closeDraftWriter({ storage, newId, now = () => Date.now(), logger = consoleLogger }) {
   const page = newId();
+  /** @param {DraftFields} fields */
+  const draftOf = fields => {
+    const { base } = fields;
+    /** @type {Record<string, unknown>} */
+    const draft = {
+      v: CLOSE_DRAFT_VERSION,
+      id: fields.id,
+      page,
+      noteId: fields.noteId,
+      at: now(),
+      base: {
+        revision: base.revision,
+        updatedAt: base.updatedAt,
+        issued: [],
+        ...(base.name === undefined ? {} : { name: base.name }),
+        blocks: base.blocks,
+        orders: base.orders,
+        issuedSaves: base.issuedSaves,
+      },
+      blocks: fields.blocks,
+      orders: fields.orders,
+      deletedBlockIds: fields.deletedBlockIds,
+      preview: fields.preview,
+      todoProgress: fields.todoProgress,
+      linkedNames: fields.linkedNames,
+    };
+    if (fields.name !== undefined)
+      Object.assign(draft, { name: fields.name, titleOrigin: fields.titleOrigin || 'typed' });
+    return /** @type {import('../core/domain/close-draft.js').CloseDraft} */ (/** @type {unknown} */ (draft));
+  };
   return Object.freeze({
     page,
     digest: blockDigest,
+    draftOf,
     write(fields) {
       if (!storage) return false;
-      const { base } = fields;
-      /** @type {Record<string, unknown>} */
-      const draft = {
-        v: CLOSE_DRAFT_VERSION,
-        id: fields.id,
-        page,
-        noteId: fields.noteId,
-        at: now(),
-        base: {
-          revision: base.revision,
-          updatedAt: base.updatedAt,
-          issued: [],
-          ...(base.name === undefined ? {} : { name: base.name }),
-          blocks: base.blocks,
-          orders: base.orders,
-          issuedSaves: base.issuedSaves,
-        },
-        blocks: fields.blocks,
-        orders: fields.orders,
-        deletedBlockIds: fields.deletedBlockIds,
-        preview: fields.preview,
-        todoProgress: fields.todoProgress,
-        linkedNames: fields.linkedNames,
-      };
-      if (fields.name !== undefined) Object.assign(draft, { name: fields.name, titleOrigin: fields.titleOrigin || 'typed' });
+      const draft = draftOf(fields);
       try {
         storage.setItem(DRAFT_PREFIX + fields.id, JSON.stringify(draft));
         return true;

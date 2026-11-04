@@ -11,7 +11,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, FakeDocument, makeEditor,
-  runUntil, startEditorClient, startNewTabKernel, quietNavigation, releaseStorage,
+  runUntil, startEditorClient, startNewTabKernel, quietNavigation, releaseStorage, createLocalStorage,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -964,6 +964,261 @@ describe('BlockEditor saves put only what their own pane changed (#17, the per-p
     assert.equal((await inserting).kind, 'committed');
     await settle();
     assert.equal(revisionAtClose(env, main), null, "tab B's commit came between");
+  });
+});
+
+describe("BlockEditor saves carry their draft for the page's journal (#35 slice 3b)", () => {
+  /**
+   * A page with note C (c1, c2) open in the page's editor, and each command the page's client
+   * was handed, with what it carries for the journal, copied into the test's own realm
+   */
+  async function pageOnC({ localStorage } = {}) {
+    const env = createLegacyEnv({ localStorage });
+    await createDatabase(env.indexedDB, {
+      records: { canvases: [note('C')], elements: [block('c1', 'C', 0, 'charlie'), block('c2', 'C', 1, 'charlie two')] },
+    });
+    env.load(...FILES);
+    /** @type {Array<[Object, Object|undefined]>} */
+    const handed = [];
+    await startEditorClient(env, {
+      onExecute: (command, options) => handed.push([plain(command), options === undefined ? undefined : plain(options)]),
+    });
+    const main = makeEditor(env);
+    await main.loadNote('C');
+    return { env, main, handed };
+  }
+
+  /** The editor saves the page's client was handed, as [command, options] */
+  const savesIn = (handed) => handed.filter(([command]) => command.type === 'saveNoteContent');
+
+  /** `editor`'s debounce save runs, and everything it holds is written */
+  async function debounceSave(env, editor) {
+    env.clock.tick(500);
+    assert.equal(await runUntil(env, editor.flushSave()), true);
+  }
+
+  /**
+   * Each save commits at once, and the editor hears of the first one only once the test calls
+   * `hear`. `saved(n)` runs the debounce and the frames until the page has issued n saves.
+   */
+  function holdFirstAnswer(env) {
+    const client = env.documentClient;
+    const real = client.saveContent;
+    const held = {
+      calls: 0,
+      hear: () => {},
+      restore: () => { client.saveContent = real; },
+      async saved(count) {
+        env.clock.tick(500);
+        for (let i = 0; i < 100 && held.calls < count; i++) {
+          env.frames();
+          await settle(2);
+        }
+        assert.equal(held.calls, count, `save ${count} went`);
+      },
+    };
+    client.saveContent = (save, options) => {
+      held.calls += 1;
+      const done = real(save, options);
+      if (held.calls > 1) return done;
+      return new Promise((resolve) => {
+        held.hear = () => resolve(done);
+      });
+    };
+    return held;
+  }
+
+  it("a pane's save carries its close-time draft, under its commandId, on the base the pane last saw commit, and names its pane", async () => {
+    const { env, main, handed } = await pageOnC();
+    const { revision } = await env.documentClient.openNote('C');
+    type(main, 'charlie, saved');
+    await debounceSave(env, main);
+    const [[command, options]] = savesIn(handed);
+    assert.ok(options && options.draft, 'it carries a draft');
+    assert.notEqual(options.covered, true, 'no other draft holds it');
+    assert.equal(typeof options.pane, 'string', 'its pane');
+    const { draft } = options;
+    assert.deepEqual(
+      [draft.v, draft.id, draft.noteId, typeof draft.page, typeof draft.at],
+      [1, command.commandId, 'C', 'string', 'number'],
+    );
+    assert.equal(draft.base.revision, revision);
+    assert.deepEqual(Object.keys(draft.base.blocks), ['c1'], 'its base names the blocks it holds');
+    assert.deepEqual(draft.blocks.map((b) => [b.id, b.content]), [['c1', 'charlie, saved']]);
+    assert.deepEqual(draft.deletedBlockIds, []);
+
+    // A pop-out on the same note is another pane
+    const { pip, pipWindow } = await openPiP(env, 'C');
+    pipWindow.requestAnimationFrame = (fn) => env.global.requestAnimationFrame(fn);
+    type(pip, 'charlie two, from the pop-out', 1);
+    assert.equal(await runUntil(env, pip.flushSave()), true);
+    const [, [, popped]] = savesIn(handed);
+    assert.equal(typeof (popped && popped.pane), 'string');
+    assert.notEqual(popped.pane, options.pane);
+  });
+
+  it("a save issued while its pane's earlier save of the note is in flight names that save among its draft's issued saves, on the same base", async () => {
+    const { env, main, handed } = await pageOnC();
+    const { revision } = await env.documentClient.openNote('C');
+    const held = holdFirstAnswer(env);
+    type(main, 'charlie, first');
+    await held.saved(1);
+    type(main, 'charlie, second');
+    await held.saved(2);
+    held.hear();
+    assert.equal(await runUntil(env, main.flushSave()), true);
+    held.restore();
+    const [[first], [, second]] = savesIn(handed);
+    const issued = env.documentClient.closeDrafts.digest(first.blocks.find((b) => b.id === 'c1'), 'C');
+    assert.equal(second.draft.base.revision, revision, "it hadn't heard the first one commit");
+    assert.ok(
+      second.draft.base.issuedSaves.some((save) => save.blocks.c1 === issued),
+      "the first save's c1, as it wrote it, is among the issued saves",
+    );
+  });
+
+  it("a save after its pane heard the earlier one commit is on that commit, so it carries everything the pane changed since", async () => {
+    const { env, main, handed } = await pageOnC();
+    type(main, 'charlie, first');
+    await debounceSave(env, main);
+    const { revision } = await env.documentClient.openNote('C');
+    type(main, 'charlie two, second', 1);
+    await debounceSave(env, main);
+    const [, [, second]] = savesIn(handed);
+    assert.equal(second.draft.base.revision, revision);
+    assert.deepEqual(second.draft.blocks.map((b) => [b.id, b.content]), [['c2', 'charlie two, second']]);
+  });
+
+  it("the closing save carries no draft of its own: its close-time draft holds it, under the same id", async () => {
+    const { env, main, handed } = await pageOnC();
+    type(main, 'charlie, typed as the tab closed');
+    env.window.fire('pagehide', { persisted: false });
+    const [[command, options]] = savesIn(handed);
+    assert.equal(options && options.covered, true);
+    assert.equal(options.draft, undefined);
+    const [draft] = draftsOf(env);
+    assert.equal(command.commandId, draft.id);
+  });
+
+  it("the closing save names its pane once the pane has one, so its commit takes the pane's earlier entries for the note (R191's finding 1)", async () => {
+    const { env, main, handed } = await pageOnC();
+    type(main, 'charlie, saved');
+    await debounceSave(env, main);
+    type(main, 'charlie, typed as the tab closed');
+    env.window.fire('pagehide', { persisted: false });
+    const [[, first], [command, closing]] = savesIn(handed);
+    assert.equal(typeof first.pane, 'string');
+    assert.deepEqual(closing, { covered: true, pane: first.pane });
+    const [draft] = draftsOf(env);
+    assert.equal(command.commandId, draft.id);
+  });
+
+  it("the closing save carries its own draft when its close-time draft didn't fit, since nothing else holds it then", async () => {
+    const { env, main, handed } = await pageOnC({ localStorage: createLocalStorage({ quota: 100 }) });
+    type(main, 'x'.repeat(300));
+    env.window.fire('pagehide', { persisted: false });
+    assert.deepEqual(draftsOf(env), [], "the close-time draft didn't fit");
+    const [[command, options]] = savesIn(handed);
+    assert.notEqual(options && options.covered, true);
+    assert.equal(options.draft.id, command.commandId);
+    assert.deepEqual(options.draft.blocks.map((b) => [b.id, b.content]), [['c1', 'x'.repeat(300)]]);
+  });
+
+  it("a save that changes nothing since its pane's base goes covered: nothing of it would replay", async () => {
+    const { env, main, handed } = await pageOnC();
+    type(main, 'charlie, typed');
+    type(main, 'charlie');
+    await debounceSave(env, main);
+    const [[, options]] = savesIn(handed);
+    assert.deepEqual(options, { covered: true });
+  });
+
+  it("a save that changes nothing since its pane's base names its pane once the pane has one, so its commit takes the pane's earlier entries for the note too (the lead's call on R191's finding 1)", async () => {
+    const { env, main, handed } = await pageOnC();
+    type(main, 'charlie, saved');
+    await debounceSave(env, main);
+    type(main, 'charlie, saved, and typed');
+    type(main, 'charlie, saved');
+    await debounceSave(env, main);
+    const [[, first], [, second]] = savesIn(handed);
+    assert.equal(typeof first.pane, 'string');
+    assert.deepEqual(second, { covered: true, pane: first.pane });
+  });
+
+  it("a pane that loads its note again gets a new id, so its saves after the load take none of its entries from before it, whose edit they don't carry (R191's fix round, Q3)", async () => {
+    const { createJournaling } = await import('../js/kernel/core/application/journaling.js');
+    const { createMemoryJournal } = await import('../js/kernel/core/memory/journal.js');
+    const { unavailable } = await import('../js/kernel/core/contracts/outcomes.js');
+    const env = createLegacyEnv();
+    await createDatabase(env.indexedDB, {
+      records: {
+        canvases: [note('C'), note('D')],
+        elements: [block('c1', 'C', 0, 'charlie'), block('c2', 'C', 1, 'charlie two'), block('d1', 'D', 0, 'delta')],
+      },
+    });
+    env.load(...FILES);
+    // The page's journal, held by its owner lock as long as the page lives
+    const journal = createMemoryJournal();
+    const journaling = createJournaling({
+      journal,
+      locks: { request: (name, options, callback) => Promise.resolve().then(callback), query: async () => ({ held: [] }) },
+      sessionId: 'page-1',
+      surface: 'newtab',
+      clock: { now: () => 0 },
+    });
+    assert.equal(await journaling.ready, true);
+    // The page's first two saves of C answer that storage can't take them, so their entries stay
+    let failing = 2;
+    const answers = [];
+    await startEditorClient(env, {
+      through: (command, options, execute) => {
+        const answer = journaling.execute(command, (sent) => {
+          if (sent.type !== 'saveNoteContent' || sent.noteId !== 'C' || failing === 0) return execute(sent);
+          failing -= 1;
+          return Promise.resolve(unavailable('storage', 'quota', false));
+        }, options);
+        answers.push(answer);
+        return answer;
+      },
+    });
+    /** The journal's entries: each one's note and its draft's blocks' text */
+    const entries = () => plain(journal.entries().map((entry) => [entry.noteId, entry.draft.blocks.map((b) => [b.id, b.content])]));
+    const FAILED = ['C', [['c1', 'charlie, the edit whose saves failed']]];
+    const main = makeEditor(env);
+    await main.loadNote('C');
+
+    // A save and its one retry, both failing
+    type(main, 'charlie, the edit whose saves failed');
+    env.clock.tick(500);
+    await runUntil(env, main.flushSave());
+    env.clock.tick(1000);
+    await runUntil(env, main.flushSave());
+    assert.equal(failing, 0, 'the save and its retry went');
+    assert.deepEqual(entries(), [FAILED, FAILED]);
+
+    // The pane loads D, then C again, which it shows as stored, without the edit
+    await runUntil(env, main.loadNote('D'));
+    await runUntil(env, main.loadNote('C'));
+    assert.deepEqual(plain(main.blocks.map((b) => b.content)), ['charlie', 'charlie two']);
+
+    // A typed save of the other block commits. It carries nothing of the edit, so the first
+    // load's entries stay for the next start
+    type(main, 'charlie two, typed after the reload', 1);
+    env.clock.tick(500);
+    assert.equal(await runUntil(env, main.flushSave()), true);
+    assert.deepEqual(entries(), [FAILED, FAILED], 'after the typed save');
+
+    // So does the closing save, covered by its close-time draft, once it commits
+    type(main, 'charlie two, typed as the tab closed', 1);
+    env.window.fire('pagehide', { persisted: false });
+    await Promise.all(answers);
+    await settle();
+    assert.deepEqual(entries(), [FAILED, FAILED], 'after the closing save');
+    const stored = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
+      .filter((row) => row.canvasId === 'C')
+      .sort((a, b) => a.order - b.order)
+      .map((row) => [row.id, row.content]);
+    assert.deepEqual(plain(stored), [['c1', 'charlie'], ['c2', 'charlie two, typed as the tab closed']]);
   });
 });
 

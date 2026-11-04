@@ -382,6 +382,11 @@ async function init() {
     return;
   }
 
+  // The quick note last sent that may still land: the journal keeps it under its ids for the drain,
+  // so another Enter of the same text sends it again under them, and it's made once (#35 slice 3b)
+  /** @type {{text: string, commandId: string, noteId: string}|null} */
+  let pending = null;
+
   // Quick Note input — creates a new note on Enter, with the record and search entry the new tab's notes get
   quickNoteInput.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
@@ -389,13 +394,16 @@ async function init() {
     if (!text) return;
 
     quickNoteInput.disabled = true;
+    const ids = pending && pending.text === text ? pending : { text, commandId: kernel.ids.next(), noteId: kernel.ids.next() };
+    pending = null;
     try {
       const outcome = await kernel.execute({
         type: 'createNote',
-        commandId: kernel.ids.next(),
-        noteId: kernel.ids.next(),
+        commandId: ids.commandId,
+        noteId: ids.noteId,
         name: text,
       });
+      if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') pending = ids;
       if (outcome.kind !== 'committed') throw new Error(`The quick note wasn't saved (${outcome.kind}: ${outcome.code})`);
       quickNoteInput.value = '';
       // Refresh the recent notes list

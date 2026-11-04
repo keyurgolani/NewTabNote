@@ -21,6 +21,15 @@ import { compareKeys, dailyDateStr } from '../core/domain/note.js';
 import { systemClock, zoneOf } from '../core/ports/runtime.js';
 
 /** @typedef {import('./host.js').Client} Client */
+/** @typedef {import('../core/application/journaling.js').JournalingOptions} JournalingOptions */
+/** @typedef {import('../core/contracts/commands.js').Command} Command */
+
+/**
+ * What an editor tells of a save: its commandId when it chose one, and for the page's journal,
+ * `covered` when its own record holds it, or the edit it saves, as a close-time draft's fields, and
+ * the pane that issued it, covered or not (#35 slice 3b)
+ * @typedef {{commandId?: string, covered?: boolean, edit?: Omit<import('./close-draft-writer.js').DraftFields, 'id'>, pane?: string}} SaveOptions
+ */
 /** @typedef {import('../core/domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../core/domain/note.js').BlockRecord} BlockRecord */
 /** @typedef {import('../core/domain/note.js').SearchEntry} SearchEntry */
@@ -46,9 +55,12 @@ import { systemClock, zoneOf } from '../core/ports/runtime.js';
  * @property {(noteId: string) => Promise<{note: NoteRecord, blocks: BlockRecord[], revision: number | null} | null>} openNote
  *   The note, its blocks in note order, and its content revision as getNote read it (null on an
  *   adapter that gives none), or null when the note isn't stored
- * @property {(save: Fields<'saveNoteContent'>, options?: {commandId?: string}) => Promise<Outcome>} saveContent
+ * @property {(save: Fields<'saveNoteContent'>, options?: SaveOptions) => Promise<Outcome>} saveContent
  *   A save, under `commandId` when the editor gives one: its closing save shares its id with
- *   the close-time draft it wrote for the same edit (#33)
+ *   the close-time draft it wrote for the same edit (#33). What it tells the page's journal goes
+ *   with the command (#35 slice 3b): `covered` for one its own record holds, as the closing save's
+ *   draft does, or its `edit`, an editor save's, which goes as the close-time draft of that edit
+ *   under the save's commandId, and either way the `pane` that issued it.
  * @property {import('./close-draft-writer.js').CloseDraftWriter | null} closeDrafts
  *   Where the editors write their close-time drafts at the page's own close (#33), or null on a
  *   page that keeps none
@@ -174,8 +186,20 @@ export function createDocumentClient(
       return { note: found.note, blocks: await read({ type: 'getNoteBlocks', noteId }, []), revision };
     },
 
-    saveContent: (save, { commandId } = {}) =>
-      client.execute({ ...save, type: 'saveNoteContent', commandId: commandId || client.ids.next() }),
+    saveContent(save, { commandId, covered, edit, pane } = {}) {
+      const id = commandId || client.ids.next();
+      /** @type {JournalingOptions} */
+      const journal = covered
+        ? pane
+          ? { covered, pane }
+          : { covered }
+        : edit && closeDrafts
+          ? { draft: closeDrafts.draftOf({ ...edit, id }), pane }
+          : {};
+      return /** @type {{execute: (command: Command, options: JournalingOptions) => Promise<Outcome>}} */ (
+        /** @type {unknown} */ (client)
+      ).execute({ ...save, type: 'saveNoteContent', commandId: id }, journal);
+    },
 
     deleteBlocks: (noteId, blockIds) =>
       client.execute({ type: 'deleteBlocks', commandId: client.ids.next(), noteId, blockIds }),

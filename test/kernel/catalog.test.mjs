@@ -547,6 +547,38 @@ describe('schema modules (#13, AC1)', () => {
     }
   });
 
+  it("system.coordinatorHealth may name the notes its last drain held back, each by id and why, at most 10 with the total beside them, and an answer without them, as an older worker's, still parses (#35 slice 3b)", () => {
+    const health = {
+      status: 'ready',
+      coordinatorId: 'c1',
+      startedAt: NOW,
+      commands: [],
+      oldestOrphanedEntryAt: NOW,
+      migration: null,
+    };
+    const { result } = moduleOf('system.coordinatorHealth');
+    /** @param {unknown} data */
+    const parses = data => v.safeParse(result, { kind: 'ready', asOf: NOW, data }).success;
+    assert.equal(parses(health), true, "an older worker's answer");
+    const notes = Array.from({ length: 10 }, (_, index) => ({ noteId: `n${index}`, code: 'timed-out' }));
+    assert.equal(parses({ ...health, held: { total: 1, notes: notes.slice(0, 1) } }), true);
+    // Ten at most by name, and the total of every one held beside them
+    assert.equal(parses({ ...health, held: { total: 27, notes } }), true);
+    for (const held of [
+      { total: 11, notes: [...notes, { noteId: 'n10', code: 'timed-out' }] },
+      { notes: notes.slice(0, 1) },
+      { total: -1, notes: [] },
+      { total: 1, notes: [{ noteId: 'n1' }] },
+      { total: 1, notes: [{ noteId: 'n1', code: 'Disk full' }] },
+      { total: 1, notes: [{ noteId: '', code: 'timed-out' }] },
+      // Never what a note holds
+      { total: 1, notes: [{ noteId: 'n1', code: 'timed-out', name: 'Call the plumber' }] },
+      { total: 1, notes: notes.slice(0, 1), text: 'Call the plumber' },
+    ]) {
+      assert.equal(parses({ ...health, held }), false, JSON.stringify(held));
+    }
+  });
+
   it('accept every answer the kernel gives the samples, both ways (#13, AC1)', async () => {
     const adapter = createMemoryAdapter();
     const runtime = { ids: testIds(), clock: testClock() };

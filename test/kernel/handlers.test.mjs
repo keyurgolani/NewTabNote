@@ -30,7 +30,7 @@ import {
 } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
-import { reachGraph } from './import-graph.mjs';
+import { importGraph, reachGraph } from './import-graph.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/application/handlers.js').HandlerTable} HandlerTable */
@@ -354,6 +354,43 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     // check above isn't empty
     const newtab = pageModules(['js/entries/newtab.js']).map(file => path.relative(ROOT, file));
     assert.equal(newtab.filter(file => APPLIER_MODULES.test(file)).length, 5);
+  });
+
+  it("each page loads its journal chunk later, never at its start, and the chunk holds none of the worker's part (#35 slice 3b)", () => {
+    const chunk = 'js/kernel/composition/journal-chunk.js';
+    // What no page's start holds: the chunk, the journaling, the apply of editor saves, which the
+    // chunk loads only when it finds one, and the journal's database
+    const chunkOnly = [
+      chunk,
+      'js/kernel/core/application/journaling.js',
+      'js/kernel/core/application/journal-apply.js',
+      'js/kernel/adapters/in-context.js',
+      'js/kernel/adapters/indexeddb/journal.js',
+    ];
+    for (const { page, entries, surface } of PAGES) {
+      if (surface === 'worker-internal') continue;
+      // What a page loads before it's ready: its own modules' static imports, and on the new tab
+      // the workspace chunk its entry loads at once (js/entries/newtab.js)
+      const starts = surface === 'newtab' ? [...entries, 'js/workspace.js'] : entries;
+      const start = new Set(
+        starts.flatMap(entry => [...importGraph(path.join(ROOT, entry))].map(file => path.relative(ROOT, file))),
+      );
+      assert.ok(start.has('js/kernel/composition/host.js'), `${page}'s start holds the shim`);
+      const loaded = pageModules(entries).map(file => path.relative(ROOT, file));
+      assert.ok(loaded.includes(chunk), `${page} loads the chunk`);
+      assert.deepEqual(
+        chunkOnly.filter(file => start.has(file)),
+        [],
+        `${page}'s start`,
+      );
+    }
+    const held = [...reachGraph([path.join(ROOT, chunk)]).modules].map(file => path.relative(ROOT, file));
+    assert.deepEqual(
+      held.filter(
+        file => WORKER_ONLY_MODULES.test(file) || file === 'js/kernel/core/messaging/journaled-operations.js',
+      ),
+      [],
+    );
   });
 
   it("neither Popup's nor Side Panel's start loads the remote apply or the index commands while #19 isn't live", () => {

@@ -4417,10 +4417,16 @@ class BlockEditor {
      */
     this._deleting = new Set();
     /**
-     * @type {Map<string, string>} The id of each note's close-time draft, which its closing save
-     * issued at the same close takes as its commandId (#33)
+     * @type {Map<string, string>} The id of each note's close-time draft written, which its closing
+     * save issued at the same close takes as its commandId (#33), and which covers that save for the
+     * page's journal (#35 slice 3b)
      */
     this._closingIds = new Map();
+    /**
+     * @type {string|null} This pane's id for its load of the note, which its saves name for the
+     * page's journal, and which each load drops (#35 slice 3b)
+     */
+    this._pane = null;
   }
 
   /**
@@ -4545,7 +4551,9 @@ class BlockEditor {
    * The loaded note is what's stored, as the open read it: its close-time draft holds what
    * changes from here (#33). The base takes the open's revision and stamp, each block's digest
    * as stored, and the editor's own serialization's where the two differ. Notes with nothing in
-   * flight or waiting to retry are forgotten.
+   * flight or waiting to retry are forgotten. The pane's id goes too, so its saves from here,
+   * which carry nothing it changed before this base, take none of its earlier entries for the
+   * page's journal (#35 slice 3b).
    * @param {Array<Object>} records - the blocks as the open read them
    * @param {number|null} revision - the note's content revision as the open read it
    * @param {number} seq - the page's save order when the open began
@@ -4554,6 +4562,7 @@ class BlockEditor {
   _rememberLoaded(records, revision, seq) {
     if (!this._drafts()) return;
     this._forgetIdleBases();
+    this._pane = null;
     const noteId = this.noteId;
     this._seen.set(noteId, {
       seq,
@@ -4799,9 +4808,11 @@ class BlockEditor {
    * @param {string} noteId
    * @param {Array<Object>} blocks - serialized, as a save writes them
    * @param {EditorTitle|null} title - the title set since the note's last save, if any
+   * @param {{preview: string, todoProgress: Object|null, text: string}} [meta] - what the editor
+   *   derived from `blocks`, when it has it already
    * @returns {Object|null} null when nothing changed since the base
    */
-  _closeDraftOf(noteId, blocks, title) {
+  _closeDraftOf(noteId, blocks, title, meta = this._computeSaveData(blocks)) {
     const seen = this._seen.get(noteId) || null;
     const { put: changed, moves } = seen ? this._saveChanges(noteId, blocks) : { put: blocks, moves: [] };
     const present = new Set(blocks.map((block) => block.id));
@@ -4828,7 +4839,6 @@ class BlockEditor {
     // (R160's N1)
     const own = seen ? ofDraft(seen.sent) : {};
     if (Object.keys(own).length > 0) issuedSaves.push({ blocks: own });
-    const meta = this._computeSaveData(blocks);
     return {
       noteId,
       base: {
@@ -4882,9 +4892,33 @@ class BlockEditor {
     for (const fields of edits) {
       if (!fields) continue;
       const id = this.documentClient.newId();
-      this._closingIds.set(fields.noteId, id);
-      drafts.write({ id, ...fields });
+      // Its note's closing save takes its id, and goes covered by it, only once it's written
+      if (drafts.write({ id, ...fields })) this._closingIds.set(fields.noteId, id);
     }
+  }
+
+  /**
+   * What a save tells the page's journal (#35 slice 3b). The closing save goes under the id of the
+   * close-time draft its editor wrote for the same edit, covered by it. Any other carries its edit,
+   * as the close-time draft of it on the base this pane last saw commit, with the saves the page
+   * issued since, and this pane's id, so the next page applies it by #33's rules if this one goes
+   * before it's answered: the document client makes the draft under the save's commandId. One
+   * that changes nothing since the base needs no entry, and a page that keeps no drafts gives none.
+   * A covered save names the pane too, once it has one, so its commit takes the pane's earlier
+   * entries for the note, as any other save's does.
+   * @param {EditorSaveState} state
+   * @param {{preview: string, todoProgress: Object|null, text: string}} meta
+   * @param {string|undefined} closingId - the id of the close-time draft written for the save's edit
+   * @returns {{commandId?: string, covered?: boolean, edit?: Object, pane?: string}|undefined}
+   */
+  _journalOptions(state, meta, closingId) {
+    const pane = this._pane || undefined;
+    if (closingId) return { commandId: closingId, covered: true, pane };
+    if (!this._drafts()) return undefined;
+    const edit = this._closeDraftOf(state.noteId, state.blocks, state.title, meta);
+    if (!edit) return { covered: true, pane };
+    if (!this._pane) this._pane = this.documentClient.newId();
+    return { edit, pane: this._pane };
   }
 
   /**
@@ -5225,13 +5259,14 @@ class BlockEditor {
       };
       pageSaves.set(state.noteId, [...(pageSaves.get(state.noteId) || []), state.issued]);
     }
-    const commandId = closing ? this._closingIds.get(state.noteId) : undefined;
-    if (commandId) this._closingIds.delete(state.noteId);
+    const closingId = closing ? this._closingIds.get(state.noteId) : undefined;
+    if (closingId) this._closingIds.delete(state.noteId);
+    const options = this._journalOptions(state, meta, closingId);
     // Open now, the command's first transaction opens before this returns
     const openAtStart = typeof this.documentClient.connectionOpen === 'function'
       ? this.documentClient.connectionOpen()
       : true;
-    return this.documentClient.saveContent(save, commandId ? { commandId } : undefined).then((outcome) => {
+    return this.documentClient.saveContent(save, options).then((outcome) => {
       if (outcome.kind === 'committed') state.committedRevision = typeof outcome.revision === 'number' ? outcome.revision : null;
       // The note had a title set by hand by the time it committed, so the generated one it carried was dropped
       if (outcome.kind === 'committed' && outcome.code === 'content-saved-title-kept') return 'title-kept';

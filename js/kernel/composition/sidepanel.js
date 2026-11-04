@@ -6,7 +6,7 @@
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { SIDEPANEL_HANDLERS } from '../core/application/handlers-sidepanel.js';
 import { applyingCloseDrafts, pageDrafts } from './close-drafts.js';
-import { kernelClient, pageHost } from './host.js';
+import { journalingClient, kernelClient, pageHost } from './host.js';
 
 /** @typedef {import('./host.js').PageHost} PageHost */
 /** @typedef {import('./close-drafts.js').Applier} Applier */
@@ -19,11 +19,11 @@ import { kernelClient, pageHost } from './host.js';
  * tab's edit, its whenReady resolves once the edit is applied, with the applier `load` hands
  * over, the `close-drafts-chunk` chunk Side Panel imports then (close-drafts.js, #33), so Side Panel
  * reads its notes with the edit in. It runs only what js/sidepanel.js and that apply send
- * (SIDEPANEL_HANDLERS).
+ * (SIDEPANEL_HANDLERS). The journal's chunk loads at idle once its first read is in, and applies
+ * the editor saves closed pages left (#35 slice 3b, host.js journalingClient).
  * @param {PageHost} [host]
  * @param {ReturnType<typeof pageDrafts>} [drafts]
  * @param {() => Promise<Applier>} [load]
- * @returns {ReturnType<typeof applyingCloseDrafts>}
  */
 export function createSidePanelClient(
   host = pageHost(),
@@ -31,5 +31,10 @@ export function createSidePanelClient(
   load = () => import('../core/application/close-drafts-chunk.js'),
 ) {
   const adapter = createIndexedDbAdapter({ ...host, mode: 'existing' });
-  return applyingCloseDrafts(kernelClient({ adapter, surface: 'sidepanel', handlers: SIDEPANEL_HANDLERS }), drafts, { load });
+  const client = applyingCloseDrafts(
+    kernelClient({ adapter, surface: 'sidepanel', handlers: SIDEPANEL_HANDLERS }),
+    drafts,
+    { load },
+  );
+  return journalingClient(client, 'sidepanel', () => import('./journal-chunk.js'), globalThis.requestIdleCallback);
 }

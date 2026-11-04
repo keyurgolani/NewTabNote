@@ -21,6 +21,9 @@
  *      rules, under `<opId>-apply` (slice 3b, the lead's call on #182), so the worker carries
  *      none of the applier. The drain leaves it, and still sweeps it after a delete for good. A
  *      save with no draft can't be replayed safely by anyone, so it's kept as a conflict record.
+ *      One a newer build wrote, or one under a tombstone the sweep keeps for, is held, and its
+ *      incident raised (the lead's answer to Q6): the code on its mark is what the pages leave it
+ *      by.
  * 3. What each answer does with its entry:
  *    - committed, a conflict (whose command the kernel kept), or a refusal that says the work is
  *      in (`note-exists`, `duplicate-block`, `block-of-another-note`): the entry goes;
@@ -31,26 +34,34 @@
  *    - an entry a newer build wrote (`unsupported-version`), or one naming an operation this build
  *      doesn't journal (`unknown-operation`): it stays for that build, and its incident is raised
  *      (the lead's answer to Q6);
- *    - unavailable, or no answer: the drain stops, and every entry left stays for the next one.
- *      A stop it can't retry, an `unavailable` that says so or a throw (`drain-failed`), would
- *      stop every drain at that entry, so it raises the entry's incident too, as a stop: the
- *      entry is still kept, so a capture is told nothing more. It still stops there, since going
- *      past it would break oldest first.
+ *    - unavailable, or no answer: the entry stays for the next drain. A code that says storage
+ *      itself can't answer (STORAGE_WIDE), or a throw at no entry, stops the drain there, with
+ *      every entry left. Any other holds back only the entry's note (the lead's call on 3b's
+ *      plan): its later entries wait behind it, so a note's entries still go oldest first, while
+ *      another note's go on past it. The drain answers `stopped`, with the stop's code, and names
+ *      each note it held back (`held`), which system.coordinatorHealth says. A stop it can't
+ *      retry, an `unavailable` that says so or a throw (`drain-failed`), would stop every drain
+ *      at that entry, so it raises the entry's incident too, as a stop: the entry is still kept,
+ *      so a capture is told nothing more. A stop it can retry raises it the same way on the third
+ *      drain in a row that stops at the entry, and never before.
  *
  * An incident is raised once for each entry and code: the entry keeps the code it was raised for
- * (`unreplayable`), and a drain that finds the same one again says nothing more. Where that mark
- * can't be written, as on a full disk, the context remembers what it raised for its life
- * (`raised`), so its next drain doesn't raise it again. The mark never keeps an entry from
- * replaying: a build that can read it replays it.
+ * (`unreplayable`), and a drain that finds the same one again says nothing more. The drains in a
+ * row that stopped at an entry on a code it can retry are counted on the same mark, as `{code,
+ * at, count}`, until the third raises it, and an incident raised there for anything else starts
+ * the count again. Where that mark can't be written, as on a full disk, the context remembers
+ * what it raised and counted for its life (`raised`, `stops`), so its next drain doesn't raise it
+ * again, and still counts. The mark never keeps an entry from replaying: a build that can read it
+ * replays it.
  *
- * What it answers holds counts and codes. `oldestOrphanedEntryAt` is when the oldest entry it
- * left whose owner is gone was written, an editor save's the pages haven't taken yet included,
- * which system.coordinatorHealth says.
+ * What it answers holds counts, codes and note ids. `oldestOrphanedEntryAt` is when the oldest
+ * entry it left whose owner is gone was written, an editor save's the pages haven't taken yet
+ * included, which system.coordinatorHealth says.
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
 import { upcastJournalEntry } from '../contracts/upcast.js';
-import { SWEPT_REASONS, isJournalRecord } from '../domain/journal.js';
+import { PAGES_APPLY, SAVE_VERSION, SWEPT_REASONS, isJournalRecord } from '../domain/journal.js';
 
 /** @typedef {import('../domain/journal.js').JournalRecord} JournalRecord */
 /** @typedef {import('../ports/journal.js').JournalStore} JournalStore */
@@ -83,21 +94,33 @@ import { SWEPT_REASONS, isJournalRecord } from '../domain/journal.js';
  *   is dropped.
  * @property {{has(key: string): boolean, add(key: string): unknown}} [raised]
  *   What this context raised already, by entry and code, which it keeps for its life
+ * @property {{get(opId: string): number | undefined, set(opId: string, count: number): unknown, delete(opId: string): unknown}} [stops]
+ *   How many drains in a row stopped at each entry on a code it can retry, by opId, which this
+ *   context keeps for its life
  * @property {(entry: JournalRecord) => void} [replayed]
  *   Told of each entry whose command is in now, once it's gone from the journal, as unreplayable
  *   is told
  */
 
 /**
+ * A note a drain held back, and the code it stopped at, at the note's oldest entry left
+ * @typedef {{noteId: string, code: string}} HeldNote
+ */
+
+/**
  * What a drain did
  * @typedef {object} DrainResult
- * @property {'empty' | 'drained' | 'stopped'} status - `stopped`: storage or the kernel couldn't answer
+ * @property {'empty' | 'drained' | 'stopped'} status
+ *   `stopped`: storage or the kernel couldn't answer, for the whole drain or at a note it held back
  * @property {string | null} code - why it stopped
  * @property {number} replayed - entries whose command is in now, run by this drain or before it
  * @property {number} swept - entries of notes deleted for good
  * @property {number} kept - entries kept as conflict records
  * @property {number} left - entries still in the journal
  * @property {number | null} oldestOrphanedEntryAt
+ * @property {HeldNote[]} held
+ *   The notes a stop at one of their entries held back, oldest first. A stop of the whole drain
+ *   names none: its code says why.
  */
 
 /**
@@ -110,10 +133,20 @@ const ALREADY_IN = Object.freeze(['note-exists', 'duplicate-block', 'block-of-an
 const NOT_THERE = 'note-not-found';
 
 /**
- * The journaled commands the pages replay, by type, which the drain leaves to them: an editor's
- * save, as the close-time draft its entry holds (slice 3b)
+ * The codes that say storage itself can't answer, so a stop on one stops the whole drain, at
+ * whichever entry it comes (the lead's call on 3b's plan). Any other code holds back only the
+ * entry's note.
  */
-const PAGES_REPLAY = Object.freeze({ saveNoteContent: true });
+const STORAGE_WIDE = Object.freeze([
+  'quota',
+  'transaction-failed',
+  'transaction-inactive',
+  'database-closed',
+  'open-failed',
+]);
+
+/** How many drains in a row stop at an entry on a code it can retry before its incident is raised */
+const STOPS_TO_RAISE = 3;
 
 /**
  * How the drain replays each journaled command, by its type: as written, under its own key. A
@@ -158,6 +191,7 @@ export async function drainJournal({
   clock,
   unreplayable,
   raised,
+  stops,
   replayed,
 }) {
   /** @type {DrainResult} */
@@ -169,6 +203,7 @@ export async function drainJournal({
     kept: 0,
     left: 0,
     oldestOrphanedEntryAt: null,
+    held: [],
   };
   /** @type {unknown[]} */
   let listed;
@@ -180,6 +215,8 @@ export async function drainJournal({
   if (listed.length === 0) return { ...result, status: 'empty' };
   /** @type {Set<string>} each entry gone from the journal, by opId */
   const gone = new Set();
+  /** @type {Set<string>} each note a stop at one of its entries holds back, by id */
+  const heldNotes = new Set();
   /** @type {ReadonlySet<string> | null} */
   let live = null;
   try {
@@ -199,18 +236,28 @@ export async function drainJournal({
       : live !== null && !live.has(entry.ownerSessionId);
 
   /**
+   * Whether `entry`'s incident for `code` is raised already: on its mark, which a count of stops
+   * isn't, or in what this context raised
+   * @param {JournalRecord} entry
+   * @param {string} code
+   */
+  const raisedFor = (entry, code) =>
+    (isRecord(entry.unreplayable) && entry.unreplayable.code === code && entry.unreplayable.count === undefined) ||
+    (raised !== undefined && raised.has(JSON.stringify([entry.opId, code])));
+
+  /**
    * Raises `entry`'s incident for `code` once, and keeps the code on the entry so a later drain
    * doesn't raise it again, and in `raised`, where the mark can't be written. Only an entry no
    * live context holds is marked, so a mark never puts back an entry its owner removed meanwhile.
+   * The mark it writes starts the count of stops at the entry again, as it does in `stops`.
    * @param {JournalRecord} entry
    * @param {string} code
    * @param {{stop?: boolean}} [how] - `stop` for a stop for good at an entry that's still kept
    */
   const raise = async (entry, code, how = {}) => {
-    if (entry.unreplayable && entry.unreplayable.code === code) return;
-    const key = JSON.stringify([entry.opId, code]);
-    if (raised && raised.has(key)) return;
-    if (raised) raised.add(key);
+    if (raisedFor(entry, code)) return;
+    if (raised) raised.add(JSON.stringify([entry.opId, code]));
+    if (stops) stops.delete(entry.opId);
     try {
       if (unreplayable) unreplayable(entry, code, how);
     } catch {
@@ -221,6 +268,53 @@ export async function drainJournal({
     } catch {
       // Without the mark, the next drain raises it again
     }
+  };
+
+  /**
+   * Counts a drain that stopped at `entry` on `code`, which it can retry, and raises the entry's
+   * incident for it, as a stop, on the third in a row (the lead's call on 3b's plan). The count is
+   * the mark's or this context's, whichever is higher, so it holds where the mark can't be written.
+   * @param {JournalRecord} entry
+   * @param {string} code
+   */
+  const counted = async (entry, code) => {
+    if (raisedFor(entry, code)) return;
+    const mark = entry.unreplayable;
+    const marked = isRecord(mark) && Number.isSafeInteger(mark.count) ? Number(mark.count) : 0;
+    const count = Math.max(marked, (stops && stops.get(entry.opId)) || 0) + 1;
+    if (count >= STOPS_TO_RAISE) {
+      await raise(entry, code, { stop: true });
+      return;
+    }
+    if (stops) stops.set(entry.opId, count);
+    try {
+      await journal.mark(entry.opId, { code, at: clock.now(), count });
+    } catch {
+      // This context's count still holds
+    }
+  };
+
+  /**
+   * A stop at `entry` on `code`: one that says storage itself can't answer stops the drain, and
+   * any other holds back the entry's note, which an entry with no note can't be. A stop it can't
+   * retry raises the entry's incident, as a stop, and one it can is counted. Answers true when
+   * the drain has to stop.
+   * @param {unknown} entry
+   * @param {string} code
+   * @param {boolean} canRetry
+   * @returns {Promise<boolean>}
+   */
+  const stopAt = async (entry, code, canRetry) => {
+    result.status = 'stopped';
+    result.code = code;
+    const wide = STORAGE_WIDE.includes(code);
+    if (!isJournalRecord(entry)) return true;
+    if (!canRetry) await raise(entry, code, { stop: true });
+    else if (!wide) await counted(entry, code);
+    if (wide || !isId(entry.noteId)) return true;
+    heldNotes.add(entry.noteId);
+    result.held.push({ noteId: entry.noteId, code });
+    return false;
   };
 
   /**
@@ -240,12 +334,7 @@ export async function drainJournal({
       command: isRecord(command) ? command : {},
     });
     if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
-      // One it can't retry would stop every drain here
-      if (outcome.kind === 'unavailable' && !outcome.retryable && isJournalRecord(entry))
-        await raise(entry, outcome.code, { stop: true });
-      result.status = 'stopped';
-      result.code = outcome.code;
-      return false;
+      return !(await stopAt(entry, outcome.code, outcome.kind === 'unknown' || outcome.retryable));
     }
     if (outcome.kind !== 'committed') {
       // Nowhere to keep it, so it stays where it is
@@ -286,72 +375,82 @@ export async function drainJournal({
       result.swept = swept.length;
     }
 
-    // 2. The replays, oldest first
+    // 2. The replays, oldest first, each note's behind any stop at its own
     for (const entry of listed) {
       deciding = null;
-      if (!isJournalRecord(entry)) {
-        // Malformed: kept as a conflict record when it has a key to keep it under
-        const opId = isRecord(entry) ? entry.opId : undefined;
-        if (isId(opId) && !(await keep(/** @type {any} */ (entry), 'invalid-payload'))) break;
-        continue;
-      }
-      if (gone.has(entry.opId) || entry.state !== 'submitted' || !orphaned(entry)) continue;
-      deciding = entry;
-      // An editor's save is the pages' to replay, but one with no draft, which no one can. An
-      // entry with no command goes on to the upcast, which reads it as malformed
-      if (isRecord(entry.command) && Object.hasOwn(PAGES_REPLAY, String(entry.command.type))) {
-        if (!isRecord(entry.draft) && !(await keep(entry, 'invalid-payload'))) break;
-        continue;
-      }
-      if (tombstones.has(entry.noteId)) {
-        await raise(entry, 'note-deleted');
-        continue;
-      }
-      const upcast = upcastJournalEntry({ v: entry.v, command: entry.command }, lookup);
-      if (!upcast.ok) {
-        if (upcast.code === 'invalid-payload') {
-          if (!(await keep(entry, 'invalid-payload'))) break;
-        } else {
-          await raise(entry, upcast.code);
-        }
-        continue;
-      }
-      const { command } = upcast;
-      const replay = Object.hasOwn(REPLAYS, String(command.type)) ? REPLAYS[String(command.type)] : null;
-      const sent = command.commandId === entry.opId && replay ? replay(command) : null;
-      if (!sent) {
-        if (!(await keep(entry, 'invalid-payload'))) break;
-        continue;
-      }
-      const outcome = await client.execute(sent);
-      if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
-        // One it can't retry would stop every drain here
-        if (outcome.kind === 'unavailable' && !outcome.retryable) await raise(entry, outcome.code, { stop: true });
-        result.status = 'stopped';
-        result.code = outcome.code;
-        break;
-      }
-      if (outcome.kind === 'rejected' && !ALREADY_IN.includes(outcome.code)) {
-        if (outcome.code === NOT_THERE || outcome.reason === 'policy') await raise(entry, outcome.code);
-        else if (!(await keep(entry, 'replay-refused'))) break;
-        continue;
-      }
-      // Its command is in, so a removal that throws leaves it for the next drain's ledger answer
-      deciding = null;
-      await journal.remove([entry.opId]);
-      gone.add(entry.opId);
-      result.replayed += 1;
       try {
-        if (replayed) replayed(entry);
-      } catch {
-        // Best effort, as unreplayable is
+        if (!isJournalRecord(entry)) {
+          // Malformed: kept as a conflict record when it has a key to keep it under
+          const opId = isRecord(entry) ? entry.opId : undefined;
+          if (isId(opId) && !(await keep(/** @type {any} */ (entry), 'invalid-payload'))) break;
+          continue;
+        }
+        if (gone.has(entry.opId) || entry.state !== 'submitted' || !orphaned(entry)) continue;
+        if (heldNotes.has(entry.noteId)) continue;
+        deciding = entry;
+        // An editor's save is the pages' to replay, unless no one can: one with no draft or no
+        // version is kept as a conflict record, and one under a tombstone the sweep keeps for, or
+        // one a newer build wrote, is held. An entry with no command goes on to the upcast, which
+        // reads it as malformed
+        if (isRecord(entry.command) && Object.hasOwn(PAGES_APPLY, String(entry.command.type))) {
+          if (!isRecord(entry.draft) || !Number.isSafeInteger(entry.v) || entry.v < 1) {
+            if (!(await keep(entry, 'invalid-payload'))) break;
+          } else if (tombstones.has(entry.noteId)) {
+            await raise(entry, 'note-deleted');
+          } else if (entry.v > SAVE_VERSION) {
+            await raise(entry, 'unsupported-version');
+          }
+          continue;
+        }
+        if (tombstones.has(entry.noteId)) {
+          await raise(entry, 'note-deleted');
+          continue;
+        }
+        const upcast = upcastJournalEntry({ v: entry.v, command: entry.command }, lookup);
+        if (!upcast.ok) {
+          if (upcast.code === 'invalid-payload') {
+            if (!(await keep(entry, 'invalid-payload'))) break;
+          } else {
+            await raise(entry, upcast.code);
+          }
+          continue;
+        }
+        const { command } = upcast;
+        const replay = Object.hasOwn(REPLAYS, String(command.type)) ? REPLAYS[String(command.type)] : null;
+        const sent = command.commandId === entry.opId && replay ? replay(command) : null;
+        if (!sent) {
+          if (!(await keep(entry, 'invalid-payload'))) break;
+          continue;
+        }
+        const outcome = await client.execute(sent);
+        if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
+          if (await stopAt(entry, outcome.code, outcome.kind === 'unknown' || outcome.retryable)) break;
+          continue;
+        }
+        if (outcome.kind === 'rejected' && !ALREADY_IN.includes(outcome.code)) {
+          if (outcome.code === NOT_THERE || outcome.reason === 'policy') await raise(entry, outcome.code);
+          else if (!(await keep(entry, 'replay-refused'))) break;
+          continue;
+        }
+        // Its command is in, so a removal that throws leaves it for the next drain's ledger answer
+        deciding = null;
+        await journal.remove([entry.opId]);
+        gone.add(entry.opId);
+        result.replayed += 1;
+        try {
+          if (replayed) replayed(entry);
+        } catch {
+          // Best effort, as unreplayable is
+        }
+      } catch (error) {
+        // A throw at no entry, as a removal once its command is in, stops the drain below
+        if (!deciding) throw error;
+        if (await stopAt(deciding, stopCode(error), retryable(error))) break;
       }
     }
   } catch (error) {
     result.status = 'stopped';
     result.code = stopCode(error);
-    // A throw at an entry would stop every drain there, unless it says it may get through
-    if (deciding && !retryable(error)) await raise(deciding, result.code, { stop: true });
   }
 
   // What it leaves, and the oldest of that no live context holds

@@ -28,7 +28,14 @@ import { applyingCloseDrafts, holdsKeys, pageDrafts } from './close-drafts.js';
 import { createDocumentClient } from './document.js';
 import { createSettingsClient } from './settings.js';
 import { PROVIDER_SETTING_KEYS, SYNC_SETTING_KEYS, createHolderSettings } from './holder-settings.js';
-import { chromeBackupSettings, chromeSettingsChanges, kernelClient, pageHost, wakeWorkerToPurge } from './host.js';
+import {
+  chromeBackupSettings,
+  chromeSettingsChanges,
+  journalingClient,
+  kernelClient,
+  pageHost,
+  wakeWorkerToPurge,
+} from './host.js';
 import { lazyFailureEvents } from './lazy-failure-events.js';
 import { createNoteRemoval } from './removal.js';
 import { createStorageFacade } from './storage-facade.js';
@@ -455,15 +462,22 @@ const loadCloseDrafts = () => import('../core/application/close-drafts-chunk.js'
  * or an untold list, which it reads for its toasts (holdsNewTabWork), so its start loads none of
  * it (#147's heap, the lead's call). Its apply also takes both untold lists, under the drafts'
  * lock, so of two new tabs starting together one tells each entry (Q-B7), and
- * `closeDraftToasts` answers the toasts for what they held once the apply is done (V3).
+ * `closeDraftToasts` answers the toasts for what they held once the apply is done (V3). Its
+ * commands go through the journal once the journal's chunk is in (#35 slice 3b, host.js
+ * journalingClient), which the page's first journaled command, or its first read at idle, loads.
  * @param {IndexedDbAdapter} adapter
- * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<NewTabApplier>}} [page]
- *   the page's drafts and its wake, from its globals, and the applier's load
+ * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<NewTabApplier>, journal?: () => Promise<import('./host.js').JournalChunk<Client>>}} [page]
+ *   the page's drafts and its wake, from its globals, the applier's load, and the journal chunk's
  * @returns {NewTabPageClient}
  */
 export function createNewTabPageClient(
   adapter,
-  { drafts = pageDrafts(), wake = () => wakeWorkerToPurge(), load = loadCloseDrafts } = {},
+  {
+    drafts = pageDrafts(),
+    wake = () => wakeWorkerToPurge(),
+    load = loadCloseDrafts,
+    journal = () => import('./journal-chunk.js'),
+  } = {},
 ) {
   const client = withCloseDraftClears(withPurgeWake(createNewTabClient(adapter), wake), {
     storage: drafts.storage,
@@ -481,7 +495,12 @@ export function createNewTabPageClient(
       applyCloseDrafts: options => applier.applyCloseDrafts({ ...options, tell: true }),
     };
   };
-  const page = applyingCloseDrafts(client, drafts, { load: telling, holds: holdsNewTabWork });
+  const page = journalingClient(
+    applyingCloseDrafts(client, drafts, { load: telling, holds: holdsNewTabWork }),
+    'newtab',
+    journal,
+    globalThis.requestIdleCallback,
+  );
   return Object.freeze({
     ...page,
     async closeDraftToasts() {

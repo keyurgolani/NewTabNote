@@ -13,14 +13,17 @@
  * - drain(): the coordinator runs it once it's ready, and again when a page wakes the worker
  *   (DRAIN_MESSAGE), under Web Lock `journal.replay`. One asked for while one runs runs once
  *   more after it, as the recovery-point purge does, so an entry written meanwhile is read too.
- *   A profile with no journal database opens nothing and makes none.
+ *   A profile with no journal database opens nothing and makes none. What its last drain left,
+ *   the oldest orphaned entry and the notes it held back (held(), slice 3b), it keeps for
+ *   system.coordinatorHealth.
  * - What the drain can't replay is `journal.entry-unreplayable` (#20, the lead's answer to the
  *   plan's Q8), on the coordinator's provider, and a capture among them is told to `notify`, with
  *   why. A stop for good at a capture raises the incident and tells it nothing, since it's still
- *   kept (the lead's call on #182). What its drains raised the worker keeps for its life, so a
- *   mark the journal can't write doesn't raise it again. A capture it adds is
- *   `capture.committed`, as one the worker adds at once is, so it resolves the capture incident
- *   its failure raised.
+ *   kept (the lead's call on #182). What its drains raised, and the stops they counted, the
+ *   worker keeps for its life, so a mark the journal can't write doesn't raise it again, and the
+ *   third drain in a row that stops at an entry raises it all the same (slice 3b). A capture it
+ *   adds is `capture.committed`, as one the worker adds at once is, so it resolves the capture
+ *   incident its failure raised.
  *
  * Building it opens nothing, and nothing here throws into the worker: a journal that can't be
  * written leaves the capture to run as it did before slice 3, and says so on the console.
@@ -58,6 +61,7 @@ export { DRAIN_MESSAGE };
  * @property {(opId: string) => void} release - its command didn't commit, so the entry stays for the drain
  * @property {(client: DrainClient) => Promise<DrainResult | null>} drain - never rejects; null with no journal to read
  * @property {() => number | null} oldestOrphanedEntryAt - what the last drain left, for system.coordinatorHealth
+ * @property {() => DrainResult['held']} held - the notes the last drain held back, for system.coordinatorHealth (slice 3b)
  */
 
 /**
@@ -137,9 +141,14 @@ export function createWorkerJournal({
   let owner = null;
   /** @type {number | null} */
   let oldest = null;
+  /** @type {DrainResult['held']} what the last drain held back */
+  let lastHeld = [];
   /** What this worker's drains raised, by entry and code, for its life (journal-drain.js) */
   /** @type {Set<string>} */
   const raised = new Set();
+  /** How many drains in a row stopped at each entry on a code they can retry, for its life */
+  /** @type {Map<string, number>} */
+  const stops = new Map();
 
   /**
    * Takes this instance's owner lock once, and holds it for as long as the worker lives.
@@ -230,6 +239,7 @@ export function createWorkerJournal({
   const once = async client => {
     if (!(await stores.journalExists())) {
       oldest = null;
+      lastHeld = [];
       return null;
     }
     const run = async () => {
@@ -243,12 +253,14 @@ export function createWorkerJournal({
         clock,
         unreplayable,
         raised,
+        stops,
         replayed,
       });
     };
     const manager = lockManager();
     const result = manager ? await manager.request(REPLAY_LOCK, { mode: 'exclusive' }, run) : await run();
     oldest = result.oldestOrphanedEntryAt;
+    lastHeld = result.held;
     return result;
   };
 
@@ -323,5 +335,6 @@ export function createWorkerJournal({
       return running;
     },
     oldestOrphanedEntryAt: () => oldest,
+    held: () => lastHeld.map(note => ({ ...note })),
   });
 }

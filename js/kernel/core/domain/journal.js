@@ -23,7 +23,9 @@
  *   Web Lock `journal.owner.<ownerSessionId>`, and the drain leaves its entries alone.
  * - `state` is `submitted` for a command sent, which the drain commits, or `draft` for input
  *   not yet sent (#2's), which it never does.
- * - `unreplayable` is set once the drain has raised its incident: `{code, at}`.
+ * - `unreplayable` is set once the drain has raised its incident: `{code, at}`. Before that, it's
+ *   `{code, at, count}` while the drain counts the drains in a row that stopped at the entry on a
+ *   code it can retry, the third of which raises it (slice 3b).
  *
  * An entry holds what the user wrote, as a close-time draft and a conflict record do. It's
  * session state: never in a backup, an export, sync, or diagnostics, and it's deleted once its
@@ -31,6 +33,7 @@
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
+import { COMMANDS } from '../contracts/commands.js';
 
 /** @typedef {import('../contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('./close-draft.js').CloseDraft} CloseDraft */
@@ -48,7 +51,7 @@ import { isId, isRecord } from '../contracts/checks.js';
  * @property {number} createdAt
  * @property {string} ownerSessionId
  * @property {'draft' | 'submitted'} state
- * @property {{code: string, at: number}} [unreplayable]
+ * @property {{code: string, at: number, count?: number}} [unreplayable]
  */
 
 /** The Web Lock the drain holds while it replays, which #2's Moment and #13's resume take too */
@@ -122,6 +125,34 @@ export function isJournalRecord(value) {
   if (value.state !== 'submitted' && value.state !== 'draft') return false;
   return Number.isFinite(value.createdAt) && Number.isFinite(value.seq);
 }
+
+/**
+ * The journaled commands the pages apply, by type, which the drain leaves to them: an editor's
+ * save, as its draft (slice 3b)
+ */
+export const PAGES_APPLY = Object.freeze({ saveNoteContent: true });
+
+/** The catalog version of an editor's save this build applies, past which a newer build wrote it */
+export const SAVE_VERSION = COMMANDS.saveNoteContent.version;
+
+/** The code the worker marks a save with when a tombstone the sweep keeps for holds it */
+const HELD = 'note-deleted';
+
+/**
+ * Whether `entry` is an editor save the pages apply (application/journal-apply.js): sent, at this
+ * build's version, with a draft, and not one the worker holds. A page's start loads the apply
+ * only for one (composition/journal-chunk.js).
+ * @param {unknown} entry
+ * @returns {entry is JournalRecord}
+ */
+export const isPagesSave = entry =>
+  isJournalRecord(entry) &&
+  entry.state === 'submitted' &&
+  isRecord(entry.command) &&
+  Object.hasOwn(PAGES_APPLY, String(entry.command.type)) &&
+  entry.v === SAVE_VERSION &&
+  entry.draft !== undefined &&
+  !(isRecord(entry.unreplayable) && entry.unreplayable.code === HELD);
 
 /**
  * `entries` oldest first: by when each was written, then by its writer's count, then by key,

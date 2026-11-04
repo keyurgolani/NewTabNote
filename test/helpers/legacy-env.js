@@ -1201,12 +1201,16 @@ function testDocumentClient(client) {
  * starts reading. It takes test/helpers/page-module.js, so node runs with
  * --experimental-vm-modules (npm test passes it).
  * @param {ReturnType<typeof createLegacyEnv>} env
- * @param {{onListQuery?: (query: Object) => void, kernelNow?: () => number, pageNow?: () => number, zone?: string}} [options]
- *   told of each query the note list makes, the kernel's and the document client's clocks, and
- *   the zone both take today's Daily Note in
+ * @param {{onListQuery?: (query: Object) => void, kernelNow?: () => number, pageNow?: () => number, zone?: string,
+ *   onExecute?: (command: Object, options: Object|undefined) => void,
+ *   through?: (command: Object, options: Object|undefined, execute: (command: Object) => Promise<Object>) => Promise<Object>}} [options]
+ *   told of each query the note list makes, the kernel's and the document client's clocks, the
+ *   zone both take today's Daily Note in, told of each command the page's client is handed,
+ *   with what it carries for the journal, and what sends each one, with that and the kernel's
+ *   own execute, as a page's journaling does (#35 slice 3b)
  * @returns {Promise<Object>} the client
  */
-async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } = {}) {
+async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone, onExecute, through } = {}) {
   const { loadPageModule } = require('./page-module');
   const { pageClientsFor } = await loadPageModule(env, 'test/helpers/editor-client.mjs');
   const { kernel, documentClient, noteList, removalFor, settingsClient, storageState, recovery, validateBackup, stores } = pageClientsFor({
@@ -1215,6 +1219,8 @@ async function startEditorClient(env, { onListQuery, kernelNow, pageNow, zone } 
     kernelNow,
     pageNow,
     zone,
+    onExecute,
+    through,
   });
   const failure = await kernel.whenReady();
   if (failure) throw new Error(`the page's kernel didn't start: ${failure.code}`);

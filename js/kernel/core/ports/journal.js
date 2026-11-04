@@ -35,7 +35,7 @@
  * @property {() => Promise<void>} open
  * @property {(entry: JournalRecord) => Promise<void>} put - writes the entry, or replaces the one under its opId
  * @property {(opIds: readonly string[]) => Promise<void>} remove - the entries under these opIds, those there are
- * @property {(opId: string, unreplayable: {code: string, at: number}) => Promise<void>} mark
+ * @property {(opId: string, unreplayable: {code: string, at: number, count?: number}) => Promise<void>} mark
  *   Sets the entry's `unreplayable` (domain/journal.js) in the transaction that reads it, so an
  *   entry removed meanwhile stays removed
  * @property {() => Promise<JournalRecord[]>} list - every entry, oldest first (domain/journal.js, inJournalOrder)

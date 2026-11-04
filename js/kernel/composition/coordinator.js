@@ -39,9 +39,10 @@
  * check: after the start, never inside it, so a hello held while it starts never waits for a
  * drain, and one that comes during a drain is welcomed `ready` at once. drain() runs one more
  * when a page wakes the worker for it. system.coordinatorHealth says when the oldest entry the
- * last drain left with no live owner was written.
+ * last drain left with no live owner was written, and names the notes it held back (slice 3b).
  */
 
+import { HELD_NOTES_NAMED } from '../core/contracts/operations/system-coordinator-health.js';
 import { failed, ready, unavailable } from '../core/contracts/outcomes.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { randomIds } from './messaging.js';
@@ -59,8 +60,13 @@ import { randomIds } from './messaging.js';
  */
 
 /**
- * The worker's journal, as the coordinator drains it (./journal.js)
- * @typedef {{drain(client: Client): Promise<unknown>, oldestOrphanedEntryAt(): number | null}} CoordinatorJournal
+ * The worker's journal, as the coordinator drains it (./journal.js): `held` is what its last drain
+ * held back, which an older journal can't say
+ * @typedef {{
+ *   drain(client: Client): Promise<unknown>,
+ *   oldestOrphanedEntryAt(): number | null,
+ *   held?: () => Array<{noteId: string, code: string}>,
+ * }} CoordinatorJournal
  */
 
 /**
@@ -436,6 +442,23 @@ export function createCoordinator({
     }
   };
 
+  /**
+   * The notes the last drain held back, the first HELD_NOTES_NAMED by id and the code each
+   * stopped at, with the total of every one held (slice 3b), or nothing while none is held, so the
+   * answer is as before then. A journal that can't say names none.
+   * @returns {{held?: NonNullable<CoordinatorHealth['held']>}}
+   */
+  const heldNotes = () => {
+    try {
+      const list = entries && typeof entries.held === 'function' ? entries.held() : [];
+      if (!Array.isArray(list) || list.length === 0) return {};
+      const notes = list.map(({ noteId, code }) => ({ noteId, code }));
+      return { held: { total: notes.length, notes: notes.slice(0, HELD_NOTES_NAMED) } };
+    } catch {
+      return {};
+    }
+  };
+
   /** @returns {CoordinatorStatus} */
   const status = () => {
     if (state === 'ready') return { status: 'ready' };
@@ -457,6 +480,7 @@ export function createCoordinator({
       })),
       oldestOrphanedEntryAt: oldestOrphaned(),
       migration: migrationNow(),
+      ...heldNotes(),
     }),
     client: () => kernel || unbuilt,
     async installed(installReason) {

@@ -647,18 +647,24 @@ describe("the coordinator's integrity check (#35 slice 1, the lead's Q2)", () =>
 
 /**
  * A worker journal whose drains the test holds open, each until it calls `release`, and whose
- * oldest orphaned entry it sets
+ * oldest orphaned entry, and the notes its last drain held back, it sets
  */
 function heldJournal() {
   /** @type {Array<{client: unknown, release: () => void}>} */
   const drains = [];
   /** @type {number | null} */
   let oldest = null;
+  /** @type {unknown} */
+  let heldBack = [];
   return {
     drains,
     /** @param {number | null} at */
     setOldest(at) {
       oldest = at;
+    },
+    /** @param {unknown} notes */
+    setHeld(notes) {
+      heldBack = notes;
     },
     journal: {
       /** @param {unknown} client */
@@ -668,6 +674,7 @@ function heldJournal() {
         });
       },
       oldestOrphanedEntryAt: () => oldest,
+      held: () => /** @type {any} */ (heldBack),
     },
   };
 }
@@ -748,6 +755,30 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
     assert.equal(coordinator.health().oldestOrphanedEntryAt, null);
   });
 
+  it('names the notes its last drain held back, each by id and why, at most 10 with the total, and says nothing of them while none is held (slice 3b)', async () => {
+    const kernel = fakeKernel();
+    const held = heldJournal();
+    const { coordinator } = coordinatorOn(kernel, { journal: held.journal });
+    // As an older worker answers
+    assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
+    held.setHeld([{ noteId: 'n1', code: 'timed-out' }]);
+    assert.deepEqual(coordinator.health().held, {
+      total: 1,
+      notes: [{ noteId: 'n1', code: 'timed-out' }],
+    });
+    const many = Array.from({ length: 12 }, (_, index) => ({ noteId: `n${index}`, code: 'not-cloneable' }));
+    held.setHeld(many);
+    assert.deepEqual(coordinator.health().held, { total: 12, notes: many.slice(0, 10) });
+    // Ids and codes only, never what a note holds
+    held.setHeld([{ noteId: 'n1', code: 'timed-out', text: 'Call the plumber' }]);
+    assert.deepEqual(coordinator.health().held, {
+      total: 1,
+      notes: [{ noteId: 'n1', code: 'timed-out' }],
+    });
+    held.setHeld([]);
+    assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
+  });
+
   it('answers the same when its journal throws or rejects', async () => {
     for (const journal of [
       {
@@ -755,6 +786,9 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
           throw new Error('the journal is broken');
         },
         oldestOrphanedEntryAt: () => {
+          throw new Error('the journal is broken');
+        },
+        held: () => {
           throw new Error('the journal is broken');
         },
       },
@@ -768,6 +802,8 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
       await turns();
       assert.deepEqual(coordinator.status(), { status: 'ready' });
       assert.equal(coordinator.health().oldestOrphanedEntryAt, null);
+      // A journal that can't say what it held, or an older one that has no say, names none
+      assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
       assert.equal(await coordinator.drain(), null);
     }
   });

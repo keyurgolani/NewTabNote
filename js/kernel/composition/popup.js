@@ -6,7 +6,7 @@
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { POPUP_HANDLERS } from '../core/application/handlers-popup.js';
 import { applyingCloseDrafts, pageDrafts } from './close-drafts.js';
-import { kernelClient, pageHost } from './host.js';
+import { journalingClient, kernelClient, pageHost } from './host.js';
 
 /** @typedef {import('./host.js').PageHost} PageHost */
 /** @typedef {import('./close-drafts.js').Applier} Applier */
@@ -20,11 +20,11 @@ import { kernelClient, pageHost } from './host.js';
  * every call answers `reload-required`. When the page holds a closing tab's edit, its whenReady
  * resolves once the edit is applied, with the applier `load` hands over, the `close-drafts-chunk`
  * chunk Popup imports then (close-drafts.js, #33), so Popup lists its notes with the edit in. It
- * runs only what js/popup.js and that apply send (POPUP_HANDLERS).
+ * runs only what js/popup.js and that apply send (POPUP_HANDLERS). Its quick note goes through the
+ * journal once the journal's chunk is in (#35 slice 3b, host.js journalingClient).
  * @param {PageHost} [host]
  * @param {ReturnType<typeof pageDrafts>} [drafts]
  * @param {() => Promise<Applier>} [load]
- * @returns {ReturnType<typeof applyingCloseDrafts>}
  */
 export function createPopupClient(
   host = pageHost(),
@@ -32,5 +32,8 @@ export function createPopupClient(
   load = () => import('../core/application/close-drafts-chunk.js'),
 ) {
   const adapter = createIndexedDbAdapter({ ...host, mode: 'existing' });
-  return applyingCloseDrafts(kernelClient({ adapter, surface: 'popup', handlers: POPUP_HANDLERS }), drafts, { load });
+  const client = applyingCloseDrafts(kernelClient({ adapter, surface: 'popup', handlers: POPUP_HANDLERS }), drafts, {
+    load,
+  });
+  return journalingClient(client, 'popup', () => import('./journal-chunk.js'), globalThis.requestIdleCallback);
 }
