@@ -5,11 +5,12 @@
  * - The page's journaling (core/application/journaling.js), on `NewTabNoteJournal`, which it opens
  *   only once it's needed: at its start when the database is there, and otherwise at the first
  *   entry it writes, so a profile with no journal opens nothing and makes none until it does.
- * - The entries closed pages left. When an editor save is among them, it loads the apply
- *   (core/application/journal-apply.js), from the `close-drafts-chunk` chunk, which the apply's
- *   own command loads anyway, so a start with nothing to apply loads none of it. When an entry the
- *   worker replays or keeps is among them, or the apply leaves one to it, it wakes the worker's
- *   drain (DRAIN_MESSAGE), once.
+ * - The entries closed pages left. When an editor save the apply takes is among them, it loads the
+ *   apply (core/application/journal-apply.js), from the `close-drafts-chunk` chunk, which the
+ *   apply's own command loads anyway, so a start with nothing to apply loads none of it, and
+ *   takes no DRAFTS_LOCK: a newer build's save, or one the worker holds, is left as it is. When an
+ *   entry the worker replays or keeps is among them, or the apply leaves one to it, it wakes the
+ *   worker's drain (DRAIN_MESSAGE), once.
  *
  * The page's globals are read when it starts, unless a test passes them. Nothing here throws into
  * the page: a journal that can't be read leaves the entries for the next start, and says so on the
@@ -19,7 +20,7 @@
 import { inContextStores } from '../adapters/in-context.js';
 import { createJournaling } from '../core/application/journaling.js';
 import { isRecord } from '../core/contracts/checks.js';
-import { DRAIN_MESSAGE, OWNER_LOCK_PREFIX, isJournalRecord } from '../core/domain/journal.js';
+import { DRAIN_MESSAGE, OWNER_LOCK_PREFIX, PAGES_APPLY, isJournalRecord, isPagesSave } from '../core/domain/journal.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { pageDrafts } from './close-drafts.js';
 
@@ -89,11 +90,9 @@ async function liveOwners(locks) {
   return live;
 }
 
-/** The journaled commands the pages apply, by type: an editor's save, as its draft */
-const PAGES_APPLY = Object.freeze({ saveNoteContent: true });
-
 /**
- * Whether `entry` is an editor save with a draft, which the pages apply
+ * Whether `entry` is an editor save with a draft: the pages apply it, or leave it as it is when
+ * it's a newer build's or one the worker holds, so the drain has nothing to do for it either way
  * @param {JournalRecord} entry
  */
 const isEditorSave = entry =>
@@ -156,7 +155,7 @@ export function startPageJournal(
       );
       /** @type {JournalApplyResult | null} */
       let result = null;
-      if (left.some(isEditorSave)) {
+      if (left.some(isPagesSave)) {
         const { applyJournalSaves, closeDraftStore } = await loadApplier();
         result = await applyJournalSaves({
           journal,

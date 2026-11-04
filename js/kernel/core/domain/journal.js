@@ -33,6 +33,7 @@
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
+import { COMMANDS } from '../contracts/commands.js';
 
 /** @typedef {import('../contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('./close-draft.js').CloseDraft} CloseDraft */
@@ -124,6 +125,31 @@ export function isJournalRecord(value) {
   if (value.state !== 'submitted' && value.state !== 'draft') return false;
   return Number.isFinite(value.createdAt) && Number.isFinite(value.seq);
 }
+
+/** The journaled commands the pages apply, by type: an editor's save, as its draft (slice 3b) */
+export const PAGES_APPLY = Object.freeze({ saveNoteContent: true });
+
+/** The catalog version of an editor's save this build applies */
+const SAVE_VERSION = COMMANDS.saveNoteContent.version;
+
+/** The code the worker marks a save with when a tombstone the sweep keeps for holds it */
+const HELD = 'note-deleted';
+
+/**
+ * Whether `entry` is an editor save the pages apply (application/journal-apply.js): sent, at this
+ * build's version, with a draft, and not one the worker holds. A page's start loads the apply
+ * only for one (composition/journal-chunk.js).
+ * @param {unknown} entry
+ * @returns {entry is JournalRecord}
+ */
+export const isPagesSave = entry =>
+  isJournalRecord(entry) &&
+  entry.state === 'submitted' &&
+  isRecord(entry.command) &&
+  Object.hasOwn(PAGES_APPLY, String(entry.command.type)) &&
+  entry.v === SAVE_VERSION &&
+  entry.draft !== undefined &&
+  !(isRecord(entry.unreplayable) && entry.unreplayable.code === HELD);
 
 /**
  * `entries` oldest first: by when each was written, then by its writer's count, then by key,

@@ -34,11 +34,9 @@
  * browser API: the ports come in.
  */
 
-import { isRecord } from '../contracts/checks.js';
-import { COMMANDS } from '../contracts/commands.js';
 import { DRAFTS_LOCK, recoveredIdOf } from '../domain/close-draft-keys.js';
 import { isCloseDraft } from '../domain/close-draft.js';
-import { isJournalRecord } from '../domain/journal.js';
+import { isPagesSave } from '../domain/journal.js';
 
 /** @typedef {import('../domain/journal.js').JournalRecord} JournalRecord */
 /** @typedef {import('../domain/close-draft.js').CloseDraft} CloseDraft */
@@ -71,30 +69,6 @@ import { isJournalRecord } from '../domain/journal.js';
  * @property {Pick<DraftStore, 'tell' | 'tellSaved'>} store - the untold lists the new tab's toasts read
  * @property {() => void} wake - wakes the worker's drain
  */
-
-/** The journaled commands the pages apply, by type: an editor's save, as its draft */
-const PAGES_APPLY = Object.freeze({ saveNoteContent: true });
-
-/** The catalog version of an editor's save this build applies */
-const SAVE_VERSION = COMMANDS.saveNoteContent.version;
-
-/** The code the worker marks a save with when a tombstone the sweep keeps for holds it */
-const HELD = 'note-deleted';
-
-/**
- * Whether `entry` is an editor save the pages apply: sent, at this build's version, with a draft,
- * and not one the worker holds
- * @param {unknown} entry
- * @returns {entry is JournalRecord}
- */
-const isPagesSave = entry =>
-  isJournalRecord(entry) &&
-  entry.state === 'submitted' &&
-  isRecord(entry.command) &&
-  Object.hasOwn(PAGES_APPLY, String(entry.command.type)) &&
-  entry.v === SAVE_VERSION &&
-  entry.draft !== undefined &&
-  !(isRecord(entry.unreplayable) && entry.unreplayable.code === HELD);
 
 /**
  * Whether `later` covers `entry`: one the same page's pane wrote of the same note after it, by the
