@@ -157,6 +157,54 @@ describe("Popup's quick note", () => {
       content: '', name: 'Call the plumber', noteId: saved.id, updatedAt: saved.updatedAt,
     });
   });
+
+  // #35 slice 3b: a quick note the kernel couldn't take now may be kept in the journal, under its
+  // ids, for the drain. Another Enter of the same text sends it again under those ids, so it's
+  // made once, whichever lands. New text is another note, under new ids.
+  it('an Enter after an answer that may land later sends the same note under the same ids, and new text, or the same text once it landed, gets new ones (#35 slice 3b)', async () => {
+    const { els, recent } = await popup({ canvases: notes() });
+    const { IDBObjectStore } = require('fake-indexeddb');
+    const original = IDBObjectStore.prototype.put;
+    /** @type {string[]} the id of each note record a quick note put, in order, as often as it's put */
+    const puts = [];
+    let failing = 2;
+    IDBObjectStore.prototype.put = function put(value, key) {
+      if (this.name !== 'canvases' || !value || typeof value.name !== 'string') return original.call(this, value, key);
+      puts.push(value.id);
+      // The first two fail as a full disk does, so the kernel answers that they aren't in
+      if (failing > 0) {
+        failing -= 1;
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      return original.call(this, value, key);
+    };
+    try {
+      const input = els['quick-note-input'];
+      /** Presses Enter, and waits until it's answered: `count` note records put, and the input back */
+      const enter = async (/** @type {number} */ count, /** @type {string} */ message) => {
+        input.dispatchEvent({ type: 'keydown', key: 'Enter' });
+        await waitFor(() => puts.length >= count && !input.disabled, { message });
+      };
+      input.value = 'Call the plumber';
+      await enter(1, 'the first went, and failed');
+      assert.equal(input.value, 'Call the plumber', 'kept for another Enter');
+      // Other text is another note, under new ids
+      input.value = 'Water the plants';
+      await enter(2, 'the second went, and failed');
+      assert.notEqual(puts[1], puts[0], 'new text, new ids');
+      // The same text again: the same note, under the same ids
+      await enter(3, 'the third went');
+      await waitFor(() => recent()[0] === 'Water the plants', { message: 'the third landed' });
+      assert.deepEqual([...new Set(puts.slice(1))], [puts[1]], 'the same note, under the same ids');
+      // Once it's in, the same text again is another note, under new ids
+      const landed = puts.length;
+      input.value = 'Water the plants';
+      await enter(landed + 1, 'the fourth went');
+      assert.notEqual(puts[landed], puts[1], 'a new note, under new ids');
+    } finally {
+      IDBObjectStore.prototype.put = original;
+    }
+  });
 });
 
 describe('what Side Panel shows', () => {
