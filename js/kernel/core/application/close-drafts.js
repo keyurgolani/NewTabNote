@@ -21,7 +21,8 @@
  *   residue saved into the note
  * - `close-draft-recovered`: its recovered note, which it names when it made it now, and
  *   doesn't when an earlier start made it (rule 0)
- * - `close-draft-dropped`: nothing to write, or deletes alone over a note changed since
+ * - `close-draft-dropped`: nothing to write, deletes alone over a note changed since, or a draft
+ *   whose closing save committed under its id, which took its edit in (#6)
  * - `close-draft-caught-up`: dropped, with the record's preview and to-do progress made again
  *   from its blocks, which a delete that committed alone, or 1.4.x's closing write of blocks,
  *   left behind (3.1 (a)). The record's revision and `updatedAt` stay as they were.
@@ -40,6 +41,18 @@
  *
  * It carries no expected revision: its own base check runs inside its transaction
  * (test/kernel/write-guards.mjs).
+ *
+ * Before its unit runs, it asks the adapter's ledger whether the closing save its draft's id keys
+ * committed: the editor gives a note's closing save the id of the close-time draft it wrote for
+ * the same edit (js/editor.js, _writeCloseDraft). That save took the draft's edit in, its text,
+ * moves, name and links, so a draft whose closing save committed is dropped, whatever another
+ * writer did to the note since, where #33's rules would put the closing page's copy back over that
+ * writer's (#181's S2). The ledger answers by the key alone, since nothing here can make the
+ * save's command again. Its unit still runs: a note deleted for good since answers gone, rule 0
+ * holds, and a record that lags its blocks catches up, with nothing else written. A delete of the
+ * page's that failed goes with the draft, as Q5 drops deletes alone over a note changed since. A
+ * kept conflict, no record, an adapter with no ledger, and a read that fails apply the draft by
+ * the rules, so no draft is dropped on a read that can't answer.
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
@@ -64,6 +77,7 @@ import { unitsWork } from './work.js';
 /** @typedef {import('../ports/repository.js').Tx} Tx */
 /** @typedef {import('../ports/repository.js').Unit} Unit */
 /** @typedef {import('../ports/repository.js').StoreName} StoreName */
+/** @typedef {import('../ports/repository.js').KernelAdapter} KernelAdapter */
 
 /**
  * @template {import('../contracts/commands.js').CommandType} T
@@ -123,11 +137,28 @@ async function replaceLinksIn(tx, noteId, names, { now, nextId }) {
   for (const toNoteId of targets) tx.put('links', { id: nextId(), fromNoteId: noteId, toNoteId, createdAt: now });
 }
 
+/**
+ * What the adapter's ledger says of the closing save `id` keys, or `absent` when it has no
+ * ledger or its read fails
+ * @param {KernelAdapter} adapter
+ * @param {string} id
+ * @returns {Promise<string>}
+ */
+async function closingSaveOf(adapter, id) {
+  try {
+    return adapter.ledger ? (await adapter.ledger.status(id)).status : 'absent';
+  } catch {
+    return 'absent';
+  }
+}
+
 /** @type {{applyCloseDraft: CommandHandler<'applyCloseDraft'>}} */
 export const closeDraftCommands = {
   async applyCloseDraft(command, { adapter, clock, ids }) {
     const { draft } = command;
     if (!isCloseDraft(draft)) return rejected('validation', 'invalid-command');
+    // Its closing save took its edit in (#6)
+    const closed = (await closingSaveOf(adapter, draft.id)) === 'committed';
     // The Trash's keeping time lives outside the note stores, so it's read before the unit
     // runs, as runTrashCleanup reads it: a recovered note in the Trash says how long it stays
     const { trashRetention } = await adapter.readSettings('preferences', ['trashRetention']);
@@ -163,7 +194,7 @@ export const closeDraftCommands = {
           return;
         }
         const own = await tx.getAllByIndex('blocks', 'canvasId', noteId);
-        if (decision.kind === 'dropped') {
+        if (decision.kind === 'dropped' || closed) {
           // The record catches up with its blocks, its revision and updatedAt as they were
           const { preview, todoProgress } = noteSaveMetadata(inBlockOrder(own));
           const lags = preview !== note.preview || !sameProgress(todoProgress, note.todoProgress);

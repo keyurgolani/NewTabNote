@@ -54,8 +54,10 @@
  * together, and only over orders the page knows the blocks by: the one its base had, or one its
  * own saves gave. A block at any other order is another writer's reorder since, and then none
  * goes in, so that writer's order stays whole. A reorder that puts each block back on an order
- * the page knows, its base's say, reads as the page's own, so the moves go over it: the next
- * start can't tell a closing save that committed from one that didn't. A block no note holds,
+ * the page knows, its base's say, reads as the page's own, so by these rules the moves go over
+ * it. The applier drops a draft whose closing save committed before these rules run, by the
+ * ledger's record under the draft's id (application/close-drafts.js, #6), so such a reorder
+ * stays then. A block no note holds,
  * another note's, or one the draft puts or deletes, is skipped. A recovered note takes no move,
  * and a residue Q5 drops takes its moves with it.
  *
