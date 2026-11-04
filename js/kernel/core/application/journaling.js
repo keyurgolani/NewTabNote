@@ -13,9 +13,10 @@
  * - The entry goes once the command is committed, a conflict, or refused, and stays when it's
  *   unavailable or unanswered, for whoever replays it. Once a pane's save of a note commits, the
  *   pane's earlier entries for that note go too, since a pane's save carries everything the pane
- *   changed since its last commit (R182's S2). So does a covered save of the pane's, as its
- *   closing save, or one with nothing to keep since the pane's base. A removal that fails is
- *   tried again with the next answer.
+ *   changed since its last commit within its load of the note (R182's S2). So does a covered
+ *   save of the pane's, as its closing save, or one with nothing to keep since the pane's base.
+ *   An editor's pane gets a new id at each load of a note, so no save takes an earlier load's
+ *   entries. A removal that fails is tried again with the next answer.
  * - A journal that can't take an entry leaves the command to run as before, and says so on the
  *   console, with the failure's code at most. Nothing here throws into the page.
  * - A command that deletes notes for good takes their entries out of the journal once it's
@@ -148,7 +149,8 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
   /**
    * The entries a pane's save of `noteId` covers once it commits: the pane's own for the note
    * that the page issued before `bound`, since the save carries everything the pane changed
-   * since its last commit, kept or still out
+   * since its last commit within its load of the note, kept or still out. A pane's id lasts one
+   * load of the note, so they're that load's.
    * @param {string} type
    * @param {unknown} noteId
    * @param {string | undefined} pane

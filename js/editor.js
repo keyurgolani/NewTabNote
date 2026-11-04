@@ -4422,7 +4422,10 @@ class BlockEditor {
      * page's journal (#35 slice 3b)
      */
     this._closingIds = new Map();
-    /** @type {string|null} This pane's id, which its saves name for the page's journal (#35 slice 3b) */
+    /**
+     * @type {string|null} This pane's id for its load of the note, which its saves name for the
+     * page's journal, and which each load drops (#35 slice 3b)
+     */
     this._pane = null;
   }
 
@@ -4548,7 +4551,9 @@ class BlockEditor {
    * The loaded note is what's stored, as the open read it: its close-time draft holds what
    * changes from here (#33). The base takes the open's revision and stamp, each block's digest
    * as stored, and the editor's own serialization's where the two differ. Notes with nothing in
-   * flight or waiting to retry are forgotten.
+   * flight or waiting to retry are forgotten. The pane's id goes too, so its saves from here,
+   * which carry nothing it changed before this base, take none of its earlier entries for the
+   * page's journal (#35 slice 3b).
    * @param {Array<Object>} records - the blocks as the open read them
    * @param {number|null} revision - the note's content revision as the open read it
    * @param {number} seq - the page's save order when the open began
@@ -4557,6 +4562,7 @@ class BlockEditor {
   _rememberLoaded(records, revision, seq) {
     if (!this._drafts()) return;
     this._forgetIdleBases();
+    this._pane = null;
     const noteId = this.noteId;
     this._seen.set(noteId, {
       seq,

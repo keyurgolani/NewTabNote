@@ -18,10 +18,11 @@
  *   save with a draft at this build's version: those are the worker's to replay or keep
  *   (journal-drain.js), or a newer build's. It leaves one the worker holds, under a tombstone the
  *   sweep keeps for, by the code on its mark (the lead's answer to Q6).
- * - A pane's save carries everything the pane changed since its last commit, so an entry a later
- *   one from the same page's pane, of the same note, covers is removed first, unapplied (R182's
- *   S2): its older text could only make a recovered note. Later is by the page's own count of its
- *   entries, which a clock stepped back doesn't change.
+ * - A pane's save carries everything the pane changed since its last commit within its load of
+ *   the note, and a pane's id lasts one load, so an entry a later one from the same page's pane,
+ *   of the same note, covers is removed first, unapplied (R182's S2): its older text could only
+ *   make a recovered note. Later is by the page's own count of its entries, which a clock
+ *   stepped back doesn't change.
  * - What each answer does with its entry: committed, it goes, and a recovered note, or a save
  *   into a note in the Trash, is told for the next new tab's toast, as a draft's is. The note gone
  *   (`close-draft-gone`): it stays for the worker's sweep, which tells a tombstone it deletes for
