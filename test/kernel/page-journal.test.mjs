@@ -15,8 +15,9 @@ import { inContextStores } from '../../js/kernel/adapters/in-context.js';
 import { journalingClient } from '../../js/kernel/composition/host.js';
 import { startPageJournal } from '../../js/kernel/composition/journal-chunk.js';
 import { createJournaling } from '../../js/kernel/core/application/journaling.js';
+import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
-import { UNTOLD_KEY } from '../../js/kernel/core/domain/close-draft-keys.js';
+import { DRAFTS_LOCK, UNTOLD_KEY } from '../../js/kernel/core/domain/close-draft-keys.js';
 import { DRAIN_MESSAGE, journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
@@ -381,6 +382,65 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
     });
     assert.equal(await third.applied, null);
     assert.deepEqual(messages, [{ type: DRAIN_MESSAGE }, { type: DRAIN_MESSAGE }]);
+  });
+
+  it("loads no apply, takes no DRAFTS_LOCK and wakes no drain for an editor save the apply leaves: a newer build's, or one the worker holds under a tombstone it keeps for (R191's finding 4)", async () => {
+    for (const kind of /** @type {const} */ (['newer', 'held'])) {
+      const real = new IDBFactory();
+      const faults = faultyFactory(real);
+      const p = pageClient();
+      await noteA(p);
+      const save = saveOfA(`c-${kind}`, `alpha, ${kind}`);
+      const entry = journalEntry({
+        command: save,
+        v: COMMANDS.saveNoteContent.version + (kind === 'newer' ? 1 : 0),
+        noteId: 'A',
+        surface: 'newtab',
+        ownerSessionId: 'page-gone',
+        seq: 1,
+        createdAt: NOW,
+        draft: /** @type {any} */ ({ v: 1, id: save.commandId, noteId: 'A' }),
+        pane: 'main',
+      });
+      const writer = inContextStores({ indexedDB: real }).journal();
+      await writer.open();
+      await writer.put(kind === 'held' ? { ...entry, unreplayable: { code: 'note-deleted', at: NOW } } : entry);
+      writer.close();
+      /** @type {string[]} the name of each Web Lock the page asked for */
+      const requested = [];
+      const pageLocks = legacyEnv.createLockManager();
+      const locks = {
+        /**
+         * @template T
+         * @param {string} name
+         * @param {{mode: 'exclusive'}} options
+         * @param {() => Promise<T>} callback
+         * @returns {Promise<T>}
+         */
+        request: (name, options, callback) => {
+          requested.push(name);
+          return pageLocks.request(name, options, callback);
+        },
+        query: () => pageLocks.query(),
+      };
+      /** @type {unknown[]} */
+      const messages = [];
+      const started = startPageJournal(p.client, 'page-1', 'newtab', {
+        stores: inContextStores({ indexedDB: faults.factory }),
+        locks,
+        storage: legacyEnv.createLocalStorage(),
+        runtime: {
+          sendMessage: async (/** @type {unknown} */ message) => {
+            messages.push(message);
+          },
+        },
+        clock: p.clock,
+      });
+      assert.equal(await started.applied, null, `${kind}: no apply`);
+      assert.equal(requested.includes(DRAFTS_LOCK), false, `${kind}: no DRAFTS_LOCK`);
+      assert.deepEqual(messages, [], `${kind}: the drain has nothing to do for it`);
+      assert.deepEqual(p.sent, [], kind);
+    }
   });
 
   it("issues a journaled command's entry in the task that sends it, once the journal is open", async () => {
