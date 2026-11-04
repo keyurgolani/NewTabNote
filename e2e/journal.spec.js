@@ -4,6 +4,9 @@
  * - An editor's save that its new tab sent, then died before it committed, is applied by the next
  *   page at its idle, by the apply's own command, within 3 s of that page's first read (the lead's
  *   bound), as the page's clock tells it.
+ * - When that tab closed instead, before its closing save's answer, its close-time draft holds
+ *   the save's edit and what was typed after it, and the next page's apply of the draft takes the
+ *   save's entry, so the older text makes no recovered note (#6).
  * - A Popup quick note sent while its note couldn't land yet, then closed, is in the next new
  *   tab, which wakes the worker's drain for it.
  * - A capture the worker was stopped in the middle of lands at the worker's next start, in
@@ -224,6 +227,45 @@ test("an editor's save that its new tab died before committing is applied by the
   // The crash took the worker too, and its uncaught exceptions went with it, so the check reads
   // the new worker's, which #13's port wakes
   await wakeWorker(next);
+  await expectNoUncaught(extension, next);
+});
+
+test("an editor's save that its new tab closed before its closing save's answer goes with the tab's close-time draft at the next start: no recovered note of its older text", async ({ extension }) => {
+  await extension.seedOnboarded();
+  const [{ id }] = await driver.seedNotes(extension, [{ name: 'Closing', blocks: [{ type: 'text', content: 'Before the close' }] }]);
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Closing');
+  await expect.poll(() => journalIn(page), { message: "the new tab's journal is in" }).toBe(true);
+  const holder = await extension.openSurface('popup');
+  await holdStores(holder, ['canvases', 'elements'], HOLD_MS);
+
+  // A save, sent: it waits behind the hold, and its entry is in the journal
+  await page.locator('#blocks-container > .block .block-content').first().click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(', and after');
+  await page.evaluate(() => {
+    app.editor.flushSave();
+  });
+  await expect.poll(() => journalEntries(holder), { message: 'the save is journaled' }).toEqual(['saveNoteContent']);
+
+  // More typed, and the tab closes as a user's close does: its close-time draft holds both, and
+  // its closing save waits behind the hold and goes with the tab
+  await page.keyboard.type(', and more');
+  await Promise.all([page.waitForEvent('close'), page.close({ runBeforeUnload: true })]);
+  const drafts = await holder.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('ntn-close-draft:')).length);
+  expect(drafts, 'the closing tab left its draft').toBe(1);
+
+  // The next page applies the draft before its first read, and its journal's apply, at idle,
+  // finds nothing of that tab's pane to make a recovered note of
+  const next = await driver.openNewTab(extension);
+  await expect.poll(async () => (await profileStore(next).getElementsByNote(id)).map(element => element.content), {
+    message: "the closing tab's draft, applied",
+    timeout: HOLD_MS + 3000,
+  }).toEqual(['Before the close, and after, and more']);
+  await expect.poll(() => journalIn(next), { message: "the next page's journal is in" }).toBe(true);
+  await expect.poll(() => journalEntries(next), { message: "the save's entry is gone" }).toEqual([]);
+  const names = (await profileStore(next).getAllNotes(true)).map(note => note.name);
+  expect(names.filter(name => name.startsWith('Recovered:')), 'no recovered note').toEqual([]);
   await expectNoUncaught(extension, next);
 });
 
