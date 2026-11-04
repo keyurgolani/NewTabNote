@@ -17,10 +17,13 @@
  *   answer.
  * - A journal that can't take an entry leaves the command to run as before, and says so on the
  *   console, with the failure's code at most. Nothing here throws into the page.
+ * - A command that deletes notes for good takes their entries out of the journal once it's
+ *   answered, whoever wrote them (`forget`), so a deleted note's text doesn't wait there for the
+ *   next drain (the lead's call on 3b). The drain's sweep stays the retry, for a removal that
+ *   fails and for a delete sent before the page's journal was in.
  *
- * `forget` removes the entries of notes deleted for good, whoever wrote them, which the drain's
- * sweep does too, and `orphaned` says whether the journal holds an entry no live context holds,
- * for the page to wake the drain. Nothing here touches a browser API: the ports come in.
+ * `orphaned` says whether the journal holds an entry no live context holds, for the page to wake
+ * the drain. Nothing here touches a browser API: the ports come in.
  */
 
 import { COMMANDS } from '../contracts/commands.js';
@@ -66,6 +69,22 @@ const ENDS = Object.freeze(['committed', 'conflict', 'rejected']);
  * editor's save, which carries everything its pane changed since its last commit
  */
 const PANE_SAVES = Object.freeze({ saveNoteContent: true });
+
+/**
+ * The codes of a committed command that deleted notes for good, whose changedIds are those notes,
+ * as the new tab's root reads them for its close-time drafts (composition/newtab.js, NOTES_DELETED)
+ */
+const NOTES_DELETED = Object.freeze(['note-deleted', 'trash-emptied', 'trash-cleaned']);
+
+/**
+ * The notes `outcome` deleted for good, a bulk action's items included
+ * @param {Outcome | BulkOutcome} outcome
+ * @returns {string[]}
+ */
+const deletedBy = outcome => {
+  if (outcome.kind === 'bulk') return outcome.items.flatMap(item => deletedBy(item.outcome));
+  return outcome.kind === 'committed' && NOTES_DELETED.includes(outcome.code) ? outcome.changedIds : [];
+};
 
 /**
  * @param {{
@@ -124,13 +143,40 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
     }
   };
 
+  /**
+   * Removes the entries of `noteIds`, notes deleted for good, whoever wrote them
+   * @param {readonly string[]} noteIds
+   */
+  const forget = async noteIds => {
+    try {
+      const deleted = new Set(noteIds);
+      const going = (await journal.list()).filter(entry => deleted.has(entry.noteId)).map(entry => entry.opId);
+      if (going.length > 0) await remove(going);
+    } catch (error) {
+      // The drain's sweep deletes them
+      warn('entry-not-removed', error);
+    }
+  };
+
   return Object.freeze({
     ready,
     execute(command, send, { covered = false, draft, pane } = {}) {
       const type = /** @type {string} */ (command.type);
       const entry = Object.hasOwn(COMMANDS, type) ? COMMANDS[/** @type {PageCommandType} */ (type)] : null;
       const noteId = /** @type {{noteId?: unknown}} */ (command).noteId;
-      if (!held || covered || !entry || !entry.journaled || typeof noteId !== 'string') return send(command);
+      if (!held || covered || !entry || !entry.journaled || typeof noteId !== 'string') {
+        const answer = send(command);
+        // A delete for good takes its notes' entries with it once it's answered, and the caller
+        // gets the answer as it came, whatever the journal does
+        Promise.resolve(answer).then(
+          outcome => {
+            const deleted = deletedBy(outcome);
+            if (deleted.length > 0) forget(deleted);
+          },
+          () => {},
+        );
+        return answer;
+      }
       seq += 1;
       const record = journalEntry({
         command: /** @type {JournalRecord['command']} */ (/** @type {unknown} */ (command)),
@@ -176,16 +222,7 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
         return outcome;
       })();
     },
-    async forget(noteIds) {
-      try {
-        const deleted = new Set(noteIds);
-        const going = (await journal.list()).filter(entry => deleted.has(entry.noteId)).map(entry => entry.opId);
-        if (going.length > 0) await remove(going);
-      } catch (error) {
-        // The drain's sweep deletes them
-        warn('entry-not-removed', error);
-      }
-    },
+    forget,
     async orphaned() {
       try {
         if (!locks || typeof locks.query !== 'function') return false;
