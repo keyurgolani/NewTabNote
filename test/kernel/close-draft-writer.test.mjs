@@ -81,6 +81,20 @@ describe("the new tab's close-time draft writer", () => {
     assert.equal(isStackDraft(/** @type {any} */ (draft)), true);
   });
 
+  it("carries the pane's moves, with each moved block's order in the base and in the page's issued saves, only when the editor gives them (#6)", () => {
+    const storage = legacyEnv.createLocalStorage();
+    const writer = closeDraftWriter({ storage, newId: idsFrom(['page-1']), now: () => AT });
+    const base = { ...fieldsOf().base, orders: { b2: 1 }, issuedSaves: [{ blocks: {}, orders: { b2: 2 } }] };
+    writer.write(fieldsOf({ id: 'moved', base, orders: [{ id: 'b2', order: 0 }] }));
+    writer.write(fieldsOf({ id: 'still' }));
+    const drafts = draftsIn(storage);
+    const moved = drafts[`${PREFIX}moved`];
+    assert.deepEqual([moved.orders, moved.base.orders, moved.base.issuedSaves], [[{ id: 'b2', order: 0 }], { b2: 1 }, [{ blocks: {}, orders: { b2: 2 } }]]);
+    assert.equal(isCloseDraft(moved), true);
+    assert.equal('orders' in drafts[`${PREFIX}still`], false);
+    assert.equal('orders' in drafts[`${PREFIX}still`].base, false);
+  });
+
   it('carries a title, typed unless it says generated, and only when the editor gives one', () => {
     const storage = legacyEnv.createLocalStorage();
     const writer = closeDraftWriter({ storage, newId: idsFrom(['page-1']), now: () => AT });

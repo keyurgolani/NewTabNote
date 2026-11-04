@@ -27,7 +27,11 @@ import { recoveredIdOf, renames, titleOf } from './close-draft.js';
 /** @typedef {import('./note.js').NoteRecord} NoteRecord */
 /** @typedef {import('./note.js').BlockRecord} BlockRecord */
 /** @typedef {import('./close-draft.js').CloseDraft} CloseDraft */
-/** @typedef {import('./close-draft.js').Residue} Residue */
+/**
+ * What of a draft's residue a recovered note holds: its blocks, its deletes and its name. The
+ * draft's moves stay out of it, and out of the original (#6).
+ * @typedef {Pick<import('./close-draft.js').Residue, 'blocks' | 'deletedBlockIds' | 'name'>} Residue
+ */
 
 /**
  * `text` as a block's HTML content that shows it as it is, as 1.4.3 escapes the callout

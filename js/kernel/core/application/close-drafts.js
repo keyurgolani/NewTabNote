@@ -34,8 +34,9 @@
  * writes them: the kernel reads a block's text from its raw content (insertLinkText), which holds
  * a name's `&` as `&amp;` and leaves out a table's cells and a toggle's children, so names read
  * that way would drop links the editor's save keeps. A merged save's links are the closing
- * page's, and the note's next save reads them all again. The catch-up leaves links to that next
- * save for the same reason, as the worker's catch-up does (the lead's Q9).
+ * page's, and the note's next save reads them all again. A save of moves alone changes no text,
+ * so it leaves the links as stored (#6). The catch-up leaves links to that next save for the
+ * same reason, as the worker's catch-up does (the lead's Q9).
  *
  * It carries no expected revision: its own base check runs inside its transaction
  * (test/kernel/write-guards.mjs).
@@ -44,7 +45,7 @@
 import { isId, isRecord } from '../contracts/checks.js';
 import { committed, rejected } from '../contracts/outcomes.js';
 import { CATCH_UP_KEY, DRAFTS_LOCK, DRAFT_PREFIX, SAVED_UNTOLD_KEY, UNTOLD_KEY } from '../domain/close-draft-keys.js';
-import { decide, isCloseDraft, recoveredIdOf, titleOf } from '../domain/close-draft.js';
+import { decide, isCloseDraft, movesOf, recoveredIdOf, titleOf } from '../domain/close-draft.js';
 import {
   inBlockOrder,
   linkTargets,
@@ -148,7 +149,7 @@ export const closeDraftCommands = {
         const madeBefore = Boolean(await tx.get('notes', recoveredId));
         /** @type {Map<string, Record<string, unknown>>} */
         const stored = new Map();
-        for (const id of new Set([...draft.blocks.map(block => block.id), ...draft.deletedBlockIds])) {
+        for (const id of new Set([...draft.blocks.map(block => block.id), ...draft.deletedBlockIds, ...movesOf(draft).map(move => move.id)])) {
           const copy = await tx.get('blocks', id);
           if (copy) stored.set(id, copy);
         }
@@ -186,12 +187,21 @@ export const closeDraftCommands = {
           applied = { code: 'close-draft-recovered', changed: [recoveredId], primary: recoveredId, revised: true };
           return;
         }
-        // The save: the residue's blocks are the note's own or new, and its deletes the note's own
+        // The save: the residue's blocks are the note's own or new, and its deletes the note's own.
+        // A block it only moved gets its new order on its record as stored, as saveNoteContent's
+        // `orders` gives it, so another writer's newer text in it stays (#6)
         const gone = new Set(residue.deletedBlockIds);
         const puts = residue.blocks.map(block => /** @type {BlockRecord} */ ({ ...block, canvasId: noteId }));
         const changedIds = new Set(puts.map(block => block.id));
-        const after = [...own.filter(block => !gone.has(block.id) && !changedIds.has(block.id)), ...puts];
+        const moved = new Map(residue.orders.map(move => [move.id, move.order]));
+        const after = [
+          ...own
+            .filter(block => !gone.has(block.id) && !changedIds.has(block.id))
+            .map(block => (moved.has(block.id) ? { ...block, order: /** @type {number} */ (moved.get(block.id)) } : block)),
+          ...puts,
+        ];
         for (const block of puts) tx.put('blocks', block);
+        for (const block of after) if (moved.has(block.id)) tx.put('blocks', block);
         for (const id of gone) tx.delete('blocks', id);
         const next = savedNote(note, residue, draft, after, now);
         tx.put('notes', next);
@@ -199,7 +209,10 @@ export const closeDraftCommands = {
           const entry = await tx.get('searchIndex', noteId);
           if (entry) tx.put('searchIndex', { ...entry, name: next.name, updatedAt: now });
         }
-        if (names) await replaceLinksIn(tx, noteId, names, { now, nextId: () => ids.next() });
+        // A save of moves alone changes no text, so it leaves the links as stored, where the closing
+        // page's names could only drop another tab's newer link (#6)
+        const rewrites = puts.length > 0 || gone.size > 0 || residue.name !== undefined;
+        if (names && rewrites) await replaceLinksIn(tx, noteId, names, { now, nextId: () => ids.next() });
         applied = {
           code: note.trashed ? 'close-draft-saved-in-trash' : 'close-draft-saved',
           changed: [noteId],

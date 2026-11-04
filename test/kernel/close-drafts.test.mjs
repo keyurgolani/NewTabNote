@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
-import { blockDigest, decide, recoveredIdOf } from '../../js/kernel/core/domain/close-draft.js';
+import { blockDigest, decide, isCloseDraft, recoveredIdOf } from '../../js/kernel/core/domain/close-draft.js';
 import { noteSaveMetadata } from '../../js/kernel/core/domain/note.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -19,6 +19,7 @@ import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 import { createKernel } from './test-kernel.mjs';
 
 /** @typedef {import('../../js/kernel/core/domain/close-draft.js').CloseDraft} CloseDraft */
+/** @typedef {import('../../js/kernel/core/domain/note.js').NoteRecord} NoteRecord */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */
 /** @typedef {import('../../js/kernel/core/ports/repository.js').KernelAdapter} KernelAdapter */
@@ -139,7 +140,7 @@ const BASE_BLOCKS = () => [block('a1', 'A', 0, 'alpha'), block('a2', 'A', 1, 'al
 
 /**
  * A stack draft of note A's edit: a1 changed, on a base the page saw at revision `revision`
- * @param {Partial<CloseDraft> & {revision?: number, baseBlocks?: Row[], issuedSaves?: Array<{name?: string, blocks: Row[]}>}} [fields]
+ * @param {Partial<CloseDraft> & {revision?: number, baseBlocks?: Row[], issuedSaves?: Array<{name?: string, blocks: Row[], orders?: Record<string, number>}>}} [fields]
  * @returns {CloseDraft}
  */
 function stackDraft({ revision = 0, baseBlocks = BASE_BLOCKS(), issuedSaves = [], base, ...fields } = {}) {
@@ -155,7 +156,7 @@ function stackDraft({ revision = 0, baseBlocks = BASE_BLOCKS(), issuedSaves = []
       issued: [],
       name: 'Alpha plan',
       blocks: digests(baseBlocks),
-      issuedSaves: issuedSaves.map(save => ({ name: save.name, blocks: digests(save.blocks) })),
+      issuedSaves: issuedSaves.map(save => ({ name: save.name, blocks: digests(save.blocks), ...(save.orders ? { orders: save.orders } : {}) })),
       ...base,
     },
     blocks: [block('a1', 'A', 0, 'alpha, edited as the tab closed', { updatedAt: T0 + 5 })],
@@ -373,6 +374,140 @@ for (const fixture of FIXTURES) {
         const draft = stackDraft({ blocks: [], name: 'Alpha plan, renamed', titleOrigin: 'typed' });
         assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-recovered', [recoveredIdOf(draft)]]);
         assert.equal((await recordOf(ctx, 'notes', 'A')).record?.name, 'Alpha, from another tab');
+      });
+    });
+
+    describe("a stack draft's moves: the orders its pane gave blocks it only moved (#6)", () => {
+      /** Note A's blocks' orders as stored, by id */
+      const ordersOfA = async () => Object.fromEntries(Object.values(await blocksOf(ctx, 'A')).map(row => [row.id, row.order]));
+
+      it("puts each move's order on the block as stored, so its text stays as another writer saved it, and makes the record from the new order", async () => {
+        await profileOf(ctx);
+        // Another tab saved a2's text since the base, and left it where it was
+        await savedElsewhere(ctx, [block('a1', 'A', 0, 'alpha'), block('a2', 'A', 1, 'alpha two, from another tab')]);
+        const draft = stackDraft({ blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } });
+        const first = await apply(ctx, draft);
+        assert.deepEqual(said(first), ['close-draft-saved', ['A']]);
+        const blocks = await blocksOf(ctx, 'A');
+        assert.deepEqual([blocks.a2.order, blocks.a2.content, blocks.a1.order, blocks.a1.content], [0, 'alpha two, from another tab', 1, 'alpha']);
+        assert.equal((await recordOf(ctx, 'notes', 'A')).record?.preview, 'alpha two, from another tab', 'the preview from the new first block');
+        assert.equal((await allOf(ctx, 'notes')).length, 2, 'no recovered note');
+        assert.deepEqual(await apply(ctx, draft), first, 'sent again, it replays and writes nothing');
+      });
+
+      it("skips a move of a block another writer reordered since the base, so that writer's order stays", async () => {
+        await profileOf(ctx, { blocks: [block('a3', 'A', 2, 'alpha three')] });
+        // Another tab moved a3 to the top since the base, which moved a1 and a2 down
+        await savedElsewhere(ctx, [block('a3', 'A', 0, 'alpha three'), block('a1', 'A', 1, 'alpha'), block('a2', 'A', 2, 'alpha two')]);
+        // The closing tab, on its base, moved a2 above a1
+        await apply(ctx, stackDraft({ blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } }));
+        assert.deepEqual(await ordersOfA(), { a3: 0, a1: 1, a2: 2 });
+      });
+
+      it("keeps every move out when another writer reordered any block the draft moves, even one whose block is still where the page knows it, so that writer's order stays whole", async () => {
+        await profileOf(ctx, { blocks: [block('a3', 'A', 2, 'alpha three')] });
+        // Another tab moved a3 above a2 since the base, which moved a2 down and left a1 where it was
+        await savedElsewhere(ctx, [block('a1', 'A', 0, 'alpha'), block('a3', 'A', 1, 'alpha three'), block('a2', 'A', 2, 'alpha two')]);
+        // The closing tab, on its base, moved a2 above a1: a1 is still at its base order, a2 isn't
+        const draft = stackDraft({ blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } });
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        assert.deepEqual(await ordersOfA(), { a1: 0, a3: 1, a2: 2 });
+      });
+
+      it("takes a move over an order one of the page's own saves gave the block, as that save's commit the page never heard of", async () => {
+        await profileOf(ctx);
+        // The page's own save moved a2 to the top and committed as the page went
+        const inFlight = [block('a2', 'A', 0, 'alpha two'), block('a1', 'A', 1, 'alpha')];
+        await savedElsewhere(ctx, inFlight);
+        // The pane had put both back where its base had them
+        const draft = stackDraft({
+          blocks: [],
+          orders: [{ id: 'a1', order: 0 }, { id: 'a2', order: 1 }],
+          base: { orders: { a1: 0, a2: 1 } },
+          issuedSaves: [{ name: 'Alpha plan', blocks: inFlight, orders: { a2: 0, a1: 1 } }],
+        });
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-saved', ['A']]);
+        assert.deepEqual(await ordersOfA(), { a1: 0, a2: 1 });
+      });
+
+      it("skips a move of a block no note holds or another note holds, and of one the draft puts or deletes, and saves the rest", async () => {
+        await profileOf(ctx);
+        const draft = stackDraft({
+          deletedBlockIds: ['a2'],
+          orders: [{ id: 'gone', order: 0 }, { id: 'b1', order: 3 }, { id: 'a1', order: 5 }, { id: 'a2', order: 6 }],
+          base: { orders: { gone: 1, b1: 0, a1: 0, a2: 1 } },
+        });
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-saved', ['A']]);
+        const blocks = await blocksOf(ctx, 'A');
+        assert.deepEqual(Object.keys(blocks), ['a1'], 'a2 deleted');
+        assert.deepEqual([blocks.a1.content, blocks.a1.order], ['alpha, edited as the tab closed', 0], "a1's put carries its own order");
+        assert.equal((await recordOf(ctx, 'blocks', 'b1')).record?.order, 0, "B's block stays where B has it");
+        assert.equal((await recordOf(ctx, 'blocks', 'gone')).record, undefined, 'no block is made for a move of one no note holds');
+      });
+
+      it("leaves the note's links as stored for moves alone, and writes the closing page's for deletes alone and for a rename alone, as before", async () => {
+        await profileOf(ctx);
+        const link = { id: 'link-1', fromNoteId: 'A', toNoteId: 'B', createdAt: T0 };
+        await seed(ctx, 'links', [link]);
+        const pairs = async () => (await allOf(ctx, 'links')).map(row => [row.fromNoteId, row.toNoteId]);
+        const revision = async () => (await recordOf(ctx, 'notes', 'A')).versions?.revision ?? 0;
+        const moves = stackDraft({ blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } });
+        assert.deepEqual(said(await apply(ctx, moves)), ['close-draft-saved', ['A']]);
+        assert.deepEqual(await pairs(), [['A', 'B']], 'moves change no text, so the link another tab saved stays');
+        const deletes = stackDraft({ id: 'draft-2', revision: await revision(), blocks: [], deletedBlockIds: ['a2'] });
+        assert.deepEqual(said(await apply(ctx, deletes)), ['close-draft-saved', ['A']]);
+        assert.deepEqual(await pairs(), [], 'a delete can take a link with it, so the closing page\'s names go in');
+        await seed(ctx, 'links', [link]);
+        const renamed = stackDraft({ id: 'draft-3', revision: await revision(), blocks: [], name: 'Alpha plan, renamed', titleOrigin: 'typed' });
+        assert.deepEqual(said(await apply(ctx, renamed)), ['close-draft-saved', ['A']]);
+        assert.deepEqual(await pairs(), [], 'and so do they with a rename');
+      });
+
+      it("writes nothing for a draft whose only move is of another note's block", async () => {
+        await profileOf(ctx);
+        const before = await recordOf(ctx, 'notes', 'A');
+        const draft = stackDraft({ blocks: [], orders: [{ id: 'b1', order: 3 }], base: { orders: { b1: 0 } } });
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        assert.deepEqual(await recordOf(ctx, 'notes', 'A'), before);
+        assert.equal((await recordOf(ctx, 'blocks', 'b1')).record?.order, 0);
+      });
+
+      it('leaves out a move of a block the draft puts, even when that put is in already', async () => {
+        await profileOf(ctx);
+        const draft = stackDraft({ blocks: [block('a1', 'A', 0, 'alpha')], orders: [{ id: 'a1', order: 5 }], base: { orders: { a1: 0 } } });
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        assert.deepEqual(await ordersOfA(), { a1: 0, a2: 1 });
+      });
+
+      it("leaves out the moves it can't read, and saves the rest of the draft", async () => {
+        await profileOf(ctx);
+        const unreadable = [null, 'a1', { id: '', order: 0 }, { id: 'a2', order: -1 }, { id: 'a2', order: 0.5 }, { id: 'a2' }];
+        const draft = stackDraft({ orders: /** @type {any} */ (unreadable), base: { orders: { a2: 1 } } });
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-saved', ['A']]);
+        assert.deepEqual(await ordersOfA(), { a1: 0, a2: 1 });
+        assert.equal((await blocksOf(ctx, 'A')).a1.content, 'alpha, edited as the tab closed');
+        const { versions } = await recordOf(ctx, 'notes', 'A');
+        const notAList = stackDraft({
+          id: 'draft-2',
+          revision: versions?.revision,
+          baseBlocks: [block('a1', 'A', 0, 'alpha, edited as the tab closed', { updatedAt: T0 + 5 }), block('a2', 'A', 1, 'alpha two')],
+          blocks: [],
+          orders: /** @type {any} */ ('a2'),
+        });
+        assert.deepEqual(said(await apply(ctx, notAList)), ['close-draft-dropped', []]);
+      });
+
+      it("leaves the original's order as stored when the draft becomes a recovered note, and drops its moves with deletes alone over a note changed since (the lead's Q5)", async () => {
+        await profileOf(ctx, { blocks: [block('a3', 'A', 2, 'alpha three')] });
+        await savedElsewhere(ctx, [block('a1', 'A', 0, 'alpha, from another tab'), block('a2', 'A', 1, 'alpha two'), block('a3', 'A', 2, 'alpha three')]);
+        // a1's edit meets the other tab's, so the draft is recovered, and its move of a3 stays out of the original
+        const recovered = stackDraft({ orders: [{ id: 'a3', order: 0 }], base: { orders: { a3: 2 } } });
+        assert.deepEqual(said(await apply(ctx, recovered)), ['close-draft-recovered', [recoveredIdOf(recovered)]]);
+        assert.equal((await ordersOfA()).a3, 2);
+        // Deletes alone over the note changed since are dropped, and the moves with them
+        const deletes = stackDraft({ id: 'draft-2', blocks: [], deletedBlockIds: ['a2'], orders: [{ id: 'a3', order: 1 }], base: { orders: { a3: 2 } } });
+        assert.deepEqual(said(await apply(ctx, deletes)), ['close-draft-dropped', []]);
+        assert.deepEqual(await ordersOfA(), { a1: 0, a2: 1, a3: 2 });
       });
     });
 
@@ -594,9 +729,33 @@ describe('applyCloseDraft below version 10, where no ledger keeps a commit', () 
 });
 
 describe('decide, on its own', () => {
+  it("takes a draft with moves as one it applies, as 1.5.0's isCloseDraft does, which checks only its own fields", () => {
+    assert.equal(isCloseDraft(stackDraft({ orders: [{ id: 'a2', order: 0 }], base: { orders: { a2: 1 } } })), true);
+  });
+
   it('answers gone for a note that is no longer stored, rule 1, whatever the draft holds', () => {
     const draft = /** @type {CloseDraft} */ (/** @type {unknown} */ (legacyDraft({ blocks: [block('a1', 'A', 0, 'alpha, edited')] })));
     assert.deepEqual(decide({ draft, note: undefined, madeBefore: false, stored: new Map(), versions: undefined }), { kind: 'gone' });
     assert.deepEqual(decide({ draft, note: undefined, madeBefore: true, stored: new Map(), versions: undefined }), { kind: 'recovered-before' }, 'rule 0 first');
+  });
+
+  const noteA = /** @type {NoteRecord} */ (/** @type {unknown} */ ({ id: 'A', name: 'Alpha plan' }));
+
+  it('skips a move of a block the page knows no order for, as a draft some other writer made could carry', () => {
+    const stored = new Map([['a1', { id: 'a1', canvasId: 'A', order: 0, content: 'alpha' }]]);
+    const draft = stackDraft({ blocks: [], orders: [{ id: 'a1', order: 3 }], baseBlocks: [] });
+    assert.equal(decide({ draft, note: noteA, madeBefore: false, stored, versions: { revision: 0, placementVersion: 0, sourceRevision: 0 } }).kind, 'dropped');
+  });
+
+  it('drops moves that come with a generated title and no deletes over a note changed since, as it drops the title alone (Q5), and saves moves alone there', () => {
+    const stored = new Map([
+      ['a1', { id: 'a1', canvasId: 'A', order: 0, content: 'alpha' }],
+      ['a2', { id: 'a2', canvasId: 'A', order: 1, content: 'alpha two, from another tab' }],
+    ]);
+    const moves = { blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } };
+    const versions = { revision: 2, placementVersion: 0, sourceRevision: 0 };
+    assert.equal(decide({ draft: stackDraft(moves), note: noteA, madeBefore: false, stored, versions }).kind, 'save');
+    const withTitle = stackDraft({ ...moves, name: 'Alpha, by the AI', titleOrigin: 'generated' });
+    assert.equal(decide({ draft: withTitle, note: noteA, madeBefore: false, stored, versions }).kind, 'dropped');
   });
 });
