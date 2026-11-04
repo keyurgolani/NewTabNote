@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, startChunksOf } = require('../scripts/build/budgets.js');
+const { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, startChunksOf, WORKER_ONLY_MODULES } = require('../scripts/build/budgets.js');
 const { fromMap } = require('../scripts/build/package-files.js');
 const { gateReport } = require('../scripts/perf/gate-report.js');
 const { fixtureProblems } = require('../scripts/perf-probe.js');
@@ -210,6 +210,32 @@ describe('the budget gate', () => {
     ]);
     // The trust code is in the fixture's lazy trust chunk, and passes
     assert.ok(!run(budgetsFor()).some(line => line.includes('trust')));
+  });
+
+  it("fails a page's start that holds a module only the service worker runs, by the module and the page, and passes the worker that holds it (#35 slice 3c)", () => {
+    // The worker's modules #35 slice 3c moved off the pages' start, each a file of the tree
+    assert.deepEqual(WORKER_ONLY_MODULES, [
+      'js/kernel/adapters/indexeddb/integrity.js',
+      'js/kernel/adapters/indexeddb/ledger-sweep.js',
+      'js/kernel/adapters/indexeddb/worker-tasks.js',
+      'js/kernel/core/application/integrity-check.js',
+      'js/kernel/core/application/record-catch-up.js',
+    ]);
+    for (const file of WORKER_ONLY_MODULES) assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} is in the tree`);
+    // On the new tab's start, through the chunk its root boots
+    assert.deepEqual(run(budgetsFor(), bundleFixture({ extraStart: ['js/kernel/core/application/record-catch-up.js'] })), [
+      'budget/worker-only newtab: its start holds js/kernel/core/application/record-catch-up.js, which only the service worker runs',
+    ]);
+    // On Popup's, in its own chunk
+    const popup = bundleFixture();
+    popup.chunks = popup.chunks.map(entry => (entry.fileName === 'assets/popup.js' ? { ...entry, moduleIds: [...entry.moduleIds, id('js/kernel/adapters/indexeddb/integrity.js')] } : entry));
+    assert.deepEqual(run(budgetsFor(), popup), [
+      'budget/worker-only popup: its start holds js/kernel/adapters/indexeddb/integrity.js, which only the service worker runs',
+    ]);
+    // The service worker holds them, and a page's start without one passes
+    const worker = bundleFixture();
+    worker.chunks = worker.chunks.map(entry => (entry.pass === 'background' ? { ...entry, moduleIds: [...entry.moduleIds, id('js/kernel/core/application/record-catch-up.js')] } : entry));
+    assert.deepEqual(run(budgetsFor(), worker), []);
   });
 
   it("fails a package its row doesn't allow, and an allowed one its graph no longer holds", () => {

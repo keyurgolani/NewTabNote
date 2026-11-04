@@ -25,6 +25,7 @@ import {
 } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
+import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
@@ -409,6 +410,36 @@ describe('each composition root', () => {
     const elements = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(profile.env.indexedDB), 'elements');
     assert.ok(elements.orphan, 'the orphaned block is still there');
     closeAll([tab, profile]);
+  });
+
+  it("gives the new tab's adapter none of the worker's own storage tasks: an integrity check answers integrity-check-needs-worker, and a sweep rejects with ledger-sweep-needs-worker (#35 slice 3c)", async () => {
+    const tab = legacyContext();
+    await legacyEnv.createDatabase(tab.env.indexedDB, { records: { elements: [legacyEnv.block('orphan', 'missing-note', 0)] } });
+    const { adapter, client } = newTabOf(tab);
+    assert.equal(await client.whenReady(), null);
+    /** @type {import('../../js/kernel/core/ports/repository.js').Work} */
+    const check = {
+      commandId: 'check-1',
+      command: /** @type {any} */ ({ type: 'runIntegrityCheck', commandId: 'check-1' }),
+      effect: { kind: 'integrity-check' },
+      done: () => committed('integrity-checked', []),
+    };
+    const { outcome } = await adapter.commit(check);
+    assert.deepEqual(outcome.kind === 'unavailable' && [outcome.cause, outcome.code, outcome.retryable], [
+      'adapter',
+      'integrity-check-needs-worker',
+      false,
+    ]);
+    /** @type {unknown} */
+    let swept = null;
+    try {
+      await adapter.sweepLedger();
+    } catch (error) {
+      swept = error;
+    }
+    const failure = /** @type {{unavailableCause?: unknown, code?: unknown}} */ (swept || {});
+    assert.deepEqual([failure.unavailableCause, failure.code], ['adapter', 'ledger-sweep-needs-worker']);
+    closeAll([tab]);
   });
 
   it("hands NotesManager, GraphView and SyncService only their own calls, each on the new tab's kernel (#17 PR 4b)", async () => {

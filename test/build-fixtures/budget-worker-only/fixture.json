@@ -1,0 +1,15 @@
+{
+  "rule": "the new tab's start takes in the records' catch-up, which only the service worker runs (#35 slice 3c)",
+  "expect": [
+    "budget/worker-only"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "js/entries/newtab.js",
+      "append": "\nimport { recordCatchUpCommands } from '../kernel/core/application/record-catch-up.js';\nwindow.ntnFixtureCatchUp = recordCatchUpCommands;\n"
+    }
+  ]
+}

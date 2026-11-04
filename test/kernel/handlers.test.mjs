@@ -16,6 +16,7 @@ import path from 'node:path';
 import ts from 'typescript';
 
 import { ALL_HANDLERS, NEWTAB_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
+import { CONTEXT_HANDLERS } from '../../js/kernel/core/application/handlers-newtab.js';
 import { POPUP_HANDLERS } from '../../js/kernel/core/application/handlers-popup.js';
 import { SIDEPANEL_HANDLERS } from '../../js/kernel/core/application/handlers-sidepanel.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
@@ -43,9 +44,18 @@ const ROOT = path.join(import.meta.dirname, '..', '..');
 /** @type {ReadonlySet<string>} */
 const CATALOG_TYPES = new Set([...WORKER_COMMAND_TYPES, ...WORKER_QUERY_TYPES]);
 
-/** The modules only the worker loads: its part of the catalog, its table, the capture, the drain */
+/**
+ * The modules only the worker loads: its part of the catalog, its table, the capture, the drain,
+ * the records' catch-up and the integrity check's command (#35 slice 3c)
+ */
 const WORKER_ONLY_MODULES =
-  /^js\/kernel\/(core\/contracts\/worker-catalog|core\/application\/(capture|handlers-worker|handlers-all|journal|journal-drain))\.js$/;
+  /^js\/kernel\/(core\/contracts\/worker-catalog|core\/application\/(capture|handlers-worker|handlers-all|journal|journal-drain|record-catch-up|integrity-check))\.js$/;
+
+/** The worker's handler modules #35 slice 3c took off the new tab's start */
+const CUT_MODULES = Object.freeze([
+  'js/kernel/core/application/record-catch-up.js',
+  'js/kernel/core/application/integrity-check.js',
+]);
 
 /** The close-time drafts' applier, which only the pages run (#33, #35 slice 3b) */
 const APPLIER_MODULES =
@@ -342,6 +352,21 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     }
     // The capture is the worker's alone, so the new tab's table doesn't hold it
     assert.equal(registered(NEWTAB_HANDLERS).has('captureToDailyNote'), false);
+  });
+
+  it("no page loads the records' catch-up or the integrity check's command, at its start or later, and the worker loads both (#35 slice 3c)", () => {
+    for (const { page, entries, surface } of PAGES) {
+      if (surface === 'worker-internal') continue;
+      const loaded = pageModules(entries).map(file => path.relative(ROOT, file));
+      assert.deepEqual(CUT_MODULES.filter(file => loaded.includes(file)), [], page);
+    }
+    const worker = pageModules(['js/background.js']).map(file => path.relative(ROOT, file));
+    for (const file of CUT_MODULES) assert.ok(worker.includes(file), `the worker loads ${file}`);
+  });
+
+  it("the new tab's start holds no handler of a type the shared catalog doesn't have, before its table keeps what the catalog allows there (#35 slice 3c)", () => {
+    assert.deepEqual(Object.keys(CONTEXT_HANDLERS.commands).filter(type => !Object.hasOwn(COMMANDS, type)), []);
+    assert.deepEqual(Object.keys(CONTEXT_HANDLERS.queries).filter(type => !Object.hasOwn(QUERIES, type)), []);
   });
 
   it("the worker loads none of the close-time drafts' applier, which only the pages run (#33, #35 slice 3b)", () => {
