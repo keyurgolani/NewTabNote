@@ -145,6 +145,17 @@ body {
   height: 100vh;
 }
 
+/* The formatting toolbars (js/ui/formatting-toolbar.js) sit in the body, absolutely placed, and
+   a selection places each by its inline top and left and shows it. Once a hidden one's fade ends,
+   it moves to the page's top, so wherever it last opened it adds no height below the app, where
+   End or a wheel would move the whole page, and it takes no focus and leaves the accessibility
+   tree. The 0.12 s is the toolbar's own fade there, and the two change together. */
+.formatting-toolbar:not(.visible) {
+  top: 0 !important;
+  visibility: hidden;
+  transition: opacity 0.12s ease, top 0s 0.12s, visibility 0s 0.12s;
+}
+
 body.focus-mode .sidebar,
 body.focus-mode #header,
 body.focus-mode #ai-floating-btn,
@@ -845,6 +856,12 @@ body.focus-mode .block:focus-within {
 
 .block:hover .block-metadata {
   opacity: 1;
+}
+
+/* A block this build can't show is a card as wide as the block, so it shows no time, which would
+   draw inside the card and, at 800 px wide, on its detail (#14) */
+.block-safe > .block-metadata {
+  display: none;
 }
 
 .block.dragging {

@@ -17,6 +17,8 @@
  * - Deleting a selection that holds cards asks first: Cancel keeps the selection and puts focus
  *   in its first block that takes it, a yes deletes them all, and one Undo brings each back as
  *   it was loaded.
+ * - A card shows no created time under the pointer, since the time would draw inside the card,
+ *   on its detail at 800 px wide. A text block still shows its own.
  */
 
 const fs = require('fs');
@@ -294,5 +296,24 @@ test('deleting a selection that holds cards asks first: Cancel keeps it and puts
   const stored = await storedBlocks(page);
   for (const id of ['opaque-blocks-unknown', 'opaque-blocks-invalid']) expect(stored[id], id).toEqual(held[id]);
   expect(stored['opaque-blocks-extra']).toEqual({ ...held['opaque-blocks-extra'], schemaVersion: 1 });
+  await expectNoUncaught(extension, page);
+});
+
+test('a card shows no created time under the pointer, which at 800 px wide would sit on its detail, while a text block still shows its own', async ({ extension }) => {
+  const { fixture } = opaqueBlocks();
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await page.setViewportSize({ width: 800, height: 800 });
+  await driver.openNote(page, 'Kept as it is');
+  const blockOf = id => page.locator(`#blocks-container > .block[data-id="${id}"]`);
+
+  for (const id of ['opaque-blocks-newer', 'opaque-blocks-unknown', 'opaque-blocks-invalid', 'opaque-blocks-typeless']) {
+    await blockOf(id).locator('.block-safe-card').hover();
+    await expect(blockOf(id).locator('.block-metadata'), id).toBeHidden();
+  }
+  await blockOf('opaque-blocks-before').locator('.block-content').hover();
+  await expect(blockOf('opaque-blocks-before').locator('.block-metadata')).toBeVisible();
+  await expect(blockOf('opaque-blocks-before').locator('.block-metadata')).toHaveCSS('opacity', '1');
   await expectNoUncaught(extension, page);
 });
