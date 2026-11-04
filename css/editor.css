@@ -5960,7 +5960,8 @@ kbd {
 
 /* A block this build keeps but can't show (js/blocks.js, appendSafeCard; #14 slice 3): read-only,
    in the card above, at a block's width and spacing. Its detail wraps so no line ends on a lone
-   word, and a selected card's outline follows its corners. */
+   word, and a selected card's outline follows its corners. While a selected card has the focus
+   ring, the ring shows without the outline, and the outline comes back once focus moves on (#14). */
 .block-safe-card {
   display: block;
   margin: 2px 0;
@@ -5976,6 +5977,10 @@ kbd {
 
 .block.block-safe.block-selected {
   border-radius: 14px;
+}
+
+.block.block-safe.block-selected:has(.block-safe-card:focus-visible) {
+  outline: none;
 }
 
 /* Settings > Data & Backup: the copy from before the update (js/ui/pre-update-copy.js). Its

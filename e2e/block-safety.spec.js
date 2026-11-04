@@ -5,6 +5,10 @@
  * - A block this build doesn't fully read (saved by a newer version, of a type it doesn't have,
  *   with stored data it can't read, or with no type) shows as a read-only card that says so,
  *   with nothing to type in.
+ * - Each card is a group a keyboard reaches by Tab, named by its title and described by its
+ *   detail. A key typed on one does nothing, and the app's own shortcuts still hear it (#14).
+ *   A selected card with the focus ring shows the ring without the selection's outline, and the
+ *   outline comes back once focus moves on.
  * - The blocks around the cards edit and save as usual, and each card's record, like a known
  *   block's field its type doesn't own, is written back as it was loaded. A save writes only
  *   the blocks it changed, each at schemaVersion 1, so a block it leaves alone stays as stored.
@@ -83,6 +87,140 @@ test('a block this build reads in a safe state shows read-only, and edits around
   // A save writes only the blocks its pane changed (#17, the per-pane save), so a known block
   // left alone, with a field its type doesn't own, stays as stored, with no version
   expect(stored['opaque-blocks-extra']).toEqual(held['opaque-blocks-extra']);
+  await expectNoUncaught(extension, page);
+});
+
+test('each card is a group a keyboard reaches: Tab stops on each in turn, named by its title and described by its detail, and a key typed on one does nothing, while ? still opens the shortcuts', async ({ extension }) => {
+  const { fixture, held } = opaqueBlocks();
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const cardOf = id => page.locator(`#blocks-container > .block[data-id="${id}"] .block-safe-card`);
+  const cards = [
+    ['opaque-blocks-newer', "This text block can't be shown", 'It was saved by a newer version of NewTabNote. Its content is kept as it is.'],
+    ['opaque-blocks-unknown', 'This “kanban” block can\'t be shown', "This version of NewTabNote doesn't have this kind of block. Its content is kept as it is."],
+    ['opaque-blocks-invalid', "This table block can't be shown", "Its saved data isn't in a form this version can read. Its content is kept as it is."],
+    ['opaque-blocks-typeless', "This block can't be shown", "Its saved data isn't in a form this version can read. Its content is kept as it is."],
+  ];
+
+  // Tab from the block before the cards stops on each card in note order: three cards, the known
+  // block after them, then the fourth card, then the table after it
+  const extra = page.locator('#blocks-container > .block[data-id="opaque-blocks-extra"] .block-content');
+  await page.locator('#blocks-container > .block[data-id="opaque-blocks-before"] .block-content').click();
+  await page.keyboard.press('End');
+  for (const [id, name, description] of cards) {
+    if (id === 'opaque-blocks-typeless') {
+      await page.keyboard.press('Tab');
+      await expect(extra).toBeFocused();
+    }
+    await page.keyboard.press('Tab');
+    await expect(cardOf(id), id).toBeFocused();
+    await expect(cardOf(id)).toHaveRole('group');
+    await expect(cardOf(id)).toHaveAccessibleName(name);
+    await expect(cardOf(id)).toHaveAccessibleDescription(description);
+  }
+
+  // On the last card, a letter, Space, Enter, Backspace and Delete change nothing, and focus stays
+  const shown = await driver.blocks(page);
+  for (const key of ['x', 'Space', 'Enter', 'Backspace', 'Delete']) await page.keyboard.press(key);
+  await expect(cardOf('opaque-blocks-typeless')).toBeFocused();
+  expect(await driver.blocks(page)).toEqual(shown);
+  const stored = await storedBlocks(page);
+  for (const [id] of cards) expect(stored[id], id).toEqual(held[id]);
+
+  // The app's own shortcuts still hear a key typed there
+  await page.keyboard.press('Shift+Slash');
+  await expect(page.getByRole('dialog', { name: 'Keyboard Shortcuts' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Keyboard Shortcuts' })).toBeHidden();
+
+  await cardOf('opaque-blocks-typeless').focus();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#blocks-container > .block[data-id="opaque-blocks-table"] th').first()).toBeFocused();
+  await expectNoUncaught(extension, page);
+});
+
+test("a selected card with the focus ring shows the ring without the selection's outline, and the outline comes back once focus moves on", async ({ extension }) => {
+  const { fixture } = opaqueBlocks();
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const kanban = page.locator('#blocks-container > .block[data-id="opaque-blocks-unknown"]');
+  const card = kanban.locator('.block-safe-card');
+  const tint = 'rgba(45, 140, 255, 0.08)';
+
+  // Selected by Cmd/Ctrl+click, the block shows the selection's outline and tint
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await card.click({ modifiers: [mod] });
+  await expect(kanban).toHaveClass(/block-selected/);
+  await expect(kanban).toHaveCSS('outline-style', 'solid');
+  await expect(kanban).toHaveCSS('background-color', tint);
+
+  // Back a card and forward again, so the focus is the keyboard's: the card's ring shows, the
+  // block's outline doesn't, and the block stays selected, in its tint
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(card).toBeFocused();
+  await expect(card).toHaveCSS('outline-style', 'solid');
+  await expect(kanban).toHaveClass(/block-selected/);
+  await expect(kanban).toHaveCSS('outline-style', 'none');
+  await expect(kanban).toHaveCSS('background-color', tint);
+
+  // Once focus moves on to the next card, the outline comes back
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#blocks-container > .block[data-id="opaque-blocks-invalid"] .block-safe-card')).toBeFocused();
+  await expect(kanban).toHaveClass(/block-selected/);
+  await expect(kanban).toHaveCSS('outline-style', 'solid');
+  await expectNoUncaught(extension, page);
+});
+
+test("a card whose record is a list item takes Tab as every card does: Tab goes on from it, Shift+Tab goes back, and its record stays as loaded", async ({ extension }) => {
+  const { fixture, held } = opaqueBlocks();
+  // The newer block's record made a to-do, a list type the block shortcuts would read
+  held['opaque-blocks-newer'].type = 'todo';
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const cardOf = id => page.locator(`#blocks-container > .block[data-id="${id}"] .block-safe-card`);
+  const before = page.locator('#blocks-container > .block[data-id="opaque-blocks-before"] .block-content');
+  await expect(cardOf('opaque-blocks-newer')).toHaveAccessibleName("This to-do block can't be shown");
+
+  await before.click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Tab');
+  await expect(cardOf('opaque-blocks-newer')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(cardOf('opaque-blocks-unknown')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(cardOf('opaque-blocks-newer')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(before).toBeFocused();
+  expect((await storedBlocks(page))['opaque-blocks-newer']).toEqual(held['opaque-blocks-newer']);
+  await expectNoUncaught(extension, page);
+});
+
+test('a focused card moved by Mod+Shift+ArrowDown keeps focus, so a second press moves it again', async ({ extension }) => {
+  const { fixture } = opaqueBlocks();
+  await fixtureHost(extension.worker).loadFixture(fixture);
+  await extension.seedOnboarded();
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept as it is');
+  const newer = page.locator('#blocks-container > .block[data-id="opaque-blocks-newer"] .block-safe-card');
+  const placeOfNewer = () => page.locator('#blocks-container > .block').evaluateAll(list => list.map(el => el.dataset.id).indexOf('opaque-blocks-newer'));
+
+  await page.locator('#blocks-container > .block[data-id="opaque-blocks-before"] .block-content').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Tab');
+  await expect(newer).toBeFocused();
+  const start = await placeOfNewer();
+  for (const step of [1, 2]) {
+    await page.keyboard.press('ControlOrMeta+Shift+ArrowDown');
+    await expect.poll(placeOfNewer, `move ${step}`).toBe(start + step);
+    await expect(newer, `move ${step}`).toBeFocused();
+  }
   await expectNoUncaught(extension, page);
 });
 

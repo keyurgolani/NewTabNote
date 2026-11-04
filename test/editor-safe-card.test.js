@@ -169,6 +169,231 @@ describe('the editor leaves a card alone (#14 slice 3)', () => {
   });
 });
 
+describe('a card is a group a keyboard reaches, with nothing in it to type into (#14)', () => {
+  const cardOf = (editor, id) => elementOf(editor, id).querySelector('.block-safe-card');
+
+  it('each card is a group named by its title and described by its detail, and takes focus, Tab included', OPTIONS, async () => {
+    const { editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, { ...NEWER, order: 2 }]);
+    const ids = [];
+    for (const id of ['k1', 'n1']) {
+      const card = cardOf(editor, id);
+      const [title, detail] = cardWords(elementOf(editor, id));
+      assert.deepEqual([card.tabIndex, card.role, card.ariaLabel], [0, 'group', title], id);
+      const describedBy = card.getAttribute('aria-describedby');
+      const detailEl = card.querySelector('.block-safe-detail');
+      assert.ok(typeof describedBy === 'string' && describedBy !== '' && describedBy === detailEl.id, `${id}: described by its detail`);
+      assert.equal(detailEl.textContent, detail);
+      ids.push(describedBy);
+    }
+    assert.notEqual(ids[0], ids[1], "each card's detail has its own id");
+  });
+
+  /** The page as a Mac's, with no caret in the fake window, as a focused card leaves none */
+  function asOnAMac(env, editor) {
+    env.global.navigator.platform = 'MacIntel';
+    editor.doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
+  }
+
+  /** A keydown of `key` at `target`, as the browser dispatches it to the editor's container and then its document */
+  function press(editor, target, key, more = {}) {
+    const event = {
+      key, code: '', target, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, defaultPrevented: false, ...more,
+      preventDefault() { this.defaultPrevented = true; },
+    };
+    editor.onBlockKeyDown(event);
+    editor.onGlobalKeyDown(event);
+    return event;
+  }
+
+  it('Enter, Backspace and Delete on a focused card do nothing, and a letter or Space does nothing either: the note never takes the key', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    const focused = [];
+    editor.focusBlock = (id) => focused.push(id);
+    const card = cardOf(editor, 'k1');
+    for (const key of ['Enter', 'Backspace', 'Delete']) {
+      assert.doesNotThrow(() => press(editor, card, key), key);
+    }
+    for (const key of ['x', ' ']) {
+      assert.equal(press(editor, card, key).defaultPrevented, true, `${JSON.stringify(key)} is kept from the note, and Space from scrolling`);
+    }
+    assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
+    assert.deepEqual(shownIds(editor), ['a1', 'k1', 'a3']);
+    await runUntil(env, editor.save());
+    assert.deepEqual(plain((await stored(env)).k1), plain(KANBAN), 'the card stays as loaded');
+  });
+
+  it('Tab and the arrow keys keep their own way from a focused card, and the block shortcuts still move it', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    // The editor's own shortcuts, as the new tab loads them
+    env.load('js/shortcut-utils.js');
+    editor.renderBlocks = () => {};
+    const card = cardOf(editor, 'k1');
+    for (const key of ['Tab', 'ArrowDown', 'ArrowUp']) {
+      assert.equal(press(editor, card, key, { code: key }).defaultPrevented, false, key);
+    }
+    assert.equal(press(editor, card, 'x', { metaKey: true }).defaultPrevented, false, "a chord isn't typing");
+    press(editor, card, 'ArrowDown', { code: 'ArrowDown', metaKey: true, shiftKey: true });
+    assert.deepEqual(plain(editor.blocks.map(b => b.id)), ['a1', 'a3', 'k1'], 'Mod+Shift+ArrowDown moved it down');
+  });
+
+  // Type anywhere takes no Alt key, so preventing one on a card would keep it only from the
+  // browser: Alt+F and Alt+E open Chrome's menu on Windows and Linux, Alt+Shift+T and Alt+Shift+B
+  // focus its toolbar and bookmarks bar
+  it('an Alt chord on a focused card is left to the browser, as type anywhere leaves it, and the note takes nothing', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    const focused = [];
+    editor.focusBlock = (id) => focused.push(id);
+    for (const [key, shiftKey] of [['f', false], ['e', false], ['T', true], ['B', true], [' ', false]]) {
+      assert.equal(press(editor, cardOf(editor, 'k1'), key, { altKey: true, shiftKey }).defaultPrevented, false, `Alt+${shiftKey ? 'Shift+' : ''}${key}`);
+    }
+    assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
+  });
+
+  it('Mod+Shift+ArrowDown moves a focused card and keeps focus on it, so a second press moves it again', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After'), block('a4', 'N', 3, 'Last')]);
+    asOnAMac(env, editor);
+    env.load('js/shortcut-utils.js');
+    // The editor's own focus, with no caret in the fake window to place
+    delete editor.focusBlock;
+    editor.placeCaretAtEnd = () => {};
+    cardOf(editor, 'k1').focus();
+    for (const order of [['a1', 'a3', 'k1', 'a4'], ['a1', 'a3', 'a4', 'k1']]) {
+      press(editor, editor.doc.activeElement, 'ArrowDown', { code: 'ArrowDown', metaKey: true, shiftKey: true });
+      assert.deepEqual(plain(editor.blocks.map(b => b.id)), order);
+      assert.ok(editor.doc.activeElement === cardOf(editor, 'k1'), 'focus is on the card, drawn again where it moved');
+    }
+  });
+
+  // Only a keyboard move takes focus to a card. Every other way between blocks finds nothing in a
+  // card to focus, so the arrows and Enter stop above and below one, until slice 4 changes them
+  it('the arrows and Enter stop at a card: from the block before it, the block after it and the title, focus stays where it was', OPTIONS, async () => {
+    /** The editor's own focus, with the caret at each block's edge and none in the fake window to place */
+    const ownFocus = (editor) => {
+      delete editor.focusBlock;
+      editor.placeCaretAtEnd = () => {};
+      editor.isCaretAtStart = () => true;
+      editor.isCaretAtEnd = () => true;
+    };
+    const contentOf = (editor, id) => elementOf(editor, id).querySelector('.block-content');
+
+    // Where focus is after each key: still where it was, each one checked on its own
+    const stayed = [];
+    const between = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(between.env, between.editor);
+    ownFocus(between.editor);
+    for (const [id, key] of [['a1', 'ArrowDown'], ['a3', 'ArrowUp']]) {
+      const content = contentOf(between.editor, id);
+      content.focus();
+      press(between.editor, content, key);
+      stayed.push([`${key} from ${id}`, between.editor.doc.activeElement === content]);
+    }
+
+    // The card first in the note, right under the title
+    const first = await openNote([{ ...KANBAN, order: 0 }, block('a2', 'N', 1, 'After')]);
+    asOnAMac(first.env, first.editor);
+    ownFocus(first.editor);
+    for (const key of ['ArrowDown', 'Enter']) {
+      first.editor.titleEl.focus();
+      first.editor.onTitleKeyDown({ key, preventDefault() {} });
+      stayed.push([`${key} from the title`, first.editor.doc.activeElement === first.editor.titleEl]);
+    }
+
+    assert.deepEqual(stayed, [['ArrowDown from a1', true], ['ArrowUp from a3', true], ['ArrowDown from the title', true], ['Enter from the title', true]]);
+  });
+
+  // A card's record can name a list type, which the block shortcuts read for Tab and Mod+Enter
+  for (const type of ['bullet', 'numbered', 'todo']) {
+    it(`Tab and Shift+Tab from the card of a newer ${type} keep their own way, and its indent and record stay as loaded`, OPTIONS, async () => {
+      const record = { ...block('l1', 'N', 1, 'Item'), type, schemaVersion: 9 };
+      const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), record, block('a3', 'N', 2, 'After')]);
+      asOnAMac(env, editor);
+      env.load('js/shortcut-utils.js');
+      assert.equal(editor.getBlockById('l1').safeState(), 'newer');
+      for (const shiftKey of [false, true]) {
+        assert.equal(press(editor, cardOf(editor, 'l1'), 'Tab', { code: 'Tab', shiftKey }).defaultPrevented, false, shiftKey ? 'Shift+Tab' : 'Tab');
+      }
+      assert.equal(editor.getBlockById('l1').indentLevel, 0);
+      await runUntil(env, editor.save());
+      assert.deepEqual(plain((await stored(env)).l1), plain(record), 'the card stays as loaded');
+    });
+  }
+
+  it("Tab from the card of a bullet whose stored data this build can't read keeps its own way too", OPTIONS, async () => {
+    const record = { ...block('l2', 'N', 1, 'Item'), type: 'bullet', indentLevel: 'deep' };
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), record]);
+    asOnAMac(env, editor);
+    env.load('js/shortcut-utils.js');
+    assert.equal(editor.getBlockById('l2').safeState(), 'invalid');
+    assert.equal(press(editor, cardOf(editor, 'l2'), 'Tab', { code: 'Tab' }).defaultPrevented, false);
+  });
+
+  it('Mod+Enter on a card adds a text block after it at no indent, whatever type and indent its record names, and a later load reads it as known', OPTIONS, async () => {
+    const newer = { ...block('l1', 'N', 1, 'Item'), type: 'todo', schemaVersion: 9, indentLevel: 7 };
+    const invalid = { ...block('l2', 'N', 2, 'Item'), type: 'bullet', indentLevel: 'deep' };
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), newer, invalid]);
+    asOnAMac(env, editor);
+    env.load('js/shortcut-utils.js');
+    for (const id of ['l1', 'l2']) press(editor, cardOf(editor, id), 'Enter', { code: 'Enter', metaKey: true });
+    const added = editor.blocks.filter(b => !['a1', 'l1', 'l2'].includes(b.id)).map(b => b.id);
+    assert.deepEqual(plain(editor.blocks.map(b => (added.includes(b.id) ? 'added' : b.id))), ['a1', 'l1', 'added', 'l2', 'added']);
+    await runUntil(env, editor.save());
+    const saved = await stored(env);
+    for (const id of added) {
+      assert.deepEqual({ type: saved[id].type, indentLevel: saved[id].indentLevel }, { type: 'text', indentLevel: 0 }, id);
+      assert.equal(env.global.BlockProjections.decodeBlock(saved[id]).state, 'current', id);
+    }
+  });
+
+  it('a digit or a punctuation key on a focused card does nothing too', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    const focused = [];
+    editor.focusBlock = (id) => focused.push(id);
+    for (const key of ['7', '.', ',', '-']) {
+      assert.equal(press(editor, cardOf(editor, 'k1'), key).defaultPrevented, true, key);
+    }
+    assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
+  });
+
+  // The guard reads the state, not the type: a newer block's card and a card in place of a block
+  // whose view throws hold nothing to type in either
+  for (const [state, record] of [['newer', NEWER], ['render-failed', RELATIVE]]) {
+    it(`on the card of a ${state} block too, a letter or Space does nothing, Enter, Backspace and Delete change nothing, and the card stays as loaded`, OPTIONS, async () => {
+      const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), record, block('a3', 'N', 2, 'After')]);
+      asOnAMac(env, editor);
+      const focused = [];
+      editor.focusBlock = (id) => focused.push(id);
+      const card = cardOf(editor, record.id);
+      for (const key of ['x', ' ']) {
+        assert.equal(press(editor, card, key).defaultPrevented, true, `${state}: ${JSON.stringify(key)}`);
+      }
+      for (const key of ['Enter', 'Backspace', 'Delete']) {
+        assert.doesNotThrow(() => press(editor, card, key), `${state}: ${key}`);
+      }
+      assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
+      assert.deepEqual(shownIds(editor), ['a1', record.id, 'a3']);
+      await runUntil(env, editor.save());
+      assert.deepEqual(plain((await stored(env))[record.id]), plain(record), 'the card stays as loaded');
+    });
+  }
+
+  it('a card drawn twice, as two panes draw it, gets a description id of its own each time, which its own detail holds', OPTIONS, async () => {
+    const { editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN]);
+    const k1 = editor.getBlockById('k1');
+    const drawn = [k1.createElement(), k1.createElement()].map(el => {
+      const card = el.querySelector('.block-safe-card');
+      return { describedBy: card.getAttribute('aria-describedby'), detail: card.querySelector('.block-safe-detail').id };
+    });
+    for (const { describedBy, detail } of drawn) {
+      assert.ok(typeof describedBy === 'string' && describedBy !== '' && describedBy === detail, 'described by its own detail');
+    }
+    assert.notEqual(drawn[0].describedBy, drawn[1].describedBy);
+  });
+});
+
 describe('deleting a selection that holds a card asks first (#14 slice 3)', () => {
   const overlay = env => env.document.querySelector('.confirm-dialog-overlay');
   const press = (env, label) => overlay(env).querySelectorAll('button').find(button => button.textContent === label).click();

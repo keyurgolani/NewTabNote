@@ -1437,7 +1437,7 @@ class BlockEditor {
     }
 
     this.renderBlocks();
-    this.focusBlock(blockId, true);
+    this.focusBlock(blockId, true, true);
     this.scheduleSave();
   }
 
@@ -1777,13 +1777,15 @@ class BlockEditor {
   }
 
   /**
-   * Focus a block
+   * Focus a block. With `card`, a card in a safe state takes focus itself, as a keyboard move
+   * leaves it (#14); every other caller still finds nothing to focus in a card, so the arrow keys
+   * still stop above and below one.
    */
-  focusBlock(blockId, atEnd = false) {
+  focusBlock(blockId, atEnd = false, card) {
     const el = this.getBlockElement(blockId);
     if (!el) return;
 
-    const content = el.querySelector('.block-content');
+    const content = el.querySelector('.block-content') || (card && el.querySelector('.block-safe-card'));
     if (content) {
       content.focus();
       // Only where focus went: a caret in a hidden pane's block would swallow every key typed after it
@@ -2562,6 +2564,9 @@ class BlockEditor {
       }
     }
 
+    // A card in a safe state is no list item to the block shortcuts, whatever type its record
+    // names, so Tab moves on from it, and a block added below it is text at no indent (#14)
+    const safe = block.safeState();
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     const modKey = isMac ? e.metaKey : e.ctrlKey;
     const shortcutAction = typeof ShortcutUtils !== 'undefined'
@@ -2571,7 +2576,7 @@ class BlockEditor {
         modKey,
         shiftKey: e.shiftKey,
         altKey: e.altKey,
-        blockType: block.type,
+        blockType: safe ? '' : block.type,
       })
       : null;
 
@@ -2579,9 +2584,9 @@ class BlockEditor {
       e.preventDefault();
 
       if (shortcutAction.type === 'insert-below') {
-        const nextType = ['bullet', 'numbered', 'todo'].includes(block.type) ? block.type : 'text';
+        const nextType = !safe && ['bullet', 'numbered', 'todo'].includes(block.type) ? block.type : 'text';
         this.insertBlockAfter(block.id, nextType, '', {
-          indentLevel: block.indentLevel || 0,
+          indentLevel: (!safe && block.indentLevel) || 0,
         });
         return;
       }
@@ -2600,6 +2605,16 @@ class BlockEditor {
         this.adjustBlockIndent(block.id, shortcutAction.delta);
         return;
       }
+    }
+
+    // A card in a safe state holds nothing to type in (#14). A key typed on it, Space too, does
+    // nothing: its default is prevented, so the note doesn't take it and Space doesn't scroll, but
+    // it goes on, so the app's shortcuts still hear it. Enter, Backspace, Delete, Tab and the arrow
+    // keys are the browser's, which do nothing on a card but move focus, and so are Alt chords, as
+    // type anywhere leaves them.
+    if (safe) {
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
+      return;
     }
 
     // Enter - create new block
@@ -3749,8 +3764,10 @@ class BlockEditor {
     // Determine the current block context
     const blockEl = e.target.closest('.block');
     const currentBlock = blockEl ? this.getBlockById(blockEl.dataset.id) : null;
-    const currentBlockContent = currentBlock ? this.extractBlockTextContent(currentBlock) : '';
-    const isEmptyBlock = currentBlock && currentBlock.type === 'text' && !currentBlockContent.trim();
+    // No paste removes what a block holds (#14): a paste turns the block it's in only when that
+    // block holds nothing, by the empty-note rule, so a text block with no text, no markup, no
+    // image and no field its type doesn't own. Otherwise what it makes goes after the block.
+    const isEmptyBlock = currentBlock && !globalThis.BlockProjections.isMeaningful(currentBlock.serialize());
 
     // (Req 34.1) URL detection → bookmark block
     if (this.isUrl(trimmed)) {
@@ -4014,8 +4031,9 @@ class BlockEditor {
    * @param {string} url
    */
   insertBookmarkBlockAfterCurrent(url) {
+    // activeBlock is the focused block's id (onBlockFocus), so the bookmark goes right after it (#14)
     const afterId = this.activeBlock
-      ? this.activeBlock.id
+      ? this.activeBlock
       : this.blocks[this.blocks.length - 1]?.id;
 
     const block = this.insertBlockAfter(afterId, 'bookmark', '', {
@@ -4106,12 +4124,13 @@ class BlockEditor {
       const block = this.createBlock('image');
       block.imageUrl = dataUrl;
 
-      // Add after active block or at end
-      if (this.activeBlock) {
-        const index = this.blocks.findIndex(b => b.id === this.activeBlock.id);
-        this.blocks.splice(index + 1, 0, block);
-      } else {
+      // Add after the focused block, whose id activeBlock holds (onBlockFocus), or at the end when
+      // there's none or it names no block of the note, as a URL's bookmark goes (#14)
+      const index = this.blocks.findIndex(b => b.id === this.activeBlock);
+      if (index === -1) {
         this.blocks.push(block);
+      } else {
+        this.blocks.splice(index + 1, 0, block);
       }
 
       this.renderBlocks();
