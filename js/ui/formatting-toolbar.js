@@ -150,6 +150,16 @@ class FormattingToolbar {
       }
     });
 
+    // Focus moving elsewhere in the page, as a click on another word moves it, ends link mode as
+    // Escape does, and the new selection is handled, not the one Link saved. Focus moving to ✓
+    // keeps it. So does a switch to another window: it gives no new target and leaves the field
+    // the page's active element, where an in-page move leaves none
+    this.el.addEventListener('focusout', (e) => {
+      if (!this.linkMode || this.el.contains(/** @type {Node | null} */ (e.relatedTarget) || this.doc.activeElement)) return;
+      this._hideLinkInput();
+      this._onSelectionChange();
+    });
+
     // Hide on mousedown outside toolbar
     this.doc.addEventListener('mousedown', (e) => {
       const target = /** @type {Node} */ (e.target);

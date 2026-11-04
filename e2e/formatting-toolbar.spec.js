@@ -20,6 +20,11 @@
  * - A selection shows its own pane's toolbar alone, in the main pane and in split view's right
  *   pane. Before, any selection showed both panes' toolbars, one over the other, so a screen
  *   reader found two "Text formatting" toolbars.
+ * - After Link, focus moving elsewhere in the page, as a click on another word moves it, closes
+ *   the link field, and the toolbar shows for the new selection. Before, link mode ignored every
+ *   selection until Enter, Escape or ✓, so its field stayed over the old words. Focus moving to
+ *   ✓ keeps the field open, so ✓ and Enter still apply the link, and so does a switch to another
+ *   window, which leaves the field focused.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -65,6 +70,12 @@ async function selectStart(page, index, length) {
   await page.keyboard.press('Home');
   for (let i = 0; i < length; i++) await page.keyboard.press('Shift+ArrowRight');
 }
+
+/** Press Link on the toolbar on top, the one a click reaches, as a user's does */
+const pressLink = page => page.locator('.formatting-toolbar.visible').last().locator('.formatting-toolbar-btn[data-id="link"]').click();
+
+/** The links in the block at `index`, each as its href and its text */
+const linksIn = (page, index) => blockContent(page, index).evaluate(el => [...el.querySelectorAll('a')].map(a => [a.getAttribute('href'), a.textContent]));
 
 test('hidden, it adds no height: the page is as tall as the window, and a wheel over the header or End in a text block leaves the page where it is', async ({ extension }) => {
   const page = await shortNote(extension);
@@ -222,6 +233,98 @@ test("a selection in one pane shows that pane's toolbar alone, in the main pane 
   await selectIn('#secondary-editor-container');
   await expect.poll(shown, "the right pane's").toEqual([false, true]);
   await expect(toolbars, 'one toolbar for a selection in the right pane').toHaveCount(1);
+  await expectNoUncaught(extension, page);
+});
+
+test("after Link, a selection of another word in the same pane closes the link field and shows that pane's toolbar alone, over the new word, in the main pane and in split view's right pane", async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [NOTE, { name: 'Other', blocks: [{ type: 'text', content: 'A line in the other note' }, { type: 'text', content: 'A second line here' }] }]);
+  const page = await driver.openNewTab(extension);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // For the main pane's toolbar and the right pane's: whether it shows, whether its link field is
+  // open, and how far its centre is off the selection's, to the pixel
+  const read = () => page.evaluate(() => {
+    const sel = getSelection();
+    const word = sel.rangeCount > 0 ? sel.getRangeAt(0).getBoundingClientRect() : null;
+    return [app.editor, app.secondaryEditor].map(({ formattingToolbar: bar }) => {
+      const box = bar.el.getBoundingClientRect();
+      return {
+        shows: bar.el.classList.contains('visible'),
+        linkField: getComputedStyle(bar.linkInput).display !== 'none',
+        offCentre: word ? Math.round(Math.abs((box.left + box.right) / 2 - (word.left + word.right) / 2)) : null,
+      };
+    });
+  });
+  /** Link pressed for the start of the pane's first block, then "second" in its second block double-clicked, as someone who changed their mind would */
+  const linkThenWord = async (pane, own) => {
+    const blocks = page.locator(`${pane} .block-content`);
+    await blocks.first().click();
+    await page.keyboard.press('Home');
+    for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowRight');
+    await pressLink(page);
+    await expect.poll(async () => (await read()).some(bar => bar.linkField), 'the link field is open').toBe(true);
+    const at = await blocks.nth(1).evaluate(el => {
+      const node = el.firstChild;
+      const start = node.data.indexOf('second');
+      const range = el.ownerDocument.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, start + 'second'.length);
+      const box = range.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    });
+    await page.mouse.dblclick(at.x, at.y);
+    await expect.poll(async () => (await read()).map(bar => bar.linkField), 'the link field closes').toEqual([false, false]);
+    await expect.poll(async () => (await read()).map(bar => bar.shows), "that pane's toolbar alone").toEqual(own === 0 ? [true, false] : [false, true]);
+    await expect.poll(async () => (await read())[own].offCentre, 'over the new word').toBe(0);
+  };
+
+  await linkThenWord('#editor-container', 0);
+  await driver.openSplitView(page);
+  await linkThenWord('#secondary-editor-container', 1);
+  await expectNoUncaught(extension, page);
+});
+
+test('in link mode, ✓ and Enter still apply the link, and focus moving from the field to ✓ leaves the field open', async ({ extension }) => {
+  const page = await shortNote(extension);
+  const field = page.locator('.formatting-toolbar-url:visible');
+  const ok = page.locator('.formatting-toolbar-link-ok:visible');
+
+  // ✓, reached from the field with Tab, then clicked
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.type('https://example.test/a');
+  await page.keyboard.press('Tab');
+  await expect(ok, 'the field stays open, with focus on ✓').toBeFocused();
+  await ok.click();
+  await expect.poll(() => linksIn(page, 0), '✓ applies it').toEqual([['https://example.test/a', 'Before']]);
+
+  // Enter in the field
+  await selectStart(page, 1, 'A second'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.type('https://example.test/b');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => linksIn(page, 1), 'Enter applies it').toEqual([['https://example.test/b', 'A second']]);
+  await expectNoUncaught(extension, page);
+});
+
+test('in link mode, a switch to another window leaves the link field open with its selection, for a URL copied there', async ({ extension }) => {
+  const page = await shortNote(extension);
+  const field = page.locator('.formatting-toolbar-url:visible');
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+
+  // A switch to another window takes focus from the field with no new target, and leaves the
+  // field the page's active element. Headless Chromium can't switch windows, so the field gets
+  // that focusout as one would come
+  await field.evaluate(el => el.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null })));
+  await page.waitForTimeout(200);
+  await expect(field, 'the link field stays open').toBeFocused();
+  await page.keyboard.type('https://example.test/c');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => linksIn(page, 0), 'its selection gets the link').toEqual([['https://example.test/c', 'Before']]);
   await expectNoUncaught(extension, page);
 });
 
