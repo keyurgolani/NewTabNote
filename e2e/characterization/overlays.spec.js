@@ -51,14 +51,8 @@ async function newBlockAtEnd(page, side = 'left') {
   await page.keyboard.press('Enter');
 }
 
-/**
- * Open the block menu on a pane's second block, from its handle. The right pane's handles
- * sit under the left pane, which takes a click there, so the click goes to the handle itself.
- */
-const openBlockMenu = (page, side = 'left') => {
-  const handle = block(page, 1, side).locator('.block-handle');
-  return side === 'right' ? handle.dispatchEvent('click') : handle.click();
-};
+/** Open the block menu on a pane's second block, with a click on its handle */
+const openBlockMenu = (page, side = 'left') => block(page, 1, side).locator('.block-handle').click();
 
 /** The template menu under a pane's second block. Nothing in 1.4.x opens it: checkMarkdownShortcuts, which looks for "/template", is never called */
 const openTemplateMenu = side => async page => {
