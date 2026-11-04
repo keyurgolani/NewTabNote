@@ -2,14 +2,15 @@
 // and journal, through the worker's own kernel and table: what it replays and in what order,
 // whose entries it leaves alone, an editor save among them, which the pages replay (slice 3b,
 // the lead's call on #182), the sweep of notes deleted for good, what it keeps and raises for an
-// entry it can't replay (Q6), and that storage it can't reach stops it with every entry left.
+// entry it can't replay (Q6), and that storage it can't reach stops it with every entry left,
+// while any other stop at an entry holds back only that entry's note (slice 3b).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { drainJournal } from '../../js/kernel/core/application/journal-drain.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
-import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
+import { UnavailableError, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
 import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
@@ -35,6 +36,20 @@ const LIVE = 'page-live';
 
 /** A day before the clock's, Oct 19, 2026, noon UTC */
 const YESTERDAY = NOW - 24 * 60 * 60 * 1000;
+
+/**
+ * An answer that says the command may get through when it's sent again, on a code that isn't
+ * storage-wide: a storage timeout at one entry
+ * @type {import('../../js/kernel/core/contracts/outcomes.js').Unavailable}
+ */
+const TIMED_OUT = Object.freeze({
+  kind: 'unavailable',
+  cause: 'storage',
+  code: 'timed-out',
+  retryable: true,
+  messageKey: 'unavailable.timed-out',
+  severity: 'error',
+});
 
 /**
  * A drain's world: one memory adapter, a new tab's kernel that writes what the test sets up,
@@ -443,7 +458,64 @@ describe('the journal drain (#35 slice 3)', () => {
     assert.deepEqual(w.sent, []);
   });
 
-  it('keeps a malformed entry, a save with no draft, and one the kernel refuses as a conflict record, and then removes it', async () => {
+  it("holds an editor's save a newer build wrote, and one under a tombstone it keeps for, raising each incident once, marked so the pages leave it too (the lead's Q6, 3b)", async () => {
+    const w = world();
+    await noteA(w);
+    const newer = await saveOfA(w, 'c-save-newer', 'alpha, as a newer build saved it');
+    await w.journal.put(entryOf(newer.command, { draft: newer.draft, v: 2 }));
+    // One at this build's version is left to the pages, with no incident
+    const ours = await saveOfA(w, 'c-save-ours', 'alpha, edited');
+    await w.journal.put(entryOf(ours.command, { draft: ours.draft, createdAt: NOW + 1 }));
+    for (const run of [1, 2]) {
+      const result = await w.drain();
+      assert.deepEqual(
+        [result.status, result.replayed, result.kept, result.left],
+        ['drained', 0, 0, 2],
+        `drain ${run}`,
+      );
+    }
+    assert.deepEqual(w.told, [['c-save-newer', 'unsupported-version']], 'once');
+    assert.deepEqual([w.sent, w.stops], [[], []]);
+    assert.deepEqual(
+      w.journal.entries().map(entry => [entry.opId, entry.unreplayable?.code]),
+      [
+        ['c-save-newer', 'unsupported-version'],
+        ['c-save-ours', undefined],
+      ],
+    );
+
+    // Under a tombstone of a reason the sweep keeps for, as #20's restore and reset will write
+    const kept = world();
+    await noteA(kept);
+    const save = await saveOfA(kept, 'c-save-kept', 'alpha, edited');
+    await kept.page.execute({ type: 'trashNote', commandId: 'c-trash-a', noteId: 'A' });
+    const deleted = await kept.page.execute({ type: 'deleteNotePermanently', commandId: 'c-delete-a', noteId: 'A' });
+    assert.equal(deleted.kind, 'committed', JSON.stringify(deleted));
+    await kept.journal.put(entryOf(save.command, { draft: save.draft }));
+    const restoring = {
+      /** @param {any} command */
+      execute: command => {
+        kept.sent.push(command.type);
+        return kept.worker.execute(command);
+      },
+      /** @param {any} query */
+      query: async query => {
+        const state = await kept.worker.query(query);
+        return state.kind === 'ready'
+          ? { ...state, data: { tombstones: [{ id: 'A', reason: 'restored-elsewhere' }] } }
+          : state;
+      },
+    };
+    for (const run of [1, 2]) {
+      const result = await kept.drain({ client: restoring });
+      assert.deepEqual([result.swept, result.replayed, result.kept, result.left], [0, 0, 0, 1], `drain ${run}`);
+    }
+    assert.deepEqual(kept.told, [['c-save-kept', 'note-deleted']], 'once');
+    assert.deepEqual([kept.sent, kept.stops], [[], []]);
+    assert.equal(kept.journal.entries()[0].unreplayable?.code, 'note-deleted');
+  });
+
+  it('keeps a malformed entry, a save with no draft or no version it can read, and one the kernel refuses as a conflict record, and then removes it', async () => {
     const w = world();
     await w.page.execute(quickNote('c-make', 'n1'));
     // Malformed: a field its schema doesn't declare
@@ -459,16 +531,30 @@ describe('the journal drain (#35 slice 3)', () => {
     );
     // A note in a folder deleted since
     await w.journal.put(entryOf({ ...quickNote('c-filed', 'n-filed'), folderId: 'f-gone' }));
+    // An editor's save with its draft, but a version no build reads (3b)
+    const unversioned = {
+      type: 'saveNoteContent',
+      commandId: 'c-unversioned',
+      noteId: 'n1',
+      blocks: [{ id: 'n1-b1', type: 'text', content: 'Typed again' }],
+    };
+    await w.journal.put(
+      entryOf(unversioned, {
+        v: 0,
+        draft: /** @type {any} */ ({ v: 1, id: 'c-unversioned', noteId: 'n1', blocks: [], deletedBlockIds: [] }),
+      }),
+    );
     const result = await w.drain();
-    assert.deepEqual([result.status, result.kept, result.left], ['drained', 3, 0]);
+    assert.deepEqual([result.status, result.kept, result.left], ['drained', 4, 0]);
     assert.deepEqual(w.told, [
       ['c-odd', 'invalid-payload'],
       ['c-bare', 'invalid-payload'],
       ['c-filed', 'replay-refused'],
+      ['c-unversioned', 'invalid-payload'],
     ]);
     // None of them is a stop: each is told as what it is
     assert.deepEqual(w.stops, []);
-    for (const opId of ['c-odd', 'c-bare', 'c-filed']) {
+    for (const opId of ['c-odd', 'c-bare', 'c-filed', 'c-unversioned']) {
       const record = await w.recordOf('conflicts', opId);
       assert.ok(record, opId);
       assert.equal(record.command.commandId, opId);
@@ -497,7 +583,7 @@ describe('the journal drain (#35 slice 3)', () => {
     }
   });
 
-  it("stops when the kernel can't answer, leaving every entry it hadn't removed", async () => {
+  it("stops at a code that says storage can't answer, leaving every entry it hadn't removed, and at any other holds back only that entry's note", async () => {
     const w = world();
     await w.journal.put(entryOf(quickNote('c1', 'n1')));
     await w.journal.put(entryOf(quickNote('c2', 'n2'), { createdAt: NOW + 1 }));
@@ -522,9 +608,10 @@ describe('the journal drain (#35 slice 3)', () => {
         query: query => w.worker.query(query),
       },
     });
+    // A stop of the whole drain holds back no note by name: its code says why
     assert.deepEqual(
-      [result.status, result.code, result.replayed, result.left],
-      ['stopped', 'transaction-failed', 1, 2],
+      [result.status, result.code, result.replayed, result.left, result.held],
+      ['stopped', 'transaction-failed', 1, 2, []],
     );
     assert.deepEqual(sent, ['c1', 'c2'], 'nothing after the stop is sent');
     assert.deepEqual(
@@ -545,9 +632,190 @@ describe('the journal drain (#35 slice 3)', () => {
       },
     });
     assert.deepEqual([blind.status, blind.code, blind.replayed, blind.left], ['stopped', 'unreadable', 0, 2]);
+
+    // Each code that says storage itself can't answer stops it the same way, at whichever entry
+    for (const [cause, code, retryable] of /** @type {const} */ ([
+      ['quota', 'quota', false],
+      ['adapter', 'transaction-inactive', false],
+      ['storage', 'database-closed', true],
+      ['storage', 'open-failed', true],
+    ])) {
+      const wide = world();
+      await wide.journal.put(entryOf(quickNote('c1', 'n1')));
+      await wide.journal.put(entryOf(quickNote('c2', 'n2'), { createdAt: NOW + 1 }));
+      /** @type {string[]} */
+      const tried = [];
+      /** @type {import('../../js/kernel/core/application/journal-drain.js').DrainClient} */
+      const client = {
+        execute: async command => {
+          tried.push(command.commandId);
+          return {
+            kind: 'unavailable',
+            cause,
+            code,
+            retryable,
+            messageKey: `unavailable.${code}`,
+            severity: 'error',
+          };
+        },
+        query: query => wide.worker.query(query),
+      };
+      for (const run of [1, 2, 3]) {
+        const stopped = await wide.drain({ client });
+        assert.deepEqual(
+          [stopped.status, stopped.code, stopped.replayed, stopped.left, stopped.held],
+          ['stopped', code, 0, 2, []],
+          `${code}, drain ${run}`,
+        );
+      }
+      assert.deepEqual(tried, ['c1', 'c1', 'c1'], code);
+      // It's storage's, not the entry's, so drains in a row that stop there raise nothing, while
+      // one it can't retry is raised once, as any stop it can't retry is
+      assert.deepEqual(wide.told, retryable ? [] : [['c1', code]], code);
+    }
+
+    // So does a throw at no entry, here the sweep's removal
+    const sweeping = world();
+    await sweeping.page.execute(quickNote('c-make', 'n-deleted'));
+    await sweeping.page.execute({ type: 'trashNote', commandId: 'c-trash', noteId: 'n-deleted' });
+    await sweeping.page.execute({ type: 'deleteNotePermanently', commandId: 'c-delete', noteId: 'n-deleted' });
+    await sweeping.journal.put(entryOf(quickNote('c-swept', 'n-deleted')));
+    await sweeping.journal.put(entryOf(quickNote('c-other', 'n-other'), { createdAt: NOW + 1 }));
+    const unswept = await sweeping.drain({
+      journal: {
+        ...sweeping.journal,
+        remove: async () => {
+          throw new Error('A bug that throws in the sweep');
+        },
+      },
+    });
+    assert.deepEqual(
+      [unswept.status, unswept.code, unswept.replayed, unswept.held],
+      ['stopped', 'drain-failed', 0, []],
+    );
+    assert.deepEqual([sweeping.sent, sweeping.told], [[], []]);
+
+    // Any other code at an entry holds back only that entry's note: the note's later entries wait
+    // behind it, so they still go oldest first, and another note's lands past it (the lead's call
+    // on 3b's plan)
+    const one = world();
+    await one.journal.put(entryOf(quickNote('c1', 'n1')));
+    await one.journal.put(
+      entryOf(
+        {
+          type: 'insertBlocks',
+          commandId: 'c1-more',
+          noteId: 'n1',
+          blocks: [{ id: 'n1-b2', type: 'text', content: 'More' }],
+        },
+        { createdAt: NOW + 1 },
+      ),
+    );
+    await one.journal.put(entryOf(quickNote('c2', 'n2'), { createdAt: NOW + 2 }));
+    /** @type {string[]} */
+    const tried = [];
+    const held = await one.drain({
+      client: {
+        execute: async command => {
+          tried.push(command.commandId);
+          return command.commandId === 'c1' ? TIMED_OUT : one.worker.execute(command);
+        },
+        query: query => one.worker.query(query),
+      },
+    });
+    // It answers stopped with the hold's code, and names the note it held back and why, which
+    // system.coordinatorHealth tells the Trust provider (the lead, 18:04 and 18:24)
+    assert.deepEqual(
+      [held.status, held.code, held.replayed, held.left, held.held],
+      ['stopped', 'timed-out', 1, 2, [{ noteId: 'n1', code: 'timed-out' }]],
+    );
+    assert.deepEqual(tried, ['c1', 'c2']);
+    assert.deepEqual(
+      one.journal.entries().map(entry => entry.opId),
+      ['c1', 'c1-more'],
+    );
+    assert.equal((await one.recordOf('notes', 'n2'))?.name, 'Call the plumber');
+    // A stop it can retry, at one drain, raises nothing
+    assert.deepEqual([one.told, one.stops], [[], []]);
+
+    // No answer is a stop it can retry too, since the next drain's ledger answers it
+    const unsure = world();
+    await unsure.journal.put(entryOf(quickNote('c-unsure', 'n-unsure')));
+    const unanswered = await unsure.drain({
+      client: {
+        execute: async command => unknown('outcome-unknown', command.commandId),
+        query: query => unsure.worker.query(query),
+      },
+    });
+    assert.deepEqual(
+      [unanswered.status, unanswered.code, unanswered.held, unsure.told],
+      ['stopped', 'outcome-unknown', [{ noteId: 'n-unsure', code: 'outcome-unknown' }], []],
+    );
   });
 
-  it("raises an entry's incident once when it stops every drain there, on a code it can't retry or a throw, and still stops there", async () => {
+  it("raises an entry's incident once, as a stop, on the third drain in a row that stops at it on a code it can retry, and never before (the lead's call on 3b's plan)", async () => {
+    const w = world();
+    // A capture an earlier worker kept, which times out every time it's sent
+    await w.journal.put(entryOf(capture('c-busy'), { owner: 'coordinator-0' }));
+    const client = {
+      /** @param {any} command */
+      execute: async command => (command.commandId === 'c-busy' ? TIMED_OUT : w.worker.execute(command)),
+      /** @param {any} query */
+      query: query => w.worker.query(query),
+    };
+    for (const run of [1, 2]) {
+      const result = await w.drain({ client });
+      assert.deepEqual(
+        [result.status, result.code, result.left, result.held],
+        ['stopped', 'timed-out', 1, [{ noteId: 'daily-c-busy', code: 'timed-out' }]],
+        `drain ${run}`,
+      );
+      assert.deepEqual(w.told, [], `drain ${run}: the next may get through`);
+    }
+    await w.drain({ client });
+    assert.deepEqual(w.told, [['c-busy', 'timed-out']], 'the third');
+    // As a stop, so a kept capture hears nothing more than it heard when it was kept
+    assert.deepEqual(w.stops, ['c-busy']);
+    await w.drain({ client });
+    assert.deepEqual(w.told, [['c-busy', 'timed-out']], 'once');
+    // Still kept, for the drain that gets through
+    const through = await w.drain();
+    assert.deepEqual([through.status, through.replayed, through.left], ['drained', 1, 0]);
+    assert.ok(await w.recordOf('notes', 'daily-c-busy'));
+
+    // An incident raised there for anything else starts the count again, on the mark and in the
+    // worker's memory alike: here an append to a note that isn't there, which the third drain gets
+    const row = world();
+    await row.journal.put(
+      entryOf({
+        type: 'insertBlocks',
+        commandId: 'c-row',
+        noteId: 'n-none',
+        blocks: [{ id: 'n-none-b1', type: 'text', content: 'More' }],
+      }),
+    );
+    let drains = 0;
+    const scripted = {
+      /** @param {any} command */
+      execute: async command => (drains === 2 ? row.worker.execute(command) : TIMED_OUT),
+      /** @param {any} query */
+      query: query => row.worker.query(query),
+    };
+    const stops = new Map();
+    for (; drains < 5; drains++) await row.drain({ client: scripted, stops });
+    assert.deepEqual(row.told, [['c-row', 'note-not-found']], 'two stops since the refusal');
+    await row.drain({ client: scripted, stops });
+    assert.deepEqual(
+      row.told,
+      [
+        ['c-row', 'note-not-found'],
+        ['c-row', 'timed-out'],
+      ],
+      'the third since',
+    );
+  });
+
+  it("raises an entry's incident once when it stops every drain there, on a code it can't retry or a throw, and holds back only its note", async () => {
     /** @type {import('../../js/kernel/core/contracts/outcomes.js').Unavailable} */
     const cannotRetry = {
       kind: 'unavailable',
@@ -576,22 +844,27 @@ describe('the journal drain (#35 slice 3)', () => {
         query: query => w.worker.query(query),
       };
       const code = stop === 'throws' ? 'drain-failed' : 'not-cloneable';
-      for (const run of [1, 2]) {
-        const result = await w.drain({ client });
-        assert.deepEqual(
-          [result.status, result.code, result.replayed, result.left],
-          ['stopped', code, 0, 2],
-          `${stop}, drain ${run}`,
-        );
-      }
-      // Once, though two drains stopped at it, so a capture says "Not captured" once; and the
-      // stop keeps the replay oldest first, so nothing after it went
+      const drains = [await w.drain({ client }), await w.drain({ client })];
+      assert.deepEqual(
+        drains.map(result => [result.status, result.code, result.replayed, result.left, result.held]),
+        [
+          ['stopped', code, 1, 1, [{ noteId: 'daily-c-stuck', code }]],
+          ['stopped', code, 0, 1, [{ noteId: 'daily-c-stuck', code }]],
+        ],
+        stop,
+      );
+      // Once, though two drains stopped at it, so a capture says "Not captured" once
       assert.deepEqual(w.told, [['c-stuck', code]], stop);
       // Raised as a stop, which leaves a kept capture kept, so its worker tells it nothing
       assert.deepEqual(w.stops, ['c-stuck'], stop);
-      assert.deepEqual(sent, ['c-stuck', 'c-stuck'], stop);
-      assert.equal(await w.recordOf('notes', 'n-later'), undefined, stop);
-      assert.deepEqual(w.journal.entries().find(entry => entry.opId === 'c-stuck')?.unreplayable?.code, code, stop);
+      // It holds back only its own note's entries, so another note's landed past it
+      assert.deepEqual(sent, ['c-stuck', 'c-later', 'c-stuck'], stop);
+      assert.ok(await w.recordOf('notes', 'n-later'), stop);
+      assert.deepEqual(
+        w.journal.entries().map(entry => [entry.opId, entry.unreplayable?.code]),
+        [['c-stuck', code]],
+        stop,
+      );
     }
 
     // The same when the conflict record that would keep an entry can't be written for good
@@ -604,17 +877,17 @@ describe('the journal drain (#35 slice 3)', () => {
       /** @param {any} query */
       query: query => w.worker.query(query),
     };
-    for (const run of [1, 2]) {
-      const result = await w.drain({ client });
-      assert.deepEqual(
-        [result.status, result.code, result.left],
-        ['stopped', 'not-cloneable', 2],
-        `keep, drain ${run}`,
-      );
-    }
+    const drains = [await w.drain({ client }), await w.drain({ client })];
+    assert.deepEqual(
+      drains.map(result => [result.status, result.code, result.replayed, result.left, result.held]),
+      [
+        ['stopped', 'not-cloneable', 1, 1, [{ noteId: 'n-odd', code: 'not-cloneable' }]],
+        ['stopped', 'not-cloneable', 0, 1, [{ noteId: 'n-odd', code: 'not-cloneable' }]],
+      ],
+    );
     assert.deepEqual(w.told, [['c-odd', 'not-cloneable']]);
     assert.deepEqual(w.stops, ['c-odd']);
-    assert.equal(await w.recordOf('notes', 'n-later'), undefined);
+    assert.ok(await w.recordOf('notes', 'n-later'));
 
     // A removal that fails for good once the entry's command is in raises nothing, since the
     // next drain's ledger answers it
@@ -627,12 +900,16 @@ describe('the journal drain (#35 slice 3)', () => {
       },
     };
     const first = await removing.drain({ journal: failingRemove });
-    assert.deepEqual([first.status, first.code, first.replayed, removing.told], ['stopped', 'quota', 0, []]);
+    assert.deepEqual(
+      [first.status, first.code, first.replayed, first.held, removing.told],
+      ['stopped', 'quota', 0, [], []],
+    );
     assert.ok(await removing.recordOf('notes', 'n-in'), 'its command is in');
     const next = await removing.drain();
     assert.deepEqual([next.status, next.replayed, next.left, removing.told], ['drained', 1, 0, []]);
 
-    // A throw that says it may get through raises nothing, as a stop it can retry doesn't
+    // A throw that says it may get through raises nothing, as a stop it can retry doesn't, and
+    // holds back its note
     const busy = world();
     await busy.journal.put(entryOf(quickNote('c-busy', 'n-busy')));
     const stopped = await busy.drain({
@@ -644,7 +921,10 @@ describe('the journal drain (#35 slice 3)', () => {
         query: query => busy.worker.query(query),
       },
     });
-    assert.deepEqual([stopped.status, stopped.code, busy.told], ['stopped', 'transaction-aborted', []]);
+    assert.deepEqual(
+      [stopped.status, stopped.code, stopped.held, busy.told],
+      ['stopped', 'transaction-aborted', [{ noteId: 'n-busy', code: 'transaction-aborted' }], []],
+    );
   });
 
   it('answers empty for an empty journal, and sends nothing', async () => {

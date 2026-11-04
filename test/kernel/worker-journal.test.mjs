@@ -293,6 +293,68 @@ describe("the worker's journal (#35 slice 3)", () => {
     assert.deepEqual(notified, []);
   });
 
+  it("counts the drains in a row that stop at an entry on a code it can retry for its life, where the mark can't be written, and raises it on the third, once (slice 3b)", async () => {
+    const memory = createMemoryJournal();
+    /** @type {import('../../js/kernel/core/ports/journal.js').JournalStore} */
+    const journal = Object.freeze({
+      open: () => memory.open(),
+      put: (/** @type {any} */ entry) => memory.put(entry),
+      list: () => memory.list(),
+      inFlight: () => memory.inFlight(),
+      remove: (/** @type {readonly string[]} */ opIds) => memory.remove(opIds),
+      // A full disk refuses the mark, so only the worker's memory can count
+      mark: async () => {
+        throw new UnavailableError('quota', 'quota', false);
+      },
+    });
+    await memory.put(
+      journalEntry({
+        command: /** @type {any} */ (capture('c-busy')),
+        v: 1,
+        noteId: 'daily-c-busy',
+        surface: 'worker-internal',
+        ownerSessionId: INSTANCE,
+        seq: 1,
+        createdAt: NOW,
+      }),
+    );
+    /** @type {Array<[string, unknown]>} */
+    const events = [];
+    /** @type {string[]} */
+    const notified = [];
+    const worked = createWorkerJournal({
+      instanceId: INSTANCE,
+      stores: /** @type {any} */ ({ journal: () => journal, journalExists: async () => true }),
+      locks: null,
+      clock: testClock(),
+      events: { event: (code, fields, failure) => events.push([code, failure]) },
+      notify: entry => notified.push(entry.opId),
+      warn: () => {},
+    });
+    const { kernel } = worker();
+    const timedOut = {
+      kind: 'unavailable',
+      cause: 'storage',
+      code: 'timed-out',
+      retryable: true,
+      messageKey: 'unavailable.timed-out',
+      severity: 'error',
+    };
+    const client = {
+      /** @param {any} command */
+      execute: async command => (command.commandId === 'c-busy' ? timedOut : kernel.execute(command)),
+      /** @param {any} query */
+      query: (/** @type {any} */ query) => kernel.query(query),
+    };
+    for (const run of [1, 2]) {
+      await worked.drain(/** @type {any} */ (client));
+      assert.deepEqual(events, [], `drain ${run}`);
+    }
+    for (let run = 3; run <= 5; run++) await worked.drain(/** @type {any} */ (client));
+    assert.deepEqual(events, [['journal.entry-unreplayable', { code: 'timed-out' }]]);
+    assert.deepEqual(notified, []);
+  });
+
   it("tells the diagnostic journal of an entry it can't replay, by why and the surface that wrote it, and notifies for a capture", async () => {
     const w = worker();
     // A newer build's capture, and a page's note it can't read, each orphaned
