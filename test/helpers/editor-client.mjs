@@ -30,10 +30,11 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  * storage guard's raw export, and an import's backup check are the root's, as the root gives
  * them to App.
  * @param {{settings: any, onListQuery?: (query: any) => void, kernelNow?: () => number,
- *   pageNow?: () => number, zone?: string}} host - the page's chrome.storage.local,
- *   what to tell of each query the note list makes, the kernel's and the document client's
- *   clocks, the system's unless given, and the zone both take today's Daily Note in, the host's
- *   unless given (#17 PR 3b)
+ *   pageNow?: () => number, zone?: string, onExecute?: (command: any, options: any) => void}} host
+ *   - the page's chrome.storage.local, what to tell of each query the note list makes, the
+ *   kernel's and the document client's clocks, the system's unless given, the zone both take
+ *   today's Daily Note in, the host's unless given (#17 PR 3b), and what to tell of each command
+ *   the page's client is handed, with what it carries for the journal (#35 slice 3b)
  * @returns {{
  *   kernel: import('../../js/kernel/composition/host.js').Client,
  *   documentClient: import('../../js/kernel/composition/document.js').DocumentClient,
@@ -49,7 +50,7 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  *   `removalFor` makes the page's removeNotes, with the pane moves and announce the test's
  *   page has, settled by its note list
  */
-export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pageNow, zone }) {
+export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pageNow, zone, onExecute }) {
   // The page waits on the worker's run first, as the new tab's root does
   const adapter = createNewTabAdapter({
     indexedDB: globalThis.indexedDB,
@@ -67,7 +68,12 @@ export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pa
     ready: adapter.open(),
   });
   const client = Object.freeze({
-    execute: kernel.execute,
+    execute: onExecute
+      ? (/** @type {any} */ command, /** @type {any} */ options) => {
+          onExecute(command, options);
+          return kernel.execute(command);
+        }
+      : kernel.execute,
     query: kernel.query,
     subscribe: kernel.subscribe,
     whenReady: kernel.whenReady,
