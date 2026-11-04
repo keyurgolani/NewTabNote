@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { drainJournal } from '../../js/kernel/core/application/journal-drain.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
-import { UnavailableError, unknown } from '../../js/kernel/core/contracts/outcomes.js';
+import { UnavailableError, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
 import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
@@ -813,6 +813,52 @@ describe('the journal drain (#35 slice 3)', () => {
       ],
       'the third since',
     );
+  });
+
+  it("adds up the drains in a row that stop at an entry on different codes it can retry, raises the third on its own code, once, and counts no more stops there on that code (R191's finding 3)", async () => {
+    const w = world();
+    // A capture an earlier worker kept, which each drain stops at on a code it can retry
+    await w.journal.put(entryOf(capture('c-busy'), { owner: 'coordinator-0' }));
+    const aborted = unavailable('storage', 'transaction-aborted', true);
+    const inTurn = [TIMED_OUT, unknown('outcome-unknown', 'c-busy'), aborted, aborted, aborted, aborted];
+    let drains = 0;
+    const client = {
+      /** @param {any} command */
+      execute: async command => (command.commandId === 'c-busy' ? inTurn[drains] : w.worker.execute(command)),
+      /** @param {any} query */
+      query: query => w.worker.query(query),
+    };
+    /** The entry's mark, by its code and count, as the drain left it */
+    const mark = () => {
+      const [entry] = w.journal.entries();
+      return entry.unreplayable ? [entry.unreplayable.code, entry.unreplayable.count ?? null] : null;
+    };
+    /** @type {unknown[]} */
+    const marks = [];
+    for (; drains < 2; drains++) {
+      await w.drain({ client });
+      marks.push(mark());
+    }
+    assert.deepEqual(
+      marks,
+      [
+        ['timed-out', 1],
+        ['outcome-unknown', 2],
+      ],
+      'one count across the codes',
+    );
+    assert.deepEqual(w.told, []);
+    await w.drain({ client });
+    drains++;
+    assert.deepEqual(w.told, [['c-busy', 'transaction-aborted']], 'the third, on its own code');
+    assert.deepEqual(w.stops, ['c-busy']);
+    assert.deepEqual(mark(), ['transaction-aborted', null], 'raised');
+    // Raised, the drains that stop there again on that code count nothing and raise nothing
+    for (; drains < inTurn.length; drains++) {
+      await w.drain({ client });
+      assert.deepEqual(mark(), ['transaction-aborted', null], `drain ${drains + 1}`);
+    }
+    assert.deepEqual(w.told, [['c-busy', 'transaction-aborted']], 'once');
   });
 
   it("raises an entry's incident once when it stops every drain there, on a code it can't retry or a throw, and holds back only its note", async () => {
