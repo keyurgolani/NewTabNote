@@ -95,6 +95,39 @@ describe("the new tab's close-time draft writer", () => {
     assert.equal('orders' in drafts[`${PREFIX}still`].base, false);
   });
 
+  it("names the pane of the base it was made on when the editor gives one, and is byte for byte as before when it doesn't (#6)", () => {
+    const storage = legacyEnv.createLocalStorage();
+    const writer = closeDraftWriter({ storage, newId: idsFrom(['page-1']), now: () => AT });
+    const paned = { ...fieldsOf({ id: 'paned' }), pane: 'pane-1' };
+    writer.write(paned);
+    writer.write(fieldsOf({ id: 'bare' }));
+    const draft = JSON.parse(/** @type {string} */ (storage.getItem(`${PREFIX}paned`)));
+    assert.equal(draft.pane, 'pane-1');
+    assert.equal(isCloseDraft(draft), true, "1.5.0's check reads none of it");
+    // In the order the writer has always written its fields, with no pane
+    const bare = {
+      v: 1,
+      id: 'bare',
+      page: 'page-1',
+      noteId: 'n1',
+      at: AT,
+      base: {
+        revision: 4,
+        updatedAt: AT - 60_000,
+        issued: [],
+        name: 'Plan',
+        blocks: { b1: blockDigest({ ...typed, content: 'before' }, 'n1') },
+        issuedSaves: [],
+      },
+      blocks: [typed],
+      deletedBlockIds: ['b9'],
+      preview: 'typed as the tab closed',
+      todoProgress: null,
+      linkedNames: ['Elsewhere'],
+    };
+    assert.equal(storage.getItem(`${PREFIX}bare`), JSON.stringify(bare));
+  });
+
   it('carries a title, typed unless it says generated, and only when the editor gives one', () => {
     const storage = legacyEnv.createLocalStorage();
     const writer = closeDraftWriter({ storage, newId: idsFrom(['page-1']), now: () => AT });

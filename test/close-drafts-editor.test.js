@@ -13,7 +13,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, createLocalStorage, settle, plain, note, block, FakeDocument,
-  makeEditor, releaseStorage, runUntil, startEditorClient, createLockManager,
+  makeEditor, releaseStorage, runUntil, startEditorClient, createLockManager, waitFor,
 } = require('./helpers/legacy-env');
 const { release143 } = require('./helpers/release-143');
 
@@ -1410,5 +1410,71 @@ describe("1.4.3 reads a draft the stack's writer wrote, on a profile at version 
     assert.equal(rows.blocks.a1.content, 'saved by the stack', 'the note as the stack saved it');
     const copies = Object.values(rows.blocks).filter((row) => row.canvasId === `${draft.id}-recovered`);
     assert.ok(copies.some((row) => row.content === 'then typed as the tab closed'), 'the edit is in the recovered note');
+  });
+});
+
+describe("a close-time draft names the pane of the base it was made on, so the next start can take that pane's journal entries for the note (#6)", () => {
+  /** The pane each of the page's saves names for the journal, by note, in the order they went */
+  function panesOfSaves(env) {
+    const client = env.documentClient;
+    const real = client.saveContent;
+    const panes = [];
+    client.saveContent = (save, options) => {
+      panes.push({ noteId: save.noteId, pane: options && typeof options.pane === 'string' ? options.pane : null });
+      return real(save, options);
+    };
+    return panes;
+  }
+
+  it('of the note the pane shows: the pane its saves named', async () => {
+    const env = await setup();
+    const editor = makeEditor(env);
+    await editor.loadNote('C');
+    const panes = panesOfSaves(env);
+    type(editor, 'charlie, saved');
+    env.clock.tick(500);
+    assert.equal(await runUntil(env, editor.flushSave()), true);
+    type(editor, 'charlie, typed as the tab closed');
+    closePage(env);
+    const [draft] = drafts(env);
+    assert.equal(typeof panes[0].pane, 'string', 'its save named a pane');
+    assert.equal(draft.pane, panes[0].pane);
+  });
+
+  it("of a note the pane left, whose failed save's retry it holds: that save's pane, not the next load's", async () => {
+    const env = await setup({ notes: [note('D', { name: 'Delta' })], blocks: [block('d1', 'D', 0, 'delta')] });
+    const editor = makeEditor(env);
+    await editor.loadNote('C');
+    // Under the pane watch, so a save that fails is seen too
+    failSavesOf(env, 'C');
+    const panes = panesOfSaves(env);
+    // D's read waits while an edit of C goes in, so the switch writes it, and the save fails
+    const client = env.documentClient;
+    const open = client.openNote;
+    let reading = false;
+    let letGo = () => {};
+    const held = new Promise((resolve) => {
+      letGo = resolve;
+    });
+    client.openNote = (noteId, ...rest) => {
+      if (noteId !== 'D' || reading) return open.call(client, noteId, ...rest);
+      reading = true;
+      return held.then(() => open.call(client, noteId, ...rest));
+    };
+    const switching = editor.loadNote('D');
+    await waitFor(() => reading, { message: "D's read" });
+    type(editor, 'charlie, typed while D was read');
+    letGo();
+    await runUntil(env, switching);
+    await settle();
+    assert.equal(editor.noteId, 'D');
+    // The page closes before the retry
+    closePage(env);
+    const ofC = drafts(env).filter((draft) => draft.noteId === 'C');
+    assert.equal(ofC.length, 1, "the left note's draft, from its retry copy");
+    assert.deepEqual(ofC[0].blocks.map((b) => b.content), ['charlie, typed while D was read']);
+    const [switched] = panes.filter((save) => save.noteId === 'C');
+    assert.equal(typeof switched.pane, 'string', "the switch's save named C's pane");
+    assert.equal(ofC[0].pane, switched.pane);
   });
 });
