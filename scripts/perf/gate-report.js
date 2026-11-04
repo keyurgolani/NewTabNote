@@ -13,8 +13,10 @@
  *
  * A profile is invalid when 1.4.0 against itself is off by more than the tolerance, when any
  * round of any package failed, when the probe reported a problem (a fixture digest that isn't
- * the recorded one, for one), or when it ran fewer rounds than build/budgets.json takes. An
- * invalid profile's timing and heap say `invalid`, with the reasons listed under the table.
+ * the recorded one, for one), or when fewer rounds have a run of every package than the probe
+ * asked for, or than build/budgets.json takes. A profile either row gates that the run has no
+ * rounds of is invalid too, so a run that measured nothing can't pass a gate. An invalid
+ * profile's timing and heap say `invalid`, with the reasons listed under the table.
  *
  * A row whose mode is `report` never fails this script; one whose mode is `gate` exits 1 when
  * it fails, or when the run is invalid.
@@ -53,13 +55,17 @@ function gateReport(probe, budgets) {
   const notes = [];
   let failed = false;
   const probeProblems = [...(probe.problems || []), ...(probe.packages || []).flatMap(entry => entry.problems || [])];
-  for (const [name, profile] of Object.entries(probe.timing ? probe.timing.profiles : {})) {
-    const ratios = Object.entries(profile.ratios || {});
+  // Each profile a row gates, then any other the run measured
+  const measured = (probe.timing && probe.timing.profiles) || {};
+  const names = [...new Set([...(timing.profiles || []), ...(heap.profiles || []), ...Object.keys(measured)])];
+  for (const name of names) {
+    const profile = measured[name];
+    const ratios = Object.entries((profile && profile.ratios) || {});
     const self = ratios.find(([, ratio]) => ratio.self);
     const candidate = ratios.find(([, ratio]) => ratio.againstBoth);
     if (!self || !candidate) {
       // Not a run this summary can read: invalid, so a gate fails and a report still writes
-      const problems = ['the run has no 1.4.0 pair and candidate'];
+      const problems = [profile ? 'the run has no 1.4.0 pair and candidate' : 'the run has no rounds of this profile, which build/budgets.json gates'];
       lines.push(`| ${name} | 0 | n/a | **no** | n/a | invalid | n/a | invalid | |`);
       notes.push(...problems.map(item => `- ${name}: ${item}`));
       if (timing.mode === 'gate' || heap.mode === 'gate') failed = true;
@@ -79,8 +85,14 @@ function gateReport(probe, budgets) {
     if (!selfRatio) problems.push('1.4.0 against itself has no paired round');
     if (!both) problems.push(`the ${candidate[0]} has no round paired with both 1.4.0 runs`);
     for (const item of probeProblems) problems.push(`the probe: ${item}`);
-    const rounds = Math.min(probe.timing.runs ?? Infinity, both ? both.values.length : 0);
-    if (rounds < timing.rounds) problems.push(`${rounds} rounds, fewer than the ${timing.rounds} build/budgets.json takes`);
+    // The medians below rest on the rounds with a run of every package: every round asked needs
+    // one, and at least as many as the row takes, so a package short on either side is invalid
+    const asked = probe.timing.runs;
+    const paired = both ? both.values.length : 0;
+    const rounds = Math.min(asked ?? Infinity, paired);
+    if (!Number.isInteger(timing.rounds) || timing.rounds < 1) problems.push("build/budgets.json's timing row doesn't say how many rounds it takes");
+    else if (rounds < timing.rounds) problems.push(`${rounds} rounds, fewer than the ${timing.rounds} build/budgets.json takes`);
+    else if (paired < asked) problems.push(`only ${paired} of the ${asked} rounds asked have a run of every package`);
     const valid = problems.length === 0 && Math.abs(selfRatio.median - 1) * 100 <= timing.tolerancePct;
     const timingVerdict = !valid ? 'invalid' : both.median - 1 <= timing.tolerancePct / 100 ? 'pass' : 'fail';
     const heapMiB = candidateHeap ? candidateHeap.median / MIB : null;
