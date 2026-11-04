@@ -353,21 +353,22 @@ function chunkFileName(root) {
   return (chunk) => (chunk.moduleIds.length === 1 && ids.has(chunk.moduleIds[0]) ? LOADER : `${ASSETS_DIR}/[name]-[hash].js`);
 }
 
-/** close-drafts-chunk's file, which the pages import only with import() */
-const CLOSE_DRAFTS_CHUNK = /(?:^|\/)close-drafts-chunk-[A-Za-z0-9_-]+\.js$/;
+/** The files of close-drafts-chunk and journal-chunk, which the pages import only with import() */
+const UNPRELOADED_CHUNKS = /(?:^|\/)(?:close-drafts|journal)-chunk-[A-Za-z0-9_-]+\.js$/;
 
 /**
  * The files the bundler preloads beside a dynamic import, or beside a page's entry: none beside
  * close-drafts-chunk, which the new tab, Popup and Side Panel import on a start that finds work
- * for it (#33, composition/close-drafts.js), so no page's start carries a preload list for it,
- * and every other import's own (the lead's trim 2). A start that finds a draft then loads the
- * applier's files one after another, which the lead takes.
+ * for it (#33, composition/close-drafts.js), or beside journal-chunk, which they import on their
+ * first journaled command or at idle (#35 slice 3b, composition/host.js), so no page's start
+ * carries a preload list for either, and every other import's own (the lead's trim 2). A start
+ * that loads one then loads its files one after another, which the lead takes.
  * @param {string} filename - the file imported, or the page's entry
  * @param {string[]} deps
  * @returns {string[]}
  */
 function preloadsFor(filename, deps) {
-  return CLOSE_DRAFTS_CHUNK.test(filename) ? [] : deps;
+  return UNPRELOADED_CHUNKS.test(filename) ? [] : deps;
 }
 
 /**
@@ -387,8 +388,8 @@ function pagesConfig(options) {
     ...common(options),
     build: {
       ...buildOptions(options),
-      // Chrome 116 has modulepreload, so the polyfill would only add code. close-drafts-chunk
-      // preloads nothing beside it (preloadsFor).
+      // Chrome 116 has modulepreload, so the polyfill would only add code. close-drafts-chunk and
+      // journal-chunk preload nothing beside them (preloadsFor).
       modulePreload: { polyfill: false, resolveDependencies: preloadsFor },
       rolldownOptions: {
         input: Object.fromEntries(Object.entries(PAGES).map(([name, file]) => [name, path.join(root, file)])),

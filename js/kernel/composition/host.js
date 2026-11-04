@@ -1,7 +1,8 @@
 /**
  * What the composition roots share (#12, "Where the kernel runs"): the settings and the
- * storage host a page or the worker reads from its globals, and the kernel each root builds on
- * its adapter, with the client it hands out.
+ * storage host a page or the worker reads from its globals, the kernel each root builds on
+ * its adapter, with the client it hands out, and the journal's shim on a page's client (#35
+ * slice 3b, journalingClient).
  *
  * Loading this module touches no browser API, so a root can load before its page's or the
  * worker's globals exist, as js/background.js needs. Everything here reads them when it's
@@ -9,6 +10,7 @@
  */
 
 import { createKernel } from '../core/application/kernel.js';
+import { COMMANDS } from '../core/contracts/commands.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { randomIds } from './ids.js';
@@ -20,6 +22,10 @@ import { randomIds } from './ids.js';
 /** @typedef {import('../core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../core/ports/runtime.js').Ids} Ids */
 /** @typedef {import('../core/ports/runtime.js').Logger} Logger */
+/** @typedef {import('../core/contracts/commands.js').Command} Command */
+/** @typedef {import('../core/contracts/outcomes.js').Outcome} Outcome */
+/** @typedef {import('../core/contracts/outcomes.js').BulkOutcome} BulkOutcome */
+/** @typedef {import('../core/application/journaling.js').JournalingOptions} JournalingOptions */
 
 /**
  * js/storage.js's shell, the `Storage` global llm.js and App's reconnect still call, which the
@@ -203,4 +209,84 @@ export function kernelClient({ adapter, surface, handlers, maintainOnOpen = fals
     whenReady: kernel.whenReady,
     ids: randomIds,
   });
+}
+
+/**
+ * A page's journal, once its chunk is in (composition/journal-chunk.js): its journaling, which
+ * writes a journaled command's entry and then sends it
+ * @typedef {{execute: (command: Command, send: Client['execute'], options?: JournalingOptions) => Promise<Outcome | BulkOutcome>}} PageJournal
+ */
+
+/**
+ * The journal's chunk, as a root loads it
+ * @template {Client} C
+ * @typedef {{startPageJournal: (options: {client: C, sessionId: string, surface: Surface}) => PageJournal}} JournalChunk
+ */
+
+/** How long after a page's first read its journal may wait for the page to go idle (the lead's bound) */
+const JOURNAL_IDLE_CAP_MS = 2000;
+
+/**
+ * The page's idle callback. A page without one, as a test's, loads its journal on its first
+ * journaled command alone.
+ * @param {() => void} callback
+ * @param {{timeout: number}} options
+ */
+const whenIdle = (callback, options) => {
+  if (typeof globalThis.requestIdleCallback === 'function') globalThis.requestIdleCallback(callback, options);
+};
+
+/**
+ * `client` with its journal (#35 slice 3b): the shim every page's root hands out. The journal's
+ * chunk loads on the page's first journaled command, or at idle once its first read is in, with a
+ * 2 s cap, whichever comes first, so no page's start holds it. No command waits for it: until it's
+ * in, a command goes as it did before slice 3, unjournaled, which the close-time draft covers for
+ * an editor's save, since a command held for it could go out after one sent later and write older
+ * text over it (the lead's addition to 3b's plan). Once it's in, each command goes through the
+ * journal, with what its caller tells of it (`options`). A chunk that can't load leaves the page
+ * as it was.
+ * @template {Client} C
+ * @param {C} client
+ * @param {{surface: Surface, load: () => Promise<JournalChunk<C>>, sessionId?: string, requestIdle?: (callback: () => void, options: {timeout: number}) => void}} options
+ *   `sessionId` is the page's, which its owner lock and entries name, new for each page load
+ * @returns {C & {execute: (command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>}}
+ */
+export function journalingClient(client, { surface, load, sessionId = randomIds.next(), requestIdle = whenIdle }) {
+  /** @type {PageJournal | null} */
+  let journal = null;
+  /** @type {Promise<void> | null} */
+  let loading = null;
+  let read = false;
+  const start = () => {
+    if (loading) return;
+    try {
+      loading = Promise.resolve(load())
+        .then(chunk => {
+          journal = chunk.startPageJournal({ client, sessionId, surface });
+        })
+        .catch(() => {});
+    } catch {
+      loading = Promise.resolve();
+    }
+  };
+  /** @type {(command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>} */
+  const execute = (command, options) => {
+    if (journal) return journal.execute(command, client.execute, options);
+    const type = /** @type {keyof typeof COMMANDS} */ (command.type);
+    if (Object.hasOwn(COMMANDS, type) && COMMANDS[type].journaled) start();
+    return client.execute(command);
+  };
+  /** @type {C['query']} */
+  const query = request => {
+    const answer = client.query(request);
+    if (!read) {
+      read = true;
+      const idle = () => requestIdle(start, { timeout: JOURNAL_IDLE_CAP_MS });
+      answer.then(idle, idle);
+    }
+    return answer;
+  };
+  return /** @type {C & {execute: typeof execute}} */ (
+    /** @type {unknown} */ (Object.freeze({ ...client, execute, query }))
+  );
 }
