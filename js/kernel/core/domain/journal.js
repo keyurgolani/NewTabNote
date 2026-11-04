@@ -23,7 +23,9 @@
  *   Web Lock `journal.owner.<ownerSessionId>`, and the drain leaves its entries alone.
  * - `state` is `submitted` for a command sent, which the drain commits, or `draft` for input
  *   not yet sent (#2's), which it never does.
- * - `unreplayable` is set once the drain has raised its incident: `{code, at}`.
+ * - `unreplayable` is set once the drain has raised its incident: `{code, at}`. Before that, it's
+ *   `{code, at, count}` while the drain counts the drains in a row that stopped at the entry on a
+ *   code it can retry, the third of which raises it (slice 3b).
  *
  * An entry holds what the user wrote, as a close-time draft and a conflict record do. It's
  * session state: never in a backup, an export, sync, or diagnostics, and it's deleted once its
@@ -48,7 +50,7 @@ import { isId, isRecord } from '../contracts/checks.js';
  * @property {number} createdAt
  * @property {string} ownerSessionId
  * @property {'draft' | 'submitted'} state
- * @property {{code: string, at: number}} [unreplayable]
+ * @property {{code: string, at: number, count?: number}} [unreplayable]
  */
 
 /** The Web Lock the drain holds while it replays, which #2's Moment and #13's resume take too */

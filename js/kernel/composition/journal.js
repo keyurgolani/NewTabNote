@@ -17,10 +17,11 @@
  * - What the drain can't replay is `journal.entry-unreplayable` (#20, the lead's answer to the
  *   plan's Q8), on the coordinator's provider, and a capture among them is told to `notify`, with
  *   why. A stop for good at a capture raises the incident and tells it nothing, since it's still
- *   kept (the lead's call on #182). What its drains raised the worker keeps for its life, so a
- *   mark the journal can't write doesn't raise it again. A capture it adds is
- *   `capture.committed`, as one the worker adds at once is, so it resolves the capture incident
- *   its failure raised.
+ *   kept (the lead's call on #182). What its drains raised, and the stops they counted, the
+ *   worker keeps for its life, so a mark the journal can't write doesn't raise it again, and the
+ *   third drain in a row that stops at an entry raises it all the same (slice 3b). A capture it
+ *   adds is `capture.committed`, as one the worker adds at once is, so it resolves the capture
+ *   incident its failure raised.
  *
  * Building it opens nothing, and nothing here throws into the worker: a journal that can't be
  * written leaves the capture to run as it did before slice 3, and says so on the console.
@@ -140,6 +141,9 @@ export function createWorkerJournal({
   /** What this worker's drains raised, by entry and code, for its life (journal-drain.js) */
   /** @type {Set<string>} */
   const raised = new Set();
+  /** How many drains in a row stopped at each entry on a code they can retry, for its life */
+  /** @type {Map<string, number>} */
+  const stops = new Map();
 
   /**
    * Takes this instance's owner lock once, and holds it for as long as the worker lives.
@@ -243,6 +247,7 @@ export function createWorkerJournal({
         clock,
         unreplayable,
         raised,
+        stops,
         replayed,
       });
     };
