@@ -128,7 +128,8 @@ class FormattingToolbar {
       e.preventDefault(); // keep selection alive
       const target = /** @type {HTMLElement} */ (e.target);
       const btn = /** @type {HTMLElement} */ (target.closest('.formatting-toolbar-btn'));
-      if (!btn) return;
+      // A double-click's second press, as one that lands where ✓ just was, does nothing (#193)
+      if (!btn || e.detail > 1) return;
       this._onButtonClick(btn.dataset.command, btn.dataset.id);
     });
 
@@ -141,15 +142,25 @@ class FormattingToolbar {
     // Link input confirm, on its activation: a click, or Enter or Space once Tab has reached it
     this._linkConfirm.addEventListener('click', () => this._applyLink());
 
-    this._linkField.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
+    // Enter, in the field or on ✓, applies the link once, on its release, so a held Enter's repeats
+    // reach nothing else (#193). An IME's commit, a press while composing and a release with no press
+    // here, does nothing. Escape, in the field or on ✓, closes the field and gives back the selection
+    // Link saved
+    this.linkInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) {
         e.preventDefault();
-        this._applyLink();
+        this._enter = true;
       }
       if (e.key === 'Escape') {
         e.preventDefault();
         this._hideLinkInput();
         this._restoreRange();
+      }
+    });
+    this.linkInput.addEventListener('keyup', (e) => {
+      if (e.key === 'Enter' && this._enter) {
+        this._enter = false;
+        this._applyLink();
       }
     });
 
@@ -400,6 +411,7 @@ class FormattingToolbar {
   _showLinkInput() {
     this._saveRange();
     this.linkMode = true;
+    this._enter = false;
     this._btnGroup.style.display = 'none';
     this.linkInput.style.display = 'flex';
 
