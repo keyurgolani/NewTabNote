@@ -236,7 +236,7 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
         }
         const outcome = await answer;
         if (!kept || !ENDS.includes(outcome.kind)) return outcome;
-        const going = [record.opId, ...(outcome.kind === 'committed' ? coveredBy(type, noteId, pane, seq) : [])];
+        const going = [record.opId, ...(outcome.kind === 'committed' ? coveredBy(type, noteId, pane, record.seq) : [])];
         await remove(going);
         return outcome;
       })();
