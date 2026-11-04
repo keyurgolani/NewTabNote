@@ -169,5 +169,54 @@ export function describeIdempotencyLedger(fixture) {
         assert.deepEqual(await context.ledger.read(pin()), { status: 'committed', outcome: pinned });
       }),
     );
+
+    it(
+      "reads a key's status by the key alone, whatever command its record is of: committed or conflict, with its outcome (#6)",
+      using(async ({ ledger, record }) => {
+        await record(pin('c1'), pinned);
+        const lost = conflict('revision-mismatch', 4);
+        await record(pin('c2'), lost);
+        assert.deepEqual(await ledger.status('c1'), { status: 'committed', outcome: pinned });
+        assert.deepEqual(await ledger.status('c2'), { status: 'conflict', outcome: lost });
+        // Another command under the key is key reuse to a read, and the key's status is the record's
+        assert.deepEqual(await ledger.read(pin('c1', false)), { status: 'key-reuse' });
+        assert.deepEqual(await ledger.status('c1'), { status: 'committed', outcome: pinned });
+      }),
+    );
+
+    it(
+      'reads the status of a key it has no record of as absent, writes nothing when it does, and answers copies',
+      using(async ({ ledger, record }) => {
+        assert.deepEqual(await ledger.status('c1'), { status: 'absent' });
+        assert.deepEqual(await record(pin('c1', false), pinned), { status: 'committed', outcome: pinned });
+        const read = /** @type {{outcome: Committed}} */ (await ledger.status('c1'));
+        read.outcome.changedIds.push('changed');
+        assert.deepEqual(await ledger.status('c1'), { status: 'committed', outcome: pinned });
+      }),
+    );
+
+    it(
+      'refuses the status of a key that is no id, with the adapter cause, as it refuses a read',
+      using(async ({ ledger }) => {
+        for (const commandId of ['', undefined, 7]) {
+          await assert.rejects(ledger.status(/** @type {string} */ (/** @type {unknown} */ (commandId))), error => {
+            assert.ok(error instanceof UnavailableError);
+            assert.deepEqual([error.unavailableCause, error.code], ['adapter', 'invalid-key']);
+            return true;
+          });
+        }
+      }),
+    );
+
+    it(
+      'rejects a status it could not read with an UnavailableError, never an answer',
+      using(async context => {
+        if (!context.failNextRead) return;
+        await context.record(pin(), pinned);
+        await context.failNextRead();
+        await assert.rejects(context.ledger.status('c1'), UnavailableError);
+        assert.deepEqual(await context.ledger.status('c1'), { status: 'committed', outcome: pinned });
+      }),
+    );
   });
 }
