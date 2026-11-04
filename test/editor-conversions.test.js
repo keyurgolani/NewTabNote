@@ -515,22 +515,25 @@ describe('a URL or an image pasted into a block in the middle of a note goes rig
     assert.deepEqual(await places(env, editor), { model: order, screen: order, saved: order });
   });
 
-  // The focused block's id naming no block of the note, as an id left from a block deleted since
-  // would: there's no block to go after, so the paste goes at the note's end
+  // No block to go after: the focused block's id names no block of the note, as an id left from a
+  // block deleted since would, or no block has focus at all, as with focus in the title. Either
+  // way the paste goes at the note's end
   for (const [what, text, items, made] of [
     ['an image', '', [{ type: 'image/png', getAsFile: () => ({ type: 'image/png', name: 'x.png' }) }], 'image'],
     ['a URL', 'https://example.test/page', [], 'bookmark'],
   ]) {
-    it(`${what} pasted while the focused block's id names no block of the note goes at the note's end`, OPTIONS, async () => {
-      const { env, editor } = await openNote([block('p1', 'N', 0, 'one'), block('p2', 'N', 1, 'two'), block('p3', 'N', 2, 'three')]);
-      env.global.Utils.readFileAsDataURL = async () => 'data:image/png;base64,iVBORw0KGgo=';
-      editor.fetchLinkPreview = () => {};
-      editor.doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
-      editor.activeBlock = 'gone';
-      editor.onPaste({ target: editor.container, clipboardData: { items, getData: () => text }, preventDefault() {} });
-      await runUntil(env, new Promise(resolve => setTimeout(resolve, 50)));
-      const order = ['p1', 'p2', 'p3', made];
-      assert.deepEqual(await places(env, editor), { model: order, screen: order, saved: order });
-    });
+    for (const [where, active] of [["while the focused block's id names no block of the note", 'gone'], ['with no focused block', null]]) {
+      it(`${what} pasted ${where} goes at the note's end`, OPTIONS, async () => {
+        const { env, editor } = await openNote([block('p1', 'N', 0, 'one'), block('p2', 'N', 1, 'two'), block('p3', 'N', 2, 'three')]);
+        env.global.Utils.readFileAsDataURL = async () => 'data:image/png;base64,iVBORw0KGgo=';
+        editor.fetchLinkPreview = () => {};
+        editor.doc.defaultView.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
+        editor.activeBlock = active;
+        editor.onPaste({ target: editor.container, clipboardData: { items, getData: () => text }, preventDefault() {} });
+        await runUntil(env, new Promise(resolve => setTimeout(resolve, 50)));
+        const order = ['p1', 'p2', 'p3', made];
+        assert.deepEqual(await places(env, editor), { model: order, screen: order, saved: order });
+      });
+    }
   }
 });
