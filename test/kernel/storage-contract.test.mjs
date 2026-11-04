@@ -31,6 +31,15 @@ const WORKER_ONLY = Object.freeze({
   'js/kernel/adapters/indexeddb/transforms.js': "the worker's transforms",
   'js/kernel/adapters/indexeddb/purge.js': "the worker's purge",
 });
+/**
+ * The storage tasks only the worker's adapter has (worker-tasks.js), which no page may reach
+ * either: the read-only integrity check and the ledger's retention (#35 slice 3c)
+ */
+const WORKER_TASK_MODULES = Object.freeze({
+  'js/kernel/adapters/indexeddb/worker-tasks.js': "the worker's storage tasks",
+  'js/kernel/adapters/indexeddb/integrity.js': "the worker's integrity check",
+  'js/kernel/adapters/indexeddb/ledger-sweep.js': "the worker's ledger sweep",
+});
 /** Deleted with #17 PR 4a, once every root opened #17's adapter */
 const LEGACY_ADAPTER = 'js/kernel/adapters/legacy/adapter.js';
 const PAGES = Object.freeze(['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html']);
@@ -112,6 +121,17 @@ it('every root loads the IndexedDB adapter, and the legacy one is gone; only the
   ]) {
     assert.ok(newtab.has(file), file);
   }
+});
+
+it("no page reaches the worker's own storage tasks, the integrity check and the ledger's retention, at its start or later, and the worker loads them (#35 slice 3c)", () => {
+  const { all, pages } = pageGraphs();
+  /** @type {string[]} */
+  const reached = [];
+  for (const [page, { modules }] of pages) {
+    for (const [file, what] of Object.entries(WORKER_TASK_MODULES)) if (modules.has(file)) reached.push(`${page} reaches ${what}`);
+  }
+  assert.deepEqual(reached, []);
+  for (const [file, what] of Object.entries(WORKER_TASK_MODULES)) assert.ok(all.workerFiles.has(file), `the worker loads ${what}`);
 });
 
 it("fails a page that reaches the runner through a chunk it loads with import(), as one planted through the trust chunk would (R88's read of #79)", () => {

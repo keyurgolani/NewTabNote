@@ -180,9 +180,6 @@ export const HELPERS = Object.freeze({
     'js/kernel/adapters/indexeddb/changes.js',
     'js/kernel/adapters/indexeddb/ledger.js',
   ],
-  // The read-only integrity check, which test/kernel/storage-integrity.test.mjs also holds to
-  // frozen 1.4.1's
-  'js/kernel/adapters/indexeddb/integrity.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/recovery-copies.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
     'js/kernel/adapters/indexeddb/adapter.js',
@@ -308,6 +305,20 @@ export const UNSHARED = Object.freeze({
   'js/kernel/adapters/indexeddb/purge.js': {
     implements: "#17's recovery-point purge (purgeRecoveryPoints), under Web Lock storage.migrate",
     tests: 'test/kernel/storage-purge.test.mjs',
+  },
+  // The service worker's own storage tasks, which only its root passes to #17's adapter: the
+  // read-only integrity check, held to frozen 1.4.1's, and the ledger's retention
+  'js/kernel/adapters/indexeddb/worker-tasks.js': {
+    implements: "the worker's storage tasks on #17's adapter (WORKER_TASKS)",
+    tests: 'test/kernel/storage-integrity.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/integrity.js': {
+    implements: "#17's read-only integrity check (checkIntegrity), the worker's after an install or an update",
+    tests: 'test/kernel/storage-integrity.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/ledger-sweep.js': {
+    implements: "#17's ledger retention (sweepLedger), the worker's at its start",
+    tests: 'test/kernel/storage-ledger.test.mjs',
   },
   // #17 PR 3a: the one runner of the one database's logical versions
   'js/kernel/adapters/indexeddb/transforms.js': {

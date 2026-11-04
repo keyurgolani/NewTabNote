@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, startChunksOf } = require('../scripts/build/budgets.js');
+const { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, startChunksOf, WORKER_ONLY_MODULES } = require('../scripts/build/budgets.js');
 const { fromMap } = require('../scripts/build/package-files.js');
 const { gateReport } = require('../scripts/perf/gate-report.js');
 const { fixtureProblems } = require('../scripts/perf-probe.js');
@@ -35,8 +35,8 @@ const chunk = chunk => ({
 });
 const id = file => path.join(ROOT, file);
 
-/** A small built package: a page that boots a loader chunk, and a popup */
-function bundleFixture({ extraStart = [], popupBytes = 10 } = {}) {
+/** A small built package: a page that boots a loader chunk, a popup, and with `sidePanel` a side panel */
+function bundleFixture({ extraStart = [], popupBytes = 10, sidePanel = false } = {}) {
   const files = new Map([
     ['newtab.html', Buffer.from('<link rel="stylesheet" href="/assets/newtab.css"><link rel="modulepreload" href="/js/runtime/lazy.js"><script type="module" src="/assets/newtab.js"></script><script src="js/entries/boot-guard.js"></script>')],
     ['popup.html', Buffer.from('<script type="module" src="/assets/popup.js"></script>')],
@@ -57,6 +57,10 @@ function bundleFixture({ extraStart = [], popupBytes = 10 } = {}) {
     ['js/lib/jszip.min.js', Buffer.from('window.JSZip = 1;')],
     ['js/lib/transformers.js', Buffer.from('window.transformers = 1;')],
   ]);
+  if (sidePanel) {
+    files.set('sidepanel.html', Buffer.from('<script type="module" src="/assets/sidepanel.js"></script>'));
+    files.set('assets/sidepanel.js', Buffer.from('export const panel = 1;'));
+  }
   const chunks = [
     chunk({ fileName: 'assets/newtab.js', isEntry: true, imports: ['js/runtime/lazy.js'], dynamicImports: ['assets/workspace.js'], moduleIds: [id('js/entries/newtab.js')] }),
     chunk({ fileName: 'js/runtime/lazy.js', moduleIds: [id('js/runtime/lazy.js')] }),
@@ -66,8 +70,10 @@ function bundleFixture({ extraStart = [], popupBytes = 10 } = {}) {
     chunk({ fileName: 'assets/indexer.js', pass: 'worker', isEntry: true, moduleIds: [id('js/workers/indexer.js'), id('node_modules/some-parser/index.js')] }),
     chunk({ fileName: 'assets/popup.js', isEntry: true, moduleIds: [id('js/popup.js'), id('js/lib/valibot/index.mjs')] }),
     chunk({ fileName: 'js/background.js', pass: 'background', isEntry: true, moduleIds: [id('js/background.js')] }),
+    ...(sidePanel ? [chunk({ fileName: 'assets/sidepanel.js', isEntry: true, moduleIds: [id('js/sidepanel.js'), id('js/lib/valibot/index.mjs')] })] : []),
   ];
-  return { files: fromMap(files, 'the fixture'), chunks, loaderChunks: { workspace: 'assets/workspace.js', trust: 'assets/trust.js', newtab: 'assets/newtab.js', popup: 'assets/popup.js' } };
+  const loaderChunks = { workspace: 'assets/workspace.js', trust: 'assets/trust.js', newtab: 'assets/newtab.js', popup: 'assets/popup.js' };
+  return { files: fromMap(files, 'the fixture'), chunks, loaderChunks: sidePanel ? { ...loaderChunks, sidepanel: 'assets/sidepanel.js' } : loaderChunks };
 }
 
 /** A budget file for the fixture, `entries` merged over the default rows */
@@ -210,6 +216,66 @@ describe('the budget gate', () => {
     ]);
     // The trust code is in the fixture's lazy trust chunk, and passes
     assert.ok(!run(budgetsFor()).some(line => line.includes('trust')));
+  });
+
+  // The worker's modules #35 slice 3c moved off the pages' start, as the test's own copy: the gate's
+  // list is pinned to it, and the cases after the pin put each one on each page's start
+  const WORKER_ONLY = [
+    'js/kernel/adapters/indexeddb/integrity.js',
+    'js/kernel/adapters/indexeddb/ledger-sweep.js',
+    'js/kernel/adapters/indexeddb/worker-tasks.js',
+    'js/kernel/core/application/integrity-check.js',
+    'js/kernel/core/application/record-catch-up.js',
+  ];
+  /** Side Panel's row, for a fixture that has its page */
+  const sidePanelRow = { page: 'sidepanel.html', reason: 'the side panel', start: { js: { raw: 1000, gzip: 1000 } }, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] };
+  const workerOnly = (/** @type {string} */ page, /** @type {string} */ file) => `budget/worker-only ${page}: its start holds ${file}, which only the service worker runs`;
+
+  it("fails a page's start that holds a module only the service worker runs, by the module and the page, and passes the worker that holds it (#35 slice 3c)", () => {
+    // The gate's list is the copy above, each a file of the tree
+    assert.deepEqual(WORKER_ONLY_MODULES, WORKER_ONLY);
+    for (const file of WORKER_ONLY_MODULES) assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} is in the tree`);
+    // On the new tab's start, through the chunk its root boots
+    assert.deepEqual(run(budgetsFor(), bundleFixture({ extraStart: ['js/kernel/core/application/record-catch-up.js'] })), [
+      'budget/worker-only newtab: its start holds js/kernel/core/application/record-catch-up.js, which only the service worker runs',
+    ]);
+    // On Popup's, in its own chunk
+    const popup = bundleFixture();
+    popup.chunks = popup.chunks.map(entry => (entry.fileName === 'assets/popup.js' ? { ...entry, moduleIds: [...entry.moduleIds, id('js/kernel/adapters/indexeddb/integrity.js')] } : entry));
+    assert.deepEqual(run(budgetsFor(), popup), [
+      'budget/worker-only popup: its start holds js/kernel/adapters/indexeddb/integrity.js, which only the service worker runs',
+    ]);
+    // The service worker holds them, and a page's start without one passes
+    const worker = bundleFixture();
+    worker.chunks = worker.chunks.map(entry => (entry.pass === 'background' ? { ...entry, moduleIds: [...entry.moduleIds, id('js/kernel/core/application/record-catch-up.js')] } : entry));
+    assert.deepEqual(run(budgetsFor(), worker), []);
+  });
+
+  it("fails each of the worker's modules on the new tab's, Popup's and Side Panel's start, each by the module and the page (#35 slice 3c)", () => {
+    const budgets = budgetsFor({ sidepanel: sidePanelRow });
+    assert.deepEqual(run(budgets, bundleFixture({ sidePanel: true })), []);
+    for (const file of WORKER_ONLY) {
+      for (const [page, entryChunk] of [['newtab', 'assets/newtab.js'], ['popup', 'assets/popup.js'], ['sidepanel', 'assets/sidepanel.js']]) {
+        const fixture = bundleFixture({ sidePanel: true });
+        fixture.chunks = fixture.chunks.map(entry => (entry.fileName === entryChunk ? { ...entry, moduleIds: [...entry.moduleIds, id(file)] } : entry));
+        assert.deepEqual(run(budgets, fixture), [workerOnly(page, file)], `${file} on ${page}'s start`);
+      }
+    }
+  });
+
+  it("fails each page whose start reaches one of the worker's modules through a chunk the pages share, as all three reached the integrity check through the host chunk (#35 slice 3c)", () => {
+    // The host chunk: the new tab's start reaches it through the chunk its root boots, and
+    // Popup's and Side Panel's through their own entries' imports
+    const fixture = bundleFixture({ sidePanel: true });
+    fixture.chunks = fixture.chunks.map(entry => {
+      if (entry.fileName === 'assets/host.js') return { ...entry, moduleIds: [...entry.moduleIds, id('js/kernel/adapters/indexeddb/integrity.js')] };
+      if (entry.fileName === 'assets/popup.js' || entry.fileName === 'assets/sidepanel.js') return { ...entry, imports: ['assets/host.js'] };
+      return entry;
+    });
+    assert.deepEqual(
+      run(budgetsFor({ sidepanel: sidePanelRow }), fixture),
+      ['newtab', 'popup', 'sidepanel'].map(page => workerOnly(page, 'js/kernel/adapters/indexeddb/integrity.js')),
+    );
   });
 
   it("fails a package its row doesn't allow, and an allowed one its graph no longer holds", () => {

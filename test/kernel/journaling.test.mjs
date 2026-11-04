@@ -606,16 +606,4 @@ describe("a page's journaling (#35 slice 3b)", () => {
     await settled(() => left().length === 0);
     assert.deepEqual(left(), []);
   });
-
-  it('tells whether the journal holds an entry no live context holds, for the page to wake the drain', async () => {
-    const w = await page();
-    assert.equal(await w.journaling.orphaned(), false);
-    // Its own, while it lives, are never orphaned
-    await w.journaling.execute(quickNote('c-own'), async () => unavailable('storage', 'transaction-aborted', true));
-    assert.equal(await w.journaling.orphaned(), false);
-    // A page that went left one behind
-    const [own] = w.journal.entries();
-    await w.journal.put({ ...own, opId: 'c-gone', ownerSessionId: 'page-gone' });
-    assert.equal(await w.journaling.orphaned(), true);
-  });
 });

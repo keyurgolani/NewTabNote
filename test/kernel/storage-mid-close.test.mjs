@@ -25,6 +25,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { WORKER_TASKS } from '../../js/kernel/adapters/indexeddb/worker-tasks.js';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
 import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -56,6 +58,25 @@ async function newTab() {
   const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
   await adapter.open();
   return { of, adapter, kernel };
+}
+
+/**
+ * v8.basic after the worker's run, and #17's adapter on it as the worker's root opens it, with
+ * the worker's own storage tasks, which only its adapter has (worker-tasks.js)
+ */
+async function worker() {
+  const of = await profileWith(/** @type {any} */ (synthesized().get('v8.basic')));
+  assert.equal((await run(of)).status, 'migrated');
+  const adapter = createIndexedDbAdapter({
+    indexedDB: of.real,
+    settings: of.chrome.api.storage.local,
+    mode: 'versioned',
+    requireCore: true,
+    commands: WORKER_COMMANDS,
+    workerTasks: WORKER_TASKS,
+  });
+  await adapter.open();
+  return { of, adapter };
 }
 
 /**
@@ -423,18 +444,20 @@ describe("#17's adapter, as the new tab's root opens it, when its connection goe
   });
 
   it("Chrome closes it while the worker's ports read: the change log, the ledger, and its sweep answer transaction-failed, as a read does", async () => {
-    /** @type {Array<[string, (adapter: import('../../js/kernel/adapters/indexeddb/adapter.js').IndexedDbAdapter) => Promise<unknown>]>} */
+    /** @type {Array<[string, (adapter: import('../../js/kernel/adapters/indexeddb/adapter.js').IndexedDbAdapter) => Promise<unknown>, () => Promise<{adapter: import('../../js/kernel/adapters/indexeddb/adapter.js').IndexedDbAdapter}>]>} */
     const calls = [
-      ['changes', adapter => adapter.commitLog.readChangesSince(0, 10)],
+      ['changes', adapter => adapter.commitLog.readChangesSince(0, 10), newTab],
       [
         'operations',
         adapter =>
           adapter.ledger.read(/** @type {any} */ ({ type: 'createNote', commandId: 'c1', noteId: 'n1', name: 'N' })),
+        newTab,
       ],
-      ['meta', adapter => adapter.sweepLedger()],
+      // Only the worker's adapter sweeps (worker-tasks.js)
+      ['meta', adapter => adapter.sweepLedger(), worker],
     ];
-    for (const [store, call] of calls) {
-      const { adapter } = await newTab();
+    for (const [store, call, open] of calls) {
+      const { adapter } = await open();
       const chrome = chromeCloses('readonly', store);
       let failure;
       try {

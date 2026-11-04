@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { WORKER_TASKS } from '../../js/kernel/adapters/indexeddb/worker-tasks.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
 import { kernelClient } from '../../js/kernel/composition/host.js';
 import { legacyEnv, newProfile, run } from './migration-support.mjs';
@@ -117,6 +118,7 @@ async function adapterSays(of) {
     indexedDB: of.real,
     settings: of.chrome.api.storage.local,
     mode: 'existing',
+    workerTasks: WORKER_TASKS,
     integrityLog: {
       info: (message, detail) => said.push({ level: 'info', message, detail: structuredClone(detail) }),
       warn: (message, error) => said.push({ level: 'warn', message, detail: nameOf(error) }),
@@ -214,6 +216,7 @@ describe("#17's integrity check reports what frozen 1.4.1's reports (#17 PR 1b, 
       indexedDB: of.real,
       settings: of.chrome.api.storage.local,
       mode: 'existing',
+      workerTasks: WORKER_TASKS,
       integrityLog: {
         info: message => said.push(['info', message]),
         warn: message => said.push(['warn', message]),

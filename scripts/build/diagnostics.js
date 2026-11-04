@@ -69,6 +69,7 @@ const CODES = Object.freeze({
   'budget/entry': 'a page or the service worker the build has with no build/budgets.json row, a row for an entry it doesn\'t have that isn\'t planned, or a planned row for one it has',
   'budget/bytes': 'an entry\'s start JS, CSS, HTML, or fonts is over its build/budgets.json row, raw or gzip',
   'budget/forbidden': 'a module or file a forbidden category names is on an entry\'s start path',
+  'budget/worker-only': 'a module only the service worker runs (scripts/build/budgets.js, WORKER_ONLY_MODULES) is on a page\'s start',
   'budget/dependency': 'an entry\'s graph holds a third-party package its row doesn\'t allow, or its row allows one the graph no longer holds',
   'budget/file': 'build/budgets.json is missing, doesn\'t parse, or doesn\'t read as a budget file',
   'vendor/mismatch': 'a vendored file differs from its js/lib/vendor.json record',

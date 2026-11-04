@@ -13,6 +13,7 @@
 import { WORKER_CATALOG } from '../contracts/worker-catalog.js';
 import { captureCommands } from './capture.js';
 import { handlerTable } from './handlers.js';
+import { integrityCommands } from './integrity-check.js';
 import { journalCommands, journalQueries } from './journal.js';
 import { maintenanceCommands } from './maintenance.js';
 import { noteCommands } from './notes.js';
@@ -23,7 +24,7 @@ export const WORKER_HANDLERS = handlerTable(
     commands: {
       captureToDailyNote: captureCommands.captureToDailyNote,
       runStartupMaintenance: maintenanceCommands.runStartupMaintenance,
-      runIntegrityCheck: maintenanceCommands.runIntegrityCheck,
+      runIntegrityCheck: integrityCommands.runIntegrityCheck,
       catchUpNoteRecords: recordCatchUpCommands.catchUpNoteRecords,
       createNote: noteCommands.createNote,
       insertBlocks: noteCommands.insertBlocks,

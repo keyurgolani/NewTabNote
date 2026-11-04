@@ -24,6 +24,8 @@
  *                      level 9, the way npm run perf:probe measures them
  *   budget/forbidden   a module, classic script, or file a forbidden category names on the
  *                      entry's start path
+ *   budget/worker-only a module only the service worker runs (WORKER_ONLY_MODULES) on a page's
+ *                      or a loader chunk's start, by the module and the entry
  *   budget/dependency  a third-party package in the entry's graph (start, lazy, workers) that
  *                      its row doesn't allow, or an allowed one it no longer has
  *   budget/file        build/budgets.json doesn't read as a budget file
@@ -49,6 +51,14 @@ const BUDGETS_FILE = 'build/budgets.json';
 const FONT = /\.(?:woff2?|ttf|otf)$/i;
 /** The start rows an entry can have */
 const START_TYPES = ['html', 'js', 'css', 'fonts'];
+/** Only the service worker runs these, and a run-time filter once kept one on a page's start (#35 slice 3c) */
+const WORKER_ONLY_MODULES = Object.freeze([
+  'js/kernel/adapters/indexeddb/integrity.js',
+  'js/kernel/adapters/indexeddb/ledger-sweep.js',
+  'js/kernel/adapters/indexeddb/worker-tasks.js',
+  'js/kernel/core/application/integrity-check.js',
+  'js/kernel/core/application/record-catch-up.js',
+]);
 
 /** @typedef {{raw: number, gzip: number}} Limit */
 /** @typedef {{raw: number, gzip: number, files: number}} Bytes */
@@ -474,6 +484,11 @@ function checkBudgets(graphs, budgets, { loaderChunks, files }) {
         problems.push(item);
       }
     }
+    if (graph.kind !== 'worker') {
+      for (const file of graph.start.modules.filter((source) => WORKER_ONLY_MODULES.includes(source))) {
+        problems.push(problem('budget/worker-only', name, `its start holds ${file}, which only the service worker runs`));
+      }
+    }
     const allowed = new Set(entry.dependencies || []);
     const held = new Set([...graph.start.packages, ...graph.lazy.packages, ...graph.workers.packages]);
     for (const name2 of [...held].sort()) {
@@ -503,4 +518,4 @@ function readBudgets(root = ROOT) {
   }
 }
 
-module.exports = { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE };
+module.exports = { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE, WORKER_ONLY_MODULES };

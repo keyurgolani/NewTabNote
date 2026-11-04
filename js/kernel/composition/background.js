@@ -31,6 +31,7 @@ import { MIGRATE_LOCK, startMigrations } from '../adapters/indexeddb/migrate.js'
 import { purgeRecoveryPoints } from '../adapters/indexeddb/purge.js';
 import { LATEST_STRUCTURAL } from '../adapters/indexeddb/registry.js';
 import { runTransforms } from '../adapters/indexeddb/transforms.js';
+import { WORKER_TASKS } from '../adapters/indexeddb/worker-tasks.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { WORKER_HANDLERS } from '../core/application/handlers-worker.js';
 import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
@@ -768,6 +769,8 @@ export function createWorkerClient(host = workerHost()) {
         requireCore: true,
         // Its ledger keys the worker's own commands too (contracts/worker-catalog.js)
         commands: WORKER_COMMANDS,
+        // And it runs the worker's own storage tasks, which no page's adapter has
+        workerTasks: WORKER_TASKS,
       });
       if (replaced) replaced.close();
       const built = kernelClient({

@@ -5,7 +5,8 @@
  * when the worker ran on Storage. It counts orphaned records, whose note isn't in `canvases`,
  * and deletes nothing (#33). Each store is read in a readonly transaction of its own, as
  * Storage reads them, so none is held for the whole scan; a store the database lacks is
- * skipped, and index key cursors keep blocks and media from being loaded.
+ * skipped, and index key cursors keep blocks and media from being loaded. Only the worker's
+ * adapter runs it (worker-tasks.js), so no page's start holds it (#35 slice 3c).
  * test/kernel/storage-integrity.test.mjs holds it to Storage's report.
  */
 
@@ -119,4 +120,35 @@ export async function runIntegrityCheck(db, log) {
   } catch (error) {
     log.warn('Integrity check encountered an error:', error);
   }
+}
+
+/**
+ * The context's console, read when the check reports, not when this module loads
+ * @type {IntegrityLog}
+ */
+const contextConsole = Object.freeze({
+  info: (message, detail) => globalThis.console.info(message, detail),
+  warn: (message, error) => globalThis.console.warn(message, error),
+});
+
+/**
+ * The check on the worker's adapter (worker-tasks.js), for runIntegrityCheck after an install or
+ * an update (#35 slice 1), never as it starts. It only reports what it finds. With no connection
+ * to read, one another context's upgrade or delete closed included, it warns, as 1.4.x's
+ * Storage.runIntegrityCheck does on a closed database: a check is no reason to open the database
+ * again, or to make one.
+ * @param {() => IDBDatabase} database - the adapter's connection's
+ * @param {IntegrityLog} [log]
+ * @returns {Promise<void>}
+ */
+export async function checkIntegrity(database, log = contextConsole) {
+  /** @type {IDBDatabase} */
+  let db;
+  try {
+    db = database();
+  } catch (error) {
+    log.warn('Integrity check encountered an error:', error);
+    return;
+  }
+  await runIntegrityCheck(db, log);
 }

@@ -71,8 +71,9 @@
  *
  * Composition roots make it with `createIndexedDbAdapter({indexedDB, settings, mode})`: since
  * #17 PR 1b the service worker's (`versioned` once its migration run has brought the database
- * to this build's version, `existing` when the run left it as it was), Popup's and Side
- * Panel's (`existing`), and since #17 PR 4a the new tab's (`existing`, with its maintenance,
+ * to this build's version, `existing` when the run left it as it was, with its own storage
+ * tasks since #35 slice 3c, worker-tasks.js), Popup's and Side Panel's (`existing`), and since
+ * #17 PR 4a the new tab's (`existing`, with its maintenance,
  * #33's copy and the backup tasks; composition/newtab.js), which #12's legacy adapter was
  * until then (connection.js).
  */
@@ -97,8 +98,7 @@ import { createConnection } from './connection.js';
 import { TRANSFORM_DAILY_KEY, answerOf } from './daily-answer.js';
 import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
-import { runIntegrityCheck } from './integrity.js';
-import { createIndexedDbLedger, ledgerRow, replayFrom, sweepLedger } from './ledger.js';
+import { createIndexedDbLedger, ledgerRow, replayFrom } from './ledger.js';
 import { copyMissingStores } from './recovery-copies.js';
 import {
   CHANGES_KEY,
@@ -129,6 +129,7 @@ import { createVersionTracker } from './versions.js';
 /** @typedef {import('./conflicts.js').ConflictRecord} ConflictRecord */
 /** @typedef {import('./connection.js').OpenMode} OpenMode */
 /** @typedef {import('./integrity.js').IntegrityLog} IntegrityLog */
+/** @typedef {import('./worker-tasks.js').WorkerTasks} WorkerTasks */
 /** @typedef {import('./connection.js').OpenState} OpenState */
 /** @typedef {import('./versions.js').VersionTracker} VersionTracker */
 /** @typedef {import('../../core/domain/tombstone.js').TombstoneRecord} TombstoneRecord */
@@ -151,8 +152,13 @@ import { createVersionTracker } from './versions.js';
  *   What an `existing` open waits on first when there's no database or an older one: a page's
  *   wait on the worker's migration run (connection.js)
  * @property {IntegrityLog} [integrityLog]
- *   Where the read-only integrity check reports (integrity.js): the context's console unless a
- *   test passes another
+ *   Where the worker's read-only integrity check reports (integrity.js): the context's console
+ *   unless a test passes another
+ * @property {WorkerTasks | null} [workerTasks]
+ *   The service worker's own storage tasks, which only its root passes (worker-tasks.js): the
+ *   read-only integrity check and the ledger's retention. Without them, as on every page, a
+ *   check answers `integrity-check-needs-worker` and a sweep rejects with
+ *   `ledger-sweep-needs-worker`, and no page's start holds either one's code.
  * @property {boolean} [maintains]
  *   An `existing` open runs startup maintenance too: the new tab's (#17 PR 4a), which opens the
  *   database as it is and still writes a new profile's first-run settings. Popup and Side Panel
@@ -198,15 +204,6 @@ import { createVersionTracker } from './versions.js';
 
 /** @type {IDBTransactionOptions} */
 const STRICT = Object.freeze({ durability: 'strict' });
-
-/**
- * The context's console, read when the check reports, not when this module loads
- * @type {IntegrityLog}
- */
-const contextConsole = Object.freeze({
-  info: (message, detail) => globalThis.console.info(message, detail),
-  warn: (message, error) => globalThis.console.warn(message, error),
-});
 
 /** @typedef {import('./requests.js').Ending} Ending */
 
@@ -529,7 +526,8 @@ export function createIndexedDbAdapter({
   openWithinMs,
   requireCore = false,
   awaitUpgrade = null,
-  integrityLog = contextConsole,
+  integrityLog,
+  workerTasks = null,
   maintains = false,
   copiesMissingStores = false,
   backups = false,
@@ -887,29 +885,6 @@ export function createIndexedDbAdapter({
   };
 
   /**
-   * The read-only integrity check (integrity.js), which only reports what it finds, so it
-   * commits whatever that is. The worker runs it after an install or an update, as
-   * runIntegrityCheck (#35 slice 1), never as it starts. With no connection to read, one
-   * another context's upgrade or delete closed included, it warns and commits, as 1.4.x's
-   * Storage.runIntegrityCheck does on a closed database: a check is no reason to open the
-   * database again, or to make one.
-   * @param {Work} work
-   * @returns {Promise<Outcome>}
-   */
-  const checkIntegrity = async work => {
-    /** @type {IDBDatabase} */
-    let db;
-    try {
-      db = connection.database();
-    } catch (error) {
-      integrityLog.warn('Integrity check encountered an error:', error);
-      return work.done();
-    }
-    await runIntegrityCheck(db, integrityLog);
-    return work.done();
-  };
-
-  /**
    * Startup maintenance: the settings Storage writes on a profile's first run, each one only
    * where nothing is stored, then nothing else. It reads no store, so it runs while the
    * database is blocked too. The read-only integrity check is an effect of its own
@@ -1059,8 +1034,11 @@ export function createIndexedDbAdapter({
           pending = commitSettings(work, effect.area, effect.values).then(outcome => ({ outcome, replayed: false }));
         } else if (effect.kind === 'backup') pending = commitBackup(work, effect);
         else if (effect.kind === 'integrity-check') {
-          // Read-only, it keeps no ledger row, as settings and maintenance keep none
-          pending = checkIntegrity(work).then(outcome => ({ outcome, replayed: false }));
+          // Read-only, it keeps no ledger row, as settings and maintenance keep none. Only the
+          // worker's adapter has the check (worker-tasks.js), and it commits whatever it finds
+          pending = workerTasks
+            ? workerTasks.checkIntegrity(database, integrityLog).then(() => ({ outcome: work.done(), replayed: false }))
+            : Promise.resolve({ outcome: unavailable('adapter', 'integrity-check-needs-worker', false), replayed: false });
         } else pending = maintain(work).then(outcome => ({ outcome, replayed: false }));
       } catch (error) {
         pending = Promise.resolve({ outcome: unavailableFrom(failureOf(error)), replayed: false });
@@ -1136,6 +1114,9 @@ export function createIndexedDbAdapter({
       }
       return commitLog;
     },
-    sweepLedger: () => sweepLedger({ database, now: clock.now(), failure: failureIn }),
+    sweepLedger: () =>
+      workerTasks
+        ? workerTasks.sweepLedger({ database, now: clock.now(), failure: failureIn })
+        : Promise.reject(new UnavailableError('adapter', 'ledger-sweep-needs-worker', false)),
   });
 }

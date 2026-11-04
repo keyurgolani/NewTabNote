@@ -7,14 +7,13 @@ import assert from 'node:assert/strict';
 
 import { appendChanges, createIndexedDbCommitLog, pruneChanges } from '../../js/kernel/adapters/indexeddb/changes.js';
 import { createConnection } from '../../js/kernel/adapters/indexeddb/connection.js';
+import { createIndexedDbLedger, ledgerRow } from '../../js/kernel/adapters/indexeddb/ledger.js';
 import {
   LEDGER_MAX_AGE_MS,
   LEDGER_SWEEP_EVERY_MS,
   SWEPT_KEY,
-  createIndexedDbLedger,
-  ledgerRow,
   sweepLedger,
-} from '../../js/kernel/adapters/indexeddb/ledger.js';
+} from '../../js/kernel/adapters/indexeddb/ledger-sweep.js';
 import { result } from '../../js/kernel/adapters/indexeddb/requests.js';
 import { isId } from '../../js/kernel/core/contracts/checks.js';
 import { UnavailableError, committed } from '../../js/kernel/core/contracts/outcomes.js';
