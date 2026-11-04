@@ -14,12 +14,12 @@
  * A profile is invalid when 1.4.0 against itself is off by more than the tolerance, when any
  * round of any package failed, when the probe reported a problem (a fixture digest that isn't
  * the recorded one, for one), or when fewer rounds have a run of every package than the probe
- * asked for, or than build/budgets.json takes. A profile either row gates that the run has no
+ * asked for, or than build/budgets.json takes. A profile either row takes that the run has no
  * rounds of is invalid too, so a run that measured nothing can't pass a gate. An invalid
  * profile's timing and heap say `invalid`, with the reasons listed under the table.
  *
- * A row whose mode is `report` never fails this script; one whose mode is `gate` exits 1 when
- * it fails, or when the run is invalid.
+ * A row whose mode is `report` never fails this script. One whose mode is `gate` exits 1 when
+ * it fails on a profile it takes, when the run of one is invalid, or when it names no profile.
  */
 
 const fs = require('fs');
@@ -40,11 +40,14 @@ function gateReport(probe, budgets) {
   const timing = budgets.timing;
   const heap = budgets.heap;
   const heapCeiling = heap.limitMiB * (1 + heap.tolerancePct / 100);
+  /** The profiles a row takes */
+  const takes = (/** @type {any} */ row) => (Array.isArray(row.profiles) ? row.profiles : []);
+  const on = (/** @type {any} */ row) => takes(row).join(' and ') || 'no profile';
   const lines = [
     '## perf: timing and heap against 1.4.0',
     '',
-    `Timing (${timing.mode}): the candidate's median ratio to both 1.4.0 runs fails above ${pct(1 + timing.tolerancePct / 100)}; a run is invalid when 1.4.0 against itself is more than ${timing.tolerancePct}% off.`,
-    `Heap (${heap.mode}): the candidate's median fails above ${heap.limitMiB} MiB plus ${heap.tolerancePct}%, ${heapCeiling.toFixed(2)} MiB.`,
+    `Timing (${timing.mode}, on ${on(timing)}): the candidate's median ratio to both 1.4.0 runs fails above ${pct(1 + timing.tolerancePct / 100)}; a run is invalid when 1.4.0 against itself is more than ${timing.tolerancePct}% off.`,
+    `Heap (${heap.mode}, on ${on(heap)}): the candidate's median fails above ${heap.limitMiB} MiB plus ${heap.tolerancePct}%, ${heapCeiling.toFixed(2)} MiB.`,
     `Rows from build/budgets.json. ${timing.mode === 'report' && heap.mode === 'report' ? 'Both are report-only: nothing here fails the job.' : ''}`,
     '',
     '| Profile | Rounds | 1.4.0 against itself | Valid | Candidate against both 1.4.0 runs | Timing | Candidate heap | Heap | 1.4.0, again, candidate (median ms) |',
@@ -54,21 +57,30 @@ function gateReport(probe, budgets) {
   /** @type {string[]} */
   const notes = [];
   let failed = false;
+  // A gate row that names no profile can't pass any run
+  for (const [label, row] of [['timing', timing], ['heap', heap]]) {
+    if (takes(row).length > 0) continue;
+    notes.push(`- build/budgets.json's ${label} row names no profile`);
+    if (row.mode === 'gate') failed = true;
+  }
   const probeProblems = [...(probe.problems || []), ...(probe.packages || []).flatMap(entry => entry.problems || [])];
-  // Each profile a row gates, then any other the run measured
+  // Each profile a row takes, then any other the run measured. A row fails the job only on the
+  // profiles it takes
   const measured = (probe.timing && probe.timing.profiles) || {};
-  const names = [...new Set([...(timing.profiles || []), ...(heap.profiles || []), ...Object.keys(measured)])];
+  const names = [...new Set([...takes(timing), ...takes(heap), ...Object.keys(measured)])];
   for (const name of names) {
+    const timingGates = timing.mode === 'gate' && takes(timing).includes(name);
+    const heapGates = heap.mode === 'gate' && takes(heap).includes(name);
     const profile = measured[name];
     const ratios = Object.entries((profile && profile.ratios) || {});
     const self = ratios.find(([, ratio]) => ratio.self);
     const candidate = ratios.find(([, ratio]) => ratio.againstBoth);
     if (!self || !candidate) {
       // Not a run this summary can read: invalid, so a gate fails and a report still writes
-      const problems = [profile ? 'the run has no 1.4.0 pair and candidate' : 'the run has no rounds of this profile, which build/budgets.json gates'];
+      const problems = [profile ? 'the run has no 1.4.0 pair and candidate' : 'the run has no rounds of this profile, which build/budgets.json takes'];
       lines.push(`| ${name} | 0 | n/a | **no** | n/a | invalid | n/a | invalid | |`);
       notes.push(...problems.map(item => `- ${name}: ${item}`));
-      if (timing.mode === 'gate' || heap.mode === 'gate') failed = true;
+      if (timingGates || heapGates) failed = true;
       verdicts.push({ profile: name, valid: false, timing: 'invalid', heap: 'invalid', problems });
       continue;
     }
@@ -98,8 +110,8 @@ function gateReport(probe, budgets) {
     const heapMiB = candidateHeap ? candidateHeap.median / MIB : null;
     const heapVerdict = problems.length > 0 || heapMiB === null ? 'invalid' : heapMiB <= heapCeiling ? 'pass' : 'fail';
     notes.push(...problems.map(item => `- ${name}: ${item}`));
-    if (timing.mode === 'gate' && timingVerdict !== 'pass') failed = true;
-    if (heap.mode === 'gate' && heapVerdict !== 'pass') failed = true;
+    if (timingGates && timingVerdict !== 'pass') failed = true;
+    if (heapGates && heapVerdict !== 'pass') failed = true;
     const labels = Object.keys(profile.packages);
     const absolute = labels.map(label => ms(profile.packages[label].interactionReadyMs && profile.packages[label].interactionReadyMs.median)).join(', ');
     const spread = (/** @type {any} */ summary) => (summary ? `${pct(summary.median)} (${pct(summary.q1)} to ${pct(summary.q3)})` : 'n/a');
