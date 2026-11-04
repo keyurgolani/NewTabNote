@@ -24,8 +24,8 @@
  *   next drain (the lead's call on 3b). The drain's sweep stays the retry, for a removal that
  *   fails and for a delete sent before the page's journal was in.
  *
- * `orphaned` says whether the journal holds an entry no live context holds, for the page to wake
- * the drain. Nothing here touches a browser API: the ports come in.
+ * Which entries closed pages left, and the drain's wake for them, are the journal chunk's start
+ * (composition/journal-chunk.js). Nothing here touches a browser API: the ports come in.
  */
 
 import { COMMANDS } from '../contracts/commands.js';
@@ -61,7 +61,6 @@ import { journalEntry, ownerLock } from '../domain/journal.js';
  *   Writes `command`'s entry, then sends it with `send`, in the same task, and answers what the
  *   send does
  * @property {(noteIds: readonly string[]) => Promise<void>} forget - never rejects
- * @property {() => Promise<boolean>} orphaned - never rejects; false when it can't tell
  */
 
 /** The answers that end a command for good, so its entry goes */
@@ -244,17 +243,5 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
       })();
     },
     forget,
-    async orphaned() {
-      try {
-        if (!locks || typeof locks.query !== 'function') return false;
-        const entries = await journal.list();
-        const { held: holding = [] } = (await locks.query()) || {};
-        const live = new Set(holding.map(lock => lock && lock.name));
-        // This page's own are never orphaned: it holds their lock while it lives
-        return entries.some(entry => !live.has(ownerLock(entry.ownerSessionId)));
-      } catch {
-        return false;
-      }
-    },
   });
 }
