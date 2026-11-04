@@ -20,11 +20,12 @@
  * - A selection shows its own pane's toolbar alone, in the main pane and in split view's right
  *   pane. Before, any selection showed both panes' toolbars, one over the other, so a screen
  *   reader found two "Text formatting" toolbars.
- * - After Link, focus moving elsewhere in the page, as a click on another word moves it, closes
- *   the link field, and the toolbar shows for the new selection. Before, link mode ignored every
- *   selection until Enter, Escape or ✓, so its field stayed over the old words. Focus moving to
- *   ✓ keeps the field open, so ✓ and Enter still apply the link, and so does a switch to another
- *   window, which leaves the field focused.
+ * - After Link, focus moving elsewhere in the page, as a click on another word or a sidebar button
+ *   moves it, closes the link field, and the toolbar shows for the selection there is now, or
+ *   hides with none. Before, link mode ignored every selection until Enter, Escape or ✓, so its
+ *   field stayed over the old words. Focus moving to ✓ keeps the field open, so ✓ by the mouse or
+ *   from the keyboard and Enter still apply the link, and so does a switch to another window,
+ *   which leaves the field focused. A press on the toolbar's own frame keeps focus in the field.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -284,28 +285,36 @@ test("after Link, a selection of another word in the same pane closes the link f
   await expectNoUncaught(extension, page);
 });
 
-test('in link mode, ✓ and Enter still apply the link, and focus moving from the field to ✓ leaves the field open', async ({ extension }) => {
-  const page = await shortNote(extension);
+test('in link mode, ✓ from the keyboard or by the mouse, and Enter in the field, still apply the link, and focus moving from the field to ✓ leaves the field open', async ({ extension }) => {
+  const page = await shortNote(extension, { name: 'Links', blocks: ['Before the cards', 'A second line', 'A third line', 'A fourth line'].map(content => ({ type: 'text', content })) });
   const field = page.locator('.formatting-toolbar-url:visible');
   const ok = page.locator('.formatting-toolbar-link-ok:visible');
+  /** Link pressed for the first `length` characters of the block at `index`, and `url` typed in the field */
+  const linkFor = async (index, length, url) => {
+    await selectStart(page, index, length);
+    await pressLink(page);
+    await expect(field).toBeFocused();
+    await page.keyboard.type(url);
+  };
 
-  // ✓, reached from the field with Tab, then clicked
-  await selectStart(page, 0, 'Before'.length);
-  await pressLink(page);
-  await expect(field).toBeFocused();
-  await page.keyboard.type('https://example.test/a');
+  // ✓ from the keyboard: Tab to it, then Enter, and in the next block Space
+  await linkFor(0, 'Before'.length, 'https://example.test/a');
   await page.keyboard.press('Tab');
   await expect(ok, 'the field stays open, with focus on ✓').toBeFocused();
-  await ok.click();
-  await expect.poll(() => linksIn(page, 0), '✓ applies it').toEqual([['https://example.test/a', 'Before']]);
-
-  // Enter in the field
-  await selectStart(page, 1, 'A second'.length);
-  await pressLink(page);
-  await expect(field).toBeFocused();
-  await page.keyboard.type('https://example.test/b');
   await page.keyboard.press('Enter');
-  await expect.poll(() => linksIn(page, 1), 'Enter applies it').toEqual([['https://example.test/b', 'A second']]);
+  await expect.poll(() => linksIn(page, 0), 'Enter on ✓ applies it').toEqual([['https://example.test/a', 'Before']]);
+  await linkFor(1, 'A second'.length, 'https://example.test/b');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press(' ');
+  await expect.poll(() => linksIn(page, 1), 'Space on ✓ applies it').toEqual([['https://example.test/b', 'A second']]);
+
+  // ✓ by the mouse, and Enter in the field
+  await linkFor(2, 'A third'.length, 'https://example.test/c');
+  await ok.click();
+  await expect.poll(() => linksIn(page, 2), 'a click on ✓ applies it').toEqual([['https://example.test/c', 'A third']]);
+  await linkFor(3, 'A fourth'.length, 'https://example.test/d');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => linksIn(page, 3), 'Enter in the field applies it').toEqual([['https://example.test/d', 'A fourth']]);
   await expectNoUncaught(extension, page);
 });
 
@@ -325,6 +334,45 @@ test('in link mode, a switch to another window leaves the link field open with i
   await page.keyboard.type('https://example.test/c');
   await page.keyboard.press('Enter');
   await expect.poll(() => linksIn(page, 0), 'its selection gets the link').toEqual([['https://example.test/c', 'Before']]);
+  await expectNoUncaught(extension, page);
+});
+
+test("in link mode, a press on the toolbar's own frame or in the gap between the field and ✓ keeps the field open, with the URL typed in it", async ({ extension }) => {
+  const page = await shortNote(extension);
+  const field = page.locator('.formatting-toolbar-url:visible');
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.type('https://example.test/typed');
+  // Inside its 4 px padding, halfway down its left edge, and halfway between the field and ✓
+  const at = await page.evaluate(() => {
+    const bar = app.editor.formattingToolbar;
+    const [frame, input, ok] = [bar.el, bar._linkField, bar._linkConfirm].map(el => el.getBoundingClientRect());
+    return {
+      'frame': { x: frame.left + 2, y: (frame.top + frame.bottom) / 2 },
+      'gap between the field and ✓': { x: (input.right + ok.left) / 2, y: (input.top + input.bottom) / 2 },
+    };
+  });
+  for (const [where, point] of Object.entries(at)) {
+    await page.mouse.click(point.x, point.y);
+    await page.waitForTimeout(200);
+    await expect(field, `the field stays open after a press on the ${where}`).toBeFocused();
+    await expect(field, `the URL stays in it after a press on the ${where}`).toHaveValue('https://example.test/typed');
+  }
+  await expectNoUncaught(extension, page);
+});
+
+test('in link mode, a press on a sidebar button, which selects nothing, closes the link field and leaves no toolbar over the words', async ({ extension }) => {
+  const page = await shortNote(extension);
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(page.locator('.formatting-toolbar-url:visible')).toBeFocused();
+  await page.locator('#calendar-next').click();
+  const toolbars = () => page.evaluate(() => [app.editor, app.secondaryEditor].map(({ formattingToolbar: bar }) => ({
+    shows: bar.el.classList.contains('visible'),
+    linkField: getComputedStyle(bar.linkInput).display !== 'none',
+  })));
+  await expect.poll(toolbars, 'the link field closes, and no toolbar shows').toEqual([{ shows: false, linkField: false }, { shows: false, linkField: false }]);
   await expectNoUncaught(extension, page);
 });
 

@@ -132,11 +132,14 @@ class FormattingToolbar {
       this._onButtonClick(btn.dataset.command, btn.dataset.id);
     });
 
-    // Link input confirm
-    this._linkConfirm.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      this._applyLink();
+    // A press anywhere on the toolbar but in its link field keeps focus where it is, as the
+    // buttons' presses always have, so one on its frame or between the field and ✓ keeps link mode
+    this.el.addEventListener('mousedown', (e) => {
+      if (e.target !== this._linkField) e.preventDefault();
     });
+
+    // Link input confirm, on its activation: a click, or Enter or Space once Tab has reached it
+    this._linkConfirm.addEventListener('click', () => this._applyLink());
 
     this._linkField.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -150,10 +153,10 @@ class FormattingToolbar {
       }
     });
 
-    // Focus moving elsewhere in the page, as a click on another word moves it, ends link mode as
-    // Escape does, and the new selection is handled, not the one Link saved. Focus moving to ✓
-    // keeps it. So does a switch to another window: it gives no new target and leaves the field
-    // the page's active element, where an in-page move leaves none
+    // Focus moving elsewhere in the page, as a click on another word or a button moves it, closes
+    // the link field and shows the toolbar for the selection there is now, not the one Link saved.
+    // Focus moving to ✓ keeps it open. So does a switch to another window: it gives no new target
+    // and leaves the field the page's active element, where an in-page move leaves none
     this.el.addEventListener('focusout', (e) => {
       if (!this.linkMode || this.el.contains(/** @type {Node | null} */ (e.relatedTarget) || this.doc.activeElement)) return;
       this._hideLinkInput();
