@@ -1220,6 +1220,164 @@ describe("BlockEditor saves carry their draft for the page's journal (#35 slice 
       .map((row) => [row.id, row.content]);
     assert.deepEqual(plain(stored), [['c1', 'charlie'], ['c2', 'charlie two, typed as the tab closed']]);
   });
+
+  /**
+   * A page with notes C (c1, c2) and D (d1), its client's commands sent through the page's
+   * journaling over a memory journal, as a page sends them (the `through` hook), and its pane on
+   * C, which loads D. D's read waits while an edit of c1 goes in, so the switch writes it
+   * (loadNote's _writePendingNow) before it shows D. The page's first `failing` saves of C answer
+   * that storage can't take them, so their entries stay. `savesOfC` is each save of C as the
+   * journaling sent it: the pane it named, and whether it was one that failed.
+   */
+  async function switchedFromC({ failing }) {
+    const { createJournaling } = await import('../js/kernel/core/application/journaling.js');
+    const { createMemoryJournal } = await import('../js/kernel/core/memory/journal.js');
+    const { unavailable } = await import('../js/kernel/core/contracts/outcomes.js');
+    const env = createLegacyEnv();
+    await createDatabase(env.indexedDB, {
+      records: {
+        canvases: [note('C'), note('D')],
+        elements: [block('c1', 'C', 0, 'charlie'), block('c2', 'C', 1, 'charlie two'), block('d1', 'D', 0, 'delta')],
+      },
+    });
+    env.load(...FILES);
+    // The page's journal, held by its owner lock as long as the page lives
+    const journal = createMemoryJournal();
+    const journaling = createJournaling({
+      journal,
+      locks: { request: (name, options, callback) => Promise.resolve().then(callback), query: async () => ({ held: [] }) },
+      sessionId: 'page-1',
+      surface: 'newtab',
+      clock: { now: () => 0 },
+    });
+    assert.equal(await journaling.ready, true);
+    let left = failing;
+    const answers = [];
+    /** @type {Array<{pane: (string|null), failed: boolean}>} */
+    const savesOfC = [];
+    await startEditorClient(env, {
+      through: (command, options, execute) => {
+        const answer = journaling.execute(command, (sent) => {
+          if (sent.type !== 'saveNoteContent' || sent.noteId !== 'C') return execute(sent);
+          const failed = left > 0;
+          savesOfC.push({ pane: options && typeof options.pane === 'string' ? options.pane : null, failed });
+          if (!failed) return execute(sent);
+          left -= 1;
+          return Promise.resolve(unavailable('storage', 'quota', false));
+        }, options);
+        answers.push(answer);
+        return answer;
+      },
+    });
+    const main = makeEditor(env);
+    await main.loadNote('C');
+
+    const client = env.documentClient;
+    const open = client.openNote;
+    let reading = false;
+    let letGo = () => {};
+    const held = new Promise((resolve) => {
+      letGo = resolve;
+    });
+    client.openNote = (noteId, ...rest) => {
+      if (noteId !== 'D' || reading) return open.call(client, noteId, ...rest);
+      reading = true;
+      return held.then(() => open.call(client, noteId, ...rest));
+    };
+    const switching = main.loadNote('D');
+    await waitFor(() => reading, { message: "D's read" });
+    type(main, EDIT_OF_C[0][1]);
+    letGo();
+    await runUntil(env, switching);
+    await settle();
+    assert.equal(main.noteId, 'D');
+    return {
+      env,
+      main,
+      savesOfC,
+      /** C's entries in the journal: each one's draft's blocks' text */
+      entriesOfC: () => plain(journal.entries()
+        .filter((entry) => entry.noteId === 'C')
+        .map((entry) => entry.draft.blocks.map((b) => [b.id, b.content]))),
+      /** Every command sent so far has its answer */
+      answered: async () => {
+        await Promise.all(answers);
+        await settle();
+      },
+    };
+  }
+
+  /** The edit of C that goes in while D's read is out */
+  const EDIT_OF_C = [['c1', 'charlie, typed while D was read']];
+
+  it("the retry of a save the switch to another note wrote names that save's pane, the one of the base it was drafted on, so its commit takes the save's entry (#191's known limit 3)", async () => {
+    const { env, main, savesOfC, entriesOfC, answered } = await switchedFromC({ failing: 1 });
+    assert.deepEqual(entriesOfC(), [EDIT_OF_C], "the switch's save failed, so its entry stays");
+
+    // Its retry, 1 s later, writes the same copy of C, after D's load, and commits
+    env.clock.tick(1000);
+    await runUntil(env, main.flushSave());
+    await answered();
+    assert.deepEqual(savesOfC.map((save) => save.failed), [true, false], 'the save, then its retry');
+    const [save, retry] = savesOfC;
+    assert.equal(typeof save.pane, 'string', "the save names C's pane");
+    assert.equal(retry.pane, save.pane, "the retry names its save's pane, not D's load's");
+    assert.deepEqual(entriesOfC(), [], "the retry's commit takes the save's entry, whose edit it carries");
+    const stored = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
+      .filter((row) => row.canvasId === 'C')
+      .sort((a, b) => a.order - b.order)
+      .map((row) => [row.id, row.content]);
+    assert.deepEqual(plain(stored), [...EDIT_OF_C, ['c2', 'charlie two']]);
+  });
+
+  it("a pane that loads a note again while its base from before is kept for a failed save's retry still gets a new id, so its saves after the load take none of that save's entries (R191's fix round, Q3)", async () => {
+    const { env, main, savesOfC, entriesOfC, answered } = await switchedFromC({ failing: 2 });
+
+    // The pane loads C again, which first sends the switch's save's retry, drafted on the base
+    // C's load before gave it, and the retry fails too. The pane shows C as stored, without the
+    // edit, and both entries stay for the next start
+    await runUntil(env, main.loadNote('C'));
+    await answered();
+    assert.deepEqual(savesOfC.map((save) => save.failed), [true, true], 'the save, then its retry');
+    assert.deepEqual(entriesOfC(), [EDIT_OF_C, EDIT_OF_C]);
+    assert.deepEqual(plain(main.blocks.map((b) => b.content)), ['charlie', 'charlie two']);
+
+    // A typed save of the other block commits. It carries nothing of the edit, so it names the
+    // new load's id, and the entries stay
+    type(main, 'charlie two, typed after the load', 1);
+    env.clock.tick(500);
+    assert.equal(await runUntil(env, main.flushSave()), true);
+    await answered();
+    assert.deepEqual(savesOfC.map((save) => save.failed), [true, true, false]);
+    assert.equal(typeof savesOfC[2].pane, 'string');
+    assert.notEqual(savesOfC[2].pane, savesOfC[0].pane, "the save after the load names the new load's id");
+    assert.deepEqual(entriesOfC(), [EDIT_OF_C, EDIT_OF_C], 'after the typed save');
+  });
+
+  it("a committed restore keeps the pane's id, so the pane's saves after it name the pane its saves before it named (the reviewer's read of R191's fix round, Q2)", async () => {
+    const { env, main, handed } = await pageOnC();
+    type(main, 'charlie, saved before the restore');
+    await debounceSave(env, main);
+    const [[, before]] = savesIn(handed);
+    assert.equal(typeof before.pane, 'string');
+
+    // The pane restores a snapshot of the note, which commits, and the base takes it in place
+    await runUntil(env, env.documentClient.saveSnapshot('C', [
+      { id: 'c1', type: 'text', content: 'charlie, restored' },
+      { id: 'c2', type: 'text', content: 'charlie two' },
+    ], 'From the snapshot'));
+    const [summary] = await runUntil(env, env.documentClient.snapshots('C'));
+    await runUntil(env, main._revertToSnapshot(summary));
+    assert.deepEqual(plain(main.blocks.map((b) => b.content)), ['charlie, restored', 'charlie two'], 'the restore is on screen');
+
+    type(main, 'charlie two, typed after the restore', 1);
+    await debounceSave(env, main);
+    const saves = savesIn(handed);
+    assert.equal(saves.length, 2, 'one save before the restore and one after it');
+    const [, after] = saves[1];
+    assert.ok(after && after.draft, 'the save after it carries a draft');
+    assert.equal(after.pane, before.pane, 'the save after the restore names the same pane');
+  });
 });
 
 describe('BlockEditor deletes stay deleted', () => {
