@@ -20,6 +20,8 @@
  *
  * A row whose mode is `report` never fails this script. One whose mode is `gate` exits 1 when
  * it fails on a profile it takes, when the run of one is invalid, or when it names no profile.
+ * The probe lists its problems for the whole run, not by profile, so one about a profile a row
+ * doesn't take still makes that row's profiles invalid.
  */
 
 const fs = require('fs');
@@ -63,6 +65,7 @@ function gateReport(probe, budgets) {
     notes.push(`- build/budgets.json's ${label} row names no profile`);
     if (row.mode === 'gate') failed = true;
   }
+  // For the whole run: the probe doesn't list them by profile, so each one counts for every profile
   const probeProblems = [...(probe.problems || []), ...(probe.packages || []).flatMap(entry => entry.problems || [])];
   // Each profile a row takes, then any other the run measured. A row fails the job only on the
   // profiles it takes

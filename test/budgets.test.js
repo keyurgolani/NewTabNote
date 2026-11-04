@@ -452,6 +452,16 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     const heavyTypical = probe(1.01, 1.05, 2.7);
     heavyTypical.timing.profiles.typical.packages.candidate.heapBytes = ratio(3.5 * 1048576);
     assert.equal(gateReport(heavyTypical, heapTypical).failed, true);
+    // Timing takes typical alone, and heap reports: maximal's timing can't fail the job, typical's can
+    const timingTypical = { ...BUDGETS, timing: { ...BUDGETS.timing, profiles: ['typical'] }, heap: { ...BUDGETS.heap, mode: 'report' } };
+    const slowMaximal = probe(1.01, 1.05, 2.7);
+    slowMaximal.timing.profiles.maximal.ratios.candidate.againstBoth.interactionReady = ratio(1.09);
+    const slow = gateReport(slowMaximal, timingTypical);
+    assert.deepEqual(slow.verdicts.map(verdict => [verdict.profile, verdict.timing]), [['typical', 'pass'], ['maximal', 'fail']]);
+    assert.equal(slow.failed, false);
+    const slowTypical = probe(1.01, 1.05, 2.7);
+    slowTypical.timing.profiles.typical.ratios.candidate.againstBoth.interactionReady = ratio(1.09);
+    assert.equal(gateReport(slowTypical, timingTypical).failed, true);
   });
 
   it('fails the job when a gate row names no profile, however little the run measured', () => {
@@ -463,6 +473,12 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
       assert.equal(report.failed, true, String(profiles));
       assert.ok(report.markdown.includes("- build/budgets.json's timing row names no profile"));
       assert.ok(report.markdown.includes("- build/budgets.json's heap row names no profile"));
+    }
+    // Either row alone, on a run whose numbers pass: the unnamed row fails it
+    for (const label of ['timing', 'heap']) {
+      const report = gateReport(probe(1.01, 1.05, 2.7), { ...BUDGETS, [label]: { ...BUDGETS[label], profiles: [] } });
+      assert.equal(report.failed, true, label);
+      assert.ok(report.markdown.includes(`- build/budgets.json's ${label} row names no profile`), label);
     }
     // A report row that names none fails nothing
     const reportOnly = { ...REPORTING, timing: { ...REPORTING.timing, profiles: [] }, heap: { ...REPORTING.heap, profiles: [] } };
