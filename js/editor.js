@@ -4898,16 +4898,19 @@ class BlockEditor {
    * issued since, and this pane's id, so the next page applies it by #33's rules if this one goes
    * before it's answered: the document client makes the draft under the save's commandId. One
    * that changes nothing since the base needs no entry, and a page that keeps no drafts gives none.
+   * A covered save names the pane too, once it has one, so its commit takes the pane's earlier
+   * entries for the note, as any other save's does.
    * @param {EditorSaveState} state
    * @param {{preview: string, todoProgress: Object|null, text: string}} meta
    * @param {string|undefined} closingId - the id of the close-time draft written for the save's edit
    * @returns {{commandId?: string, covered?: boolean, edit?: Object, pane?: string}|undefined}
    */
   _journalOptions(state, meta, closingId) {
-    if (closingId) return { commandId: closingId, covered: true };
+    const pane = this._pane || undefined;
+    if (closingId) return { commandId: closingId, covered: true, pane };
     if (!this._drafts()) return undefined;
     const edit = this._closeDraftOf(state.noteId, state.blocks, state.title, meta);
-    if (!edit) return { covered: true };
+    if (!edit) return { covered: true, pane };
     if (!this._pane) this._pane = this.documentClient.newId();
     return { edit, pane: this._pane };
   }

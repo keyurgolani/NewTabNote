@@ -27,7 +27,7 @@ import { systemClock, zoneOf } from '../core/ports/runtime.js';
 /**
  * What an editor tells of a save: its commandId when it chose one, and for the page's journal,
  * `covered` when its own record holds it, or the edit it saves, as a close-time draft's fields, and
- * the pane that issued it (#35 slice 3b)
+ * the pane that issued it, covered or not (#35 slice 3b)
  * @typedef {{commandId?: string, covered?: boolean, edit?: Omit<import('./close-draft-writer.js').DraftFields, 'id'>, pane?: string}} SaveOptions
  */
 /** @typedef {import('../core/domain/note.js').NoteRecord} NoteRecord */
@@ -59,8 +59,8 @@ import { systemClock, zoneOf } from '../core/ports/runtime.js';
  *   A save, under `commandId` when the editor gives one: its closing save shares its id with
  *   the close-time draft it wrote for the same edit (#33). What it tells the page's journal goes
  *   with the command (#35 slice 3b): `covered` for one its own record holds, as the closing save's
- *   draft does, or its `edit` and `pane`, an editor save's, which goes as the close-time draft of
- *   that edit under the save's commandId.
+ *   draft does, or its `edit`, an editor save's, which goes as the close-time draft of that edit
+ *   under the save's commandId, and either way the `pane` that issued it.
  * @property {import('./close-draft-writer.js').CloseDraftWriter | null} closeDrafts
  *   Where the editors write their close-time drafts at the page's own close (#33), or null on a
  *   page that keeps none
@@ -190,7 +190,9 @@ export function createDocumentClient(
       const id = commandId || client.ids.next();
       /** @type {JournalingOptions} */
       const journal = covered
-        ? { covered }
+        ? pane
+          ? { covered, pane }
+          : { covered }
         : edit && closeDrafts
           ? { draft: closeDrafts.draftOf({ ...edit, id }), pane }
           : {};

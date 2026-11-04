@@ -13,8 +13,9 @@
  * - The entry goes once the command is committed, a conflict, or refused, and stays when it's
  *   unavailable or unanswered, for whoever replays it. Once a pane's save of a note commits, the
  *   pane's earlier entries for that note go too, since a pane's save carries everything the pane
- *   changed since its last commit (R182's S2). A removal that fails is tried again with the next
- *   answer.
+ *   changed since its last commit (R182's S2). So does a covered save of the pane's, as its
+ *   closing save, or one with nothing to keep since the pane's base. A removal that fails is
+ *   tried again with the next answer.
  * - A journal that can't take an entry leaves the command to run as before, and says so on the
  *   console, with the failure's code at most. Nothing here throws into the page.
  * - A command that deletes notes for good takes their entries out of the journal once it's
@@ -47,7 +48,8 @@ import { journalEntry, ownerLock } from '../domain/journal.js';
 
 /**
  * What a caller tells the journaling of a command: `covered` when its own record holds it, as
- * the closing save's close-time draft does, and an editor save's `draft` and `pane`
+ * the closing save's close-time draft does, an editor save's `draft`, and the `pane` that issued
+ * an editor save, covered or not
  * @typedef {{covered?: boolean, draft?: CloseDraft, pane?: string}} JournalingOptions
  */
 
@@ -144,6 +146,26 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
   };
 
   /**
+   * The entries a pane's save of `noteId` covers once it commits: the pane's own for the note
+   * that the page issued before `bound`, since the save carries everything the pane changed
+   * since its last commit, kept or still out
+   * @param {string} type
+   * @param {unknown} noteId
+   * @param {string | undefined} pane
+   * @param {number} bound - the seq of the first entry issued after the save
+   * @returns {string[]}
+   */
+  const coveredBy = (type, noteId, pane, bound) => {
+    /** @type {string[]} */
+    const going = [];
+    if (!Object.hasOwn(PANE_SAVES, type) || pane === undefined) return going;
+    for (const [opId, other] of own) {
+      if (other.pane === pane && other.noteId === noteId && other.seq < bound) going.push(opId);
+    }
+    return going;
+  };
+
+  /**
    * Removes the entries of `noteIds`, notes deleted for good, whoever wrote them
    * @param {readonly string[]} noteIds
    */
@@ -166,12 +188,16 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
       const noteId = /** @type {{noteId?: unknown}} */ (command).noteId;
       if (!held || covered || !entry || !entry.journaled || typeof noteId !== 'string') {
         const answer = send(command);
-        // A delete for good takes its notes' entries with it once it's answered, and the caller
-        // gets the answer as it came, whatever the journal does
+        const bound = seq + 1;
+        // A delete for good takes its notes' entries with it once it's answered, and a pane's
+        // covered save that commits takes what it covers. The caller gets the answer as it came,
+        // whatever the journal does.
         Promise.resolve(answer).then(
           outcome => {
             const deleted = deletedBy(outcome);
             if (deleted.length > 0) forget(deleted);
+            const going = outcome.kind === 'committed' ? coveredBy(type, noteId, pane, bound) : [];
+            if (going.length > 0) remove(going);
           },
           () => {},
         );
@@ -210,14 +236,7 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
         }
         const outcome = await answer;
         if (!kept || !ENDS.includes(outcome.kind)) return outcome;
-        /** @type {string[]} */
-        const going = [record.opId];
-        // A pane's committed save carries everything the pane changed since its last commit
-        if (outcome.kind === 'committed' && Object.hasOwn(PANE_SAVES, type) && pane !== undefined) {
-          for (const [opId, other] of own) {
-            if (other.pane === pane && other.noteId === noteId && other.seq < seq) going.push(opId);
-          }
-        }
+        const going = [record.opId, ...(outcome.kind === 'committed' ? coveredBy(type, noteId, pane, seq) : [])];
         await remove(going);
         return outcome;
       })();
