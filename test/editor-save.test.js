@@ -1100,6 +1100,19 @@ describe("BlockEditor saves carry their draft for the page's journal (#35 slice 
     assert.equal(command.commandId, draft.id);
   });
 
+  it("the closing save names its pane once the pane has one, so its commit takes the pane's earlier entries for the note (R191's finding 1)", async () => {
+    const { env, main, handed } = await pageOnC();
+    type(main, 'charlie, saved');
+    await debounceSave(env, main);
+    type(main, 'charlie, typed as the tab closed');
+    env.window.fire('pagehide', { persisted: false });
+    const [[, first], [command, closing]] = savesIn(handed);
+    assert.equal(typeof first.pane, 'string');
+    assert.deepEqual(closing, { covered: true, pane: first.pane });
+    const [draft] = draftsOf(env);
+    assert.equal(command.commandId, draft.id);
+  });
+
   it("the closing save carries its own draft when its close-time draft didn't fit, since nothing else holds it then", async () => {
     const { env, main, handed } = await pageOnC({ localStorage: createLocalStorage({ quota: 100 }) });
     type(main, 'x'.repeat(300));
@@ -1118,6 +1131,18 @@ describe("BlockEditor saves carry their draft for the page's journal (#35 slice 
     await debounceSave(env, main);
     const [[, options]] = savesIn(handed);
     assert.deepEqual(options, { covered: true });
+  });
+
+  it("a save that changes nothing since its pane's base names its pane once the pane has one, so its commit takes the pane's earlier entries for the note too (the lead's call on R191's finding 1)", async () => {
+    const { env, main, handed } = await pageOnC();
+    type(main, 'charlie, saved');
+    await debounceSave(env, main);
+    type(main, 'charlie, saved, and typed');
+    type(main, 'charlie, saved');
+    await debounceSave(env, main);
+    const [[, first], [, second]] = savesIn(handed);
+    assert.equal(typeof first.pane, 'string');
+    assert.deepEqual(second, { covered: true, pane: first.pane });
   });
 });
 

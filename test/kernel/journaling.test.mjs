@@ -8,14 +8,18 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { applyJournalSaves } from '../../js/kernel/core/application/journal-apply.js';
 import { createJournaling } from '../../js/kernel/core/application/journaling.js';
 import { committed, conflict, rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
+import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
 import { ownerLock } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 import { createKernel } from './test-kernel.mjs';
+
+/** @typedef {import('../../js/kernel/core/domain/close-draft.js').CloseDraft} CloseDraft */
 
 /** The page's own session */
 const SESSION = 'page-1';
@@ -116,6 +120,90 @@ const quickNote = commandId => ({
   name: 'Call the plumber',
   blocks: [{ id: `block-${commandId}`, type: 'text', content: 'Call the plumber' }],
 });
+
+/**
+ * Lets the journal's work go on until `done` holds, for a few turns at most
+ * @param {() => boolean} [done]
+ */
+const settled = async (done = () => false) => {
+  for (let turn = 0; turn < 20 && !done(); turn += 1) await new Promise(resolve => setImmediate(resolve));
+};
+
+/**
+ * A page whose main pane saw quick note c-make's block commit as the editor writes it, then left a
+ * save of it that answered it may land later, then sent a covered save of the block as `text`,
+ * which committed: its closing save, covered by its close-time draft, or a save back to the
+ * pane's base. Then the next page's start applies what the page left.
+ * @param {string} text
+ */
+async function nextStartAfter(text) {
+  const w = await page();
+  assert.equal((await w.journaling.execute(quickNote('c-make'), w.send)).kind, 'committed');
+  const noteId = 'note-c-make';
+  /**
+   * An editor save of the note's block
+   * @param {string} commandId
+   * @param {string} content
+   * @returns {any}
+   */
+  const saveOf = (commandId, content) => ({
+    type: 'saveNoteContent',
+    commandId,
+    noteId,
+    blocks: [{ id: 'block-c-make', type: 'text', content, order: 0 }],
+    deriveFromStored: true,
+  });
+  // The pane's base: the block as its own save stored it
+  assert.equal((await w.kernel.execute(saveOf('c-base', 'Call the plumber'))).kind, 'committed');
+  /** The note's block as stored now */
+  const blockNow = async () =>
+    /** @type {any} */ ((await w.adapter.read(['blocks'], tx => tx.getAllByIndex('blocks', 'canvasId', noteId)))[0]);
+  const stored = await blockNow();
+  const revision = await w.adapter.read(['notes'], async tx => {
+    await tx.get('notes', noteId);
+    return tx.versions('notes', noteId)?.revision ?? 0;
+  });
+  const kept = saveOf('c-kept', 'Call the plumber, first');
+  /** @type {CloseDraft} its close-time draft, on the block as the pane last saw it commit */
+  const draft = {
+    v: 1,
+    id: 'c-kept',
+    page: SESSION,
+    noteId,
+    at: NOW,
+    base: {
+      revision,
+      updatedAt: null,
+      issued: [],
+      name: 'Call the plumber',
+      blocks: { 'block-c-make': blockDigest(stored, noteId) },
+    },
+    blocks: kept.blocks.map((/** @type {any} */ block) => ({ ...block, canvasId: noteId })),
+    deletedBlockIds: [],
+    preview: 'Call the plumber, first',
+    todoProgress: null,
+    linkedNames: [],
+  };
+  await w.journaling.execute(kept, async () => unavailable('storage', 'transaction-aborted', true), {
+    draft,
+    pane: 'main',
+  });
+  const covered = await w.journaling.execute(saveOf('c-covered', text), w.send, { covered: true, pane: 'main' });
+  assert.equal(covered.kind, 'committed', JSON.stringify(covered));
+  await settled(() => w.journal.entries().length === 0);
+  /** @type {unknown[]} */
+  const told = [];
+  const next = await applyJournalSaves({
+    journal: w.journal,
+    client: { execute: command => w.kernel.execute(/** @type {any} */ (command)) },
+    liveOwners: async () => new Set(),
+    sessionId: 'page-2',
+    locks: null,
+    store: { tell: entry => told.push(entry), tellSaved: () => {} },
+    wake: () => {},
+  });
+  return { next, told, content: (await blockNow()).content, left: w.journal.entries() };
+}
 
 describe("a page's journaling (#35 slice 3b)", () => {
   it('journals nothing until it holds its owner lock, and holds it for as long as the page lives', async () => {
@@ -280,6 +368,101 @@ describe("a page's journaling (#35 slice 3b)", () => {
     );
   });
 
+  it("removes its pane's entries for a note that it issued before a covered save of the note once that save commits, kept or still out, and leaves another pane's, another note's, one issued after it, and every one when the covered save doesn't commit (R191's finding 1)", async () => {
+    const w = await page();
+    const made = await w.journaling.execute(quickNote('c-make'), w.send);
+    assert.equal(made.kind, 'committed');
+    const noteId = 'note-c-make';
+    const fail = async () => unavailable('storage', 'transaction-aborted', true);
+    /** The journal's entries, by opId */
+    const left = () =>
+      w.journal
+        .entries()
+        .map(entry => entry.opId)
+        .sort();
+    /**
+     * An editor save of `note`'s block
+     * @param {string} commandId
+     * @param {string} note
+     * @param {string} content
+     * @returns {any}
+     */
+    const save = (commandId, note, content) => ({
+      type: 'saveNoteContent',
+      commandId,
+      noteId: note,
+      blocks: [{ id: 'block-c-make', type: 'text', content, order: 0 }],
+    });
+    /** @param {string} id @param {string} note */
+    const draftOf = (id, note) => /** @type {any} */ ({ v: 1, id, noteId: note, blocks: [], deletedBlockIds: [] });
+    // The main pane's save of the note that answered it may land later, and one still out, then
+    // another pane's save of the note, and the main pane's save of another note
+    await w.journaling.execute(save('c-kept', noteId, 'a'), fail, { draft: draftOf('c-kept', noteId), pane: 'main' });
+    /** @type {(outcome: any) => void} */
+    let answerOut = () => {};
+    const out = w.journaling.execute(
+      save('c-out', noteId, 'ab'),
+      () =>
+        new Promise(resolve => {
+          answerOut = resolve;
+        }),
+      { draft: draftOf('c-out', noteId), pane: 'main' },
+    );
+    await w.journaling.execute(save('c-side', noteId, 'side'), fail, {
+      draft: draftOf('c-side', noteId),
+      pane: 'side',
+    });
+    await w.journaling.execute(save('c-other', 'note-other', 'x'), fail, {
+      draft: draftOf('c-other', 'note-other'),
+      pane: 'main',
+    });
+    // A covered save of the note from the main pane that doesn't commit leaves every entry
+    await w.journaling.execute(save('c-failed', noteId, 'abc'), fail, { covered: true, pane: 'main' });
+    await settled();
+    assert.deepEqual(left(), ['c-kept', 'c-other', 'c-out', 'c-side']);
+    // The main pane's covered save of the note that commits, as its closing save goes under its
+    // close-time draft's id, and a save the pane issues while it's out
+    /** @type {() => void} */
+    let answerCovered = () => {};
+    const covered = w.journaling.execute(
+      save('c-covered', noteId, 'abc'),
+      (/** @type {any} */ command) =>
+        new Promise(resolve => {
+          answerCovered = () => resolve(w.kernel.execute(command));
+        }),
+      { covered: true, pane: 'main' },
+    );
+    await w.journaling.execute(save('c-after', noteId, 'abcd'), fail, {
+      draft: draftOf('c-after', noteId),
+      pane: 'main',
+    });
+    answerCovered();
+    assert.equal((await covered).kind, 'committed');
+    // It carries everything the pane changed since its last commit, so it covers the pane's
+    // entries for the note from before it, the one still out included
+    await settled(() => left().length < 5);
+    assert.deepEqual(left(), ['c-after', 'c-other', 'c-side']);
+    answerOut(unavailable('storage', 'transaction-aborted', true));
+    assert.equal((await out).kind, 'unavailable');
+    await settled();
+    assert.deepEqual(left(), ['c-after', 'c-other', 'c-side']);
+  });
+
+  it("leaves the next start nothing of its pane's to apply once the pane's closing save commits, so it makes no recovered note of the older text (R191's finding 1)", async () => {
+    const { next, told, content, left } = await nextStartAfter('Call the plumber, as it closed');
+    assert.deepEqual([next.recovered, told], [[], []], 'no recovered note of the older text');
+    assert.deepEqual(next.saved, []);
+    assert.equal(content, 'Call the plumber, as it closed');
+    assert.deepEqual(left, []);
+  });
+
+  it("leaves the next start nothing of its pane's to apply once the pane's save back to its base commits, so the older text doesn't land over it with no conflict to catch it (the lead's call on R191's finding 1)", async () => {
+    const { next, told, content, left } = await nextStartAfter('Call the plumber');
+    assert.deepEqual([next.saved, next.recovered, told], [[], [], []], 'the older text, not applied');
+    assert.equal(content, 'Call the plumber');
+    assert.deepEqual(left, []);
+  });
+
   it("runs the command as it did when the journal can't take its entry, and says so on the console", async () => {
     const w = await page();
     w.journal.failNext('put');
@@ -314,13 +497,6 @@ describe("a page's journaling (#35 slice 3b)", () => {
         .entries()
         .map(entry => entry.opId)
         .sort();
-    /**
-     * Lets the journal's work go on until `done` holds, for a few turns at most
-     * @param {() => boolean} [done]
-     */
-    const settled = async (done = () => false) => {
-      for (let turn = 0; turn < 20 && !done(); turn += 1) await new Promise(resolve => setImmediate(resolve));
-    };
     // Notes a to d, each with a save that may land later, and a save of a that a page that went left
     for (const id of ['a', 'b', 'c', 'd']) {
       assert.equal((await w.journaling.execute(quickNote(id), w.send)).kind, 'committed');
