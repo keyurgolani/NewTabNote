@@ -323,6 +323,9 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(entries.popup.start.js, { raw: 115 * KIB, gzip: 40 * KIB });
     assert.deepEqual(entries.sidepanel.start.js, { raw: 112 * KIB, gzip: 40 * KIB });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
+    // Timing takes 12 rounds of each profile, and both rows gate both profiles
+    assert.equal(BUDGETS.timing.rounds, 12);
+    assert.deepEqual([BUDGETS.timing.profiles, BUDGETS.heap.profiles], [['typical', 'maximal'], ['typical', 'maximal']]);
     // Heap is 3.12 MiB, the median of CI's three readings of next's code at 0caa9c3e with #157's probe,
     // plus about 5% (2026-11-02), failing above 3.378 with its 3%
     assert.deepEqual([BUDGETS.heap.limitMiB, BUDGETS.heap.tolerancePct], [3.28, 3]);
@@ -348,38 +351,44 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
   const REPORTING = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'report' }, heap: { ...BUDGETS.heap, mode: 'report' } };
   const ratio = (median, extra = {}) => ({ median, q1: median - 0.01, q3: median + 0.01, values: Array(12).fill(median), ...extra });
   // The candidate's ratio to the first 1.4.0 copy alone is set apart from its ratio to both, so
-  // a summary that read the first would show
-  const probe = (self, both, heapMiB, { first = both + 0.2, failures = [], problems = [], rounds = 12 } = {}) => ({
+  // a summary that read the first would show. Both profiles the rows gate get the same numbers.
+  // `paired` is how many rounds have a run of every package: a package that recorded fewer, on
+  // either side, leaves its other rounds unpaired
+  const probe = (self, both, heapMiB, { first = both + 0.2, failures = [], problems = [], rounds = 12, paired = rounds } = {}) => ({
     environment: { cpu: 'test', cores: 4, platform: 'linux' },
     timing: {
       browser: '156',
       runs: rounds,
-      profiles: {
-        typical: {
-          packages: {
-            '1.4.0': { interactionReadyMs: ratio(900), heapBytes: ratio(4 * 1048576), failures: [] },
-            '1.4.0-again': { interactionReadyMs: ratio(905), heapBytes: ratio(4 * 1048576), failures: [] },
-            candidate: { interactionReadyMs: ratio(950), heapBytes: ratio(heapMiB * 1048576), failures },
+      profiles: Object.fromEntries(
+        ['typical', 'maximal'].map(name => [
+          name,
+          {
+            packages: {
+              '1.4.0': { interactionReadyMs: ratio(900), heapBytes: ratio(4 * 1048576), failures: [] },
+              '1.4.0-again': { interactionReadyMs: ratio(905), heapBytes: ratio(4 * 1048576), failures: [] },
+              candidate: { interactionReadyMs: ratio(950), heapBytes: ratio(heapMiB * 1048576), failures },
+            },
+            ratios: {
+              '1.4.0-again': { self: true, interactionReady: ratio(self, { values: Array(paired).fill(self) }) },
+              candidate: { interactionReady: ratio(first, { values: Array(paired).fill(first) }), againstBoth: { interactionReady: ratio(both, { values: Array(paired).fill(both) }) } },
+            },
           },
-          ratios: {
-            '1.4.0-again': { self: true, interactionReady: ratio(self, { values: Array(rounds).fill(self) }) },
-            candidate: { interactionReady: ratio(first, { values: Array(rounds).fill(first) }), againstBoth: { interactionReady: ratio(both, { values: Array(rounds).fill(both) }) } },
-          },
-        },
-      },
+        ]),
+      ),
     },
     problems,
   });
+  const each = verdict => ['typical', 'maximal'].map(profile => ({ profile, ...verdict }));
 
   it('says valid, pass or fail for timing and heap, and fails nothing while the rows report', () => {
     // Against the first copy alone the candidate is +25%: the summary reads both
     const passing = gateReport(probe(1.01, 1.05, 2.7, { first: 1.25 }), REPORTING);
-    assert.deepEqual(passing.verdicts, [{ profile: 'typical', valid: true, timing: 'pass', heap: 'pass', problems: [] }]);
+    assert.deepEqual(passing.verdicts, each({ valid: true, timing: 'pass', heap: 'pass', problems: [] }));
     assert.equal(passing.failed, false);
     assert.match(passing.markdown, /\| typical \| 12 \| \+1\.0% .* \| yes \| \+5\.0% .* \| pass \| 2\.70 MiB \| pass \|/);
     // Against the first copy alone it's +1%: the summary reads both
     const failing = gateReport(probe(1.01, 1.09, 3.5, { first: 1.01 }), REPORTING);
-    assert.deepEqual(failing.verdicts, [{ profile: 'typical', valid: true, timing: 'fail', heap: 'fail', problems: [] }]);
+    assert.deepEqual(failing.verdicts, each({ valid: true, timing: 'fail', heap: 'fail', problems: [] }));
     assert.equal(failing.failed, false, 'report-only rows fail nothing');
     assert.deepEqual(gateReport(probe(1.09, 1.0, 2.7), REPORTING).verdicts[0], { profile: 'typical', valid: false, timing: 'invalid', heap: 'pass', problems: [] });
   });
@@ -390,6 +399,11 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
       [{ failures: [{ round: 3, message: 'the page never marked ready' }] }, 'candidate round 3 failed: the page never marked ready'],
       [{ problems: ["the typical fixture isn't the one build/budgets.json measured (aaaa, not bbbb), so its numbers don't compare"] }, "the probe: the typical fixture isn't the one build/budgets.json measured (aaaa, not bbbb), so its numbers don't compare"],
       [{ rounds: 9 }, '9 rounds, fewer than the 12 build/budgets.json takes'],
+      // 12 asked, and a package, on either side, recorded 11 with no failure listed. The row's 12
+      // already caught this one
+      [{ paired: 11 }, '11 rounds, fewer than the 12 build/budgets.json takes'],
+      // Past the 12 the row takes, every round asked still counts
+      [{ rounds: 15, paired: 14 }, 'only 14 of the 15 rounds asked have a run of every package'],
     ];
     for (const [options, reason] of cases) {
       const reported = gateReport(probe(1.01, 1.05, 2.7, options), REPORTING);
@@ -398,6 +412,84 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
       assert.ok(reported.markdown.includes(`- typical: ${reason}`), reason);
       assert.equal(gateReport(probe(1.01, 1.05, 2.7, options), gated).failed, true, reason);
     }
+  });
+
+  it('calls a profile the rows take invalid when the run has no rounds of it, so a run that measured nothing fails a gate', () => {
+    const missing = { profile: 'maximal', valid: false, timing: 'invalid', heap: 'invalid', problems: ['the run has no rounds of this profile, which build/budgets.json takes'] };
+    // The run measured typical alone
+    const typicalOnly = probe(1.01, 1.05, 2.7);
+    delete typicalOnly.timing.profiles.maximal;
+    const reported = gateReport(typicalOnly, REPORTING);
+    assert.deepEqual(reported.verdicts, [{ profile: 'typical', valid: true, timing: 'pass', heap: 'pass', problems: [] }, missing]);
+    assert.equal(reported.failed, false, 'report mode fails nothing');
+    assert.match(reported.markdown, /\| maximal \| 0 \| n\/a \| \*\*no\*\* \| n\/a \| invalid \| n\/a \| invalid \|/);
+    assert.ok(reported.markdown.includes('- maximal: the run has no rounds of this profile, which build/budgets.json takes'));
+    assert.equal(gateReport(typicalOnly, BUDGETS).failed, true);
+    // A run with no profiles, and one with no timing at all: both profiles are invalid
+    const noProfiles = probe(1.01, 1.05, 2.7);
+    noProfiles.timing.profiles = {};
+    for (const nothing of [noProfiles, { ...probe(1.01, 1.05, 2.7), timing: null }]) {
+      const report = gateReport(nothing, BUDGETS);
+      assert.deepEqual(report.verdicts, [{ ...missing, profile: 'typical' }, missing]);
+      assert.equal(report.failed, true);
+    }
+  });
+
+  it('fails each row only on the profiles it takes', () => {
+    // Heap takes typical alone, and timing reports: maximal's heap can't fail the job, nor can its absence
+    const heapTypical = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'report' }, heap: { ...BUDGETS.heap, profiles: ['typical'] } };
+    const heavyMaximal = probe(1.01, 1.05, 2.7);
+    heavyMaximal.timing.profiles.maximal.packages.candidate.heapBytes = ratio(3.5 * 1048576);
+    const heavy = gateReport(heavyMaximal, heapTypical);
+    assert.deepEqual(heavy.verdicts.map(verdict => [verdict.profile, verdict.heap]), [['typical', 'pass'], ['maximal', 'fail']]);
+    assert.equal(heavy.failed, false);
+    const typicalOnly = probe(1.01, 1.05, 2.7);
+    delete typicalOnly.timing.profiles.maximal;
+    assert.equal(gateReport(typicalOnly, heapTypical).failed, false);
+    // Timing takes both, so as a gate it fails on the missing profile
+    assert.equal(gateReport(typicalOnly, { ...heapTypical, timing: BUDGETS.timing }).failed, true);
+    // Heap still fails on the profile it takes
+    const heavyTypical = probe(1.01, 1.05, 2.7);
+    heavyTypical.timing.profiles.typical.packages.candidate.heapBytes = ratio(3.5 * 1048576);
+    assert.equal(gateReport(heavyTypical, heapTypical).failed, true);
+    // Timing takes typical alone, and heap reports: maximal's timing can't fail the job, typical's can
+    const timingTypical = { ...BUDGETS, timing: { ...BUDGETS.timing, profiles: ['typical'] }, heap: { ...BUDGETS.heap, mode: 'report' } };
+    const slowMaximal = probe(1.01, 1.05, 2.7);
+    slowMaximal.timing.profiles.maximal.ratios.candidate.againstBoth.interactionReady = ratio(1.09);
+    const slow = gateReport(slowMaximal, timingTypical);
+    assert.deepEqual(slow.verdicts.map(verdict => [verdict.profile, verdict.timing]), [['typical', 'pass'], ['maximal', 'fail']]);
+    assert.equal(slow.failed, false);
+    const slowTypical = probe(1.01, 1.05, 2.7);
+    slowTypical.timing.profiles.typical.ratios.candidate.againstBoth.interactionReady = ratio(1.09);
+    assert.equal(gateReport(slowTypical, timingTypical).failed, true);
+  });
+
+  it('fails the job when a gate row names no profile, however little the run measured', () => {
+    const nothing = { ...probe(1.01, 1.05, 2.7), timing: null };
+    for (const profiles of [[], undefined]) {
+      const unnamed = { ...BUDGETS, timing: { ...BUDGETS.timing, profiles }, heap: { ...BUDGETS.heap, profiles } };
+      const report = gateReport(nothing, unnamed);
+      assert.deepEqual(report.verdicts, []);
+      assert.equal(report.failed, true, String(profiles));
+      assert.ok(report.markdown.includes("- build/budgets.json's timing row names no profile"));
+      assert.ok(report.markdown.includes("- build/budgets.json's heap row names no profile"));
+    }
+    // Either row alone, on a run whose numbers pass: the unnamed row fails it
+    for (const label of ['timing', 'heap']) {
+      const report = gateReport(probe(1.01, 1.05, 2.7), { ...BUDGETS, [label]: { ...BUDGETS[label], profiles: [] } });
+      assert.equal(report.failed, true, label);
+      assert.ok(report.markdown.includes(`- build/budgets.json's ${label} row names no profile`), label);
+    }
+    // A report row that names none fails nothing
+    const reportOnly = { ...REPORTING, timing: { ...REPORTING.timing, profiles: [] }, heap: { ...REPORTING.heap, profiles: [] } };
+    assert.equal(gateReport(nothing, reportOnly).failed, false);
+  });
+
+  it("calls a profile invalid when build/budgets.json's timing row doesn't say how many rounds it takes", () => {
+    const unset = { ...BUDGETS, timing: { ...BUDGETS.timing, rounds: undefined } };
+    const one = gateReport(probe(1.01, 1.05, 2.7, { rounds: 1 }), unset);
+    assert.deepEqual(one.verdicts, each({ valid: false, timing: 'invalid', heap: 'invalid', problems: ["build/budgets.json's timing row doesn't say how many rounds it takes"] }));
+    assert.equal(one.failed, true);
   });
 
   it("fails the job on build/budgets.json's own rows: timing over its 7%, and heap over 3.28 MiB plus 3%", () => {
@@ -474,6 +566,18 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
       const contexts = (ruleset.rules || []).filter(rule => rule.type === 'required_status_checks').flatMap(rule => rule.parameters.required_status_checks.map(check => check.context));
       assert.ok(contexts.every(context => context === 'pr-gate'), `${name} requires ${contexts.join(', ')}`);
     }
+  });
+
+  it("has CI's probe step ask for at least the rounds the timing row takes, and every profile either row takes", () => {
+    const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/perf.yml'), 'utf8');
+    const start = workflow.indexOf('- name: Time 1.4.0');
+    const step = workflow.slice(start, workflow.indexOf('- name:', start + 1));
+    const command = step.slice(step.indexOf('npm run perf:probe'));
+    const runs = /--runs (\d+)/.exec(command);
+    const profiles = /--profiles (\S+)/.exec(command);
+    assert.ok(runs && Number(runs[1]) >= BUDGETS.timing.rounds, 'the probe step asks for the rounds');
+    assert.ok(profiles, 'the probe step names its profiles');
+    for (const name of [...BUDGETS.timing.profiles, ...BUDGETS.heap.profiles]) assert.ok(profiles[1].split(',').includes(name), name);
   });
 
   it('lets npm run perf:probe --baseline read build/budgets.json', () => {
