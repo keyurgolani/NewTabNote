@@ -3,16 +3,19 @@
 // in-memory adapter and on #17's. One test per path: saved with its deletes, merged with another
 // writer's change, recovered, dropped as already in or as deletes alone, caught up, gone, and
 // rule 0, each for the stack's drafts and 1.4.3's, plus the block of another note or of none, a
-// resend, and below version 10.
+// resend, and below version 10. A draft whose closing save committed under its id is dropped by
+// the ledger's word (#181's S2, #6), and one the ledger can't speak for applies by the rules.
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { unitsWork } from '../../js/kernel/core/application/work.js';
-import { committed } from '../../js/kernel/core/contracts/outcomes.js';
+import { UnavailableError, committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest, decide, isCloseDraft, recoveredIdOf } from '../../js/kernel/core/domain/close-draft.js';
 import { noteSaveMetadata } from '../../js/kernel/core/domain/note.js';
+import { LEDGER_MAX_AGE_MS } from '../../js/kernel/adapters/indexeddb/ledger-sweep.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
+import { createMemoryLedger } from '../../js/kernel/core/memory/ledger.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { adapterOn, closeAll, indexedDbFixture, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
@@ -47,7 +50,8 @@ const FIXTURES = [
   {
     name: 'in-memory',
     async start() {
-      const adapter = createMemoryAdapter();
+      // With a ledger, as #17's adapter keeps one
+      const adapter = createMemoryAdapter({ ledger: createMemoryLedger() });
       const clock = testClock();
       const ids = testIds();
       const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
@@ -226,6 +230,50 @@ async function savedElsewhere(ctx, blocks) {
   });
   assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
 }
+
+/**
+ * The closing save of `draft`'s note, as the closing page's editor sends it under the draft's id
+ * (js/editor.js, _writeCloseDraft): the blocks it puts, or the moves it makes, the closing page's
+ * preview and link names, and no delete (#6, G6)
+ * @param {Context} ctx
+ * @param {CloseDraft} draft
+ */
+async function closingSaveOf(ctx, draft) {
+  const moves = Array.isArray(draft.orders) && draft.orders.length > 0;
+  const outcome = await ctx.kernel.execute(/** @type {Command} */ ({
+    type: 'saveNoteContent',
+    commandId: draft.id,
+    noteId: draft.noteId,
+    blocks: draft.blocks,
+    ...(moves ? { orders: draft.orders, deriveFromStored: true } : { preview: draft.preview }),
+    linkedNames: draft.linkedNames,
+  }));
+  assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+}
+
+/**
+ * Another tab's save that puts A's blocks back to the copies the closing page's base has, and
+ * links A to Bravo
+ * @param {Context} ctx
+ */
+async function revertedElsewhere(ctx) {
+  const blocks = BASE_BLOCKS();
+  const outcome = await ctx.kernel.execute({
+    type: 'saveNoteContent',
+    commandId: ctx.ids.next(),
+    noteId: 'A',
+    blocks,
+    preview: noteSaveMetadata(blocks).preview,
+    linkedNames: ['Bravo'],
+  });
+  assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+}
+
+/**
+ * Note A's links, as [from, to]
+ * @param {Context} ctx
+ */
+const linksOf = async ctx => (await allOf(ctx, 'links')).map(link => [link.fromNoteId, link.toNoteId]);
 
 for (const fixture of FIXTURES) {
   describe(`applyCloseDraft on the ${fixture.name} adapter`, () => {
@@ -698,8 +746,216 @@ for (const fixture of FIXTURES) {
         assert.deepEqual(await recordOf(ctx, 'notes', 'A'), before);
       });
     });
+
+    describe("a draft whose closing save committed under its id: its edit is in, so it's dropped (#181's S2, #6)", () => {
+      it("leaves another writer's revert of a block, and the link that writer added: nothing is written, and no recovered note (P2b, P7b)", async () => {
+        await profileOf(ctx);
+        const draft = stackDraft();
+        await closingSaveOf(ctx, draft);
+        await revertedElsewhere(ctx);
+        const before = await recordOf(ctx, 'notes', 'A');
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        assert.equal((await blocksOf(ctx, 'A')).a1.content, 'alpha', "the other writer's copy stays");
+        assert.deepEqual(await linksOf(ctx), [['A', 'B']], 'the link the other writer added stays');
+        assert.deepEqual(await recordOf(ctx, 'notes', 'A'), before, 'nothing is written');
+        assert.equal((await allOf(ctx, 'notes')).length, 2, 'no recovered note');
+      });
+
+      it("leaves another writer's reorder back to the orders the page knew (S2)", async () => {
+        await profileOf(ctx);
+        const draft = stackDraft({ blocks: [], orders: [{ id: 'a2', order: 0 }, { id: 'a1', order: 1 }], base: { orders: { a1: 0, a2: 1 } } });
+        await closingSaveOf(ctx, draft);
+        await savedElsewhere(ctx, BASE_BLOCKS());
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        const orders = Object.fromEntries(Object.values(await blocksOf(ctx, 'A')).map(row => [row.id, row.order]));
+        assert.deepEqual(orders, { a1: 0, a2: 1 });
+      });
+
+      it("takes a delete that failed with it, as the lead's Q5 drops deletes alone over a note changed since: the block stays (the lead's ruling 1)", async () => {
+        await profileOf(ctx);
+        // The page's delete of a2 failed, and the closing save carries no delete
+        const draft = stackDraft({ deletedBlockIds: ['a2'] });
+        await closingSaveOf(ctx, draft);
+        await revertedElsewhere(ctx);
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        const blocks = await blocksOf(ctx, 'A');
+        assert.deepEqual(Object.keys(blocks).sort(), ['a1', 'a2'], 'the block stays');
+        assert.equal(blocks.a1.content, 'alpha');
+      });
+
+      it('still catches the record up with its blocks when it lags them, as the drop of deletes alone does, and writes nothing else', async () => {
+        await profileOf(ctx);
+        // The page's delete of a1 failed, and the closing save's preview is its first block's, a2
+        const typed = block('a2', 'A', 1, 'alpha two, edited as the tab closed', { updatedAt: T0 + 5 });
+        const draft = stackDraft({ blocks: [typed], deletedBlockIds: ['a1'], preview: 'alpha two, edited as the tab closed' });
+        await closingSaveOf(ctx, draft);
+        const before = await recordOf(ctx, 'notes', 'A');
+        assert.equal(before.record?.preview, 'alpha two, edited as the tab closed');
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-caught-up', ['A']]);
+        const after = await recordOf(ctx, 'notes', 'A');
+        assert.equal(after.record?.preview, noteSaveMetadata([block('a1', 'A', 0, 'alpha'), typed]).preview, 'from the blocks as stored');
+        assert.deepEqual(
+          [after.record?.updatedAt, after.versions?.revision],
+          [before.record?.updatedAt, before.versions?.revision],
+          'its revision and updatedAt as they were',
+        );
+        assert.deepEqual(Object.keys(await blocksOf(ctx, 'A')).sort(), ['a1', 'a2']);
+      });
+
+      it('answers gone when its note was deleted for good since, as a draft with no closing save does', async () => {
+        await profileOf(ctx);
+        const draft = stackDraft();
+        await closingSaveOf(ctx, draft);
+        for (const type of ['trashNote', 'deleteNotePermanently']) {
+          const outcome = await ctx.kernel.execute(/** @type {Command} */ ({ type, commandId: ctx.ids.next(), noteId: 'A' }));
+          assert.equal(outcome.kind, 'committed', type);
+        }
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-gone', []]);
+      });
+
+      it("drops one in 1.4.3's format the same way, with no recovered note", async () => {
+        await profileOf(ctx);
+        const draft = legacyDraft();
+        await closingSaveOf(ctx, draft);
+        await savedElsewhere(ctx, [block('a1', 'A', 0, 'alpha, from another tab'), block('a2', 'A', 1, 'alpha two')]);
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-dropped', []]);
+        assert.equal((await blocksOf(ctx, 'A')).a1.content, 'alpha, from another tab');
+        assert.equal((await allOf(ctx, 'notes')).length, 2, 'no recovered note');
+      });
+
+      it("applies by the rules when its id keys a kept conflict, not a commit, since that save didn't land (the lead's ruling 2)", async () => {
+        await profileOf(ctx);
+        const draft = stackDraft();
+        const kept = await ctx.kernel.execute(/** @type {Command} */ ({
+          type: 'saveNoteContent',
+          commandId: draft.id,
+          noteId: 'A',
+          blocks: draft.blocks,
+          preview: draft.preview,
+          expectedRevision: 7,
+        }));
+        assert.equal(kept.kind, 'conflict', JSON.stringify(kept));
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-saved', ['A']]);
+        assert.equal((await blocksOf(ctx, 'A')).a1.content, 'alpha, edited as the tab closed');
+      });
+
+      it("applies by the rules when its id keys nothing, a close whose save never committed: the closing page's text and link names go in, as on 1.5.0", async () => {
+        await profileOf(ctx);
+        const draft = stackDraft();
+        await revertedElsewhere(ctx);
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-saved', ['A']]);
+        assert.equal((await blocksOf(ctx, 'A')).a1.content, 'alpha, edited as the tab closed');
+        assert.deepEqual(await linksOf(ctx), [], "the closing page's names, which hold no link");
+      });
+    });
   });
 }
+
+describe("a committed close the ledger can't speak for: the draft applies by the rules, never dropped on a read that can't answer (the lead's rulings 2 and 3)", () => {
+  /**
+   * P2b's case: the closing save commits under the draft's id, and another writer puts a1 back
+   * to its base copy since. Then `before`, and the apply of the draft.
+   * @param {Context} ctx
+   * @param {() => Promise<void> | void} [before]
+   */
+  async function p2b(ctx, before = () => {}) {
+    await profileOf(ctx);
+    const draft = stackDraft();
+    await closingSaveOf(ctx, draft);
+    await revertedElsewhere(ctx);
+    await before();
+    return apply(ctx, draft);
+  }
+
+  /** @param {Context} ctx */
+  const savedOver = async ctx => {
+    assert.equal((await blocksOf(ctx, 'A')).a1.content, 'alpha, edited as the tab closed');
+  };
+
+  /**
+   * An in-memory context whose adapter is given `ledger`, or none
+   * @param {import('../../js/kernel/core/memory/ledger.js').MemoryLedger} [ledger]
+   * @returns {Context}
+   */
+  const inMemory = ledger => {
+    const adapter = createMemoryAdapter(ledger ? { ledger } : {});
+    const clock = testClock();
+    const ids = testIds();
+    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+    return { adapter, clock, ids, kernel, close: () => {} };
+  };
+
+  /**
+   * A context on #17's adapter over `of`, opened as `mode` says
+   * @param {ReturnType<typeof profile>} of
+   * @param {'versioned' | 'existing'} [mode]
+   * @returns {Promise<Context>}
+   */
+  const onIndexedDb = async (of, mode = 'versioned') => {
+    const clock = testClock();
+    const ids = testIds();
+    const adapter = adapterOn(of, { mode, clock });
+    await adapter.open();
+    return { adapter, clock, ids, kernel: kernelOn(adapter, { ids, clock }), close: () => closeAll(of) };
+  };
+
+  it('on the in-memory adapter with no ledger', async () => {
+    const ctx = inMemory();
+    assert.deepEqual(said(await p2b(ctx)), ['close-draft-saved', ['A']]);
+    await savedOver(ctx);
+  });
+
+  it("on the in-memory adapter whose ledger can't read", async () => {
+    const ctx = inMemory(createMemoryLedger({
+      beforeRead() {
+        throw new UnavailableError('storage', 'read-failed', true);
+      },
+    }));
+    assert.deepEqual(said(await p2b(ctx)), ['close-draft-saved', ['A']]);
+    await savedOver(ctx);
+  });
+
+  it("on #17's adapter, when the status read fails, and its unit still commits on the same connection", async () => {
+    const of = profile();
+    const ctx = await onIndexedDb(of);
+    try {
+      // The fault is the status read's alone, by its key, so the commit's own ledger read goes through
+      const failing = () => of.faults.failNextRead('operations', 'NotReadableError', 'draft-1');
+      assert.deepEqual(said(await p2b(ctx, failing)), ['close-draft-saved', ['A']]);
+      await savedOver(ctx);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("on #17's adapter, once the ledger's sweep took the closing save's row after 90 days, which then reads absent", async () => {
+    const of = profile();
+    const ctx = await onIndexedDb(of);
+    try {
+      const swept = async () => {
+        ctx.clock.advance(LEDGER_MAX_AGE_MS + 1);
+        const { swept: ran, deleted } = await /** @type {any} */ (ctx.adapter).sweepLedger();
+        assert.ok(ran && deleted >= 2, `the sweep ran and took the closing save's row (${deleted})`);
+      };
+      assert.deepEqual(said(await p2b(ctx, swept)), ['close-draft-saved', ['A']]);
+      await savedOver(ctx);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it('below version 10, where no ledger keeps the closing save', async () => {
+    const of = profile();
+    await legacyEnv.createDatabase(of.real, {});
+    const ctx = await onIndexedDb(of, 'existing');
+    try {
+      assert.deepEqual(said(await p2b(ctx)), ['close-draft-saved', ['A']]);
+      await savedOver(ctx);
+    } finally {
+      await ctx.close();
+    }
+  });
+});
 
 describe('applyCloseDraft below version 10, where no ledger keeps a commit', () => {
   it('content first finds the work done when the page went before removing the draft: the resend writes nothing', async () => {

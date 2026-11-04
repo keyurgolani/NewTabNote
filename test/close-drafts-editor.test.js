@@ -13,7 +13,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, createLocalStorage, settle, plain, note, block, FakeDocument,
-  makeEditor, releaseStorage, runUntil, startEditorClient,
+  makeEditor, releaseStorage, runUntil, startEditorClient, createLockManager,
 } = require('./helpers/legacy-env');
 const { release143 } = require('./helpers/release-143');
 
@@ -77,9 +77,12 @@ function type(editor, text, index = 0) {
 /**
  * A new tab's page on a profile at version 8, as 1.4.x left it, its editors on the real kernel
  * with the page's draft writer: notes A (a1, a2), B (b1) and C (c1, c2), and what `more` adds
- * @param {{localStorage?: Object, notes?: Array<Object>, blocks?: Array<Object>, files?: Array<string>}} [more]
+ * @param {{localStorage?: Object, notes?: Array<Object>, blocks?: Array<Object>, files?: Array<string>, migrated?: boolean}} [more]
+ *   `migrated`: the worker's migration run takes the database to this build's version before the
+ *   page opens it, so #17's ledger keeps each command the page commits, as on a profile the worker
+ *   upgraded. One at version 8 keeps none.
  */
-async function setup({ localStorage = createLocalStorage(), notes = [], blocks = [], files = FILES } = {}) {
+async function setup({ localStorage = createLocalStorage(), notes = [], blocks = [], files = FILES, migrated = false } = {}) {
   const env = createLegacyEnv({ localStorage });
   await createDatabase(env.indexedDB, {
     records: {
@@ -94,6 +97,19 @@ async function setup({ localStorage = createLocalStorage(), notes = [], blocks =
       ],
     },
   });
+  if (migrated) {
+    const { runMigrations } = await import('../js/kernel/adapters/indexeddb/migrate.js');
+    const run = await runMigrations({
+      indexedDB: env.indexedDB,
+      keyRange: env.global.IDBKeyRange,
+      locks: createLockManager(),
+      estimate: null,
+      crypto: globalThis.crypto,
+      clock: { now: () => Date.now() },
+      logger: { warn() {} },
+    });
+    assert.equal(run.status, 'migrated', "the worker's run upgraded the database");
+  }
   env.load(...files);
   await startEditorClient(env);
   return env;
@@ -912,9 +928,12 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
       .map((row) => [row.content, row.order]);
   }
 
-  /** The page's main pane and pop-out on C, and the pop-out's edit to c2 stored */
-  async function popOutSavedC2() {
-    const env = await setup();
+  /**
+   * The page's main pane and pop-out on C, and the pop-out's edit to c2 stored
+   * @param {{migrated?: boolean}} [options] - as setup takes it
+   */
+  async function popOutSavedC2(options) {
+    const env = await setup(options);
     const main = editing(makeEditor(env));
     await main.loadNote('C');
     const { pip, pipWindow } = await openPiP(env, 'C');
@@ -948,6 +967,26 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
     assert.deepEqual(result.saved, [], 'its draft finds every block where the closing save put it');
     assert.deepEqual(await recoveredNames(env), []);
     assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['added in the main pane', 1], ['charlie two, from the pop-out', 2]]);
+  });
+
+  it("the same with the closing save committed, then another tab's move of c2 back above the new block: the next start drops the draft, so that tab's order stays (#181's S2, #6)", async () => {
+    // On a database the worker upgraded, whose ledger keeps the closing save
+    const { env, main } = await popOutSavedC2({ migrated: true });
+    const saves = watchSaves(env);
+    main.insertBlockAfter('c1', 'text', 'added in the main pane');
+    closePage(env);
+    assert.equal((await saves[saves.length - 1].done).kind, 'committed', 'the closing save committed');
+    // Another tab moves c2 back where the closing page knew it
+    const other = await secondTab(env);
+    const tabB = editing(makeEditor(other));
+    await tabB.loadNote('C');
+    tabB.moveBlockByDirection('c2', -1);
+    assert.equal(await runUntil(other, tabB.flushSave()), true);
+    assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['charlie two, from the pop-out', 1], ['added in the main pane', 2]]);
+    const result = await nextStart(env);
+    assert.deepEqual([result.saved, result.recovered], [[], []]);
+    assert.deepEqual(await recoveredNames(env), []);
+    assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['charlie two, from the pop-out', 1], ['added in the main pane', 2]]);
   });
 
   it("two tabs: tab A's Enter puts a block above the one tab B saved, and A's closing save is lost: A's new block goes into the note beside B's text, in A's order, with no recovered note", async () => {
