@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { test, expect, launchExtension, resolveDist, builtFiles } = require('./harness');
+const driver = require('./characterization/driver');
 
 /**
  * Copy the build to a temp dir and edit it: `edits` maps each file of the sources to a function
@@ -194,4 +195,29 @@ test('update() loads a new version in place, keeping the profile and the ID, and
   const page = await extension.openSurface('popup');
   await page.evaluate(() => { setTimeout(() => { throw new Error('self-test: page throws after an update'); }, 0); });
   await expect.poll(async () => (await extension.uncaught()).map(describe)).toContain('popup.html |  | self-test: page throws after an update');
+});
+
+test("a pop-out window loads the extension's own files, and what it asks of anywhere else is blocked and logged", async ({ extension }) => {
+  test.setTimeout(60_000);
+  const early = 'https://example.com/harness-pop-out-early.png';
+  // An origin the extension's connect-src allows, so the fetch gets as far as the network
+  const late = 'https://api.openai.com/harness-pop-out-late';
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Pop-out', blocks: [{ type: 'text', content: 'A line' }, { type: 'image', imageUrl: early }] }]);
+  const page = await driver.openNewTab(extension);
+  const [pip] = await Promise.all([extension.context.waitForEvent('page'), page.locator('#pip-toggle').click()]);
+  await expect.poll(() => page.evaluate(() => Boolean(app.tabController.pipEditor && app.tabController.pipEditor.blocks.length > 1))).toBe(true);
+
+  // The new tab copies its stylesheet in as a <link> as the window opens
+  await expect.poll(() => pip.evaluate(() => Boolean(document.querySelector('link[rel="stylesheet"]').sheet)), "the pop-out's copy of the new tab's stylesheet loads").toBe(true);
+  expect(await pip.evaluate(async () => (await fetch(document.querySelector('link[rel="stylesheet"]').href)).status), "a later fetch of the extension's own file").toBe(200);
+
+  // The note's image outside the extension, asked for as the window opens, and a later fetch
+  await expect.poll(() => pip.evaluate(src => {
+    const img = document.querySelector(`img[src="${src}"]`);
+    return Boolean(img && img.complete && img.naturalWidth === 0);
+  }, early), "the note's image outside the extension doesn't load").toBe(true);
+  expect(await pip.evaluate(url => fetch(url).then(() => 'answered', () => 'failed'), late), 'a later fetch outside the extension').toBe('failed');
+  expect(extension.log(), 'the later fetch is logged as blocked').toContain(`blocked GET ${late} from the pop-out window`);
+  await pip.close().catch(() => {});
 });
