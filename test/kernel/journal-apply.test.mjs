@@ -522,6 +522,30 @@ for (const fixture of FIXTURES) {
       await two.close();
     });
 
+    it("covers by the page's own count of its entries, not by the journal's order, so the pane's later save lands when the page's clock stepped back between the two (R191's finding 2)", async () => {
+      const w = await world(fixture);
+      await noteA(w);
+      // Two saves from the main pane that didn't land, the later written after the page's clock
+      // stepped back, so the journal lists it first
+      const older = await saveOf(w, 'c-main-1', 'alpha, first');
+      const later = await saveOf(w, 'c-main-2', 'alpha, second');
+      const olderEntry = entryOf(older.command, { draft: older.draft, pane: 'main', createdAt: NOW + 5000 });
+      const laterEntry = entryOf(later.command, { draft: later.draft, pane: 'main' });
+      assert.ok(laterEntry.seq > olderEntry.seq, 'the page counted the later save after the older');
+      await w.journal.put(olderEntry);
+      await w.journal.put(laterEntry);
+      assert.deepEqual(
+        w.journal.entries().map(entry => entry.opId),
+        ['c-main-2', 'c-main-1'],
+      );
+      const result = await w.apply();
+      assert.deepEqual(w.sent, ['c-main-2-apply']);
+      assert.deepEqual([result.saved, result.recovered], [['A'], []]);
+      assert.equal((await blockOf(w, 'a1')).content, 'alpha, second');
+      assert.deepEqual(w.journal.entries(), []);
+      await w.close();
+    });
+
     it("saves a later entry over the pane's earlier save that committed, by the issued saves its draft names, not as a recovered note (R182's S2, P2)", async () => {
       const w = await world(fixture);
       await noteA(w);
