@@ -25,7 +25,8 @@
  *   hides with none. Before, link mode ignored every selection until Enter, Escape or ✓, so its
  *   field stayed over the old words. Focus moving to ✓ keeps the field open, so ✓ by the mouse or
  *   from the keyboard and Enter still apply the link, and so does a switch to another window,
- *   which leaves the field focused. A press on the toolbar's own frame keeps focus in the field.
+ *   which leaves the field focused. A press on the toolbar's own frame, or on ✓ until its release,
+ *   keeps focus in the field.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -337,28 +338,39 @@ test('in link mode, a switch to another window leaves the link field open with i
   await expectNoUncaught(extension, page);
 });
 
-test("in link mode, a press on the toolbar's own frame or in the gap between the field and ✓ keeps the field open, with the URL typed in it", async ({ extension }) => {
+test("in link mode, a press on the toolbar's own frame, in the gap between the field and ✓, or on ✓ keeps focus in the field with the URL typed in it, and ✓'s release applies it", async ({ extension }) => {
   const page = await shortNote(extension);
   const field = page.locator('.formatting-toolbar-url:visible');
   await selectStart(page, 0, 'Before'.length);
   await pressLink(page);
   await expect(field).toBeFocused();
   await page.keyboard.type('https://example.test/typed');
-  // Inside its 4 px padding, halfway down its left edge, and halfway between the field and ✓
-  const at = await page.evaluate(() => {
+  // Inside its 4 px padding, halfway down its left edge, halfway between the field and ✓, and ✓'s centre
+  const { presses, ok } = await page.evaluate(() => {
     const bar = app.editor.formattingToolbar;
-    const [frame, input, ok] = [bar.el, bar._linkField, bar._linkConfirm].map(el => el.getBoundingClientRect());
+    const [frame, input, button] = [bar.el, bar._linkField, bar._linkConfirm].map(el => el.getBoundingClientRect());
     return {
-      'frame': { x: frame.left + 2, y: (frame.top + frame.bottom) / 2 },
-      'gap between the field and ✓': { x: (input.right + ok.left) / 2, y: (input.top + input.bottom) / 2 },
+      presses: {
+        'frame': { x: frame.left + 2, y: (frame.top + frame.bottom) / 2 },
+        'gap between the field and ✓': { x: (input.right + button.left) / 2, y: (input.top + input.bottom) / 2 },
+      },
+      ok: { x: (button.left + button.right) / 2, y: (button.top + button.bottom) / 2 },
     };
   });
-  for (const [where, point] of Object.entries(at)) {
+  for (const [where, point] of Object.entries(presses)) {
     await page.mouse.click(point.x, point.y);
     await page.waitForTimeout(200);
     await expect(field, `the field stays open after a press on the ${where}`).toBeFocused();
     await expect(field, `the URL stays in it after a press on the ${where}`).toHaveValue('https://example.test/typed');
   }
+
+  // Read while ✓ is held down, before its release
+  await page.mouse.move(ok.x, ok.y);
+  await page.mouse.down();
+  const held = await page.evaluate(() => document.activeElement === app.editor.formattingToolbar._linkField);
+  expect(held, 'focus stays in the field during a press on ✓').toBe(true);
+  await page.mouse.up();
+  await expect.poll(() => linksIn(page, 0), "✓'s release applies it").toEqual([['https://example.test/typed', 'Before']]);
   await expectNoUncaught(extension, page);
 });
 
