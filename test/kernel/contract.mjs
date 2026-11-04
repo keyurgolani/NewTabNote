@@ -9,8 +9,9 @@ import assert from 'node:assert/strict';
 import { createKernel } from './test-kernel.mjs';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
-import { COMMAND_TYPES, newCommand } from '../../js/kernel/core/contracts/commands.js';
+import { newCommand } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
+import { WORKER_COMMAND_TYPES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { noteSaveMetadata } from '../../js/kernel/core/domain/note.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { placementOf } from '../../js/product/placement.js';
@@ -136,6 +137,9 @@ const STORAGE_DEFAULT_SESSION = Object.freeze({ openTabs: null, activeTabIndex: 
 
 /** The versions #17's IndexedDB adapter keeps on each note it writes (adapters/indexeddb/versions.js) */
 const VERSION_FIELDS = Object.freeze(['revision', 'placementVersion', 'sourceRevision']);
+
+/** Every caller but the service worker, whose policy is on the shared catalog alone */
+const PAGE_CALLERS = Object.freeze(Object.values(CALLERS).filter(caller => caller.surface !== 'worker-internal'));
 
 /**
  * A note's own fields, without the versions an adapter may keep on its record, which outcomes
@@ -1734,8 +1738,8 @@ export function runContractSuite(fixture) {
       });
     });
 
-    describe('version history and inserts run from the new tab only', () => {
-      it('refuses each from Popup, Side Panel, and the service worker', async () => {
+    describe('version history runs from the new tab only, and inserts from it and the service worker', () => {
+      it("refuses each from Popup and Side Panel, and version history from the service worker, whose drain replays a page's insert (#35 slice 3)", async () => {
         await createNote({ noteId: 'n1', blocks: someBlocks('n1', 1) });
         await run(cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's1', blocks: [], title: 'Plan' }));
         const before = [await noteOf('n1'), await blocksOf('n1')];
@@ -1744,7 +1748,9 @@ export function runContractSuite(fixture) {
           for (const command of [
             cmd('saveSnapshot', { noteId: 'n1', snapshotId: 's2', blocks: [], title: 'X' }),
             cmd('restoreSnapshot', { noteId: 'n1', snapshotId: 's1', preSnapshotId: 'p', blocks: [] }),
-            cmd('insertBlocks', { noteId: 'n1', blocks: [{ id: 'ai-0', type: 'text', content: 'X' }] }),
+            ...(caller === CALLERS['worker-internal']
+              ? []
+              : [cmd('insertBlocks', { noteId: 'n1', blocks: [{ id: 'ai-0', type: 'text', content: 'X' }] })]),
           ]) {
             assertRejected(await other.execute(command), 'policy', 'not-on-surface');
           }
@@ -1894,6 +1900,110 @@ export function runContractSuite(fixture) {
           assert.deepEqual([await noteOf('d1'), await blocksOf('d1')], daily);
         },
       );
+
+      it("lands a capture made on an earlier day, by its `at`, in that day's Daily Note, with the commit's times (#35 slice 3)", async () => {
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const yesterday = NOW - 24 * 60 * 60 * 1000;
+        committedOf(await worker.execute(cmd('captureToDailyNote', { noteId: 'd1', blockId: 'c1', capture: page })));
+        const late = committedOf(
+          await worker.execute(
+            cmd('captureToDailyNote', { noteId: 'd0', blockId: 'c0', capture: page, at: yesterday }),
+          ),
+        );
+        assert.deepEqual(late.changedIds, ['d0']);
+        const daily = await noteOf('d0');
+        assert.deepEqual([daily?.dateStr, daily?.name], ['2026-10-19', 'Daily Note - Oct 19, 2026']);
+        assert.deepEqual(
+          (await blocksOf('d0')).map(({ id, createdAt }) => [id, createdAt]),
+          [['c0', NOW]],
+        );
+        // Today's keeps today's capture alone, and an instant that isn't one is refused
+        assert.deepEqual(
+          (await blocksOf('d1')).map(({ id }) => id),
+          ['c1'],
+        );
+        assertRejected(
+          await worker.execute(cmd('captureToDailyNote', { noteId: 'd9', blockId: 'c9', capture: page, at: -1 })),
+          'validation',
+          'invalid-command',
+        );
+        assert.equal(await noteOf('d9'), undefined);
+      });
+    });
+
+    describe("the journal drain's own operations (#35 slice 3)", () => {
+      it('findTombstones names each note deleted for good, and why, once each, and only the worker reads them', async () => {
+        await createNote({ noteId: 'kept', name: 'Kept' });
+        await createNote({ noteId: 'gone', name: 'Gone' });
+        await run(cmd('trashNote', { noteId: 'gone' }));
+        await run(cmd('deleteNotePermanently', { noteId: 'gone' }));
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const state = await worker.query({ type: 'findTombstones', noteIds: ['kept', 'gone', 'never-made', 'gone'] });
+        assert.deepEqual(state.kind === 'ready' && state.data, { tombstones: [{ id: 'gone', reason: 'deleted' }] });
+        assert.equal((await worker.query({ type: 'findTombstones', noteIds: ['kept'] })).kind, 'empty');
+        // A page's policy is on the shared catalog, which doesn't have it
+        for (const page of PAGE_CALLERS) {
+          assert.deepEqual(await ctx.kernel(page).query({ type: 'findTombstones', noteIds: ['gone'] }), {
+            kind: 'failed',
+            cause: 'policy',
+            code: 'unknown-operation',
+          });
+        }
+      });
+
+      it("keepJournalEntry keeps an entry as a conflict record under its opId, once, and the note's deletion for good takes it", async () => {
+        await createNote({ noteId: 'n1', name: 'Plan' });
+        const read = await kernel.query({ type: 'getNote', noteId: 'n1' });
+        const revision = read.kind === 'ready' ? (read.data.revision ?? 0) : 0;
+        const worker = ctx.kernel(CALLERS['worker-internal']);
+        const entry = {
+          type: 'saveNoteContent',
+          commandId: 'c-entry',
+          noteId: 'n1',
+          blocks: [{ id: 'b1', type: 'text', content: 'Typed as the page went' }],
+        };
+        const kept = committedOf(
+          await worker.execute(cmd('keepJournalEntry', { opId: 'c-entry', noteId: 'n1', command: entry })),
+        );
+        assert.deepEqual([kept.code, kept.changedIds], ['journal-entry-kept', []]);
+        /** @param {string} id */
+        const conflictOf = id => ctx.adapter.read(['conflicts'], tx => tx.get('conflicts', id));
+        assert.deepEqual(await conflictOf('c-entry'), {
+          id: 'c-entry',
+          noteId: 'n1',
+          scope: 'content',
+          expected: null,
+          current: revision,
+          at: ctx.clock.now(),
+          command: entry,
+        });
+        // The same entry kept again, under another key, adds none
+        const again = committedOf(
+          await worker.execute(
+            cmd('keepJournalEntry', { opId: 'c-entry', noteId: 'n1', command: { ...entry, blocks: [] } }),
+          ),
+        );
+        assert.equal(again.code, 'journal-entry-kept-before');
+        assert.deepEqual((await conflictOf('c-entry'))?.command, entry);
+        // One that names no note is kept with none
+        committedOf(
+          await worker.execute(cmd('keepJournalEntry', { opId: 'c-loose', command: { type: 'createNote' } })),
+        );
+        assert.equal((await conflictOf('c-loose'))?.noteId, null);
+        // Only the worker keeps them: a page's policy, on the shared catalog, doesn't know it
+        for (const page of PAGE_CALLERS) {
+          assertRejected(
+            await ctx.kernel(page).execute(cmd('keepJournalEntry', { opId: 'c-page', command: entry })),
+            'policy',
+            'unknown-operation',
+          );
+        }
+        assert.equal(await conflictOf('c-page'), undefined);
+        // The note's deletion for good takes its records (#17 PR 2b)
+        await run(cmd('trashNote', { noteId: 'n1' }));
+        await run(cmd('deleteNotePermanently', { noteId: 'n1' }));
+        assert.equal(await conflictOf('c-entry'), undefined);
+      });
     });
 
     describe('ensureDailyNote', () => {
@@ -2249,9 +2359,13 @@ export function runContractSuite(fixture) {
         assert.deepEqual((await blocksOf(daily[0].id)).map(block => block.id).sort(), ['c0', 'c1', 'c2']);
       });
 
-      it("ten captures at once, from the worker and two pages, make one Daily Note with ten blocks, in the order they were made (#17's slice 3)", async () => {
-        const senders = { worker: ctx.kernel(CALLERS['worker-internal']), page: kernel, second: (await ctx.secondContext()).kernel() };
-        const from = /** @type {const} */ (['worker', 'page', 'second']);
+      it("ten captures at once, from the worker on two connections, make one Daily Note with ten blocks, in the order they were made (#17's slice 3)", async () => {
+        // Only the worker captures (#35 slice 3), so the captures race over two connections
+        const senders = {
+          worker: ctx.kernel(CALLERS['worker-internal']),
+          second: (await ctx.secondContext()).kernel(CALLERS['worker-internal']),
+        };
+        const from = /** @type {const} */ (['worker', 'second']);
         // A capture takes its time as it starts, so the clock moves on once the capture before
         // has read it, and none waits for another to commit. The blocks' ids sort apart from
         // the order the captures were made in, so a note that kept them by id fails.
@@ -2268,10 +2382,12 @@ export function runContractSuite(fixture) {
         const sent = [];
         try {
           for (let i = 0; i < 10; i++) {
-            const blockId = `${from[i % 3]}-${i}`;
+            const blockId = `${from[i % from.length]}-${i}`;
             const before = reads;
             sent.push(
-              senders[from[i % 3]].execute(cmd('captureToDailyNote', { noteId: `d${i}`, blockId, capture: page })),
+              senders[from[i % from.length]].execute(
+                cmd('captureToDailyNote', { noteId: `d${i}`, blockId, capture: page }),
+              ),
             );
             for (let turn = 0; reads === before && turn < 1000; turn++) await Promise.resolve();
             assert.ok(reads > before, `${blockId} read its time before the next was sent`);
@@ -3166,7 +3282,10 @@ export function runContractSuite(fixture) {
       it("runIntegrityCheck is the service worker's alone, and commits having changed nothing (#35)", async () => {
         const noteId = await createNote({ name: 'Plan' });
         const before = await noteOf(noteId);
-        assertRejected(await kernel.execute(cmd('runIntegrityCheck', {})), 'policy', 'not-on-surface');
+        // In the worker's part of the catalog, so a page's policy doesn't know it
+        for (const page of PAGE_CALLERS) {
+          assertRejected(await ctx.kernel(page).execute(cmd('runIntegrityCheck', {})), 'policy', 'unknown-operation');
+        }
         const checked = committedOf(await ctx.kernel(CALLERS['worker-internal']).execute(cmd('runIntegrityCheck', {})));
         assert.deepEqual([checked.code, checked.changedIds], ['integrity-checked', []]);
         assert.deepEqual(await noteOf(noteId), before);
@@ -3850,12 +3969,18 @@ export function runContractSuite(fixture) {
         assert.equal((await noteOf('quick'))?.name, 'Quick');
       });
 
-      it('lets Side Panel read only, and the service worker capture and run maintenance only', async () => {
+      it('lets Side Panel read only, and the service worker capture, run maintenance, and replay what a page journaled only', async () => {
         const panel = ctx.kernel(CALLERS.sidepanel);
         assertRejected(await panel.execute(cmd('createNote', { noteId: 'n1' })), 'policy', 'not-on-surface');
         assert.equal(await noteOf('n1'), undefined);
         const worker = ctx.kernel(CALLERS['worker-internal']);
-        assertRejected(await worker.execute(cmd('createNote', { noteId: 'n2' })), 'policy', 'not-on-surface');
+        // Its drain replays a page's note, as written (#35 slice 3), and nothing a page didn't journal
+        committedOf(await worker.execute(cmd('createNote', { noteId: 'n2' })));
+        assertRejected(
+          await worker.execute(cmd('renameNote', { noteId: 'n2', name: 'Later' })),
+          'policy',
+          'not-on-surface',
+        );
         assert.deepEqual(await worker.query({ type: 'listNotes', view: 'active' }), {
           kind: 'failed',
           cause: 'policy',
@@ -4013,7 +4138,8 @@ export function runContractSuite(fixture) {
       });
 
       it('every catalog command is one this suite runs', () => {
-        assert.deepEqual([...COMMAND_TYPES].sort(), [
+        // The shared catalog's, and the worker's part's (contracts/worker-catalog.js)
+        assert.deepEqual([...WORKER_COMMAND_TYPES].sort(), [
           // #33's two run on both of this suite's adapters in close-drafts.test.mjs and records-catch-up.test.mjs
           'applyCloseDraft',
           'applyDerivedTitle',
@@ -4037,6 +4163,8 @@ export function runContractSuite(fixture) {
           'ensureDailyNote',
           'importBackup',
           'insertBlocks',
+          // The worker's journal drain's, run below in "the journal drain's own operations"
+          'keepJournalEntry',
           'moveFolder',
           'moveNoteToFolder',
           'recordBackup',

@@ -30,6 +30,8 @@ import {
   journal,
   unavailableCoordinator,
 } from './kernel/composition/coordinator.js';
+import { DRAIN_MESSAGE, createWorkerJournal } from './kernel/composition/journal.js';
+import { randomIds } from './kernel/composition/messaging.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { installWorkerNetwork } from './kernel/composition/worker-network.js';
 
@@ -51,6 +53,15 @@ const instanceId = coordinatorInstanceId();
  * and so does a purge of the recovery points that stopped, and its end (#17 PR 2b).
  */
 let coordinator = unavailableCoordinator(instanceId);
+
+/**
+ * The worker's journal (#35 slice 3, js/kernel/composition/journal.js), set at the end of this
+ * file, before the coordinator, which drains it: a capture writes its entry there before the
+ * coordinator starts, so one the notes can't take now is kept, and the drain adds it once they
+ * can. Until then, and for good if building it threw, a capture runs as it did before slice 3.
+ * @type {import('./kernel/composition/journal.js').WorkerJournal | null}
+ */
+let captureJournal = null;
 
 /**
  * The worker's failure events (#20, "Diagnostic journal"), set with the coordinator at the end
@@ -182,13 +193,39 @@ function purgeStatus() {
   );
 }
 
-/** Why a capture can't be saved (the reasons the new tab shows) */
+/**
+ * Why a capture can't be saved (the reasons the new tab shows), for a capture whose journal
+ * entry couldn't be written: one that's kept says so instead (KEPT_CAPTURE)
+ */
 const CAPTURE_REFUSALS = {
   newerSchema: "Your notes were upgraded by a newer NewTabNote version. This version can't open them safely, so it won't change anything. Update NewTabNote to keep working.",
   missingCoreStores: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
-  // #17 PR 1b: the upgrade waits on an open page of an older version, and there's no journal yet
+  // #17 PR 1b: the upgrade waits on an open page of an older version
   blockedUpgrade: 'NewTabNote is updating how your notes are stored, and an open NewTabNote tab or window is holding them. Close or reload it, then try again.',
 };
+
+/**
+ * A capture the notes couldn't take, kept in the journal for the drain (#35 slice 3, the lead's
+ * words for the plan's Q2), and one the drain then couldn't add. A kept capture says what will
+ * add it when that's up to the user (the director's words for #182): an update, for a database a
+ * newer build upgraded, or closing the older build's tabs and windows that hold the upgrade.
+ */
+const KEPT_CAPTURE = Object.freeze({
+  title: "Kept for today's note",
+  message: "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added when your notes open.",
+  newerSchema: "Update NewTabNote to add this. A newer version upgraded your notes. It's kept on this device until then.",
+  blockedUpgrade: "Close or reload your open NewTabNote tabs and windows to finish an update and add this. It's kept on this device until then.",
+  missingStores: 'Open a new tab to export a copy. Your notes database is incomplete. What you added is kept on this device.',
+});
+const UNREPLAYABLE_CAPTURE = Object.freeze({
+  title: 'Not captured',
+  message: "NewTabNote couldn't add a kept capture to today's note.",
+});
+/** A capture a newer build kept, which the drain holds for that build (the lead's Q6) */
+const HELD_CAPTURE = Object.freeze({
+  title: 'Kept for your notes',
+  message: "Update NewTabNote to add a capture from a newer version. It's kept on this device until then.",
+});
 
 /**
  * The refusal for a kernel answer that says the database can't be opened safely: a newer
@@ -201,6 +238,19 @@ function captureRefusal({ cause, code }) {
   if (code === 'missing-core-stores') return CAPTURE_REFUSALS.missingCoreStores;
   if (code === 'blocked-upgrade') return CAPTURE_REFUSALS.blockedUpgrade;
   return null;
+}
+
+/**
+ * What a kept capture says for the answer that kept it: what will add it, when that's up to
+ * the user, and otherwise that it's added when the notes open
+ * @param {{cause?: string, code?: string}} answer
+ * @returns {string}
+ */
+function keptMessage({ cause, code }) {
+  if (cause === 'newer-schema') return KEPT_CAPTURE.newerSchema;
+  if (code === 'blocked-upgrade') return KEPT_CAPTURE.blockedUpgrade;
+  if (code === 'missing-core-stores') return KEPT_CAPTURE.missingStores;
+  return KEPT_CAPTURE.message;
 }
 
 /**
@@ -335,13 +385,47 @@ function notifyCapture(title, message) {
 
 /**
  * Capture a page, or selected text and the page it came from, to today's Daily Note with the
- * kernel's captureToDailyNote command. Saved, refused (the database can't be opened safely),
- * and failed captures each end with a notification, and a refused or failed one also with a
- * `capture.failed` event, which holds the outcome's cause and code and never what was captured.
+ * kernel's captureToDailyNote command. Its journal entry is written first, before the
+ * coordinator starts (#35 slice 3), and goes once the capture is answered for good: saved, or
+ * refused for what it holds. A capture the notes can't take now (they won't open, an older
+ * build's page holds their upgrade, or a write failed) is kept, says so and what will add it
+ * (keptMessage), and the coordinator's drain adds it to the Daily Note of the day it was made
+ * once they can. Without an entry, as when the journal can't be written, it ends as it did
+ * before slice 3: saved, refused (the database can't be opened safely), or failed, each with a
+ * notification. A refused or failed one, kept or not, is also a `capture.failed` event, which
+ * holds the outcome's cause and code and never what was captured.
  * @param {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} item
  * @returns {Promise<void>}
  */
 async function captureToDailyNote(item) {
+  /** @type {import('./kernel/core/contracts/commands.js').CommandOf<'captureToDailyNote'>} */
+  const command = {
+    type: 'captureToDailyNote',
+    commandId: randomIds.next(),
+    // The Daily Note's id if this capture makes it, and the captured block's
+    noteId: randomIds.next(),
+    blockId: randomIds.next(),
+    capture: item.type === 'bookmark'
+      ? { type: 'bookmark', url: item.url, title: item.title }
+      : { type: 'text', content: item.content, source: item.source },
+    // The instant it was made, whose day it lands in, however late the drain adds it
+    at: Date.now(),
+  };
+  const kept = captureJournal ? await captureJournal.keep(command, { noteId: command.noteId }) : false;
+  /**
+   * The notes can't take it now, for `answer`: kept for the drain, saying what will add it, or
+   * today's words without an entry
+   * @param {string} words
+   * @param {{cause?: string, code?: string}} answer
+   */
+  const notTaken = (words, answer) => {
+    if (kept) {
+      captureJournal.release(command.commandId);
+      notifyCapture(KEPT_CAPTURE.title, keptMessage(answer));
+    } else {
+      notifyCapture('Not captured', words);
+    }
+  };
   try {
     await coordinator.start();
     const kernel = coordinator.client();
@@ -350,39 +434,58 @@ async function captureToDailyNote(item) {
       const refusal = captureRefusal(failure);
       // Its cause and code: a refusal warns, as 1.4.x did at open, and any other failure is an error
       (refusal ? console.warn : console.error)('Storage not opened in background:', failure);
-      notifyCapture('Not captured', refusal || "NewTabNote couldn't open your notes, so nothing was saved.");
+      notTaken(refusal || "NewTabNote couldn't open your notes, so nothing was saved.", failure);
       failureEvents.event('capture.failed', {}, failure);
       return;
     }
-    const commandId = kernel.ids.next();
-    const outcome = await kernel.execute({
-      type: 'captureToDailyNote',
-      commandId,
-      // The Daily Note's id if this capture makes it, and the captured block's
-      noteId: kernel.ids.next(),
-      blockId: kernel.ids.next(),
-      capture: item.type === 'bookmark'
-        ? { type: 'bookmark', url: item.url, title: item.title }
-        : { type: 'text', content: item.content, source: item.source },
-    });
+    const outcome = await kernel.execute(command);
     if (outcome.kind !== 'committed') {
       const refusal = captureRefusal(outcome);
       // An outcome holds its kind, cause, and code, and never what was captured
       (refusal ? console.warn : console.error)('Failed to capture to daily note:', outcome);
       const reason = CAPTURE_FAILURES[outcome.messageKey] || CAPTURE_FAILED;
-      notifyCapture('Not captured', refusal || `Saving to today's note failed: ${reason}`);
-      failureEvents.event('capture.failed', { commandId }, outcome);
+      const words = refusal || `Saving to today's note failed: ${reason}`;
+      // Unavailable or unanswered, it may land later; refused for what it holds, it never will
+      if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
+        notTaken(words, outcome);
+      } else {
+        if (kept) await captureJournal.settle(command.commandId);
+        notifyCapture('Not captured', words);
+      }
+      failureEvents.event('capture.failed', { commandId: command.commandId }, outcome);
       return;
     }
+    if (kept) await captureJournal.settle(command.commandId);
     notifyCapture('Captured to New Tab Note', item.type === 'bookmark' ? `Saved link: ${item.title}` : 'Saved selected text');
     // A capture that committed resolves an earlier capture failure (#20); it opens NewTabNoteTrust
     // only while one may be open
-    failureEvents.event('capture.committed', { commandId });
+    failureEvents.event('capture.committed', { commandId: command.commandId });
   } catch (error) {
     console.error('Failed to capture to daily note:', error);
-    notifyCapture('Not captured', `Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`);
+    notTaken(`Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`, {});
     failureEvents.event('capture.failed', {}, error);
   }
+}
+
+/**
+ * What a page of this extension that found a journal entry no live context holds hears when it
+ * wakes the worker with journal.drain (#35 slice 3, the lead's answer to the plan's Q4): what
+ * the drain it asks for did, by status and count. The message carries nothing, since the drain
+ * goes by what the journal holds. js/kernel/composition/worker-network.js runs it for this
+ * extension's own senders only, as it runs purgeStatus, and answers any other sender
+ * `{error: 'request-refused'}`.
+ * @returns {Promise<{status: string, replayed: number}>}
+ */
+function drainStatus() {
+  return coordinator.drain().then(
+    (result) => {
+      const drained = /** @type {{status?: unknown, replayed?: unknown} | null} */ (result && typeof result === 'object' ? result : null);
+      return drained && typeof drained.status === 'string' && typeof drained.replayed === 'number'
+        ? { status: drained.status, replayed: drained.replayed }
+        : { status: 'skipped', replayed: 0 };
+    },
+    () => ({ status: 'failed', replayed: 0 }),
+  );
 }
 
 // ============ The coordinator ============
@@ -400,18 +503,37 @@ try {
 }
 // The worker's network (#21 slice 1b): its one onMessage listener, the request proxy, and the
 // guard's wiring, which journals what the guard refused into the events above. It never throws.
-// It hands a page's wait on the migration (#17) to migrationStatus, and a page's storage.purge
-// after a delete for good (#17 PR 2b) to purgeStatus, from this extension's own senders only.
-// Every event comes after this file has run, the coordinator's build included.
-installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus, [PURGE_MESSAGE]: purgeStatus } });
+// It hands a page's wait on the migration (#17) to migrationStatus, a page's storage.purge
+// after a delete for good (#17 PR 2b) to purgeStatus, and a page's journal.drain (#35 slice 3)
+// to drainStatus, from this extension's own senders only. Every event comes after this file
+// has run, the coordinator's build included.
+installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus, [PURGE_MESSAGE]: purgeStatus, [DRAIN_MESSAGE]: drainStatus } });
+try {
+  // Building it opens nothing: the first capture opens NewTabNoteJournal, and the first drain
+  // reads it only when it's there
+  captureJournal = createWorkerJournal({
+    instanceId,
+    events: failureEvents,
+    // A capture a newer build wrote waits for it; one no build can read is kept as a conflict record
+    notify: (entry, code) => {
+      const words = code === 'unsupported-version' ? HELD_CAPTURE : UNREPLAYABLE_CAPTURE;
+      notifyCapture(words.title, words.message);
+    },
+  });
+} catch (error) {
+  // Captures run as they did before slice 3, unjournaled
+  console.error("NewTabNote: the worker's journal couldn't be built", error);
+}
 try {
   coordinator = createCoordinator({
     instanceId,
     makeKernel: () => createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event), events: failureEvents }),
     events: failureEvents,
+    journal: captureJournal,
   });
 } catch (error) {
-  // The stand-in stays, every capture says it couldn't open the notes, and #20 hears why
+  // The stand-in stays, every capture is kept for a later start's drain and says so, and #20
+  // hears why
   console.error("NewTabNote: the background coordinator couldn't be built", error);
   journal(failureEvents, 'coordinator.start-failed', {}, error);
 }

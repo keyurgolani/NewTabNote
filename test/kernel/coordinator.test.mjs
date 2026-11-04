@@ -4,8 +4,9 @@
 // an update runs the read-only integrity check once. A kernel that can't be built leaves it
 // unavailable, every command answers so, and it's `coordinator.start-failed`; a start that
 // opens is `coordinator.started`. system.coordinatorHealth says the same, with when it started
-// and its commands by outcome. Nothing it journals or reports changes what it answers.
-// test/background-coordinator.test.js runs it in js/background.js.
+// and its commands by outcome. Nothing it journals or reports changes what it answers. Once it's
+// ready it drains #35's journal (slice 3), never inside its start, so a hello held while it
+// starts never waits for a drain. test/background-coordinator.test.js runs it in js/background.js.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +17,9 @@ import {
   createCoordinator,
   unavailableCoordinator,
 } from '../../js/kernel/composition/coordinator.js';
+
+/** When a journal entry was written, for the health's oldest orphaned entry */
+const NOW_AT = Date.UTC(2026, 9, 20, 12, 0, 0);
 
 /** What a command and a query answer from a coordinator whose kernel couldn't be built */
 const UNAVAILABLE = Object.freeze({
@@ -641,6 +645,134 @@ describe("the coordinator's integrity check (#35 slice 1, the lead's Q2)", () =>
   });
 });
 
+/**
+ * A worker journal whose drains the test holds open, each until it calls `release`, and whose
+ * oldest orphaned entry it sets
+ */
+function heldJournal() {
+  /** @type {Array<{client: unknown, release: () => void}>} */
+  const drains = [];
+  /** @type {number | null} */
+  let oldest = null;
+  return {
+    drains,
+    /** @param {number | null} at */
+    setOldest(at) {
+      oldest = at;
+    },
+    journal: {
+      /** @param {unknown} client */
+      drain(client) {
+        return new Promise(resolve => {
+          drains.push({ client, release: () => resolve({ status: 'drained', replayed: 1 }) });
+        });
+      },
+      oldestOrphanedEntryAt: () => oldest,
+    },
+  };
+}
+
+describe("the coordinator's journal drain (#35 slice 3)", () => {
+  it('drains once it is ready, never before, on its kernel, and its start never waits for the drain', async () => {
+    const kernel = fakeKernel();
+    const held = heldJournal();
+    const { coordinator } = coordinatorOn(kernel, { journal: held.journal });
+    const started = coordinator.start();
+    await turns();
+    assert.equal(held.drains.length, 0, 'none while it starts');
+    kernel.open();
+    // The drain stays held, and the start, which a hello held while it's starting waits on, is in
+    await started;
+    assert.deepEqual(coordinator.status(), { status: 'ready' });
+    await turns();
+    assert.equal(held.drains.length, 1);
+    assert.equal(held.drains[0].client, coordinator.client());
+    // A hello during the drain is welcomed ready at once
+    assert.deepEqual(coordinator.status(), { status: 'ready' });
+    held.drains[0].release();
+  });
+
+  it("doesn't drain while degraded, and drains once the run an older page blocked ends and the kernel opens", async () => {
+    for (const failure of [
+      { kind: 'unavailable', cause: 'newer-schema', code: 'version-too-new' },
+      { kind: 'unavailable', cause: 'storage', code: 'open-failed' },
+    ]) {
+      const kernel = fakeKernel({ failure });
+      const held = heldJournal();
+      const { coordinator } = coordinatorOn(kernel, { journal: held.journal });
+      const started = coordinator.start();
+      kernel.open();
+      await started;
+      await turns();
+      assert.equal(held.drains.length, 0, failure.code);
+      assert.equal(await coordinator.drain(), null, failure.code);
+    }
+    const kernel = blockedKernel();
+    const held = heldJournal();
+    const { coordinator } = coordinatorOn(kernel, { journal: held.journal });
+    await coordinator.start();
+    await turns();
+    assert.deepEqual(coordinator.status(), { status: 'degraded', reason: 'migrating' });
+    assert.equal(held.drains.length, 0, 'none while the upgrade is blocked');
+    kernel.unblock();
+    await turns();
+    assert.deepEqual(coordinator.status(), { status: 'ready' });
+    assert.equal(held.drains.length, 1, "the captures kept meanwhile replay once it's ready");
+  });
+
+  it('drains again when a page asks, once it is ready, and answers what the drain did', async () => {
+    const kernel = fakeKernel();
+    const held = heldJournal();
+    const { coordinator } = coordinatorOn(kernel, { journal: held.journal });
+    const asked = coordinator.drain();
+    await turns();
+    // The ask started it, and waits for its start
+    assert.equal(held.drains.length, 0);
+    kernel.open();
+    await turns();
+    // The start's own drain, then the one asked for
+    assert.equal(held.drains.length, 2);
+    held.drains[0].release();
+    held.drains[1].release();
+    assert.deepEqual(await asked, { status: 'drained', replayed: 1 });
+  });
+
+  it('says when the oldest entry with no live owner was written, and null for anything else the journal says', async () => {
+    const kernel = fakeKernel();
+    const held = heldJournal();
+    const { coordinator } = coordinatorOn(kernel, { journal: held.journal });
+    assert.equal(coordinator.health().oldestOrphanedEntryAt, null);
+    held.setOldest(NOW_AT);
+    assert.equal(coordinator.health().oldestOrphanedEntryAt, NOW_AT);
+    held.setOldest(/** @type {any} */ ('yesterday'));
+    assert.equal(coordinator.health().oldestOrphanedEntryAt, null);
+  });
+
+  it('answers the same when its journal throws or rejects', async () => {
+    for (const journal of [
+      {
+        drain: () => {
+          throw new Error('the journal is broken');
+        },
+        oldestOrphanedEntryAt: () => {
+          throw new Error('the journal is broken');
+        },
+      },
+      { drain: () => Promise.reject(new Error('the journal is broken')), oldestOrphanedEntryAt: () => null },
+    ]) {
+      const kernel = fakeKernel();
+      const { coordinator } = coordinatorOn(kernel, { journal });
+      const started = coordinator.start();
+      kernel.open();
+      await started;
+      await turns();
+      assert.deepEqual(coordinator.status(), { status: 'ready' });
+      assert.equal(coordinator.health().oldestOrphanedEntryAt, null);
+      assert.equal(await coordinator.drain(), null);
+    }
+  });
+});
+
 describe("the coordinator's stand-in and instance id", () => {
   it('answers as unavailable, for js/background.js until the real one is built or when building it threw', async () => {
     const standIn = unavailableCoordinator('coordinator-1');
@@ -648,6 +780,8 @@ describe("the coordinator's stand-in and instance id", () => {
     assert.deepEqual(standIn.status(), { status: 'degraded', reason: 'coordinator-unavailable' });
     await standIn.start();
     await standIn.installed('install');
+    // It has no journal to drain
+    assert.equal(await standIn.drain(), null);
     const client = standIn.client();
     const capture = {
       type: /** @type {const} */ ('captureToDailyNote'),

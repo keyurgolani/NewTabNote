@@ -40,7 +40,8 @@
  */
 
 import { clone } from '../contracts/clone.js';
-import { COMMANDS } from '../contracts/commands.js';
+// Every command a context runs, the worker's own too, since the tests run both on this adapter
+import { WORKER_COMMANDS as COMMANDS } from '../contracts/worker-catalog.js';
 import { UnavailableError, rejected, unavailable, unavailableFrom } from '../contracts/outcomes.js';
 import { blocksByNote, folderOps, noteOps } from '../domain/changes.js';
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
@@ -609,7 +610,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       // items runs. The same commandId with another selection is refused before it writes,
       // even sent at the same time, and a resend runs again, each item answering from its own
       // record.
-      if (kept === undefined && COMMANDS[command.type].bulk && !outcomes.has(command.commandId)) {
+      if (kept === undefined && COMMANDS[command.type]?.bulk && !outcomes.has(command.commandId)) {
         outcomes.set(command.commandId, { fingerprint: digestOf(command) });
       }
       return kept;

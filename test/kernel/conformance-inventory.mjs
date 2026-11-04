@@ -87,6 +87,17 @@ export const PORTS = Object.freeze({
       { host: 'chromium', via: 'e2e/harness/index.js', run: 'e2e/chrome-storage.spec.js' },
     ],
   },
+  // #35 slice 3's journal store: NewTabNoteJournal, a database of its own, and the memory
+  // journal the drain's tests run on
+  'journal-store': {
+    contract: 'js/kernel/core/ports/journal.js',
+    types: ['JournalStore', 'JournalReader'],
+    suite: { module: 'test/kernel/journal-store-suite.mjs', runner: 'describeJournalStore' },
+    implementations: [
+      { module: 'js/kernel/core/memory/journal.js', run: 'test/kernel/journal-store.test.mjs' },
+      { module: 'js/kernel/adapters/indexeddb/journal.js', run: 'test/kernel/journal-store.test.mjs' },
+    ],
+  },
   // #20's trust store: NewTabNoteTrust on #17's adapter, and the memory store, through the
   // records layer's bounds and repeat rule (#20 slice 1)
   'trust-store': {
@@ -104,15 +115,10 @@ export const PORTS = Object.freeze({
  * The other contracts in js/kernel/core/ports/, which have no shared suite: the typedefs an
  * implementation's type matches, each implementation there is with the test that covers it,
  * and why there's no suite. A module whose type matches one of them and isn't listed fails,
- * so a second implementation, or the first of the journal, comes with a suite.
+ * so a second implementation comes with a suite, as the journal's came with #35 slice 3.
  * @type {Readonly<Record<string, {types: readonly string[], implementations: Readonly<Record<string, string>>, reason: string}>>}
  */
 export const WITHOUT_SUITE = Object.freeze({
-  'js/kernel/core/ports/journal.js': {
-    types: ['JournalReader'],
-    implementations: {},
-    reason: "nothing implements it yet: #17's journal client does, in its slice 2, with a suite",
-  },
   'js/kernel/core/ports/policy.js': {
     types: ['PolicyPort'],
     implementations: { 'js/kernel/core/ports/policy.js': 'test/kernel/policy.test.mjs' },
@@ -208,6 +214,8 @@ export const COMPOSERS = Object.freeze({
   },
   // #17 PR 4a: the new tab's root opens #17's adapter with the new tab's options
   'js/kernel/composition/newtab.js': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
+  // #35 slice 3: each context opens its journal here, once
+  'js/kernel/adapters/in-context.js': { port: 'journal-store', of: ['js/kernel/adapters/indexeddb/journal.js'] },
   // #20 slice 1b: a context's failure events, on NewTabNoteTrust (js/kernel/composition/
   // lazy-failure-events.js, the new tab's, only imports this one and composes nothing itself)
   'js/kernel/composition/trust.js': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },

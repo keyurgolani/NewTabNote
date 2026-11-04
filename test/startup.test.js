@@ -19,6 +19,14 @@ const {
 const { startWorker } = require('./helpers/load-background');
 const { loadPageModule } = require('./helpers/page-module');
 
+/** What a capture the notes can't take says since #35 slice 3: it's kept for the journal's drain */
+const KEPT_TITLE = "Kept for today's note";
+const KEPT_MESSAGE = "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added when your notes open.";
+/** And one a newer build's upgrade keeps from this build, which says what will add it */
+const KEPT_NEWER_MESSAGE = "Update NewTabNote to add this. A newer version upgraded your notes. It's kept on this device until then.";
+/** And one an incomplete database keeps, which says what to do first */
+const KEPT_MISSING_MESSAGE = 'Open a new tab to export a copy. Your notes database is incomplete. What you added is kept on this device.';
+
 const TEST_KEY = 'test-only-api-key';
 // One past this build's version (js/storage.js's dbVersion, 11 since #17 PR 3b), as a newer build upgrades to
 const NEWER_VERSION = 12;
@@ -651,7 +659,7 @@ describe("a database a newer build upgraded, past this build's version (AC7)", (
     assert.deepEqual(env.chrome.writes(), []);
   });
 
-  it('the context menu and keyboard command refuse with a "Not captured" notification', async () => {
+  it("the context menu and keyboard command keep each capture for a build that can open the notes, say so, and change nothing of them (#35 slice 3)", async () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB, { version: NEWER_VERSION });
     const before = await dumpDatabase(env.indexedDB);
@@ -664,9 +672,10 @@ describe("a database a newer build upgraded, past this build's version (AC7)", (
     await env.chrome.api.commands.onCommand.listeners[0]('capture-page');
     await waitFor(() => env.chrome.notifications.length === 3, { withinMs: 10000, message: 'three notifications' });
 
+    // The new tab still says why and what to do; a capture is kept in the journal meanwhile, and
+    // says what will add it
     for (const notification of env.chrome.notifications) {
-      assert.equal(notification.title, 'Not captured');
-      assert.match(notification.message, /^Your notes were upgraded by a newer NewTabNote version\./);
+      assert.deepEqual([notification.title, notification.message], [KEPT_TITLE, KEPT_NEWER_MESSAGE]);
     }
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
     // The worker's run left it as it was, and recorded that, the three refusals marked their
@@ -801,10 +810,10 @@ describe('background capture on a version-8 database', () => {
         { url: 'https://example.test/', title: 'x' });
       await waitFor(() => env.chrome.notifications.length === count, { withinMs: 10000, message: `failure notification ${count}` });
     }
-    // An outcome carries no error message, so each says why in words of its own
+    // Each is kept for the journal's drain, and says so (#35 slice 3)
     assert.deepEqual(env.chrome.notifications, [
-      { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: there is no room left to store it" },
-      { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: the notes database couldn't store it" },
+      { type: 'basic', iconUrl: 'icons/icon48.png', title: KEPT_TITLE, message: KEPT_MESSAGE },
+      { type: 'basic', iconUrl: 'icons/icon48.png', title: KEPT_TITLE, message: KEPT_MESSAGE },
     ]);
     // and the console has each outcome's cause and code, and none of what was captured
     const failed = logged(env, 'error', 'Failed to capture to daily note:');
@@ -815,7 +824,7 @@ describe('background capture on a version-8 database', () => {
     assert.ok(!JSON.stringify(failed).includes('quote'));
   });
 
-  it('refuses on a database without its blocks store and changes nothing', async () => {
+  it('keeps a capture on a database without its blocks store, says so, and changes nothing of it', async () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB, { omit: ['elements'] });
     const before = await dumpDatabase(env.indexedDB);
@@ -824,8 +833,7 @@ describe('background capture on a version-8 database', () => {
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, { url: 'https://example.test/', title: 'x' });
     await waitFor(() => env.chrome.notifications.length === 1, { withinMs: 10000, message: 'refusal notification' });
     assert.deepEqual(env.chrome.notifications[0], {
-      type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured',
-      message: "Your notes database is incomplete, so this version won't change anything. Open a new tab to export a copy.",
+      type: 'basic', iconUrl: 'icons/icon48.png', title: KEPT_TITLE, message: KEPT_MISSING_MESSAGE,
     });
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
     // The run gave it a recovery point and no step (Q13), and recorded that, and the refusal
@@ -835,7 +843,7 @@ describe('background capture on a version-8 database', () => {
     assert.equal(env.chrome.local.setting_storageUpgrade.status, 'refused');
   });
 
-  it("lets a newer build upgrade the database, and refuses the next capture as it would have at start", async () => {
+  it("lets a newer build upgrade the database, and keeps the next capture as it would have at start", async () => {
     const env = createLegacyEnv({ context: 'worker' });
     await fixture(env.indexedDB);
     await startWorker(env);
@@ -853,8 +861,7 @@ describe('background capture on a version-8 database', () => {
     upgraded.close();
     env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, tab);
     await waitFor(() => env.chrome.notifications.length === 2, { withinMs: 10000, message: 'refusal notification' });
-    assert.equal(env.chrome.notifications[1].title, 'Not captured');
-    assert.match(env.chrome.notifications[1].message, /^Your notes were upgraded by a newer NewTabNote version\./);
+    assert.deepEqual([env.chrome.notifications[1].title, env.chrome.notifications[1].message], [KEPT_TITLE, KEPT_NEWER_MESSAGE]);
   });
 });
 

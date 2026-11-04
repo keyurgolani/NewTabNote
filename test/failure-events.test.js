@@ -175,6 +175,8 @@ describe('failure events (js/kernel/composition/trust.js)', () => {
       { errorCode: 'version-too-new', cause: 'newer-schema', retryable: false },
     );
     assert.deepEqual(trust.failureEvidence({ cause: TITLE, code: CREDENTIAL, retryable: 'yes' }), {});
+    // The journal drain's stop on a throw, whose incident says why (#35 slice 3)
+    assert.deepEqual(trust.failureEvidence({ code: 'drain-failed' }), { errorCode: 'drain-failed' });
     const hostile = {};
     for (const name of ['name', 'code', 'cause', 'retryable', 'unavailableCause']) {
       Object.defineProperty(hostile, name, {
@@ -426,11 +428,14 @@ describe('the worker reports background capture and storage init (js/background.
     }
     assert.deepEqual(incidentsOf(seen.incidents), [['capture', 'capture-failed', null, 'capture-risk', 2]]);
     assertNoCanary(seen.text, 'NewTabNoteTrust or the export');
-    // The user still hears exactly what they did before
-    assert.deepEqual(plain(worker.env.chrome.notifications), [
-      { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: the notes database couldn't store it" },
-      { type: 'basic', iconUrl: 'icons/icon48.png', title: 'Not captured', message: "Saving to today's note failed: the notes database couldn't store it" },
-    ]);
+    // The user hears each is kept for the journal's drain (#35 slice 3)
+    const kept = {
+      type: 'basic',
+      iconUrl: 'icons/icon48.png',
+      title: "Kept for today's note",
+      message: "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added when your notes open.",
+    };
+    assert.deepEqual(plain(worker.env.chrome.notifications), [kept, kept]);
   });
 
   it('a database that would not open is a storage.open-failed event at start, and each capture a capture.failed one', async () => {

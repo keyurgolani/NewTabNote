@@ -1,0 +1,656 @@
+// #35 slice 3's drain (js/kernel/core/application/journal-drain.js), on the in-memory adapter
+// and journal, through the worker's own kernel and table: what it replays and in what order,
+// whose entries it leaves alone, an editor save among them, which the pages replay (slice 3b,
+// the lead's call on #182), the sweep of notes deleted for good, what it keeps and raises for an
+// entry it can't replay (Q6), and that storage it can't reach stops it with every entry left.
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { drainJournal } from '../../js/kernel/core/application/journal-drain.js';
+import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
+import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
+import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
+import { journalEntry } from '../../js/kernel/core/domain/journal.js';
+import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
+import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
+import { journaledLookup } from '../../js/kernel/core/messaging/journaled-operations.js';
+import { WORKER_CATALOG } from '../../js/kernel/core/contracts/worker-catalog.js';
+import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
+import { CALLERS, NOW, testClock, testIds } from './support.mjs';
+import { createKernel } from './test-kernel.mjs';
+
+/** @typedef {import('../../js/kernel/core/domain/journal.js').JournalRecord} JournalRecord */
+/** @typedef {import('../../js/kernel/core/domain/close-draft.js').CloseDraft} CloseDraft */
+/** @typedef {any} Row */
+
+/** The coordinator's own session, the instance id it owns the worker's entries under */
+const OWN = 'coordinator-1';
+
+/** A page that closed or crashed, whose owner lock is free */
+const GONE = 'page-gone';
+
+/** A page that's still open, holding its owner lock */
+const LIVE = 'page-live';
+
+/** A day before the clock's, Oct 19, 2026, noon UTC */
+const YESTERDAY = NOW - 24 * 60 * 60 * 1000;
+
+/**
+ * A drain's world: one memory adapter, a new tab's kernel that writes what the test sets up,
+ * the worker's kernel on its own table, which the drain sends through, and the journal
+ * @param {{live?: string[], inFlight?: string[]}} [options]
+ */
+function world({ live = [LIVE], inFlight = [] } = {}) {
+  const adapter = createMemoryAdapter();
+  const clock = testClock();
+  // Each on the policy its root builds: the page's on the shared catalog, the worker's on its own
+  const page = createKernel({
+    adapter,
+    policy: createBaselinePolicy(),
+    caller: CALLERS.newtab,
+    ids: testIds('page'),
+    clock,
+  });
+  const worker = createKernel({
+    adapter,
+    policy: createBaselinePolicy(WORKER_CATALOG),
+    caller: CALLERS['worker-internal'],
+    handlers: WORKER_HANDLERS,
+    ids: testIds('worker'),
+    clock,
+  });
+  const journal = createMemoryJournal();
+  /** @type {Array<[string, string]>} each incident the drain raised, by opId and code */
+  const told = [];
+  /** @type {string[]} each entry whose incident a stop raised, which a kept capture isn't told */
+  const stops = [];
+  /** @type {string[]} each entry it replayed */
+  const replayed = [];
+  /** @type {string[]} the types of the commands it sent */
+  const sent = [];
+  /** @type {Array<[string, string, string]>} each command it sent, by type, and its answer's kind and code */
+  const answers = [];
+  const holders = new Set(live);
+  const flying = new Set(inFlight);
+  const client = {
+    /** @param {any} command */
+    execute: async command => {
+      sent.push(command.type);
+      const outcome = await worker.execute(command);
+      answers.push([command.type, outcome.kind, /** @type {any} */ (outcome).code]);
+      return outcome;
+    },
+    /** @param {any} query */
+    query: query => worker.query(query),
+  };
+  /** @param {Partial<import('../../js/kernel/core/application/journal-drain.js').DrainPorts>} [overrides] */
+  const drain = (overrides = {}) =>
+    drainJournal({
+      journal,
+      client,
+      lookup: journaledLookup,
+      liveOwners: async () => holders,
+      own: { sessionId: OWN, inFlight: () => flying },
+      clock,
+      unreplayable: (entry, code, how) => {
+        told.push([entry.opId, code]);
+        if (how?.stop) stops.push(entry.opId);
+      },
+      replayed: entry => replayed.push(entry.opId),
+      ...overrides,
+    });
+  /**
+   * @param {string} store
+   * @param {string} key
+   */
+  const recordOf = (store, key) =>
+    adapter.read([/** @type {any} */ (store)], tx => tx.get(/** @type {any} */ (store), key));
+  /** @param {string} noteId */
+  const blocksOf = noteId => adapter.read(['blocks'], tx => tx.getAllByIndex('blocks', 'canvasId', noteId));
+  /** @param {string} noteId */
+  const revisionOf = noteId =>
+    adapter.read(['notes'], async tx => {
+      await tx.get('notes', noteId);
+      return tx.versions('notes', noteId)?.revision ?? 0;
+    });
+  return {
+    adapter,
+    clock,
+    page,
+    worker,
+    journal,
+    told,
+    stops,
+    replayed,
+    sent,
+    answers,
+    holders,
+    flying,
+    drain,
+    recordOf,
+    blocksOf,
+    revisionOf,
+  };
+}
+
+let counted = 0;
+
+/**
+ * The entry a context writes for `command`, before it sends it
+ * @param {Record<string, any>} command
+ * @param {{owner?: string, createdAt?: number, noteId?: string, draft?: CloseDraft, v?: number}} [options]
+ * @returns {JournalRecord}
+ */
+function entryOf(command, { owner = GONE, createdAt = NOW, noteId = command.noteId, draft, v = 1 } = {}) {
+  counted += 1;
+  return journalEntry({
+    command: /** @type {any} */ (command),
+    v,
+    noteId,
+    surface: owner === OWN ? 'worker-internal' : 'newtab',
+    ownerSessionId: owner,
+    seq: counted,
+    createdAt,
+    draft,
+  });
+}
+
+/**
+ * A Popup quick note's creation
+ * @param {string} commandId
+ * @param {string} noteId
+ * @param {string} [text]
+ * @returns {any}
+ */
+const quickNote = (commandId, noteId, text = 'Call the plumber') => ({
+  type: 'createNote',
+  commandId,
+  noteId,
+  name: text,
+  blocks: [{ id: `${noteId}-b1`, type: 'text', content: text }],
+});
+
+/**
+ * A capture the worker sends
+ * @param {string} commandId
+ * @param {{at?: number, content?: string}} [options]
+ */
+const capture = (commandId, { at = NOW, content = 'A quote' } = {}) => ({
+  type: 'captureToDailyNote',
+  commandId,
+  noteId: `daily-${commandId}`,
+  blockId: `block-${commandId}`,
+  capture: { type: 'text', content },
+  at,
+});
+
+/**
+ * Note A as the page made it: a1 and a2
+ * @param {ReturnType<typeof world>} w
+ */
+async function noteA(w) {
+  const made = await w.page.execute({
+    type: 'createNote',
+    commandId: 'c-make-a',
+    noteId: 'A',
+    name: 'Alpha plan',
+    blocks: [
+      { id: 'a1', type: 'text', content: 'alpha', order: 0 },
+      { id: 'a2', type: 'text', content: 'alpha two', order: 1 },
+    ],
+  });
+  assert.equal(made.kind, 'committed', JSON.stringify(made));
+}
+
+/**
+ * An editor's save of note A's a1, and its draft on what the page last saw commit: the stored
+ * a1 and the revision then, as 3b's editor writes them beside the save
+ * @param {ReturnType<typeof world>} w
+ * @param {string} commandId
+ * @param {string} text
+ */
+async function saveOfA(w, commandId, text) {
+  const [a1] = (await w.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === 'a1');
+  const revision = await w.revisionOf('A');
+  const blocks = [{ id: 'a1', type: 'text', content: text, order: 0 }];
+  const command = { type: 'saveNoteContent', commandId, noteId: 'A', blocks, deriveFromStored: true };
+  /** @type {CloseDraft} */
+  const draft = {
+    v: 1,
+    id: commandId,
+    page: 'page-1',
+    noteId: 'A',
+    at: NOW,
+    base: { revision, updatedAt: null, issued: [], name: 'Alpha plan', blocks: { a1: blockDigest(a1, 'A') } },
+    blocks: blocks.map(block => ({ ...block, canvasId: 'A' })),
+    deletedBlockIds: [],
+    preview: text,
+    todoProgress: null,
+    linkedNames: [],
+  };
+  return { command, draft };
+}
+
+describe('the journal drain (#35 slice 3)', () => {
+  it('replays each entry no live context holds, oldest first, under its own key, and removes it once it is in', async () => {
+    const w = world();
+    await w.journal.put(entryOf(quickNote('c2', 'n2', 'Second'), { createdAt: NOW + 5 }));
+    await w.journal.put(entryOf(quickNote('c1', 'n1', 'First'), { createdAt: NOW }));
+    await w.journal.put(
+      entryOf(
+        {
+          type: 'insertBlocks',
+          commandId: 'c3',
+          noteId: 'n1',
+          blocks: [{ id: 'n1-b2', type: 'text', content: 'More' }],
+        },
+        { createdAt: NOW + 9 },
+      ),
+    );
+    const result = await w.drain();
+    assert.deepEqual(
+      [result.status, result.replayed, result.left, result.oldestOrphanedEntryAt],
+      ['drained', 3, 0, null],
+    );
+    assert.deepEqual(w.sent, ['createNote', 'createNote', 'insertBlocks']);
+    assert.deepEqual(w.replayed, ['c1', 'c2', 'c3']);
+    assert.equal((await w.recordOf('notes', 'n1'))?.name, 'First');
+    assert.deepEqual((await w.blocksOf('n1')).map((/** @type {Row} */ block) => block.content).sort(), [
+      'First',
+      'More',
+    ]);
+    assert.equal((await w.recordOf('notes', 'n2'))?.name, 'Second');
+    assert.deepEqual(w.journal.entries(), []);
+    assert.deepEqual(w.told, []);
+  });
+
+  it("leaves a live context's entries, a draft, and its own capture in flight, and replays its own once it's released", async () => {
+    const w = world({ inFlight: ['c-flying'] });
+    await w.journal.put(entryOf(quickNote('c-live', 'n-live'), { owner: LIVE }));
+    await w.journal.put({ ...entryOf(quickNote('c-draft', 'n-draft')), state: 'draft' });
+    await w.journal.put(entryOf(capture('c-flying'), { owner: OWN, noteId: 'daily-c-flying' }));
+    await w.journal.put(entryOf(capture('c-kept'), { owner: OWN, noteId: 'daily-c-kept', createdAt: NOW + 1 }));
+    const first = await w.drain();
+    assert.deepEqual([first.replayed, first.left], [1, 3]);
+    assert.deepEqual(w.replayed, ['c-kept']);
+    // The live page's and the capture in flight are held; the draft's page is gone
+    assert.equal(first.oldestOrphanedEntryAt, NOW);
+    w.flying.delete('c-flying');
+    w.holders.delete(LIVE);
+    const second = await w.drain();
+    assert.deepEqual([second.replayed, second.left], [2, 1]);
+    assert.deepEqual(
+      w.journal.entries().map(entry => [entry.opId, entry.state]),
+      [['c-draft', 'draft']],
+    );
+  });
+
+  it("replays no other context's entry when it can't tell which are alive", async () => {
+    const w = world();
+    await w.journal.put(entryOf(quickNote('c1', 'n1')));
+    await w.journal.put(entryOf(capture('c-kept'), { owner: OWN, noteId: 'daily-c-kept' }));
+    const result = await w.drain({ liveOwners: async () => null });
+    assert.deepEqual([result.replayed, result.left], [1, 1]);
+    assert.deepEqual(w.replayed, ['c-kept']);
+    assert.equal(result.oldestOrphanedEntryAt, null);
+  });
+
+  it('answers a command that committed already with its ledger row, and runs nothing twice', async () => {
+    const w = world();
+    const created = await w.page.execute(quickNote('c1', 'n1'));
+    assert.equal(created.kind, 'committed');
+    await w.page.execute({ type: 'renameNote', commandId: 'c-rename', noteId: 'n1', name: 'Renamed since' });
+    // The page went before it removed its entry
+    await w.journal.put(entryOf(quickNote('c1', 'n1')));
+    const result = await w.drain();
+    assert.deepEqual([result.status, result.replayed, result.left], ['drained', 1, 0]);
+    // What it answered then, from the ledger, not a second create refused
+    assert.deepEqual(w.answers, [['createNote', 'committed', 'note-created']]);
+    assert.equal((await w.recordOf('notes', 'n1'))?.name, 'Renamed since');
+  });
+
+  it("lands a capture in the Daily Note of the day it was made, and a capture that's in already once", async () => {
+    const w = world();
+    await w.journal.put(entryOf(capture('c-yesterday', { at: YESTERDAY, content: 'Said yesterday' }), { owner: OWN }));
+    const result = await w.drain();
+    assert.deepEqual([result.replayed, result.left], [1, 0]);
+    const daily = await w.recordOf('notes', 'daily-c-yesterday');
+    assert.equal(daily?.dateStr, '2026-10-19');
+    assert.deepEqual(
+      (await w.blocksOf('daily-c-yesterday')).map((/** @type {Row} */ block) => block.id),
+      ['block-c-yesterday'],
+    );
+    // Its block is in, so the same capture again, past the ledger's window, is in already
+    await w.journal.put(
+      entryOf({ ...capture('c-again', { at: YESTERDAY }), blockId: 'block-c-yesterday' }, { owner: OWN }),
+    );
+    const again = await w.drain();
+    assert.deepEqual([again.replayed, again.left], [1, 0]);
+    assert.equal((await w.blocksOf('daily-c-yesterday')).length, 1);
+  });
+
+  it('deletes the entries of a note deleted for good, unreplayed, whatever their owner, and keeps one under any other reason', async () => {
+    const w = world();
+    await w.page.execute(quickNote('c-make', 'n1'));
+    await w.page.execute({ type: 'trashNote', commandId: 'c-trash', noteId: 'n1' });
+    const deleted = await w.page.execute({ type: 'deleteNotePermanently', commandId: 'c-delete', noteId: 'n1' });
+    assert.equal(deleted.kind, 'committed', JSON.stringify(deleted));
+    await w.journal.put(
+      entryOf({
+        type: 'insertBlocks',
+        commandId: 'c-gone',
+        noteId: 'n1',
+        blocks: [{ id: 'x1', type: 'text', content: 'Lost' }],
+      }),
+    );
+    await w.journal.put(
+      entryOf(
+        {
+          type: 'insertBlocks',
+          commandId: 'c-live',
+          noteId: 'n1',
+          blocks: [{ id: 'x2', type: 'text', content: 'Lost' }],
+        },
+        { owner: LIVE },
+      ),
+    );
+    const result = await w.drain();
+    assert.deepEqual([result.swept, result.replayed, result.left], [2, 0, 0]);
+    assert.deepEqual(w.sent, []);
+    assert.equal(await w.recordOf('notes', 'n1'), undefined);
+
+    // A tombstone for a reason the sweep doesn't delete for, as #20's restore and reset will write
+    const kept = world();
+    await kept.page.execute(quickNote('c-make', 'n2'));
+    await kept.page.execute({ type: 'trashNote', commandId: 'c-trash', noteId: 'n2' });
+    await kept.page.execute({ type: 'deleteNotePermanently', commandId: 'c-delete', noteId: 'n2' });
+    await kept.journal.put(entryOf(quickNote('c-n2', 'n2')));
+    const reasons = await kept.drain({
+      client: {
+        execute: command => kept.worker.execute(command),
+        query: async query => {
+          const state = await kept.worker.query(query);
+          return state.kind === 'ready'
+            ? { ...state, data: { tombstones: [{ id: 'n2', reason: 'restored-elsewhere' }] } }
+            : state;
+        },
+      },
+    });
+    assert.deepEqual([reasons.swept, reasons.replayed, reasons.left], [0, 0, 1]);
+    assert.deepEqual(kept.told, [['c-n2', 'note-deleted']]);
+    assert.equal(await kept.recordOf('notes', 'n2'), undefined);
+  });
+
+  it("leaves an editor's save to the pages, sweeps it once its note is deleted for good, and keeps one with no draft as a conflict record", async () => {
+    // With its draft, the pages apply it by #33's rules (slice 3b): the worker sends nothing for it,
+    // and it stays, orphaned, for them
+    const w = world();
+    await noteA(w);
+    const save = await saveOfA(w, 'c-save', 'alpha, edited');
+    await w.journal.put(entryOf(save.command, { draft: save.draft, createdAt: NOW - 5 }));
+    const left = await w.drain();
+    assert.deepEqual([left.status, left.replayed, left.kept, left.left], ['drained', 0, 0, 1]);
+    assert.equal(left.oldestOrphanedEntryAt, NOW - 5);
+    assert.deepEqual([w.sent, w.told], [[], []]);
+    const [a1] = (await w.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === 'a1');
+    assert.equal(a1.content, 'alpha', 'nothing applied');
+
+    // Its note deleted for good: swept, as every entry of that note is
+    await w.page.execute({ type: 'trashNote', commandId: 'c-trash-a', noteId: 'A' });
+    await w.page.execute({ type: 'deleteNotePermanently', commandId: 'c-delete-a', noteId: 'A' });
+    const swept = await w.drain();
+    assert.deepEqual([swept.swept, swept.left], [1, 0]);
+
+    // With no draft, no one can apply it: kept as a conflict record, and its text with it
+    const bare = world();
+    await noteA(bare);
+    await bare.journal.put(entryOf((await saveOfA(bare, 'c-bare', 'alpha, edited')).command));
+    const kept = await bare.drain();
+    assert.deepEqual([kept.kept, kept.left], [1, 0]);
+    assert.deepEqual(bare.sent, ['keepJournalEntry']);
+    assert.ok(await bare.recordOf('conflicts', 'c-bare'));
+  });
+
+  it("keeps an entry whose note isn't there, raising its incident once", async () => {
+    const w = world();
+    await w.journal.put(
+      entryOf({
+        type: 'insertBlocks',
+        commandId: 'c-orphan',
+        noteId: 'n-none',
+        blocks: [{ id: 'x1', type: 'text', content: 'Kept' }],
+      }),
+    );
+    const first = await w.drain();
+    assert.deepEqual([first.status, first.replayed, first.left, first.oldestOrphanedEntryAt], ['drained', 0, 1, NOW]);
+    assert.deepEqual(w.told, [['c-orphan', 'note-not-found']]);
+    assert.deepEqual(w.journal.entries()[0].unreplayable, { code: 'note-not-found', at: NOW });
+    await w.drain();
+    assert.deepEqual(w.told, [['c-orphan', 'note-not-found']], 'raised once');
+  });
+
+  it("keeps a newer build's entry and one naming an operation it doesn't journal, for a build that can replay them (the lead's Q6)", async () => {
+    const w = world();
+    await w.journal.put(entryOf(quickNote('c-newer', 'n-newer'), { v: 2 }));
+    await w.journal.put(entryOf({ type: 'renameNote', commandId: 'c-rename', noteId: 'n1', name: 'Later' }));
+    const result = await w.drain();
+    assert.deepEqual([result.replayed, result.kept, result.left], [0, 0, 2]);
+    assert.deepEqual(w.told, [
+      ['c-newer', 'unsupported-version'],
+      ['c-rename', 'unknown-operation'],
+    ]);
+    assert.deepEqual(w.sent, []);
+  });
+
+  it('keeps a malformed entry, a save with no draft, and one the kernel refuses as a conflict record, and then removes it', async () => {
+    const w = world();
+    await w.page.execute(quickNote('c-make', 'n1'));
+    // Malformed: a field its schema doesn't declare
+    await w.journal.put(entryOf({ ...quickNote('c-odd', 'n-odd'), color: 'red' }));
+    // An editor's save with no draft, which can't be replayed safely
+    await w.journal.put(
+      entryOf({
+        type: 'saveNoteContent',
+        commandId: 'c-bare',
+        noteId: 'n1',
+        blocks: [{ id: 'n1-b1', type: 'text', content: 'Typed' }],
+      }),
+    );
+    // A note in a folder deleted since
+    await w.journal.put(entryOf({ ...quickNote('c-filed', 'n-filed'), folderId: 'f-gone' }));
+    const result = await w.drain();
+    assert.deepEqual([result.status, result.kept, result.left], ['drained', 3, 0]);
+    assert.deepEqual(w.told, [
+      ['c-odd', 'invalid-payload'],
+      ['c-bare', 'invalid-payload'],
+      ['c-filed', 'replay-refused'],
+    ]);
+    // None of them is a stop: each is told as what it is
+    assert.deepEqual(w.stops, []);
+    for (const opId of ['c-odd', 'c-bare', 'c-filed']) {
+      const record = await w.recordOf('conflicts', opId);
+      assert.ok(record, opId);
+      assert.equal(record.command.commandId, opId);
+      assert.equal(record.expected, null);
+    }
+    assert.equal((await w.recordOf('conflicts', 'c-bare')).noteId, 'n1');
+
+    // A damaged entry with a null command, or none: kept as a conflict record, and the entry
+    // after it still replays
+    for (const command of [null, undefined]) {
+      const damaged = world();
+      /** @type {Record<string, unknown>} */
+      const bad = { ...entryOf(quickNote('c-damaged', 'n-damaged')), command };
+      if (command === undefined) delete bad.command;
+      await damaged.journal.put(/** @type {any} */ (bad));
+      await damaged.journal.put(entryOf(quickNote('c-after', 'n-after'), { createdAt: NOW + 1 }));
+      const drained = await damaged.drain();
+      assert.deepEqual(
+        [drained.status, drained.kept, drained.replayed, drained.left],
+        ['drained', 1, 1, 0],
+        String(command),
+      );
+      assert.deepEqual(damaged.told, [['c-damaged', 'invalid-payload']], String(command));
+      assert.deepEqual((await damaged.recordOf('conflicts', 'c-damaged'))?.command, {}, String(command));
+      assert.ok(await damaged.recordOf('notes', 'n-after'), String(command));
+    }
+  });
+
+  it("stops when the kernel can't answer, leaving every entry it hadn't removed", async () => {
+    const w = world();
+    await w.journal.put(entryOf(quickNote('c1', 'n1')));
+    await w.journal.put(entryOf(quickNote('c2', 'n2'), { createdAt: NOW + 1 }));
+    // A later entry, which the stop at c2 keeps from going before it
+    await w.journal.put(entryOf(quickNote('c3', 'n3'), { createdAt: NOW + 2 }));
+    /** @type {string[]} */
+    const sent = [];
+    const result = await w.drain({
+      client: {
+        execute: async command => {
+          sent.push(command.commandId);
+          if (sent.length === 1) return w.worker.execute(command);
+          return {
+            kind: 'unavailable',
+            cause: 'storage',
+            code: 'transaction-failed',
+            retryable: true,
+            messageKey: 'unavailable.transaction-failed',
+            severity: 'error',
+          };
+        },
+        query: query => w.worker.query(query),
+      },
+    });
+    assert.deepEqual(
+      [result.status, result.code, result.replayed, result.left],
+      ['stopped', 'transaction-failed', 1, 2],
+    );
+    assert.deepEqual(sent, ['c1', 'c2'], 'nothing after the stop is sent');
+    assert.deepEqual(
+      w.journal.entries().map(entry => entry.opId),
+      ['c2', 'c3'],
+    );
+    // A stop it can retry raises nothing: the next drain may get through
+    assert.deepEqual([w.told, w.stops], [[], []]);
+    // A journal it can't read stops it before anything runs
+    w.journal.failNext('list');
+    const unread = await w.drain();
+    assert.deepEqual([unread.status, unread.code, unread.replayed], ['stopped', 'transaction-aborted', 0]);
+    // Nor does it replay anything when it can't read the tombstones first
+    const blind = await w.drain({
+      client: {
+        execute: command => w.worker.execute(command),
+        query: async () => ({ kind: 'failed', cause: 'storage', code: 'unreadable' }),
+      },
+    });
+    assert.deepEqual([blind.status, blind.code, blind.replayed, blind.left], ['stopped', 'unreadable', 0, 2]);
+  });
+
+  it("raises an entry's incident once when it stops every drain there, on a code it can't retry or a throw, and still stops there", async () => {
+    /** @type {import('../../js/kernel/core/contracts/outcomes.js').Unavailable} */
+    const cannotRetry = {
+      kind: 'unavailable',
+      cause: 'adapter',
+      code: 'not-cloneable',
+      retryable: false,
+      messageKey: 'unavailable.not-cloneable',
+      severity: 'error',
+    };
+    for (const stop of /** @type {const} */ (['cannot-retry', 'throws'])) {
+      const w = world();
+      // A capture an earlier worker kept, and a note made after it
+      await w.journal.put(entryOf(capture('c-stuck'), { owner: 'coordinator-0' }));
+      await w.journal.put(entryOf(quickNote('c-later', 'n-later'), { createdAt: NOW + 1 }));
+      /** @type {string[]} */
+      const sent = [];
+      const client = {
+        /** @param {any} command */
+        execute: async command => {
+          sent.push(command.commandId);
+          if (command.commandId !== 'c-stuck') return w.worker.execute(command);
+          if (stop === 'throws') throw new Error('A bug that throws on this entry');
+          return cannotRetry;
+        },
+        /** @param {any} query */
+        query: query => w.worker.query(query),
+      };
+      const code = stop === 'throws' ? 'drain-failed' : 'not-cloneable';
+      for (const run of [1, 2]) {
+        const result = await w.drain({ client });
+        assert.deepEqual(
+          [result.status, result.code, result.replayed, result.left],
+          ['stopped', code, 0, 2],
+          `${stop}, drain ${run}`,
+        );
+      }
+      // Once, though two drains stopped at it, so a capture says "Not captured" once; and the
+      // stop keeps the replay oldest first, so nothing after it went
+      assert.deepEqual(w.told, [['c-stuck', code]], stop);
+      // Raised as a stop, which leaves a kept capture kept, so its worker tells it nothing
+      assert.deepEqual(w.stops, ['c-stuck'], stop);
+      assert.deepEqual(sent, ['c-stuck', 'c-stuck'], stop);
+      assert.equal(await w.recordOf('notes', 'n-later'), undefined, stop);
+      assert.deepEqual(w.journal.entries().find(entry => entry.opId === 'c-stuck')?.unreplayable?.code, code, stop);
+    }
+
+    // The same when the conflict record that would keep an entry can't be written for good
+    const w = world();
+    await w.journal.put(entryOf({ ...quickNote('c-odd', 'n-odd'), color: 'red' }));
+    await w.journal.put(entryOf(quickNote('c-later', 'n-later'), { createdAt: NOW + 1 }));
+    const client = {
+      /** @param {any} command */
+      execute: async command => (command.type === 'keepJournalEntry' ? cannotRetry : w.worker.execute(command)),
+      /** @param {any} query */
+      query: query => w.worker.query(query),
+    };
+    for (const run of [1, 2]) {
+      const result = await w.drain({ client });
+      assert.deepEqual(
+        [result.status, result.code, result.left],
+        ['stopped', 'not-cloneable', 2],
+        `keep, drain ${run}`,
+      );
+    }
+    assert.deepEqual(w.told, [['c-odd', 'not-cloneable']]);
+    assert.deepEqual(w.stops, ['c-odd']);
+    assert.equal(await w.recordOf('notes', 'n-later'), undefined);
+
+    // A removal that fails for good once the entry's command is in raises nothing, since the
+    // next drain's ledger answers it
+    const removing = world();
+    await removing.journal.put(entryOf(quickNote('c-in', 'n-in')));
+    const failingRemove = {
+      ...removing.journal,
+      remove: async () => {
+        throw new UnavailableError('quota', 'quota', false);
+      },
+    };
+    const first = await removing.drain({ journal: failingRemove });
+    assert.deepEqual([first.status, first.code, first.replayed, removing.told], ['stopped', 'quota', 0, []]);
+    assert.ok(await removing.recordOf('notes', 'n-in'), 'its command is in');
+    const next = await removing.drain();
+    assert.deepEqual([next.status, next.replayed, next.left, removing.told], ['drained', 1, 0, []]);
+
+    // A throw that says it may get through raises nothing, as a stop it can retry doesn't
+    const busy = world();
+    await busy.journal.put(entryOf(quickNote('c-busy', 'n-busy')));
+    const stopped = await busy.drain({
+      client: {
+        execute: async () => {
+          throw new UnavailableError('storage', 'transaction-aborted', true);
+        },
+        /** @param {any} query */
+        query: query => busy.worker.query(query),
+      },
+    });
+    assert.deepEqual([stopped.status, stopped.code, busy.told], ['stopped', 'transaction-aborted', []]);
+  });
+
+  it('answers empty for an empty journal, and sends nothing', async () => {
+    const w = world();
+    const result = await w.drain();
+    assert.deepEqual([result.status, result.left, result.oldestOrphanedEntryAt], ['empty', 0, null]);
+    assert.deepEqual(w.sent, []);
+  });
+});

@@ -1,9 +1,22 @@
 // A payload for every catalog command (#13, AC1), which the catalog test and #17's AC1 test
 // (write-guards.test.mjs) both run, so one sample set holds each schema and each use case.
+// It covers the worker's part of the catalog too (contracts/worker-catalog.js).
 
-import { NOW } from './support.mjs';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
+import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').CommandType} CommandType */
+
+/**
+ * Who sends `type`'s sample: the new tab, or the service worker for a command whose entry
+ * doesn't list the new tab, as the worker's part's own don't
+ * @param {string} type
+ */
+export const senderOf = type =>
+  Object.hasOwn(WORKER_COMMANDS, type) &&
+  !WORKER_COMMANDS[/** @type {CommandType} */ (type)].surfaces.includes('newtab')
+    ? CALLERS['worker-internal']
+    : CALLERS.newtab;
 
 /**
  * @template {CommandType} T
@@ -97,12 +110,19 @@ export const COMMAND_SAMPLES = {
       linkedNames: [],
     },
   },
+  // A journal entry the worker's drain couldn't replay, kept as a conflict record of n1 (#35 slice 3)
+  keepJournalEntry: {
+    opId: 'c-unreplayed',
+    noteId: 'n1',
+    command: { type: 'saveNoteContent', commandId: 'c-unreplayed', noteId: 'n1', blocks: [] },
+  },
   // The worker's catch-up of the records 1.4.x left behind their blocks, over n1 and a note it has no record of
   catchUpNoteRecords: { noteIds: ['n1', 'n-gone'] },
   captureToDailyNote: {
     noteId: 'd1',
     blockId: 'b9',
     capture: { type: 'text', content: 'Quote', source: 'https://example.test/' },
+    at: NOW,
   },
   ensureDailyNote: { noteId: 'd2', dateStr: '2026-10-19' },
   archiveNote: { noteId: 'n1' },

@@ -47,17 +47,20 @@ function isCaller(caller) {
   return SURFACES.includes(/** @type {Surface} */ (surface)) && typeof contextId === 'string' && contextId !== '';
 }
 
+/** @typedef {import('../contracts/commands.js').Catalog} Catalog */
+
 /**
  * The surfaces a catalog entry allows, or undefined when no entry has that type: the kernel's
- * commands and queries, and the coordinator's own queries, which the router answers
- * (contracts/system.js)
+ * commands and queries in `catalog`, and the coordinator's own queries, which the router
+ * answers (contracts/system.js)
+ * @param {Catalog} catalog
  * @param {unknown} type
  * @returns {readonly Surface[] | undefined}
  */
-function allowedSurfaces(type) {
+function allowedSurfaces({ commands, queries }, type) {
   if (typeof type !== 'string') return undefined;
-  if (Object.hasOwn(COMMANDS, type)) return COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].surfaces;
-  if (Object.hasOwn(QUERIES, type)) return QUERIES[/** @type {keyof typeof QUERIES} */ (type)].surfaces;
+  if (Object.hasOwn(commands, type)) return commands[type].surfaces;
+  if (Object.hasOwn(queries, type)) return queries[type].surfaces;
   if (Object.hasOwn(SYSTEM_QUERIES, type)) {
     return SYSTEM_QUERIES[/** @type {keyof typeof SYSTEM_QUERIES} */ (type)].surfaces;
   }
@@ -65,16 +68,21 @@ function allowedSurfaces(type) {
 }
 
 /**
- * The baseline policy: each catalog entry's `surfaces`. A request the catalog doesn't have,
- * one from a surface its entry doesn't list, and any request from a caller that isn't a known
- * surface are denied.
+ * The baseline policy on `catalog`: each entry's `surfaces`. A request the catalog doesn't
+ * have, one from a surface its entry doesn't list, and any request from a caller that isn't a
+ * known surface are denied. Every page builds it on the shared catalog, and the service worker
+ * on its own composed with it (contracts/worker-catalog.js), which only adds `worker-internal`.
+ * @param {Catalog} [catalog]
  * @returns {PolicyPort}
  */
-export function createBaselinePolicy() {
+export function createBaselinePolicy(catalog = { commands: COMMANDS, queries: QUERIES }) {
   return Object.freeze({
     authorize(request, caller) {
       if (!isCaller(caller)) return deny('unknown-caller');
-      const surfaces = allowedSurfaces(request !== null && typeof request === 'object' ? request.type : undefined);
+      const surfaces = allowedSurfaces(
+        catalog,
+        request !== null && typeof request === 'object' ? request.type : undefined,
+      );
       if (!surfaces) return deny('unknown-operation');
       return surfaces.includes(caller.surface) ? ALLOW : deny('not-on-surface');
     },

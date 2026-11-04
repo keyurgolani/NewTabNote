@@ -14,9 +14,10 @@
  *
  * Retention (sweepLedger): the worker drops rows older than LEDGER_MAX_AGE_MS, and the oldest
  * past LEDGER_MAX_ROWS, at most once every LEDGER_SWEEP_EVERY_MS. A resend older than that
- * reads as `absent` and runs again: a create is refused as `note-exists`, a capture lands its
- * block again under the same id, a placement command applies again, and from #17 PR 4 a save
- * carries its expected revision, so it conflicts and its text is kept.
+ * reads as `absent` and runs again: a create is refused as `note-exists`, a capture's block,
+ * stored already under its id, as `duplicate-block`, a placement command applies again, and from
+ * #17 PR 4 a save carries its expected revision, so it conflicts and its text is kept. The
+ * journal's drain replays an editor's save by #33's rules instead, which find it in already.
  */
 
 import { isId } from '../../core/contracts/checks.js';
@@ -42,11 +43,11 @@ import { committed, endOf, result } from './requests.js';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * How long a row is kept. A resend comes within seconds of the send it repeats until the
- * capture journal (#2, #35) replays captures for up to 90 days: that change has to raise this
- * to cover its window.
+ * How long a row is kept: 90 days since #35's journal (slice 3), whose drain replays an entry
+ * under its opId for as long as it stays, so a command that committed answers its row rather
+ * than running again across that window (#17, "Identity and feed")
  */
-export const LEDGER_MAX_AGE_MS = 30 * DAY_MS;
+export const LEDGER_MAX_AGE_MS = 90 * DAY_MS;
 
 /** The most rows kept, at about 250 bytes a row about 12 MB at worst; the oldest go first */
 export const LEDGER_MAX_ROWS = 50000;

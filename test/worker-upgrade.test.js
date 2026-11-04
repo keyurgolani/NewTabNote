@@ -4,8 +4,9 @@
 // upgrades a version-8 profile to this build's version (11 since #17 PR 3b) on the worker's
 // first event that needs storage, a page's storage.migrate included, answers that page once the
 // run has finished (Q12), and while an
-// older build's open page blocks the upgrade, a capture says "Not captured" with why, at once,
-// rather than wait or claim it saved. storage.migrate is accepted only from the extension's own
+// older build's open page blocks the upgrade, a capture is kept in #35's journal (slice 3) and
+// says so, at once, rather than wait or claim it saved, and lands once the upgrade is in.
+// storage.migrate is accepted only from the extension's own
 // senders (#21's isOwnSender), as API_REQUEST is: js/kernel/composition/worker-network.js runs
 // the worker's handler for them alone, and answers any other sender request-refused.
 
@@ -93,7 +94,7 @@ describe('the worker upgrades the database and answers the pages that wait on it
     assert.equal(env.global.storagePurge, sweep, 'no sweep started');
   });
 
-  it('while an older page blocks the upgrade, a capture says Not captured and why, and saves nothing; then captures save', async () => {
+  it("while an older page blocks the upgrade, a capture is kept and says so, and saves nothing; then it lands in today's note, and captures save (#35 slice 3)", async () => {
     const env = workerEnv();
     await createDatabase(env.indexedDB, { records: { canvases: [note('n1')] } });
     // 1.4.1's new tab holds its connection and never closes it on versionchange
@@ -107,16 +108,26 @@ describe('the worker upgrades the database and answers the pages that wait on it
       assert.deepEqual(env.chrome.notifications[0], {
         type: 'basic',
         iconUrl: 'icons/icon48.png',
-        title: 'Not captured',
-        message: 'NewTabNote is updating how your notes are stored, and an open NewTabNote tab or window is holding them. Close or reload it, then try again.',
+        title: "Kept for today's note",
+        message: "Close or reload your open NewTabNote tabs and windows to finish an update and add this. It's kept on this device until then.",
       });
       // (A dump would wait behind the blocked upgrade, so the database is read once it lands)
       blocker.close();
       blockerOpen = false;
       assert.deepEqual(await answer, { status: 'migrated' });
+      // Once the run is in, the coordinator is ready, and its drain adds the kept capture
+      const daily = await waitFor(async () => {
+        const dump = await dumpDatabase(env.indexedDB);
+        return Object.values(recordsOf(dump, 'canvases')).find((record) => record.isDaily) || null;
+      }, { withinMs: 10000, message: "the kept capture in today's note" });
       const upgraded = await dumpDatabase(env.indexedDB);
       assert.equal(upgraded.version, THIS_VERSION);
-      assert.deepEqual(Object.keys(recordsOf(upgraded, 'canvases')), ['n1'], 'nothing was captured while blocked');
+      assert.deepEqual(Object.keys(recordsOf(upgraded, 'canvases')).sort(), ['n1', daily.id].sort());
+      assert.deepEqual(
+        Object.values(recordsOf(upgraded, 'elements')).filter((block) => block.canvasId === daily.id).map((block) => [block.type, block.url]),
+        [['bookmark', TAB.url]],
+      );
+      assert.equal(env.chrome.notifications.length, 1, 'the drain adds it without a second notification');
       env.chrome.api.contextMenus.onClicked.listeners[0]({ menuItemId: 'capture-page' }, TAB);
       await waitFor(() => env.chrome.notifications.length === 2, { withinMs: 10000, message: 'the second notification' });
       assert.equal(env.chrome.notifications[1].title, 'Captured to New Tab Note');

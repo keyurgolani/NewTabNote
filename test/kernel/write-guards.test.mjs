@@ -11,11 +11,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createKernel } from './test-kernel.mjs';
-import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import { walk } from '../../js/kernel/core/contracts/schema-walk.js';
+import {
+  WORKER_CATALOG,
+  WORKER_COMMANDS,
+  WORKER_COMMAND_TYPES,
+} from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
-import { COMMAND_SAMPLES } from './command-samples.mjs';
+import { COMMAND_SAMPLES, senderOf } from './command-samples.mjs';
 import { indexedDbFixture } from './storage-fixture.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';
 import { SCOPE_GUARDS, VERSION_FIELDS, WRITE_GUARDS } from './write-guards.mjs';
@@ -29,9 +33,10 @@ import { SCOPE_GUARDS, VERSION_FIELDS, WRITE_GUARDS } from './write-guards.mjs';
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const CATALOG_URL = new URL('../../js/kernel/core/contracts/commands.js', import.meta.url);
 
+// Every command of the shared catalog and of the worker's part (contracts/worker-catalog.js)
 /** @type {Map<string, any>} */
 const payloads = new Map();
-for (const [type, entry] of Object.entries(COMMANDS)) {
+for (const [type, entry] of Object.entries(WORKER_COMMANDS)) {
   payloads.set(type, (await import(new URL(entry.schema, CATALOG_URL).href)).payload);
 }
 
@@ -159,7 +164,7 @@ const pageCallers = () => callersIn(pageFiles().map(file => [file, fs.readFileSy
 
 describe("#17's AC1: every writer's scope and guard", () => {
   it('names every catalog command once', () => {
-    assert.deepEqual(Object.keys(WRITE_GUARDS).sort(), [...COMMAND_TYPES].sort());
+    assert.deepEqual(Object.keys(WRITE_GUARDS).sort(), [...WORKER_COMMAND_TYPES].sort());
   });
 
   it('each guarded command takes its version where the table says, for its scope, and no other command takes one', () => {
@@ -224,8 +229,8 @@ describe("#17's AC1: every writer's scope and guard", () => {
   });
 
   /**
-   * Runs every catalog sample through a kernel over `inner`, and answers the scopes each
-   * command's work committed in, and which commands committed or ran
+   * Runs every catalog sample through a kernel over `inner`, from the surface senderOf names,
+   * and answers the scopes each command's work committed in, and which commands committed or ran
    * @param {KernelAdapter} inner
    * @param {{committing: CommandType | null}} [tracking] - set to the command whose work commits
    */
@@ -248,16 +253,20 @@ describe("#17's AC1: every writer's scope and guard", () => {
         }
       },
     };
-    const kernel = createKernel({
+    const ids = testIds();
+    const clock = testClock();
+    const page = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+    const worker = createKernel({
       adapter,
-      policy: createBaselinePolicy(),
-      caller: CALLERS.newtab,
-      ids: testIds(),
-      clock: testClock(),
+      policy: createBaselinePolicy(WORKER_CATALOG),
+      caller: CALLERS['worker-internal'],
+      ids,
+      clock,
     });
     /** @type {string[]} */
     const ran = [];
     for (const [type, fields] of Object.entries(COMMAND_SAMPLES)) {
+      const kernel = senderOf(type) === CALLERS.newtab ? page : worker;
       const outcome = await kernel.execute(/** @type {Command} */ ({ ...fields, type, commandId: `c-${type}` }));
       if (outcome.kind === 'committed' || outcome.kind === 'bulk') ran.push(type);
     }

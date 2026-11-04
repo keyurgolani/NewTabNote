@@ -73,6 +73,7 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 /** @typedef {import('./operations/apply-remote-placement.js').ApplyRemotePlacement} ApplyRemotePlacement */
 /** @typedef {import('./operations/apply-close-draft.js').ApplyCloseDraft} ApplyCloseDraft */
 /** @typedef {import('./operations/catch-up-note-records.js').CatchUpNoteRecords} CatchUpNoteRecords */
+/** @typedef {import('./operations/keep-journal-entry.js').KeepJournalEntry} KeepJournalEntry */
 
 /** @typedef {RunBulkAction['action']} BulkAction */
 
@@ -86,10 +87,26 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  *   | CompleteOnboarding | TurnOffBackgroundJobs | RecordBackup | RecordExportNotice | SnoozeSpaceNotice
  *   | CreateAutoBackup | ImportBackup
  *   | UpdateSearchIndex | SaveVector | ApplyRemoteChanges | ApplyRemoteContent | ApplyRemotePlacement
- *   | ApplyCloseDraft | CatchUpNoteRecords} Command
+ *   | ApplyCloseDraft | CatchUpNoteRecords | KeepJournalEntry} Command
  */
 
 /** @typedef {Command['type']} CommandType */
+
+/**
+ * The commands only the service worker runs, which its part of the catalog holds
+ * (worker-catalog.js), so no page's start carries them
+ * @typedef {'captureToDailyNote' | 'runIntegrityCheck' | 'catchUpNoteRecords' | 'keepJournalEntry'} WorkerOnlyCommandType
+ */
+
+/** The shared catalog's commands, which a page may send by its own surface */
+/** @typedef {Exclude<CommandType, WorkerOnlyCommandType>} PageCommandType */
+
+/**
+ * A catalog a context's kernel, policy and adapter run on: on every page the shared one
+ * (COMMANDS, QUERIES), and on the service worker the shared one composed with its own part
+ * (worker-catalog.js)
+ * @typedef {{commands: Readonly<Record<string, CommandEntry>>, queries: Readonly<Record<string, import('./queries.js').QueryEntry>>}} Catalog
+ */
 
 /**
  * @template {CommandType} T
@@ -133,12 +150,18 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
 
 /**
  * A version 1 entry. #35 (background coordinator) sets `journaled` on its content saves, note
- * creation, appends, and captures. A command moved to a new version keeps a step from the
- * last one in contracts/upcast.js, so a journal entry written before the move still replays.
+ * creation, appends, and captures (slice 3): a context writes each to its journal before it
+ * sends it, and the coordinator's drain replays one no context lived to see answered
+ * (domain/journal.js). A command moved to a new version keeps a step from the last one in
+ * contracts/upcast.js, so a journal entry written before the move still replays. A journaled
+ * command's payload changes only that way, with a new version and its step: its schema is
+ * strict, so a field added at the same version reads as malformed in a build that doesn't know
+ * it, and that build keeps the entry as a conflict record rather than replay it.
+ * test/kernel/catalog.test.mjs holds each journaled payload as it is at its version.
  * @param {string} module - the schema module's name under contracts/operations/
  * @param {Aggregate} aggregate
  * @param {Surface[]} surfaces
- * @param {{entityTypes: EntityType[], maxBytes?: number, deadlineMs?: number, bulk?: true}} options
+ * @param {{entityTypes: EntityType[], maxBytes?: number, deadlineMs?: number, bulk?: true, journaled?: true}} options
  * @returns {CommandEntry}
  */
 const entry = (module, aggregate, surfaces, { entityTypes, maxBytes = SMALL_MESSAGE_BYTES, ...options }) =>
@@ -161,17 +184,24 @@ const entry = (module, aggregate, surfaces, { entityTypes, maxBytes = SMALL_MESS
 /** What a request that carries content, or a list as long as the user makes it, may encode to */
 const LARGE = MAX_MESSAGE_BYTES;
 
+/** A journaled command's options: journaled, and as large as a message, as each journaled entry declares */
+export const JOURNALED = Object.freeze({ maxBytes: LARGE, journaled: true });
+
+/** The entry builder, which the service worker's part of the catalog builds its own with */
+export { entry as commandEntry };
+
 /**
- * What each surface could do before the kernel: everything from the new-tab page, a quick
- * note from Popup, nothing from Side Panel, and capture plus startup maintenance from the
- * service worker, which #35 gives the integrity check it ran at every start. Since 1.4.3 a
- * Popup or Side Panel start applies closing tabs' edits too (#33).
- * @type {Readonly<Record<CommandType, CommandEntry>>}
+ * The shared catalog, which every page's kernel, policy and adapter run on: everything from the
+ * new-tab page, a quick note from Popup, nothing from Side Panel, and since 1.4.3 a Popup or
+ * Side Panel start applies closing tabs' edits too (#33). It names no `worker-internal`: the
+ * service worker's part (worker-catalog.js) holds what only the worker runs and grants it the
+ * shared commands it runs too, so a page's start carries none of it (the lead's split, #182).
+ * @type {Readonly<Record<PageCommandType, CommandEntry>>}
  */
 export const COMMANDS = Object.freeze({
   createNote: entry('create-note', 'note', ['newtab', 'popup'], {
     entityTypes: ['note', 'block', 'folder'],
-    maxBytes: LARGE,
+    ...JOURNALED,
   }),
   renameNote: entry('rename-note', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
   setPinned: entry('set-pinned', 'note', ['newtab'], { entityTypes: ['note'] }),
@@ -179,14 +209,10 @@ export const COMMANDS = Object.freeze({
   unarchiveNote: entry('unarchive-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   trashNote: entry('trash-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   restoreNote: entry('restore-note', 'note', ['newtab'], { entityTypes: ['note'] }),
-  saveNoteContent: entry('save-note-content', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
+  saveNoteContent: entry('save-note-content', 'note', ['newtab'], { entityTypes: ['note', 'block'], ...JOURNALED }),
   deleteBlocks: entry('delete-blocks', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
   applyDerivedTitle: entry('apply-derived-title', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
   attachInsights: entry('attach-insights', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
-  captureToDailyNote: entry('capture-to-daily-note', 'note', ['newtab', 'worker-internal'], {
-    entityTypes: ['note', 'block'],
-    maxBytes: LARGE,
-  }),
   // The sidebar's Daily Note button and calendar, the palette, and AI chat's Alt+D, all in the new tab
   ensureDailyNote: entry('ensure-daily-note', 'note', ['newtab'], { entityTypes: ['note'] }),
   runBulkAction: entry('run-bulk-action', 'note', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE, bulk: true }),
@@ -207,17 +233,10 @@ export const COMMANDS = Object.freeze({
     entityTypes: ['note'],
     maxBytes: LARGE,
   }),
-  runStartupMaintenance: entry('run-startup-maintenance', 'system', ['newtab', 'worker-internal'], {
+  runStartupMaintenance: entry('run-startup-maintenance', 'system', ['newtab'], {
     entityTypes: [],
     deadlineMs: MAINTENANCE_DEADLINE_MS,
   }),
-  // The read-only integrity check, which the service worker runs after an install or an update (#35)
-  runIntegrityCheck: entry('run-integrity-check', 'system', ['worker-internal'], {
-    entityTypes: [],
-    deadlineMs: MAINTENANCE_DEADLINE_MS,
-  }),
-  // The worker's one-time catch-up of 1.4.x's lagging records after the update, in batches (#33)
-  catchUpNoteRecords: entry('catch-up-note-records', 'note', ['worker-internal'], { entityTypes: ['note'] }),
   // The auto-title and insights jobs run in the new tab until #35 moves them
   setInsightsPending: entry('set-insights-pending', 'job', ['newtab'], { entityTypes: ['note'] }),
   recordJobRun: entry('record-job-run', 'job', ['newtab'], { entityTypes: [] }),
@@ -230,8 +249,12 @@ export const COMMANDS = Object.freeze({
     entityTypes: ['note', 'snapshot', 'block'],
     maxBytes: LARGE,
   }),
-  insertBlocks: entry('insert-blocks', 'note', ['newtab'], { entityTypes: ['note', 'block'], maxBytes: LARGE }),
-  // A closing tab's edit, which the next start of the new tab, Popup or Side Panel applies (#33)
+  insertBlocks: entry('insert-blocks', 'note', ['newtab'], {
+    entityTypes: ['note', 'block'],
+    ...JOURNALED,
+  }),
+  // A closing tab's edit, which the next start of the new tab, Popup or Side Panel applies
+  // (#33), as a page will a journaled editor save (#35 slice 3b, the lead's call on #182)
   applyCloseDraft: entry('apply-close-draft', 'note', ['newtab', 'popup', 'sidepanel'], {
     entityTypes: ['note', 'block'],
     maxBytes: LARGE,
@@ -267,8 +290,9 @@ export const COMMANDS = Object.freeze({
   applyRemotePlacement: entry('apply-remote-placement', 'note', ['newtab'], { entityTypes: ['note', 'folder'] }),
 });
 
-/** @type {readonly CommandType[]} */
-export const COMMAND_TYPES = Object.freeze(/** @type {CommandType[]} */ (Object.keys(COMMANDS)));
+/** The shared catalog's command types: what a page may send, by its own surface */
+/** @type {readonly PageCommandType[]} */
+export const COMMAND_TYPES = Object.freeze(/** @type {PageCommandType[]} */ (Object.keys(COMMANDS)));
 
 /**
  * @type {Readonly<Record<BulkAction,
@@ -283,8 +307,9 @@ export const BULK_ACTIONS = Object.freeze({
 });
 
 /**
+ * Whether `type` is a command of the shared catalog
  * @param {unknown} type
- * @returns {type is CommandType}
+ * @returns {type is PageCommandType}
  */
 export function isCommandType(type) {
   return typeof type === 'string' && Object.hasOwn(COMMANDS, type);

@@ -1,9 +1,9 @@
 /**
  * system.coordinatorHealth, catalog version 1: the background coordinator's own state (#35,
  * "Incidents and health"), which #20's `coordinator` provider reads. What its welcome says,
- * its instance id and when it started, the commands it ran by outcome, and when the oldest
- * journal entry it couldn't replay was written, null until #35's journal (slice 3), and while
- * it says `migrating`, whether its run upgrades the database or an older build's open page
+ * its instance id and when it started, the commands it ran by outcome, when the oldest journal
+ * entry its last drain left with no live owner was written, null with none (#35 slice 3), and
+ * while it says `migrating`, whether its run upgrades the database or an older build's open page
  * blocks that upgrade (#35 slice 2). Ids, counts, times, and codes only: nothing in it names a
  * note or holds what the user wrote.
  */

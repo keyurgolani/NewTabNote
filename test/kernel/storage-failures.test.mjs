@@ -313,13 +313,14 @@ describe('failures on the IndexedDB adapter', () => {
     });
 
     it('both capturing to today: one Daily Note, with both captures, since making it and adding to it is one transaction', async () => {
-      const { of, runtime } = await opened();
+      const { of, runtime, tab } = await opened();
       const worker = kernelOn(/** @type {IndexedDbAdapter} */ (of.adapters[0]), runtime, CALLERS['worker-internal']);
-      const tab = await otherContext(of);
+      // Only the worker captures (#35 slice 3), so the other is its kernel on a second connection
+      const other = await otherContext(of, { surface: 'worker-internal', contextId: 'worker-2' });
       const capture = /** @type {const} */ ({ type: 'text', content: 'Quote' });
       const outcomes = await Promise.all([
         worker.execute({ type: 'captureToDailyNote', commandId: 'a', noteId: 'd-worker', blockId: 'k1', capture }),
-        tab.execute({ type: 'captureToDailyNote', commandId: 'b', noteId: 'd-tab', blockId: 'k2', capture }),
+        other.execute({ type: 'captureToDailyNote', commandId: 'b', noteId: 'd-other', blockId: 'k2', capture }),
       ]);
       assert.deepEqual(
         outcomes.map(outcome => outcome.kind),

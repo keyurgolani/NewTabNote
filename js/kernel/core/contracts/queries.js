@@ -44,6 +44,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 /** @typedef {import('./operations/list-links.js').ListLinks} ListLinks */
 /** @typedef {import('./operations/list-vectors.js').ListVectors} ListVectors */
 /** @typedef {import('./operations/get-sync-data.js').GetSyncData} GetSyncData */
+/** @typedef {import('./operations/find-tombstones.js').FindTombstones} FindTombstones */
 /** @typedef {import('../ports/repository.js').ExportData} ExportData */
 /** @typedef {import('../domain/note.js').LinkRecord} LinkRecord */
 /** @typedef {import('../domain/note.js').VectorRecord} VectorRecord */
@@ -57,9 +58,15 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  *   | ListFolders
  *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns
  *   | ListSnapshots | GetSnapshot | FindDailyNote
- *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent | ListLinks | ListVectors | GetSyncData} Query
+ *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent | ListLinks | ListVectors | GetSyncData
+ *   | FindTombstones} Query
  */
 /** @typedef {Query['type']} QueryType */
+
+/** The query only the service worker reads, which its part of the catalog holds (worker-catalog.js) */
+/** @typedef {'findTombstones'} WorkerOnlyQueryType */
+
+/** @typedef {Exclude<QueryType, WorkerOnlyQueryType>} PageQueryType */
 
 /**
  * @template {QueryType} T
@@ -93,6 +100,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @property {LinkRecord[]} listLinks
  * @property {VectorRecord[]} listVectors
  * @property {ExportData} getSyncData
+ * @property {{tombstones: Array<{id: string, reason: string}>}} findTombstones
  */
 
 /**
@@ -114,8 +122,9 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  */
 
 /**
- * The new tab, Popup, and Side Panel read notes, folders, and preferences today, and the
- * service worker reads nothing through the kernel.
+ * The new tab, Popup, and Side Panel read notes, folders, and preferences today. The service
+ * worker reads only what its journal drain needs, which its part of the catalog holds
+ * (worker-catalog.js, #35 slice 3).
  */
 const READERS = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup', 'sidepanel']));
 
@@ -145,7 +154,14 @@ const entry = (module, entityTypes, surfaces = READERS, maxBytes = SMALL_MESSAGE
     destinations: Object.freeze([]),
   });
 
-/** @type {Readonly<Record<QueryType, QueryEntry>>} */
+/** The entry builder, which the service worker's part of the catalog builds its own with */
+export { entry as queryEntry };
+
+/**
+ * The shared catalog's queries, which every page's kernel and policy run on. It names no
+ * `worker-internal`: the service worker's part (worker-catalog.js) holds what only it reads.
+ * @type {Readonly<Record<PageQueryType, QueryEntry>>}
+ */
 export const QUERIES = Object.freeze({
   listNotes: entry('list-notes', []),
   getNote: entry('get-note', ['note']),
@@ -182,12 +198,14 @@ export const QUERIES = Object.freeze({
   getSyncData: entry('get-sync-data', [], NEW_TAB),
 });
 
-/** @type {readonly QueryType[]} */
-export const QUERY_TYPES = Object.freeze(/** @type {QueryType[]} */ (Object.keys(QUERIES)));
+/** The shared catalog's query types: what a page may read, by its own surface */
+/** @type {readonly PageQueryType[]} */
+export const QUERY_TYPES = Object.freeze(/** @type {PageQueryType[]} */ (Object.keys(QUERIES)));
 
 /**
+ * Whether `type` is a query of the shared catalog
  * @param {unknown} type
- * @returns {type is QueryType}
+ * @returns {type is PageQueryType}
  */
 export function isQueryType(type) {
   return typeof type === 'string' && Object.hasOwn(QUERIES, type);

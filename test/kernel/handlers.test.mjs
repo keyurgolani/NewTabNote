@@ -5,7 +5,9 @@
 // Panel's and the worker's tables hold nothing else, so neither Popup's nor Side Panel's start
 // loads the remote apply or the index commands. A table that holds a bulk command holds its
 // refusal too. A command or query the policy allows that a table lacks is refused as
-// not-registered and logged as an error, never run.
+// not-registered and logged as an error, never run. Each page's table is on the shared catalog,
+// and the worker's on its own part composed with it (contracts/worker-catalog.js), which no
+// page's start loads.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,8 +21,13 @@ import { SIDEPANEL_HANDLERS } from '../../js/kernel/core/application/handlers-si
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
 import { handlerTable } from '../../js/kernel/core/application/handlers.js';
 import { NOT_REGISTERED, createKernel } from '../../js/kernel/core/application/kernel.js';
-import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
-import { QUERIES, QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
+import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
+import { QUERIES } from '../../js/kernel/core/contracts/queries.js';
+import {
+  WORKER_CATALOG,
+  WORKER_COMMAND_TYPES,
+  WORKER_QUERY_TYPES,
+} from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { reachGraph } from './import-graph.mjs';
@@ -32,9 +39,17 @@ import { CALLERS, testClock, testIds } from './support.mjs';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 
-/** Every command and query type the catalog has */
+/** Every command and query type the catalog has, the worker's part's with the shared ones */
 /** @type {ReadonlySet<string>} */
-const CATALOG_TYPES = new Set([...COMMAND_TYPES, ...QUERY_TYPES]);
+const CATALOG_TYPES = new Set([...WORKER_COMMAND_TYPES, ...WORKER_QUERY_TYPES]);
+
+/** The modules only the worker loads: its part of the catalog, its table, the capture, the drain */
+const WORKER_ONLY_MODULES =
+  /^js\/kernel\/(core\/contracts\/worker-catalog|core\/application\/(capture|handlers-worker|handlers-all|journal|journal-drain))\.js$/;
+
+/** The close-time drafts' applier, which only the pages run (#33, #35 slice 3b) */
+const APPLIER_MODULES =
+  /^js\/kernel\/core\/(application\/close-drafts|domain\/(close-draft|close-draft-format|close-draft-keys|recovered-note))\.js$/;
 
 /**
  * Each page with a kernel: the modules its HTML loads, its surface, its root's table, and
@@ -81,6 +96,25 @@ function pageModules(entries) {
 /** The kernel's own module, whose one send is the startup maintenance a root that maintains runs */
 const KERNEL = path.join(ROOT, 'js', 'kernel', 'core', 'application', 'kernel.js');
 
+/** The contracts, where the planted case puts a schema module */
+const CONTRACTS = path.join(ROOT, 'js', 'kernel', 'core', 'contracts') + path.sep;
+
+/**
+ * Whether `node` is a schema's own name for what it defines, which isn't a send: the first
+ * argument of commandPayload() or queryPayload(), a schema's `type`, or of v.literal(), as a
+ * change op's name. The service worker loads the journaled commands' schemas since #35 slice 3,
+ * to read a journal entry before its drain replays it.
+ * @param {ts.Node} node
+ * @returns {boolean}
+ */
+const isSchemaName = node => {
+  const { parent } = node;
+  if (!ts.isCallExpression(parent) || parent.arguments[0] !== node) return false;
+  const called = parent.expression;
+  if (ts.isIdentifier(called)) return called.text === 'commandPayload' || called.text === 'queryPayload';
+  return ts.isPropertyAccessExpression(called) && called.name.text === 'literal';
+};
+
 /**
  * @param {ts.PropertyName | undefined} name
  * @returns {boolean} whether a property so named is an object's `type`
@@ -100,9 +134,10 @@ const unwrapped = node => (ts.isParenthesizedExpression(node) ? unwrapped(node.e
  * isn't a string (computed, shorthand, or behind a spread), and a catalog type's name in any
  * other string but another property's key or value, which names something else: a table's key,
  * BULK_ACTIONS' item commands, a change op's name. A call handed a variable is read where its
- * object is built, as the worker's client forwards what js/background.js builds. It finds a
- * send a table lacks by accident, not one written to get past it. `readFile` reads a module's
- * text, from disk unless given, so a test can plant a send.
+ * object is built, as the worker's client forwards what js/background.js builds. A schema's own
+ * name for what it defines (isSchemaName) is read for none of it. It finds a send a table lacks
+ * by accident, not one written to get past it. `readFile` reads a module's text, from disk
+ * unless given, so a test can plant a send.
  * @param {string[]} files
  * @param {{readFile?: (file: string) => string}} [options]
  * @returns {{types: Set<string>, own: Set<string>, unread: string[]}}
@@ -122,7 +157,7 @@ function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {
       `${path.relative(ROOT, file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`;
     /** @param {ts.Node} node */
     const walk = node => {
-      if (ts.isStringLiteralLike(node) && CATALOG_TYPES.has(node.text)) {
+      if (ts.isStringLiteralLike(node) && CATALOG_TYPES.has(node.text) && !isSchemaName(node)) {
         const { parent } = node;
         if (!ts.isPropertyAssignment(parent)) unread.push(at(node));
         else if (parent.initializer === node && isTypeName(parent.name)) (file === KERNEL ? own : types).add(node.text);
@@ -165,19 +200,20 @@ const registered = table => new Set([...Object.keys(table.commands), ...Object.k
  */
 const bulkWithoutRefusal = table =>
   Object.keys(table.commands).filter(
-    type => COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].bulk && !Object.hasOwn(table.refusals, type),
+    type => table.catalog.commands[type]?.bulk && !Object.hasOwn(table.refusals, type),
   );
 
 /**
- * Whether the catalog lets `surface` send `type`
+ * Whether the catalog `table` runs on, which its root builds its policy on, lets `surface` send
+ * `type`
  * @param {string} type
  * @param {Surface} surface
+ * @param {HandlerTable} table
  */
-const allowedOn = (type, surface) => {
-  const entry = Object.hasOwn(COMMANDS, type)
-    ? COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)]
-    : QUERIES[/** @type {keyof typeof QUERIES} */ (type)];
-  return entry.surfaces.includes(surface);
+const allowedOn = (type, surface, table) => {
+  const { commands, queries } = table.catalog;
+  const entry = Object.hasOwn(commands, type) ? commands[type] : Object.hasOwn(queries, type) ? queries[type] : null;
+  return !!entry && entry.surfaces.includes(surface);
 };
 
 describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
@@ -206,7 +242,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
         // the catalog allows there
         assert.deepEqual(
           [...registered(table)].sort(),
-          [...CATALOG_TYPES].filter(type => allowedOn(type, 'newtab')).sort(),
+          [...CATALOG_TYPES].filter(type => allowedOn(type, 'newtab', table)).sort(),
         );
       } else {
         assert.deepEqual(unread, [], `${page} sends what the scan can't read`);
@@ -219,9 +255,11 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       });
     }
 
-    it(`${page}: the catalog allows on ${surface} every type its table holds, and each bulk command it holds comes with its refusal`, () => {
+    it(`${page}: its table is on the catalog its root builds its policy on, which allows on ${surface} every type it holds, and each bulk command it holds comes with its refusal`, () => {
+      if (surface === 'worker-internal') assert.equal(table.catalog, WORKER_CATALOG);
+      else assert.deepEqual([table.catalog.commands, table.catalog.queries], [COMMANDS, QUERIES]);
       assert.deepEqual(
-        [...registered(table)].filter(type => !allowedOn(type, surface)),
+        [...registered(table)].filter(type => !allowedOn(type, surface, table)),
         [],
       );
       assert.deepEqual(
@@ -249,8 +287,21 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       "built.type = 'trashNote';",
     ].join('\n');
     const kernel = "dispatch({ type: 'runStartupMaintenance', commandId: ids.next() });";
-    const read = sendsIn(['page.js', KERNEL], { readFile: file => (file === KERNEL ? kernel : page) });
-    assert.deepEqual([...read.types].sort(), ['createNote', 'listNotes']);
+    // A schema module names the operation it defines, which isn't a send, and a send in it is
+    // read as anywhere else
+    const contract = path.join(CONTRACTS, 'operations', 'create-note.js');
+    const read = sendsIn(['page.js', KERNEL, contract], {
+      readFile: file => {
+        if (file === contract)
+          return [
+            "export const payload = commandPayload('createNote', { op: v.literal('createFolder') });",
+            "export const read = queryPayload('getNote', {});",
+            "kernel.query({ type: 'getNoteBlocks' });",
+          ].join('\n');
+        return file === KERNEL ? kernel : page;
+      },
+    });
+    assert.deepEqual([...read.types].sort(), ['createNote', 'getNoteBlocks', 'listNotes']);
     assert.deepEqual([...read.own], ['runStartupMaintenance']);
     // The spread, the shorthand type, the type read from a name, its call and its string, and a
     // type set on an object after it's built
@@ -261,17 +312,48 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
   });
 
   it("ALL_HANDLERS, the tests' table, holds every command and query the catalog has", () => {
+    assert.equal(ALL_HANDLERS.catalog, WORKER_CATALOG);
     assert.deepEqual([...registered(ALL_HANDLERS)].sort(), [...CATALOG_TYPES].sort());
     assert.deepEqual(Object.keys(ALL_HANDLERS.refusals).sort(), ['applyRemoteChanges', 'runBulkAction']);
     assert.deepEqual(bulkWithoutRefusal(ALL_HANDLERS), []);
   });
 
-  it("the close-time drafts' apply is in the table of each page whose root applies them: the new tab's, Popup's and Side Panel's (#33)", () => {
+  it("the close-time drafts' apply is in the table of each page whose root applies them, and not the worker's, which leaves a journaled editor save to the pages (#33, #35 slice 3)", () => {
     for (const { page, entries, surface, table, maintains } of PAGES) {
-      const applies = surface !== 'worker-internal';
-      assert.equal(sentBy({ entries, maintains }).sent.has('applyCloseDraft'), applies, `${page} ${applies ? 'sends' : "doesn't send"} it`);
-      assert.equal(registered(table).has('applyCloseDraft'), applies, `${page}'s table ${applies ? 'holds' : "doesn't hold"} it`);
+      const pages = surface !== 'worker-internal';
+      assert.equal(sentBy({ entries, maintains }).sent.has('applyCloseDraft'), pages, `${page} sends it`);
+      assert.equal(registered(table).has('applyCloseDraft'), pages, `${page}'s table holds it`);
     }
+  });
+
+  it("the worker's table holds what its journal drain sends, and no page loads the worker's part, the capture or the drain, at its start or later (#35 slice 3)", () => {
+    const worker = sentBy({ entries: ['js/background.js'], maintains: true }).sent;
+    for (const type of ['createNote', 'insertBlocks', 'captureToDailyNote', 'keepJournalEntry', 'findTombstones']) {
+      assert.ok(worker.has(type), type);
+    }
+    for (const { page, entries, surface } of PAGES) {
+      if (surface === 'worker-internal') continue;
+      const loaded = pageModules(entries).map(file => path.relative(ROOT, file));
+      assert.deepEqual(
+        loaded.filter(file => WORKER_ONLY_MODULES.test(file)),
+        [],
+        page,
+      );
+    }
+    // The capture is the worker's alone, so the new tab's table doesn't hold it
+    assert.equal(registered(NEWTAB_HANDLERS).has('captureToDailyNote'), false);
+  });
+
+  it("the worker loads none of the close-time drafts' applier, which only the pages run (#33, #35 slice 3b)", () => {
+    const loaded = pageModules(['js/background.js']).map(file => path.relative(ROOT, file));
+    assert.deepEqual(
+      loaded.filter(file => APPLIER_MODULES.test(file)),
+      [],
+    );
+    // And the new tab loads all five, at its first apply (close-drafts-on-demand.js), so the
+    // check above isn't empty
+    const newtab = pageModules(['js/entries/newtab.js']).map(file => path.relative(ROOT, file));
+    assert.equal(newtab.filter(file => APPLIER_MODULES.test(file)).length, 5);
   });
 
   it("neither Popup's nor Side Panel's start loads the remote apply or the index commands while #19 isn't live", () => {
@@ -421,9 +503,12 @@ describe('a command or query the policy allows that a table lacks (#17 PR 4b)', 
     const logged = [];
     const kernel = createKernel({
       adapter: createMemoryAdapter(),
-      policy: createBaselinePolicy(),
+      policy: createBaselinePolicy(WORKER_CATALOG),
       caller: CALLERS['worker-internal'],
-      handlers: handlerTable({ commands: { captureToDailyNote: WORKER_HANDLERS.commands.captureToDailyNote } }),
+      handlers: handlerTable(
+        { commands: { captureToDailyNote: WORKER_HANDLERS.commands.captureToDailyNote } },
+        WORKER_CATALOG,
+      ),
       ids: testIds(),
       clock: testClock(),
       maintainOnOpen: true,

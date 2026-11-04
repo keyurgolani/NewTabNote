@@ -197,4 +197,5 @@ export const WRITE_GUARDS = Object.freeze({
   recordExportNotice: none("the export notice's outcome"),
   snoozeSpaceNotice: none("the space notice's snooze"),
   createAutoBackup: none('an automatic backup, beside the settings'),
+  keepJournalEntry: none("a conflict record of a journal entry the worker's drain couldn't replay (#35 slice 3)"),
 });

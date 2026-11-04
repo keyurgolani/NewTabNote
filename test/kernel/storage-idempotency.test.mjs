@@ -8,9 +8,10 @@ import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
+import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
-import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import { committed, conflict } from '../../js/kernel/core/contracts/outcomes.js';
+import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { digestOf } from '../../js/kernel/core/memory/fingerprint.js';
 import { adapterOn, closeAll, kernelOn, legacyEnv, profile, recordsOf } from './storage-fixture.mjs';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
@@ -438,8 +439,16 @@ describe("#17's adapter's declared limits (#17 PR 2a)", () => {
 describe('no shipped path reaches a conflict before #17 PR 4 (#17 PR 2a, plan section 3)', () => {
   const VERSIONED = ['expectedRevision', 'expectedPlacementVersion', 'sourceRevision'];
 
-  it('no command Popup, Side Panel, or the worker may run carries an expected version or a source revision', async () => {
-    const shipped = Object.entries(COMMANDS).filter(([, entry]) =>
+  /**
+   * The versioned fields a command Popup, Side Panel, or the worker may run takes from a page: an
+   * insert the worker's journal drain replays as the new tab sent it (#35 slice 3), which never
+   * sets its expected revision (composition/document.js)
+   */
+  const AS_A_PAGE_SENT = { insertBlocks: ['expectedRevision'] };
+
+  it("no command Popup, Side Panel, or the worker may run carries an expected version or a source revision, but the one a page's insert holds", async () => {
+    // The worker's catalog holds the shared one's entries, its grants on them, and its own
+    const shipped = Object.entries(WORKER_COMMANDS).filter(([, entry]) =>
       entry.surfaces.some(surface => ['popup', 'sidepanel', 'worker-internal'].includes(surface)),
     );
     assert.deepEqual(shipped.map(([type]) => type).sort(), [
@@ -449,6 +458,9 @@ describe('no shipped path reaches a conflict before #17 PR 4 (#17 PR 2a, plan se
       // The worker's one-time catch-up of 1.4.x's lagging records, a derived write with no source revision (#33)
       'catchUpNoteRecords',
       'createNote',
+      'insertBlocks',
+      // A journal entry the drain can't replay, kept as a conflict record that expects no version (#35 slice 3)
+      'keepJournalEntry',
       // The worker's read-only check after an install or an update (#35 slice 1)
       'runIntegrityCheck',
       'runStartupMaintenance',
@@ -460,10 +472,33 @@ describe('no shipped path reaches a conflict before #17 PR 4 (#17 PR 2a, plan se
       const fields = Object.keys(module.payload.entries);
       assert.deepEqual(
         fields.filter(field => VERSIONED.includes(field)),
-        [],
+        Object.hasOwn(AS_A_PAGE_SENT, type) ? AS_A_PAGE_SENT[/** @type {'insertBlocks'} */ (type)] : [],
         type,
       );
     }
+    // The new tab's inserts, AI chat's and the sidebar's, all go through its document client,
+    // which sends none of those fields
+    /** @type {Array<Record<string, unknown>>} */
+    const executed = [];
+    const documents = createDocumentClient(
+      /** @type {any} */ ({
+        ids: testIds('insert'),
+        whenReady: async () => null,
+        execute: async (/** @type {Record<string, unknown>} */ command) => {
+          executed.push(command);
+          return committed('blocks-inserted', ['n1']);
+        },
+      }),
+    );
+    await documents.insertBlocks('n1', [{ id: 'b1', type: 'text', content: 'Inserted' }]);
+    await documents.insertBlocks('n1', [{ id: 'b2', type: 'text', content: 'Inserted' }], 0);
+    assert.deepEqual(
+      executed.map(command => [command.type, Object.keys(command).filter(field => VERSIONED.includes(field))]),
+      [
+        ['insertBlocks', []],
+        ['insertBlocks', []],
+      ],
+    );
   });
 
   it("the worker's capture commits into a Daily Note another command moved meanwhile, and Popup's create commits", async () => {

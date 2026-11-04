@@ -147,7 +147,20 @@ describe("#17's ledger retention (sweepLedger)", () => {
     await done;
   };
 
-  it('drops rows older than 30 days, oldest first in batches, and keeps the rest', async () => {
+  it("keeps a row 90 days, the journal drain's window (#35 slice 3)", async () => {
+    const { of, database, close } = await opened();
+    try {
+      const day = 24 * 60 * 60 * 1000;
+      await fill(database, 3, index => [NOW - 60 * day, NOW - 89 * day, NOW - 91 * day][index]);
+      assert.deepEqual(await sweepLedger({ database, now: NOW, batch: 100 }), { swept: true, deleted: 1 });
+      assert.deepEqual((await recordsOf(of, 'operations')).map(row => row.at).sort(), [NOW - 89 * day, NOW - 60 * day]);
+      assert.equal(LEDGER_MAX_AGE_MS, 90 * day);
+    } finally {
+      close();
+    }
+  });
+
+  it('drops rows older than 90 days, oldest first in batches, and keeps the rest', async () => {
     const { of, database, close } = await opened();
     try {
       const old = NOW - LEDGER_MAX_AGE_MS - 1000;

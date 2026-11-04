@@ -14,7 +14,6 @@ import { dailyHolder, holdsKey, underAnswer, withAssignedKey } from '../domain/d
 import {
   NOTE_VIEWS,
   blocksFromTemplate,
-  captureBlock,
   dailyDateStr,
   dailyNoteName,
   dailyNoteNameFor,
@@ -63,7 +62,7 @@ import { contentChanged, unitsWork } from './work.js';
 /**
  * @typedef {'createNote' | 'renameNote' | 'setPinned' | 'archiveNote' | 'unarchiveNote' | 'trashNote'
  *   | 'restoreNote' | 'saveNoteContent' | 'deleteBlocks' | 'insertBlocks' | 'applyDerivedTitle' | 'attachInsights'
- *   | 'captureToDailyNote' | 'ensureDailyNote' | 'runBulkAction' | 'moveNoteToFolder' | 'convertNoteToTemplate'
+ *   | 'ensureDailyNote' | 'runBulkAction' | 'moveNoteToFolder' | 'convertNoteToTemplate'
  *   | 'convertTemplateToNote' | 'deleteNotePermanently' | 'emptyTrash' | 'runTrashCleanup'} NoteCommandType
  */
 
@@ -340,17 +339,6 @@ const isOptionalString = value => value === undefined || typeof value === 'strin
 const isStringList = value => Array.isArray(value) && value.every(item => typeof item === 'string');
 
 /**
- * @param {unknown} value
- * @returns {value is import('../domain/note.js').Capture}
- */
-function isCapture(value) {
-  if (!isRecord(value)) return false;
-  if (value.type === 'bookmark') return isOptionalString(value.url) && isOptionalString(value.title);
-  if (value.type === 'text') return typeof value.content === 'string' && isOptionalString(value.source);
-  return false;
-}
-
-/**
  * The Daily Note that holds `key` in `tx`, which spans the notes and the daily index (#17 PR
  * 3b): the one the index names while it still holds the key (domain/daily.js, holdsKey), else
  * the one #17's rules give the key among every note, found by one scan. The scan runs on a
@@ -399,7 +387,7 @@ async function dailyNoteIn(tx, key, zone, repair) {
  * @param {{noteId: string, dailyKey: string, name: string, now: number, zone: string}} daily
  * @returns {Promise<{dailyId: string, created: boolean, repaired: boolean} | Rejected>}
  */
-async function findOrMakeDailyNote(tx, { noteId, dailyKey, name, now, zone }) {
+export async function findOrMakeDailyNote(tx, { noteId, dailyKey, name, now, zone }) {
   const found = await dailyNoteIn(tx, dailyKey, zone, true);
   if (found) return { dailyId: found.note.id, created: false, repaired: found.repaired };
   if (await tx.get('notes', noteId)) return rejected('validation', 'note-exists');
@@ -417,7 +405,7 @@ async function findOrMakeDailyNote(tx, { noteId, dailyKey, name, now, zone }) {
  * @param {{noteId: string, title: string, now: number, nextId: () => string}} target
  * @returns {Promise<BlockRecord[]>}
  */
-async function dailyTemplateBlocks(tx, templateId, target) {
+export async function dailyTemplateBlocks(tx, templateId, target) {
   if (!isId(templateId)) return [];
   return blocksFromTemplate(await tx.getAllByIndex('blocks', 'canvasId', templateId), target);
 }
@@ -959,69 +947,6 @@ export const noteCommands = {
       // Held to the insight fields, so it can't change the note's name, placement, or lifecycle
       { primary: noteRecord(noteId), scope: 'derived', sourceRevision },
     );
-  },
-
-  async captureToDailyNote(command, { adapter, clock, ids }) {
-    const { noteId, blockId, capture } = command;
-    if (!isId(noteId) || !isId(blockId) || !isCapture(capture)) return invalid();
-    // The template setting lives outside the note stores, so it's read before any unit runs
-    const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);
-    const now = clock.now();
-    // Today's, keyed and named by its local date in the clock's zone (#17 PR 3b), where 1.4.x's
-    // background.js keyed it by the UTC date
-    const zone = zoneOf(clock);
-    const dailyName = dailyNoteName(now, zone);
-    const dailyKey = dailyDateStr(now, zone);
-    let dailyId = noteId;
-    let created = false;
-    /** @type {Unit[]} */
-    const units = [
-      {
-        stores: ['notes', 'dailyIndex'],
-        async run(tx) {
-          // The later units follow what this one decides, and each run decides afresh, since
-          // an adapter may run the units again (ports/repository.js, Unit)
-          dailyId = noteId;
-          created = false;
-          const daily = await findOrMakeDailyNote(tx, { noteId, dailyKey, name: dailyName, now, zone });
-          if ('kind' in daily) return daily;
-          ({ dailyId, created } = daily);
-        },
-      },
-      {
-        stores: ['searchIndex'],
-        when: () => created,
-        async run(tx) {
-          tx.put('searchIndex', newSearchEntry({ id: noteId, name: dailyName }, now));
-        },
-      },
-      {
-        stores: ['blocks'],
-        async run(tx) {
-          // A capture adds a block under an id of its own, so one that's stored is refused, as
-          // insertBlocks refuses it: today's Daily Note's own, or another note's, which a capture
-          // never takes (R131). The record says which note holds it, where its key alone wouldn't.
-          const stored = await tx.get('blocks', blockId);
-          if (stored && stored.canvasId !== dailyId) return rejected('validation', 'block-of-another-note');
-          if (stored) return rejected('validation', 'duplicate-block');
-          // A new Daily Note starts with the Daily Note template's blocks, as in Storage.ensureDailyNote
-          if (created) {
-            const copies = await dailyTemplateBlocks(tx, templateId, {
-              noteId,
-              title: dailyName,
-              now,
-              nextId: () => ids.next(),
-            });
-            for (const block of copies) tx.put('blocks', block);
-          }
-          tx.put('blocks', captureBlock({ id: blockId, noteId: dailyId, capture, now }));
-        },
-      },
-    ];
-    return unitsWork(command, units, () => committed('capture-saved', [dailyId]), {
-      primary: () => ({ store: 'notes', key: dailyId }),
-      revised: contentChanged,
-    });
   },
 
   async ensureDailyNote(command, { adapter, clock, ids }) {

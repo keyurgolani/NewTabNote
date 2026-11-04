@@ -94,6 +94,17 @@ export const ERROR_CODES = Object.freeze([
   'write-outside-scope',
   // #35's coordinator: its run upgrading the database, which the `coordinator` provider reads
   'migration-running',
+  // #35 slice 3's journal drain: why an entry can't replay as written (journal-drain.js), a
+  // newer build's, one naming an operation this build doesn't journal, one it can't read, one
+  // the kernel refused, or one whose note isn't there or was deleted for a reason it keeps for;
+  // and the stop at an entry that threw, which would stop every drain there
+  'unsupported-version',
+  'unknown-operation',
+  'invalid-payload',
+  'replay-refused',
+  'note-not-found',
+  'note-deleted',
+  'drain-failed',
   // #17's recovery points (recovery-points.js): a database it refuses, and why a point failed
   // re-verification
   'recovery-unavailable',
@@ -184,8 +195,10 @@ export const FAULT_CODES = Object.freeze([
   'purge-stopped',
   'unreachable',
   'contribution-unavailable',
-  // #35's coordinator, whose kernel the worker couldn't build
+  // #35's coordinator, whose kernel the worker couldn't build, and a journal entry its drain
+  // can't replay as written (slice 3)
   'start-failed',
+  'entry-unreplayable',
   // A migration to the latest version not done yet, failed, or blocked, with version 8 still
   // working (storage's check)
   'migration-pending',
