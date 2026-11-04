@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createJournaling } from '../../js/kernel/core/application/journaling.js';
-import { conflict, rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
+import { committed, conflict, rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { ownerLock } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
@@ -303,6 +303,87 @@ describe("a page's journaling (#35 slice 3b)", () => {
       w.journal.entries().map(entry => entry.opId),
       ['c-2'],
     );
+  });
+
+  it("removes the entries of the notes a command deletes for good once it's answered, whoever wrote them, and leaves them when the delete didn't commit (the lead's call on 3b)", async () => {
+    const w = await page();
+    const fail = async () => unavailable('storage', 'transaction-aborted', true);
+    /** The journal's entries, by opId */
+    const left = () =>
+      w.journal
+        .entries()
+        .map(entry => entry.opId)
+        .sort();
+    /**
+     * Lets the journal's work go on until `done` holds, for a few turns at most
+     * @param {() => boolean} [done]
+     */
+    const settled = async (done = () => false) => {
+      for (let turn = 0; turn < 20 && !done(); turn += 1) await new Promise(resolve => setImmediate(resolve));
+    };
+    // Notes a to d, each with a save that may land later, and a save of a that a page that went left
+    for (const id of ['a', 'b', 'c', 'd']) {
+      assert.equal((await w.journaling.execute(quickNote(id), w.send)).kind, 'committed');
+      await w.journaling.execute(
+        {
+          type: 'saveNoteContent',
+          commandId: `c-save-${id}`,
+          noteId: `note-${id}`,
+          blocks: [{ id: `block-${id}`, type: 'text', content: 'Edited', order: 0 }],
+        },
+        fail,
+      );
+    }
+    const [saved] = w.journal.entries();
+    await w.journal.put({ ...saved, opId: 'c-gone-a', ownerSessionId: 'page-gone' });
+    assert.deepEqual(left(), ['c-gone-a', 'c-save-a', 'c-save-b', 'c-save-c', 'c-save-d']);
+
+    // A delete for good that didn't commit leaves every entry
+    assert.equal(
+      (await w.journaling.execute({ type: 'trashNote', commandId: 'c-trash-a', noteId: 'note-a' }, w.send)).kind,
+      'committed',
+    );
+    await w.journaling.execute({ type: 'deleteNotePermanently', commandId: 'c-delete-try', noteId: 'note-a' }, fail);
+    await settled();
+    assert.deepEqual(left(), ['c-gone-a', 'c-save-a', 'c-save-b', 'c-save-c', 'c-save-d']);
+
+    // One that did removes its note's entries, whoever wrote them, and leaves the others'
+    const deleted = await w.journaling.execute(
+      { type: 'deleteNotePermanently', commandId: 'c-delete-a', noteId: 'note-a' },
+      w.send,
+    );
+    assert.deepEqual([deleted.kind, deleted.code], ['committed', 'note-deleted']);
+    await settled(() => left().length < 5);
+    assert.deepEqual(left(), ['c-save-b', 'c-save-c', 'c-save-d']);
+
+    // A bulk delete names its notes in its items' answers
+    for (const id of ['b', 'c']) {
+      assert.equal(
+        (await w.journaling.execute({ type: 'trashNote', commandId: `c-trash-${id}`, noteId: `note-${id}` }, w.send))
+          .kind,
+        'committed',
+      );
+    }
+    const bulk = await w.journaling.execute(
+      { type: 'runBulkAction', commandId: 'c-bulk', action: 'delete', noteIds: ['note-b'] },
+      w.send,
+    );
+    assert.equal(bulk.kind, 'bulk');
+    await settled(() => left().length < 3);
+    assert.deepEqual(left(), ['c-save-c', 'c-save-d']);
+
+    // Empty Trash names the notes it deleted only in its answer
+    const emptied = await w.journaling.execute({ type: 'emptyTrash', commandId: 'c-empty' }, w.send);
+    assert.deepEqual([emptied.kind, emptied.code], ['committed', 'trash-emptied']);
+    await settled(() => left().length < 2);
+    assert.deepEqual(left(), ['c-save-d']);
+
+    // So does trash retention, answered here as the kernel answers one that deleted a note for good
+    await w.journaling.execute({ type: 'runTrashCleanup', commandId: 'c-cleanup' }, async () =>
+      committed('trash-cleaned', ['note-d']),
+    );
+    await settled(() => left().length === 0);
+    assert.deepEqual(left(), []);
   });
 
   it('tells whether the journal holds an entry no live context holds, for the page to wake the drain', async () => {
