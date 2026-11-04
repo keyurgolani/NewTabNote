@@ -136,10 +136,17 @@ function drafts(env) {
 
 /**
  * The next start: another new tab on the same profile, whose root applies the drafts before its
- * first read (createNewTabPageClient). Answers what it applied.
+ * first read (createNewTabPageClient), with the root's own applier, whose forget of a draft's
+ * covered journal entries reads the profile's journal (#6). Answers what it applied.
  */
 async function nextStart(env) {
   const newTab = await import('../js/kernel/composition/newtab.js');
+  const { inContextStores } = await import('../js/kernel/adapters/in-context.js');
+  const load = async () => {
+    const applier = await import('../js/kernel/composition/close-drafts-applier.js');
+    const { forgetCovered } = await import('../js/kernel/composition/journal-chunk.js');
+    return { ...applier, forgetCovered: (draft) => forgetCovered(draft, inContextStores({ indexedDB: env.indexedDB })) };
+  };
   const client = newTab.createNewTabPageClient(
     newTab.createNewTabAdapter({
       indexedDB: env.indexedDB,
@@ -147,7 +154,7 @@ async function nextStart(env) {
       awaitUpgrade: async () => {},
       locks: env.global.navigator.locks,
     }),
-    { drafts: { storage: env.global.localStorage, locks: env.global.navigator.locks }, wake: () => {} },
+    { drafts: { storage: env.global.localStorage, locks: env.global.navigator.locks }, wake: () => {}, load },
   );
   const failure = await client.whenReady();
   if (failure) throw new Error(`the next start's kernel didn't start: ${failure.code}`);

@@ -6,8 +6,10 @@
  * read of its notes has every closing tab's edit in.
  *
  * Most starts have nothing to apply, so a synchronous look at localStorage comes first, and only
- * a page that has work loads the applier: the `close-drafts-chunk` chunk, which each root's
- * `load` imports then (the lead's option 1), so no page's start loads any of it. A draft's key,
+ * a page that has work loads the applier: close-drafts-applier.js, with the `close-drafts-chunk`
+ * chunk under it, which each root's `load` imports then (the lead's option 1), so no page's start
+ * loads any of it. It hands the forget of a draft's covered journal entries beside the applier
+ * (#6), which the apply asks only for a draft that names its pane. A draft's key,
  * or 1.4.3's catch-up key, which the first stack start reads and then removes, gives every page
  * work (holdsDrafts). The untold lists give the new tab work too, since it reads them for its
  * toasts (its root's holdsNewTabWork, composition/newtab.js), and give Popup and Side Panel none.
@@ -22,8 +24,10 @@ import { CATCH_UP_KEY, DRAFT_PREFIX, SAVED_UNTOLD_KEY, UNTOLD_KEY } from '../cor
 /** @typedef {import('../core/application/close-drafts.js').ApplyResult} ApplyResult */
 
 /**
- * What a root applies its page's drafts with, which it loads when the page has work
- * @typedef {Pick<typeof import('../core/application/close-drafts.js'), 'applyCloseDrafts' | 'closeDraftStore'>} Applier
+ * What a root applies its page's drafts with, which it loads when the page has work, and the
+ * forget of the journal entries a draft's close covered, which a load without one goes without
+ * @typedef {Pick<typeof import('../core/application/close-drafts.js'), 'applyCloseDrafts' | 'closeDraftStore'>
+ *   & {forgetCovered?: (draft: import('../core/domain/close-draft.js').CloseDraft) => Promise<void>}} Applier
  */
 
 /**
@@ -102,8 +106,8 @@ export function applyingCloseDrafts(
     (applying ||= client.whenReady().then(async failure => {
       if (failure || !hasWork(storage)) return null;
       try {
-        const { applyCloseDrafts, closeDraftStore } = await load();
-        return await applyCloseDrafts({ client, store: closeDraftStore(storage), locks, logger });
+        const { applyCloseDrafts, closeDraftStore, forgetCovered } = await load();
+        return await applyCloseDrafts({ client, store: closeDraftStore(storage), locks, logger, forget: forgetCovered });
       } catch (error) {
         logger.warn('close-drafts-not-applied', { error });
         return null;

@@ -17,10 +17,11 @@ import { journalingClient, kernelClient, pageHost } from './host.js';
  * seconds on the worker's migration run when there's no database or an older one (Q12). A
  * database a newer build upgraded is refused as `newer-schema`. When the page holds a closing
  * tab's edit, its whenReady resolves once the edit is applied, with the applier `load` hands
- * over, the `close-drafts-chunk` chunk Side Panel imports then (close-drafts.js, #33), so Side Panel
- * reads its notes with the edit in. It runs only what js/sidepanel.js and that apply send
- * (SIDEPANEL_HANDLERS). The journal's chunk loads at idle once its first read is in, and applies
- * the editor saves closed pages left (#35 slice 3b, host.js journalingClient).
+ * over, close-drafts-applier.js with the `close-drafts-chunk` chunk under it, which Side Panel
+ * imports then (close-drafts.js, #33), so Side Panel reads its notes with the edit in. It runs
+ * only what js/sidepanel.js and that apply send (SIDEPANEL_HANDLERS). The journal's chunk loads at
+ * idle once its first read is in, and applies the editor saves closed pages left (#35 slice 3b,
+ * host.js journalingClient).
  * @param {PageHost} [host]
  * @param {ReturnType<typeof pageDrafts>} [drafts]
  * @param {() => Promise<Applier>} [load]
@@ -28,7 +29,7 @@ import { journalingClient, kernelClient, pageHost } from './host.js';
 export function createSidePanelClient(
   host = pageHost(),
   drafts = pageDrafts(),
-  load = () => import('../core/application/close-drafts-chunk.js'),
+  load = () => import('./close-drafts-applier.js'),
 ) {
   const adapter = createIndexedDbAdapter({ ...host, mode: 'existing' });
   const client = applyingCloseDrafts(

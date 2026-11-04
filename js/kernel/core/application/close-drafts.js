@@ -482,10 +482,18 @@ const nothingApplied = () => ({
  * the Trash a draft was saved into on its own list (V3). With `tell`, the new tab's, it then
  * takes both lists, still under the lock, so of two new tabs starting together only one tells
  * each entry (Q-B7), and it takes the lock for a list alone too.
- * @param {{client: DraftClient, store: DraftStore, locks?: DraftLocks | null, logger?: {warn: (event: string, detail: Record<string, unknown>) => void}, tell?: boolean}} options
+ *
+ * With `forget`, a draft that names its page and pane takes that pane's journal entries for its
+ * note once its apply commits, before the draft is removed, still under the lock (#6). The draft
+ * holds everything the pane changed within its load of the note, so nothing an entry holds is
+ * lost, and each start applies its drafts before its journal, under the same lock, so no journal
+ * apply lists them first. A note gone keeps them for the worker's sweep, which tells a tombstone
+ * it keeps for from one it deletes for, and so does a draft kept for the next start.
+ * @param {{client: DraftClient, store: DraftStore, locks?: DraftLocks | null, logger?: {warn: (event: string, detail: Record<string, unknown>) => void}, tell?: boolean, forget?: (draft: CloseDraft) => Promise<void>}} options
+ *   `forget` never rejects
  * @returns {Promise<ApplyResult>}
  */
-export async function applyCloseDrafts({ client, store, locks = null, logger, tell = false }) {
+export async function applyCloseDrafts({ client, store, locks = null, logger, tell = false, forget }) {
   const result = nothingApplied();
   result.catchUp = store.takeCatchUp();
   // Nearly every start: no draft and nothing to tell, so no lock and no command
@@ -514,6 +522,7 @@ export async function applyCloseDrafts({ client, store, locks = null, logger, te
       else if (outcome.code === 'close-draft-caught-up') result.caughtUp.push(noteId);
       else if (outcome.code === 'close-draft-gone') result.gone.push(noteId);
       else result.dropped.push(noteId);
+      if (forget && outcome.code !== 'close-draft-gone' && isId(draft.page) && isId(draft.pane)) await forget(draft);
       store.remove(key);
     }
     if (tell) result.told = store.takeUntold();

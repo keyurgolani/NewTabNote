@@ -15,6 +15,9 @@
  * The page's globals are read when it starts, unless a test passes them. Nothing here throws into
  * the page: a journal that can't be read leaves the entries for the next start, and says so on the
  * console, with the failure's code at most.
+ *
+ * forgetCovered is what a start's apply of the close-time drafts takes a draft's covered entries
+ * with (#6, core/application/close-drafts.js), loaded only for a draft that names its pane.
  */
 
 import { inContextStores } from '../adapters/in-context.js';
@@ -71,6 +74,38 @@ function openedJournal(stores) {
     mark: (opId, unreplayable) => opened(journal => journal.mark(opId, unreplayable)),
     list: () => opened(journal => journal.list()),
   });
+}
+
+/**
+ * The journal entries a close-time draft's close covered go, unapplied (#6): the editor saves of
+ * the draft's note that its page's pane issued, which the pages' apply would otherwise take, by
+ * the page load's id their drafts carry and the pane's. The draft holds everything that pane
+ * changed within its load of the note. Another page's, another pane's, another note's, a newer
+ * build's and one the worker holds stay. A profile with no journal opens nothing. Never rejects.
+ * @param {import('../core/domain/close-draft.js').CloseDraft} draft - one that names its page and pane
+ * @param {InContextStores} [stores] - the page's own unless a test passes them
+ * @returns {Promise<void>}
+ */
+export async function forgetCovered(draft, stores = inContextStores()) {
+  try {
+    if (!(await stores.journalExists())) return;
+    const journal = openedJournal(stores);
+    const going = (await journal.list())
+      .filter(
+        entry =>
+          isPagesSave(entry) &&
+          entry.noteId === draft.noteId &&
+          entry.pane === draft.pane &&
+          isRecord(entry.draft) &&
+          entry.draft.page === draft.page,
+      )
+      .map(entry => entry.opId);
+    if (going.length > 0) await journal.remove(going);
+  } catch (error) {
+    warnOf('entries-not-forgotten', error);
+  } finally {
+    stores.journal().close();
+  }
 }
 
 /**

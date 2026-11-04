@@ -289,10 +289,10 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     assert.deepEqual(newtab.filter(isTrust), []);
     assert.ok(!newtab.includes('js/kernel/composition/trust.js'));
     // The tab's import()s: the root's of the workspace chunk, the loader's retry, the failure
-    // events' own, of ./trust.js, the close-time drafts' two, of close-drafts-chunk.js: the
-    // start's, when localStorage gives it work, and applyCloseDraft's wrapper's, at first use
-    // (#33, option 1), and the root's of the journal's chunk, on the first journaled command or
-    // at idle (#35 slice 3b)
+    // events' own, of ./trust.js, the close-time drafts' two: the start's of
+    // close-drafts-applier.js, when localStorage gives it work, and applyCloseDraft's wrapper's
+    // of close-drafts-chunk.js, at first use (#33, option 1), and the root's of the journal's
+    // chunk, on the first journaled command or at idle (#35 slice 3b)
     const dynamic = dynamicImportsIn(newtab.map(file => path.join(ROOT, file)))
       .map(at => path.relative(ROOT, at).split(path.sep).join('/').replace(/:\d+:\d+$/, ''))
       .sort();
@@ -310,13 +310,16 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     // the journal's chunk does, and what each chunk reaches, through its imports and import()s,
     // holds no trust code
     for (const [file, specifiers] of /** @type {Array<[string, string[]]>} */ ([
-      ['js/kernel/composition/newtab.js', ['../core/application/close-drafts-chunk.js', './journal-chunk.js']],
+      ['js/kernel/composition/newtab.js', ['./close-drafts-applier.js', './journal-chunk.js']],
       ['js/kernel/core/application/close-drafts-on-demand.js', ['./close-drafts-chunk.js']],
+      // The forget beside the applier loads the journal's chunk, for a draft that names its pane (#6)
+      ['js/kernel/composition/close-drafts-applier.js', ['./journal-chunk.js']],
     ])) {
       const loads = loadsOf(fs.readFileSync(path.join(ROOT, file), 'utf8')).dynamicLoads.map(load => load.specifier);
       assert.deepEqual(loads, specifiers, file);
     }
     for (const chunk of [
+      'js/kernel/composition/close-drafts-applier.js',
       'js/kernel/core/application/close-drafts-chunk.js',
       'js/kernel/composition/journal-chunk.js',
     ]) {
