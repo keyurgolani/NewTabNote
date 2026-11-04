@@ -15,8 +15,9 @@
  *   pane's earlier entries for that note go too, since a pane's save carries everything the pane
  *   changed since its last commit within its load of the note (R182's S2). So does a covered
  *   save of the pane's, as its closing save, or one with nothing to keep since the pane's base.
- *   An editor's pane gets a new id at each load of a note, so no save takes an earlier load's
- *   entries. A removal that fails is tried again with the next answer.
+ *   An editor's pane keeps its id on its base of the note, which each load makes anew, so no
+ *   save takes an earlier load's entries, and the retry of a save written as the pane left the
+ *   note names its save's id. A removal that fails is tried again with the next answer.
  * - A journal that can't take an entry leaves the command to run as before, and says so on the
  *   console, with the failure's code at most. Nothing here throws into the page.
  * - A command that deletes notes for good takes their entries out of the journal once it's
