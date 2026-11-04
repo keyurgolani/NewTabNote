@@ -60,9 +60,8 @@
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
-import { COMMANDS } from '../contracts/commands.js';
 import { upcastJournalEntry } from '../contracts/upcast.js';
-import { SWEPT_REASONS, isJournalRecord } from '../domain/journal.js';
+import { PAGES_APPLY, SAVE_VERSION, SWEPT_REASONS, isJournalRecord } from '../domain/journal.js';
 
 /** @typedef {import('../domain/journal.js').JournalRecord} JournalRecord */
 /** @typedef {import('../ports/journal.js').JournalStore} JournalStore */
@@ -132,15 +131,6 @@ const ALREADY_IN = Object.freeze(['note-exists', 'duplicate-block', 'block-of-an
 
 /** What a refusal of a replay keeps in the journal: the note isn't there to write to */
 const NOT_THERE = 'note-not-found';
-
-/**
- * The journaled commands the pages replay, by type, which the drain leaves to them: an editor's
- * save, as the close-time draft its entry holds (slice 3b)
- */
-const PAGES_REPLAY = Object.freeze({ saveNoteContent: true });
-
-/** The catalog version of an editor's save, past which a newer build wrote the entry */
-const SAVE_VERSION = COMMANDS.saveNoteContent.version;
 
 /**
  * The codes that say storage itself can't answer, so a stop on one stops the whole drain, at
@@ -402,7 +392,7 @@ export async function drainJournal({
         // version is kept as a conflict record, and one under a tombstone the sweep keeps for, or
         // one a newer build wrote, is held. An entry with no command goes on to the upcast, which
         // reads it as malformed
-        if (isRecord(entry.command) && Object.hasOwn(PAGES_REPLAY, String(entry.command.type))) {
+        if (isRecord(entry.command) && Object.hasOwn(PAGES_APPLY, String(entry.command.type))) {
           if (!isRecord(entry.draft) || !Number.isSafeInteger(entry.v) || entry.v < 1) {
             if (!(await keep(entry, 'invalid-payload'))) break;
           } else if (tombstones.has(entry.noteId)) {

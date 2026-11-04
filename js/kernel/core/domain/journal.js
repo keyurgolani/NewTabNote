@@ -126,11 +126,14 @@ export function isJournalRecord(value) {
   return Number.isFinite(value.createdAt) && Number.isFinite(value.seq);
 }
 
-/** The journaled commands the pages apply, by type: an editor's save, as its draft (slice 3b) */
+/**
+ * The journaled commands the pages apply, by type, which the drain leaves to them: an editor's
+ * save, as its draft (slice 3b)
+ */
 export const PAGES_APPLY = Object.freeze({ saveNoteContent: true });
 
-/** The catalog version of an editor's save this build applies */
-const SAVE_VERSION = COMMANDS.saveNoteContent.version;
+/** The catalog version of an editor's save this build applies, past which a newer build wrote it */
+export const SAVE_VERSION = COMMANDS.saveNoteContent.version;
 
 /** The code the worker marks a save with when a tombstone the sweep keeps for holds it */
 const HELD = 'note-deleted';
