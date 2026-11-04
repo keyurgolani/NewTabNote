@@ -437,8 +437,8 @@ describe('each composition root', () => {
     } catch (error) {
       swept = error;
     }
-    const failure = /** @type {{unavailableCause?: unknown, code?: unknown}} */ (swept || {});
-    assert.deepEqual([failure.unavailableCause, failure.code], ['adapter', 'ledger-sweep-needs-worker']);
+    const failure = /** @type {{unavailableCause?: unknown, code?: unknown, retryable?: unknown}} */ (swept || {});
+    assert.deepEqual([failure.unavailableCause, failure.code, failure.retryable], ['adapter', 'ledger-sweep-needs-worker', false]);
     closeAll([tab]);
   });
 
