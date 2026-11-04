@@ -2,7 +2,8 @@
  * The journal (#35 slice 3b): a command a page sent that hadn't landed when the page went is
  * kept in NewTabNoteJournal, and lands later.
  * - An editor's save that its new tab sent, then died before it committed, is applied by the next
- *   page at its idle, within 3 s of that page's first read (the lead's bound).
+ *   page at its idle, by the apply's own command, within 3 s of that page's first read (the lead's
+ *   bound), as the page's clock tells it.
  * - A Popup quick note sent while its note couldn't land yet, then closed, is in the next new
  *   tab, which wakes the worker's drain for it.
  * - A capture the worker was stopped in the middle of lands at the worker's next start, in
@@ -43,8 +44,8 @@ function journalIn(page) {
   return page.evaluate(async () => (await navigator.locks.query()).held.some(lock => lock.name.startsWith('journal.owner.')));
 }
 
-/** The entries in NewTabNoteJournal, read from `page`: each one's command type. Makes no journal. */
-function journalEntries(page) {
+/** The entries in NewTabNoteJournal, read from `page`: each one's opId and command type. Makes no journal. */
+function journalRecords(page) {
   return page.evaluate(() => new Promise((resolve, reject) => {
     const open = indexedDB.open('NewTabNoteJournal');
     open.onupgradeneeded = () => {
@@ -62,7 +63,7 @@ function journalEntries(page) {
       const request = db.transaction('entries').objectStore('entries').getAll();
       request.onsuccess = () => {
         db.close();
-        resolve(request.result.map(entry => (entry.command ? entry.command.type : null)));
+        resolve(request.result.map(entry => ({ opId: entry.opId, type: entry.command ? entry.command.type : null })));
       };
       request.onerror = () => {
         db.close();
@@ -70,6 +71,50 @@ function journalEntries(page) {
       };
     };
   }));
+}
+
+/** The entries in NewTabNoteJournal, read from `page`: each one's command type. Makes no journal. */
+async function journalEntries(page) {
+  return (await journalRecords(page)).map(entry => entry.type);
+}
+
+/**
+ * #17's ledger row under `opId` in CanvasTabDB, read from `page`: its outcome's code, and when it
+ * was written, on the page's clock. Null when there's none.
+ */
+function ledgerRow(page, opId) {
+  return page.evaluate(key => new Promise((resolve, reject) => {
+    const open = indexedDB.open('CanvasTabDB');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const request = db.transaction('operations').objectStore('operations').get(key);
+      request.onsuccess = () => {
+        db.close();
+        const row = request.result;
+        resolve(row ? { code: row.outcome ? row.outcome.code : null, at: row.at } : null);
+      };
+      request.onerror = () => {
+        db.close();
+        reject(request.error);
+      };
+    };
+  }), opId);
+}
+
+/**
+ * Runs in every page before its scripts: notes when the page asks for its idle with a deadline,
+ * on the page's clock, in window.__ntnIdleAsks. The journal's shim makes a page's first such ask
+ * once its first read is in (js/kernel/composition/host.js, journalingClient).
+ */
+function recordIdleAsks() {
+  const ask = window.requestIdleCallback;
+  window.__ntnIdleAsks = [];
+  if (typeof ask !== 'function') return;
+  window.requestIdleCallback = (callback, options) => {
+    if (options && options.timeout !== undefined) window.__ntnIdleAsks.push(Date.now());
+    return ask.call(window, callback, options);
+  };
 }
 
 /** How long a page's renderer may take to go once it's told to crash */
@@ -156,16 +201,25 @@ test("an editor's save that its new tab died before committing is applied by the
     app.editor.flushSave();
   });
   await expect.poll(() => journalEntries(holder), { message: 'the save is journaled' }).toEqual(['saveNoteContent']);
+  const [{ opId }] = await journalRecords(holder);
   await crash(extension, page);
 
   // The next page applies it at its idle, after its first read
+  await extension.context.addInitScript(recordIdleAsks);
   const next = await driver.openNewTab(extension);
-  const read = Date.now();
   await expect.poll(async () => (await profileStore(next).getElementsByNote(id)).map(element => element.content), {
     message: "the dead tab's save, applied",
     timeout: 3000,
   }).toEqual(['Before the crash, and after']);
-  expect(Date.now() - read, 'within 3 s of the first read').toBeLessThan(3000);
+  // By the apply's own command, whose ledger row is under the entry's key, so the text isn't the
+  // dead tab's own transaction landing as its renderer went
+  const applied = await ledgerRow(next, `${opId}-apply`);
+  expect(applied && applied.code, "the apply's answer").toBe('close-draft-saved');
+  // From the first read's answer, when the page asks for its idle, to the apply's commit, both on
+  // the page's clock
+  const asks = await next.evaluate(() => window.__ntnIdleAsks || []);
+  expect(asks.length, 'the page asked for its idle once its first read was in').toBeGreaterThan(0);
+  expect(applied.at - asks[0], 'within 3 s of the first read').toBeLessThan(3000);
   await expect.poll(() => journalEntries(next), { message: 'its entry is gone' }).toEqual([]);
   // The crash took the worker too, and its uncaught exceptions went with it, so the check reads
   // the new worker's, which #13's port wakes
