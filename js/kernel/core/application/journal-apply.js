@@ -20,7 +20,8 @@
  *   sweep keeps for, by the code on its mark (the lead's answer to Q6).
  * - A pane's save carries everything the pane changed since its last commit, so an entry a later
  *   one from the same page's pane, of the same note, covers is removed first, unapplied (R182's
- *   S2): its older text could only make a recovered note.
+ *   S2): its older text could only make a recovered note. Later is by the page's own count of its
+ *   entries, which a clock stepped back doesn't change.
  * - What each answer does with its entry: committed, it goes, and a recovered note, or a save
  *   into a note in the Trash, is told for the next new tab's toast, as a draft's is. The note gone
  *   (`close-draft-gone`): it stays for the worker's sweep, which tells a tombstone it deletes for
@@ -96,8 +97,9 @@ const isPagesSave = entry =>
   !(isRecord(entry.unreplayable) && entry.unreplayable.code === HELD);
 
 /**
- * Whether `later`, an entry after `entry`, covers it: one the same page's pane wrote of the same
- * note, with a draft the applier reads
+ * Whether `later` covers `entry`: one the same page's pane wrote of the same note after it, by the
+ * page's own count of its entries rather than the journal's order, which goes by the page's clock
+ * first, with a draft the applier reads
  * @param {JournalRecord} later
  * @param {JournalRecord} entry
  */
@@ -106,6 +108,7 @@ const covers = (later, entry) =>
   later.pane === entry.pane &&
   later.ownerSessionId === entry.ownerSessionId &&
   later.noteId === entry.noteId &&
+  later.seq > entry.seq &&
   isCloseDraft(later.draft);
 
 /**
@@ -130,10 +133,10 @@ export async function applyJournalSaves({ journal, client, liveOwners, sessionId
     const unreadable = [];
     /** @type {Array<{entry: JournalRecord, draft: CloseDraft}>} */
     const applying = [];
-    saves.forEach((entry, index) => {
+    saves.forEach(entry => {
       const { draft } = entry;
       if (!isCloseDraft(draft)) unreadable.push(entry);
-      else if (saves.slice(index + 1).some(later => covers(later, entry))) covered.push(entry.opId);
+      else if (saves.some(later => covers(later, entry))) covered.push(entry.opId);
       else applying.push({ entry, draft });
     });
     if (covered.length > 0) await journal.remove(covered);
