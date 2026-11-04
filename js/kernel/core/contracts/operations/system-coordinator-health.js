@@ -4,8 +4,10 @@
  * its instance id and when it started, the commands it ran by outcome, when the oldest journal
  * entry its last drain left with no live owner was written, null with none (#35 slice 3), and
  * while it says `migrating`, whether its run upgrades the database or an older build's open page
- * blocks that upgrade (#35 slice 2). Ids, counts, times, and codes only: nothing in it names a
- * note or holds what the user wrote.
+ * blocks that upgrade (#35 slice 2). While its last drain held notes back, it names them, ten at
+ * most, each by id and the code it stopped at, with the total of every one held (`held`, slice
+ * 3b, optional at version 1 as `orders` was for saveNoteContent, so an older worker's answer
+ * still parses). Ids, counts, times, and codes only: nothing in it holds what the user wrote.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';
@@ -13,6 +15,9 @@ import { code, count, id, timestamp } from '../fields.js';
 import { queryPayload } from '../operation.js';
 import { OUTCOME_KINDS } from '../outcomes.js';
 import { queryStateSchema } from '../outcome-schemas.js';
+
+/** How many of the notes its last drain held back the answer names, beside the total of all of them */
+export const HELD_NOTES_NAMED = 10;
 
 export const payload = queryPayload('system.coordinatorHealth', {});
 
@@ -28,6 +33,13 @@ export const coordinatorHealth = v.strictObject({
   // While it says migrating: its run upgrading the database, or an older build's open page
   // blocking that upgrade; null otherwise
   migration: v.nullable(v.picklist(['running', 'blocked'])),
+  // While its last drain held notes back: the first of them by id and why, and how many in all
+  held: v.optional(
+    v.strictObject({
+      total: count,
+      notes: v.pipe(v.array(v.strictObject({ noteId: id, code })), v.maxLength(HELD_NOTES_NAMED)),
+    }),
+  ),
 });
 
 export const result = queryStateSchema(coordinatorHealth);
