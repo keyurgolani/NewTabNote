@@ -128,8 +128,9 @@ class FormattingToolbar {
       e.preventDefault(); // keep selection alive
       const target = /** @type {HTMLElement} */ (e.target);
       const btn = /** @type {HTMLElement} */ (target.closest('.formatting-toolbar-btn'));
-      // A double-click's second press, as one that lands where ✓ just was, does nothing (#193)
-      if (!btn || e.detail > 1) return;
+      // Only the primary button's first press runs one (#193): a right-click does nothing, and so does
+      // a double-click's second press or any later one, as one that lands where ✓ just was
+      if (!btn || e.button || e.detail > 1) return;
       this._onButtonClick(btn.dataset.command, btn.dataset.id);
     });
 
@@ -143,13 +144,14 @@ class FormattingToolbar {
     this._linkConfirm.addEventListener('click', () => this._applyLink());
 
     // Enter, in the field or on ✓, applies the link once, on its release, so a held Enter's repeats
-    // reach nothing else (#193). An IME's commit, a press while composing and a release with no press
-    // here, does nothing. Escape, in the field or on ✓, closes the field and gives back the selection
-    // Link saved
+    // reach nothing else (#193). It applies the URL the field had at the press, so a key pressed before
+    // the release, which the field takes, is dropped with the field. An IME's commit, a press while
+    // composing and a release with no press here, does nothing. Escape, in the field or on ✓, closes
+    // the field and gives back the selection Link saved.
     this.linkInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.isComposing) {
         e.preventDefault();
-        this._enter = true;
+        if (!e.repeat) this._url = this._linkField.value;
       }
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -158,10 +160,7 @@ class FormattingToolbar {
       }
     });
     this.linkInput.addEventListener('keyup', (e) => {
-      if (e.key === 'Enter' && this._enter) {
-        this._enter = false;
-        this._applyLink();
-      }
+      if (e.key === 'Enter' && this._url != null) this._applyLink(this._url);
     });
 
     // Focus moving elsewhere in the page, as a click on another word or a button moves it, closes
@@ -411,7 +410,6 @@ class FormattingToolbar {
   _showLinkInput() {
     this._saveRange();
     this.linkMode = true;
-    this._enter = false;
     this._btnGroup.style.display = 'none';
     this.linkInput.style.display = 'flex';
 
@@ -430,13 +428,16 @@ class FormattingToolbar {
 
   _hideLinkInput() {
     this.linkMode = false;
+    // A closed row takes no keys, so no release can apply an Enter pressed before it closed
+    this._url = null;
     if (this.linkInput) this.linkInput.style.display = 'none';
     if (this._btnGroup) this._btnGroup.style.display = 'flex';
     if (this._linkField) this._linkField.value = '';
   }
 
-  _applyLink() {
-    const url = (this._linkField.value || '').trim();
+  /** @param {string} [value] The URL to apply: the field's own, or the one it had at Enter's press */
+  _applyLink(value = this._linkField.value) {
+    const url = (value || '').trim();
     this._hideLinkInput();
     this._restoreRange();
 
