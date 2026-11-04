@@ -129,6 +129,11 @@
       return { type: 'indent-block', delta: shiftKey ? -1 : 1 };
     }
 
+    // The block's menu, from the keyboard (#14 slice 4)
+    if (modKey && !shiftKey && !altKey && code === 'Slash') {
+      return { type: 'block-menu' };
+    }
+
     return null;
   }
 

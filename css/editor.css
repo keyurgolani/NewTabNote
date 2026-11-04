@@ -1037,6 +1037,17 @@ body.focus-mode .block:focus-within {
   border-top: 1px solid var(--border-color);
 }
 
+/* A divider's or an image's stop, which the arrow keys land on (js/blocks.js blockStop, #14
+   slice 4), shows the app's focus ring: a divider's takes in its rule's margins, and an image's
+   hugs the image */
+.block-stop {
+  display: flow-root;
+}
+
+.image-block-wrapper:has(img) {
+  width: fit-content;
+}
+
 /* Image Block */
 .block[data-type="image"] {
   margin: 8px 0;
@@ -3207,6 +3218,13 @@ body.focus-mode .block:focus-within {
   height: 1px;
   background: var(--border-color);
   margin: 4px 0;
+}
+
+/* The focused item of a block's menu or its Turn into, which the keys move (js/ui/menu-keys.js,
+   #14 slice 4): the app's ring, inside the item, beside the hover color */
+.block-action-menu > :focus-visible,
+.turn-into-menu > :focus-visible {
+  outline-offset: -2px;
 }
 
 .ai-action-item {

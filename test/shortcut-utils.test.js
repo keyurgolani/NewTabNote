@@ -106,6 +106,18 @@ test('editor shortcut resolves list indentation only for list-like blocks', () =
   }), null);
 });
 
+test("editor shortcut resolves Mod+/ to the block's menu, with no Shift or Alt, and no app shortcut takes it (#14 slice 4)", () => {
+  const press = (more) => getEditorShortcutAction({ code: 'Slash', key: '/', modKey: true, shiftKey: false, altKey: false, blockType: 'text', ...more });
+  assert.deepEqual(press({}), { type: 'block-menu' });
+  assert.deepEqual(press({ blockType: 'divider' }), { type: 'block-menu' });
+  for (const more of [{ modKey: false }, { shiftKey: true, key: '?' }, { altKey: true }]) {
+    assert.equal(press(more), null, JSON.stringify(more));
+  }
+  for (const isInput of [false, true]) {
+    assert.equal(getAppShortcutAction({ code: 'Slash', key: '/', modKey: true, shiftKey: false, altKey: false, isInput }), null);
+  }
+});
+
 test('clampIndentLevel keeps indentation between zero and four', () => {
   assert.equal(clampIndentLevel(0, -1), 0);
   assert.equal(clampIndentLevel(2, 1), 3);
