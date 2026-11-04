@@ -100,30 +100,34 @@ const isEditorSave = entry =>
   isRecord(entry.command) && Object.hasOwn(PAGES_APPLY, String(entry.command.type)) && entry.draft !== undefined;
 
 /**
- * The page's journal, and the apply of what closed pages left, which starts now
+ * The page's journal, and the apply of what closed pages left, which starts now. The shim calls
+ * it with its arguments in order (host.js, journalingClient), so the pages' start carries none of
+ * their names.
+ * @param {Client} client
+ * @param {string} sessionId
+ * @param {Surface} surface
  * @param {{
- *   client: Client,
- *   sessionId: string,
- *   surface: Surface,
  *   stores?: InContextStores,
  *   locks?: JournalingLocks | null,
  *   storage?: DraftStorage,
  *   runtime?: {sendMessage?: (message: unknown) => Promise<unknown>} | null,
  *   clock?: {now(): number},
- * }} options - the page's own globals unless a test passes them
+ * }} [globals] - the page's own unless a test passes them
  * @returns {Journaling & {applied: Promise<JournalApplyResult | null>}}
  *   `applied`: what the apply did, null when nothing was there for it. Never rejects.
  */
-export function startPageJournal({
+export function startPageJournal(
   client,
   sessionId,
   surface,
-  stores = inContextStores(),
-  locks = /** @type {JournalingLocks | null} */ (pageDrafts().locks),
-  storage = pageDrafts().storage,
-  runtime = globalThis.chrome?.runtime ?? null,
-  clock = systemClock,
-}) {
+  {
+    stores = inContextStores(),
+    locks = /** @type {JournalingLocks | null} */ (pageDrafts().locks),
+    storage = pageDrafts().storage,
+    runtime = globalThis.chrome?.runtime ?? null,
+    clock = systemClock,
+  } = {},
+) {
   const journal = openedJournal(stores);
   const journaling = createJournaling({ journal, locks, sessionId, surface, clock, warn: warnOf });
   let woken = false;

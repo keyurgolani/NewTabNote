@@ -495,11 +495,12 @@ export function createNewTabPageClient(
       applyCloseDrafts: options => applier.applyCloseDrafts({ ...options, tell: true }),
     };
   };
-  const page = journalingClient(applyingCloseDrafts(client, drafts, { load: telling, holds: holdsNewTabWork }), {
-    surface: 'newtab',
-    load: journal,
-    requestIdle: globalThis.requestIdleCallback,
-  });
+  const page = journalingClient(
+    applyingCloseDrafts(client, drafts, { load: telling, holds: holdsNewTabWork }),
+    'newtab',
+    journal,
+    globalThis.requestIdleCallback,
+  );
   return Object.freeze({
     ...page,
     async closeDraftToasts() {

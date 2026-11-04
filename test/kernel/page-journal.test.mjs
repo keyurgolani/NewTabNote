@@ -114,8 +114,8 @@ const saveOfA = (commandId, text) => ({
  * @param {number[]} [started]
  */
 const chunkOn = (journal, clock, started = []) => ({
-  /** @param {{sessionId: string, surface: any}} options */
-  startPageJournal: ({ sessionId, surface }) => {
+  /** @param {unknown} client @param {string} sessionId @param {any} surface */
+  startPageJournal: (client, sessionId, surface) => {
     started.push(Date.now());
     const journaling = createJournaling({
       journal,
@@ -139,16 +139,17 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
     const loading = new Promise(resolve => {
       deliver = resolve;
     });
-    const client = journalingClient(p.client, {
-      surface: 'newtab',
-      sessionId: 'page-1',
-      load: () => {
+    const client = journalingClient(
+      p.client,
+      'newtab',
+      () => {
         loads += 1;
         return /** @type {any} */ (loading);
       },
       // A page that doesn't go idle here
-      requestIdle: () => {},
-    });
+      () => {},
+      'page-1',
+    );
     // A command the catalog doesn't journal loads nothing
     const renamed = await client.execute({ type: 'renameNote', commandId: 'c-rename', noteId: 'A', name: 'Renamed' });
     assert.equal(renamed.kind, 'committed');
@@ -209,19 +210,20 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
       ...p.client,
       query: (/** @type {any} */ query) => answered.then(() => p.client.query(query)),
     });
-    const client = journalingClient(slow, {
-      surface: 'newtab',
-      sessionId: 'page-1',
-      load: async () => {
+    const client = journalingClient(
+      slow,
+      'newtab',
+      async () => {
         loads += 1;
         return /** @type {any} */ (chunkOn(createMemoryJournal(), p.clock, started));
       },
       // A page kept busy past the cap: requestIdleCallback calls back at its timeout
-      requestIdle: (/** @type {() => void} */ callback, /** @type {{timeout?: number} | undefined} */ options) => {
+      (/** @type {() => void} */ callback, /** @type {{timeout?: number} | undefined} */ options) => {
         asked.push(options);
         setTimeout(callback, options?.timeout ?? 0);
       },
-    });
+      'page-1',
+    );
     await tick();
     await tick();
     assert.deepEqual([asked, loads], [[], 0], 'nothing before the first read');
@@ -246,10 +248,7 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
     const real = new IDBFactory();
     const faults = faultyFactory(real);
     const p = pageClient();
-    const started = startPageJournal({
-      client: p.client,
-      sessionId: 'page-1',
-      surface: 'newtab',
+    const started = startPageJournal(p.client, 'page-1', 'newtab', {
       stores: inContextStores({ indexedDB: faults.factory }),
       locks: legacyEnv.createLockManager(),
       storage: legacyEnv.createLocalStorage(),
@@ -312,10 +311,7 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
       },
     };
     const storage = legacyEnv.createLocalStorage();
-    const started = startPageJournal({
-      client: p.client,
-      sessionId: 'page-1',
-      surface: 'newtab',
+    const started = startPageJournal(p.client, 'page-1', 'newtab', {
       stores: inContextStores({ indexedDB: faults.factory }),
       locks: legacyEnv.createLockManager(),
       storage,
@@ -352,10 +348,7 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
     // And a save whose draft no page can apply, which the apply leaves to the worker too
     await more.put(left(saveOfA('c-bad', 'alpha, typed'), 4, /** @type {any} */ ({ v: 1, id: 'c-bad' })));
     more.close();
-    const next = startPageJournal({
-      client: p.client,
-      sessionId: 'page-2',
-      surface: 'newtab',
+    const next = startPageJournal(p.client, 'page-2', 'newtab', {
       stores: inContextStores({ indexedDB: faults.factory }),
       locks: legacyEnv.createLockManager(),
       storage,
@@ -379,10 +372,7 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
       ],
     );
     // A page that finds only the worker's entries, with nothing to apply, wakes its drain too
-    const third = startPageJournal({
-      client: p.client,
-      sessionId: 'page-3',
-      surface: 'newtab',
+    const third = startPageJournal(p.client, 'page-3', 'newtab', {
       stores: inContextStores({ indexedDB: faults.factory }),
       locks: legacyEnv.createLockManager(),
       storage,
@@ -402,10 +392,7 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
     const writer = inContextStores({ indexedDB: real }).journal();
     await writer.open();
     writer.close();
-    const started = startPageJournal({
-      client: p.client,
-      sessionId: 'page-1',
-      surface: 'newtab',
+    const started = startPageJournal(p.client, 'page-1', 'newtab', {
       stores: inContextStores({ indexedDB: faults.factory }),
       locks: legacyEnv.createLockManager(),
       storage: legacyEnv.createLocalStorage(),

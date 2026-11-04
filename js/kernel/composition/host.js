@@ -220,7 +220,7 @@ export function kernelClient({ adapter, surface, handlers, maintainOnOpen = fals
 /**
  * The journal's chunk, as a root loads it
  * @template {Client} C
- * @typedef {{startPageJournal: (options: {client: C, sessionId: string, surface: Surface}) => PageJournal}} JournalChunk
+ * @typedef {{startPageJournal: (client: C, sessionId: string, surface: Surface) => PageJournal}} JournalChunk
  */
 
 /** How long after a page's first read its journal may wait for the page to go idle (the lead's bound) */
@@ -234,48 +234,47 @@ const JOURNAL_IDLE_CAP_MS = 2000;
  * an editor's save, since a command held for it could go out after one sent later and write older
  * text over it (the lead's addition to 3b's plan). Once it's in, each command goes through the
  * journal, with what its caller tells of it (`options`). A chunk that can't load leaves the page
- * as it was.
+ * as it was. Its arguments come in order, and nothing of its own state is a property, so the
+ * pages' start carries none of its names (the lead's byte cut).
  * @template {Client} C
  * @param {C} client
- * @param {{surface: Surface, load: () => Promise<JournalChunk<C>>, sessionId?: string, requestIdle?: (callback: () => void, options: {timeout: number}) => void}} options
- *   `sessionId` is the page's, which its owner lock and entries name, new for each page load.
- *   `requestIdle` is the page's idle callback, `globalThis.requestIdleCallback` from its root. A
- *   page without one, as in Node, loads its journal on its first journaled command alone.
+ * @param {Surface} surface
+ * @param {() => Promise<JournalChunk<C>>} load the journal's chunk
+ * @param {(callback: () => void, options: {timeout: number}) => void} [requestIdle] the page's idle
+ *   callback, `globalThis.requestIdleCallback` from its root. A page without one, as in Node,
+ *   loads its journal on its first journaled command alone.
+ * @param {string} [sessionId] the page's, which its owner lock and entries name, new for each page
+ *   load
  * @returns {C & {execute: (command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>}}
  */
-export function journalingClient(client, { surface, load, sessionId = randomIds.next(), requestIdle }) {
-  /** @type {PageJournal | null} */
-  let journal = null;
-  /** @type {Promise<void> | null} */
-  let loading = null;
-  let read = false;
+export function journalingClient(client, surface, load, requestIdle, sessionId = randomIds.next()) {
+  /** @type {PageJournal | undefined} */
+  let journal;
+  /** @type {Promise<void> | undefined} */
+  let loading;
+  // The chunk's load, once. One that can't load, or can't start, leaves the page unjournaled.
   const start = () => {
-    if (loading) return;
-    try {
-      loading = Promise.resolve(load())
-        .then(chunk => {
-          journal = chunk.startPageJournal({ client, sessionId, surface });
-        })
-        .catch(() => {});
-    } catch {
-      loading = Promise.resolve();
-    }
+    loading ||= (async () => {
+      try {
+        journal = (await load()).startPageJournal(client, sessionId, surface);
+      } catch {
+        // The page goes on as before slice 3
+      }
+    })();
   };
+  /** @type {(() => void) | undefined} the ask for the page's idle, made once, when its first read is in */
+  let idle = () => requestIdle?.(start, { timeout: JOURNAL_IDLE_CAP_MS });
   /** @type {(command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>} */
   const execute = (command, options) => {
     if (journal) return journal.execute(command, client.execute, options);
-    const type = /** @type {keyof typeof COMMANDS} */ (command.type);
-    if (Object.hasOwn(COMMANDS, type) && COMMANDS[type].journaled) start();
+    if (COMMANDS[/** @type {keyof typeof COMMANDS} */ (command.type)]?.journaled) start();
     return client.execute(command);
   };
   /** @type {C['query']} */
   const query = request => {
     const answer = client.query(request);
-    if (!read) {
-      read = true;
-      const idle = () => requestIdle?.(start, { timeout: JOURNAL_IDLE_CAP_MS });
-      answer.then(idle, idle);
-    }
+    if (idle) answer.then(idle, idle);
+    idle = undefined;
     return answer;
   };
   return /** @type {C & {execute: typeof execute}} */ (
