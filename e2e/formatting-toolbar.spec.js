@@ -106,6 +106,8 @@ test('a toolbar that opened low in the window adds no height once the window is 
     return lines.reduce((best, el, i) => (el.getBoundingClientRect().bottom < innerHeight - 20 ? i : best), 0);
   });
   await selectInOneGo(page, low, 0, 4);
+  // It opened low, its bottom past the shorter window's height, so the resize has a low place to test
+  expect(await page.locator('.formatting-toolbar.visible').last().evaluate(el => el.getBoundingClientRect().bottom + scrollY), 'it opens low').toBeGreaterThan(700);
   await unselect(page);
   await expect.poll(() => pageHeight(page)).toBe(900);
 
