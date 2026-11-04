@@ -1144,6 +1144,82 @@ describe("BlockEditor saves carry their draft for the page's journal (#35 slice 
     assert.equal(typeof first.pane, 'string');
     assert.deepEqual(second, { covered: true, pane: first.pane });
   });
+
+  it("a pane that loads its note again gets a new id, so its saves after the load take none of its entries from before it, whose edit they don't carry (R191's fix round, Q3)", async () => {
+    const { createJournaling } = await import('../js/kernel/core/application/journaling.js');
+    const { createMemoryJournal } = await import('../js/kernel/core/memory/journal.js');
+    const { unavailable } = await import('../js/kernel/core/contracts/outcomes.js');
+    const env = createLegacyEnv();
+    await createDatabase(env.indexedDB, {
+      records: {
+        canvases: [note('C'), note('D')],
+        elements: [block('c1', 'C', 0, 'charlie'), block('c2', 'C', 1, 'charlie two'), block('d1', 'D', 0, 'delta')],
+      },
+    });
+    env.load(...FILES);
+    // The page's journal, held by its owner lock as long as the page lives
+    const journal = createMemoryJournal();
+    const journaling = createJournaling({
+      journal,
+      locks: { request: (name, options, callback) => Promise.resolve().then(callback), query: async () => ({ held: [] }) },
+      sessionId: 'page-1',
+      surface: 'newtab',
+      clock: { now: () => 0 },
+    });
+    assert.equal(await journaling.ready, true);
+    // The page's first two saves of C answer that storage can't take them, so their entries stay
+    let failing = 2;
+    const answers = [];
+    await startEditorClient(env, {
+      through: (command, options, execute) => {
+        const answer = journaling.execute(command, (sent) => {
+          if (sent.type !== 'saveNoteContent' || sent.noteId !== 'C' || failing === 0) return execute(sent);
+          failing -= 1;
+          return Promise.resolve(unavailable('storage', 'quota', false));
+        }, options);
+        answers.push(answer);
+        return answer;
+      },
+    });
+    /** The journal's entries: each one's note and its draft's blocks' text */
+    const entries = () => plain(journal.entries().map((entry) => [entry.noteId, entry.draft.blocks.map((b) => [b.id, b.content])]));
+    const FAILED = ['C', [['c1', 'charlie, the edit whose saves failed']]];
+    const main = makeEditor(env);
+    await main.loadNote('C');
+
+    // A save and its one retry, both failing
+    type(main, 'charlie, the edit whose saves failed');
+    env.clock.tick(500);
+    await runUntil(env, main.flushSave());
+    env.clock.tick(1000);
+    await runUntil(env, main.flushSave());
+    assert.equal(failing, 0, 'the save and its retry went');
+    assert.deepEqual(entries(), [FAILED, FAILED]);
+
+    // The pane loads D, then C again, which it shows as stored, without the edit
+    await runUntil(env, main.loadNote('D'));
+    await runUntil(env, main.loadNote('C'));
+    assert.deepEqual(plain(main.blocks.map((b) => b.content)), ['charlie', 'charlie two']);
+
+    // A typed save of the other block commits. It carries nothing of the edit, so the first
+    // load's entries stay for the next start
+    type(main, 'charlie two, typed after the reload', 1);
+    env.clock.tick(500);
+    assert.equal(await runUntil(env, main.flushSave()), true);
+    assert.deepEqual(entries(), [FAILED, FAILED], 'after the typed save');
+
+    // So does the closing save, covered by its close-time draft, once it commits
+    type(main, 'charlie two, typed as the tab closed', 1);
+    env.window.fire('pagehide', { persisted: false });
+    await Promise.all(answers);
+    await settle();
+    assert.deepEqual(entries(), [FAILED, FAILED], 'after the closing save');
+    const stored = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
+      .filter((row) => row.canvasId === 'C')
+      .sort((a, b) => a.order - b.order)
+      .map((row) => [row.id, row.content]);
+    assert.deepEqual(plain(stored), [['c1', 'charlie'], ['c2', 'charlie two, typed as the tab closed']]);
+  });
 });
 
 describe('BlockEditor deletes stay deleted', () => {
