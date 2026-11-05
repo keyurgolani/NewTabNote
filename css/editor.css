@@ -1026,9 +1026,9 @@ body.focus-mode .block:focus-within {
   tab-size: 2;
 }
 
-/* Divider Block */
+/* Divider Block: its row's padding is on its stop */
 .block[data-type="divider"] {
-  padding: 12px 0;
+  padding: 0;
   pointer-events: none;
 }
 
@@ -1038,14 +1038,21 @@ body.focus-mode .block:focus-within {
 }
 
 /* A divider's or an image's stop, which the arrow keys land on (js/blocks.js blockStop, #14
-   slice 4), shows the app's focus ring: a divider's takes in its rule's margins, and an image's
-   hugs the image */
+   slice 4), shows the app's focus ring. A divider's holds the row's padding, with the rule through
+   its middle, so its ring takes the whole row, 2 px inside as the menu items' is; an image's hugs
+   the image, with its corners */
 .block-stop {
   display: flow-root;
 }
 
+.block[data-type="divider"] .block-stop {
+  padding: 12px 0;
+  outline-offset: -2px;
+}
+
 .image-block-wrapper:has(img) {
   width: fit-content;
+  border-radius: 6px;
 }
 
 /* Image Block */
