@@ -27,6 +27,8 @@ import {
   STATUS_BY_PROVIDER,
   STEP,
   SUBJECT,
+  UPDATE_SAVES,
+  UPDATE_STATUS,
 } from './copy.js';
 import { EVENT_CODES } from '../core/event-codes.js';
 import { PROVIDERS } from '../core/providers/catalog.js';
@@ -226,6 +228,47 @@ export function consequenceOf(providerId, receipt, now) {
   });
 }
 
+// ───────── An update to how notes are stored (the director's change 9) ─────────
+
+/**
+ * The update state storage's fault `faultCode` stands for, as the consequence its words are
+ * under, or null for any other fault: a wait for free space only when the run said so
+ * (`space-short`), and any other wait, such as an upgrade waiting on another connection, as
+ * waiting (#20 slice 4d says what to do about that one)
+ * @param {string} faultCode
+ * @param {Readonly<Record<string, unknown>>} evidence - the receipt's, and the incident's when it has some
+ * @returns {string | null}
+ */
+export function updateKeyOf(faultCode, evidence) {
+  if (faultCode === 'migration-blocked') return evidence.errorCode === 'space-short' ? 'storage.migration-blocked' : 'storage.migration-pending';
+  if (faultCode === 'migration-pending' || faultCode === 'migration-failed') return `storage.${faultCode}`;
+  return null;
+}
+
+/**
+ * The update state a storage receipt reports, or null
+ * @param {HealthReceipt | null} receipt
+ */
+function updateOf(receipt) {
+  const key = receipt && receipt.consequenceKey;
+  if (!key || !key.startsWith('storage.migration-')) return null;
+  return updateKeyOf(key.slice('storage.'.length), /** @type {Record<string, unknown>} */ (receipt.evidence || {}));
+}
+
+/** An update that's waiting needs no one, as the worker finishes it on its own: it counts as attention nowhere */
+const WAITING = Object.freeze(['storage.migration-pending']);
+
+/**
+ * An update's words: its consequence, and that notes save normally when the check saved its test
+ * entry where new notes go, but for the wait for free space, whose words say what to do
+ * @param {string} key - updateKeyOf's
+ * @param {HealthReceipt | null} receipt
+ */
+function updateText(key, receipt) {
+  const words = /** @type {Record<string, string>} */ (CONSEQUENCE)[key];
+  return key !== 'storage.migration-blocked' && receipt && receipt.capture === 'safe' ? `${words} ${UPDATE_SAVES}` : words;
+}
+
 // ───────── The Trust Center ─────────
 
 /**
@@ -353,6 +396,8 @@ function rowText(rowId, status, entries, now) {
   // No receipt: nothing on this device has checked it yet, which is its reason (change 8). A
   // check that hasn't run can't say more, such as whether the local model has loaded before
   if (!receipt) return PAGE.neverChecked;
+  const update = rowId === 'storage' ? updateOf(receipt) : null;
+  if (update) return updateText(update, receipt);
   const evidence = /** @type {Record<string, any>} */ ((receipt && receipt.evidence) || {});
   const legacy = rowId === 'recovery-readiness' && evidence.records ? ` ${fill(notes['recovery-readiness/legacy'], { records: evidence.records })}` : '';
   const consequence = consequenceOf(rowId, receipt, now);
@@ -411,7 +456,14 @@ export function trustSections(report, { now, checking = new Set() }) {
     const status = worstOf(meaningful.length > 0 ? meaningful : statuses);
     const incidents = report.incidents.filter(incident => ids.includes(incident.providerId) && incident.state !== 'resolved');
     const open = incidents.filter(incident => !incident.dismissed);
-    const attention = open.length > 0 || ATTENTION.includes(status);
+    // Storage's update state, when its check reported one: its own words and shape, and a wait
+    // that needs no one (change 9)
+    const update = rowId === 'storage' && status === 'degraded' ? updateOf(entries[0].receipt) : null;
+    const evidenceNow = /** @type {Record<string, unknown>} */ ((entries[0].receipt && entries[0].receipt.evidence) || {});
+    const waits = (/** @type {Incident} */ incident) =>
+      incident.providerId === 'storage' && WAITING.includes(String(updateKeyOf(incident.faultCode, evidenceNow)));
+    const waiting = update !== null && WAITING.includes(update);
+    const attention = open.some(incident => !waits(incident)) || (ATTENTION.includes(status) && !waiting);
     const showsTime = !['not-configured', 'off', 'unsupported', 'checking', 'unverified'].includes(status);
     const verifiedTimes = entries
       .filter(entry => entry.receipt && (rowId !== 'platform' || entry.status === 'verified'))
@@ -422,8 +474,12 @@ export function trustSections(report, { now, checking = new Set() }) {
       id: rowId,
       label: /** @type {Record<string, {label: string}>} */ (PROVIDER)[rowId].label,
       status,
-      statusText: rowId === 'platform' ? /** @type {Record<string, string>} */ (STATUS)[status] : statusWords(rowId, status),
-      tone: /** @type {Record<string, string>} */ (TONE)[status] || 'unknown',
+      statusText: update
+        ? /** @type {Record<string, {text: string}>} */ (UPDATE_STATUS)[update].text
+        : rowId === 'platform'
+          ? /** @type {Record<string, string>} */ (STATUS)[status]
+          : statusWords(rowId, status),
+      tone: update ? /** @type {Record<string, {tone: string}>} */ (UPDATE_STATUS)[update].tone : /** @type {Record<string, string>} */ (TONE)[status] || 'unknown',
       time: showsTime && verifiedTimes.length > 0 ? Math.max(...verifiedTimes) : null,
       text: rowText(rowId, status, entries, now),
       attention,
@@ -547,6 +603,7 @@ export function attentionText(rows) {
  * @property {boolean} resolved
  * @property {number | null} resolvedAt
  * @property {string} rowId - the Trust Center row it belongs to
+ * @property {boolean} waiting - an update that's waiting, which counts as needing attention nowhere (change 9)
  */
 
 /**
@@ -560,6 +617,10 @@ export function incidentTitle(incident, evidence = {}) {
   evidence = /** @type {Record<string, any>} */ ({ ...evidence, ...(incident.evidence || {}) });
   const long = `${incident.providerId}/${incident.faultCode}/${incident.subjectId}`;
   const short = `${incident.providerId}/${incident.faultCode}`;
+  // An update waiting on anything but free space reads as an update waiting (change 9)
+  if (incident.providerId === 'storage' && updateKeyOf(incident.faultCode, evidence) === 'storage.migration-pending') {
+    return titles['storage/migration-pending'];
+  }
   return fill(titles[long] || titles[short] || 'Part of NewTabNote needs a look', { count: evidence.count });
 }
 
@@ -611,6 +672,7 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
     const dismissed = !resolved && list.every(incident => incident.dismissed);
     const dismissTimes = list.map(incident => incident.dismissChangedAt).filter(at => typeof at === 'number');
     const rowId = PLATFORM.includes(first.providerId) ? 'platform' : first.providerId;
+    const update = first.providerId === 'storage' ? updateKeyOf(first.faultCode, evidence) : null;
     problems.push({
       key,
       title,
@@ -623,9 +685,11 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
       lastSeenAt: Math.max(...list.map(incident => incident.lastSeenAt)),
       occurrences: Math.max(...list.map(incident => incident.occurrences)),
       // How far behind search is when its receipt says, and otherwise what that means
-      text: key === 'index/lagging' && typeof evidence.lag === 'number' && evidence.lag > 0
-        ? fill(CONSEQUENCE['indexing.lagging'], { lag: evidence.lag })
-        : fill(texts[key] || '', { count: list.length }),
+      text: update
+        ? updateText(update, entry ? entry.receipt : null)
+        : key === 'index/lagging' && typeof evidence.lag === 'number' && evidence.lag > 0
+          ? fill(CONSEQUENCE['indexing.lagging'], { lag: evidence.lag })
+          : fill(texts[key] || '', { count: list.length }),
       places: key === 'credentials/legacy-secret' ? list.map(incident => capitalize(places[String(incident.subjectId)] || String(incident.subjectId))) : [],
       stillWorks: preserved,
       notWorking: affected,
@@ -637,6 +701,7 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
       resolved,
       resolvedAt: resolved && resolvedTimes.length > 0 ? Math.max(.../** @type {number[]} */ (resolvedTimes)) : null,
       rowId: /** @type {Record<string, unknown>} */ (PROVIDER)[rowId] ? rowId : first.providerId,
+      waiting: update !== null && WAITING.includes(update),
     });
   }
   return problems.sort(
@@ -712,13 +777,14 @@ function resolvedByCheck(incident) {
  * The Recovery Center's headline, from its open problems and the summary
  * @param {readonly Problem[]} open - the open problems that aren't dismissed
  * @param {TrustSummary} summary
- * @param {{now: number, lastCheckedAt: number | null, dismissed?: number}} options - `dismissed`:
- *   how many open problems are dismissed
+ * @param {{now: number, lastCheckedAt: number | null, dismissed?: number, waiting?: number}} options -
+ *   `dismissed`: how many open problems are dismissed; `waiting`: how many are an update that's
+ *   waiting, which needs no one (change 9)
  * @returns {{tone: string, title: string, proof: string}}
  */
-export function recoveryHeadline(open, summary, { now, lastCheckedAt, dismissed = 0 }) {
-  if (open.length === 0 && dismissed > 0) {
-    // Every open problem is dismissed: none needs the user, and some are still there
+export function recoveryHeadline(open, summary, { now, lastCheckedAt, dismissed = 0, waiting = 0 }) {
+  if (open.length === 0 && (dismissed > 0 || waiting > 0)) {
+    // Every open problem is dismissed, or an update that's waiting: none needs the user, and some are still there
     return {
       tone: 'ok',
       title: PAGE.nothingNeedsYou,

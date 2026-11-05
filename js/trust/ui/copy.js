@@ -83,6 +83,20 @@ export const STATUS_BY_PROVIDER = Object.freeze({
   'block-types': { 'not-configured': 'Nothing to check' },
 });
 
+/**
+ * Storage's status while an update to how notes are stored waits or didn't finish, by its
+ * consequence (the director's change 9): its words, and its shape, the dashed ring of a wait or
+ * the half-filled shape of an update that didn't finish
+ */
+export const UPDATE_STATUS = Object.freeze({
+  'storage.migration-pending': { text: 'Update waiting', tone: 'unknown' },
+  'storage.migration-blocked': { text: 'Update waiting', tone: 'unknown' },
+  'storage.migration-failed': { text: "Update didn't finish", tone: 'partial' },
+});
+
+/** What follows an update's words when the check saved its test entry where new notes go */
+export const UPDATE_SAVES = 'They save normally.';
+
 /** A receipt's consequence: a row's second line when it isn't fine, by provider/key or key */
 export const CONSEQUENCE = Object.freeze({
   'storage.capture-at-risk': "NewTabNote couldn't save a test entry, so new notes and captures may not be saved.",
@@ -91,6 +105,13 @@ export const CONSEQUENCE = Object.freeze({
   'storage.unavailable': "NewTabNote couldn't open your notes database, so notes can't be read or saved here.",
   'storage.trust-records-unavailable':
     "Notes save normally, but NewTabNote can't keep its own health records right now, so this page may miss recent problems.",
+  // The director's change 9: an update waiting, waiting for free space for its copy, or that
+  // didn't finish. A wait for any other reason reads as waiting (model.js, updateKey)
+  'storage.migration-pending':
+    'An update is waiting to change how your notes are stored. Until it does, your notes are stored as they were.',
+  'storage.migration-blocked':
+    "Before NewTabNote changes how your notes are stored, it saves a copy of them. This device doesn't have enough free space for that copy yet, so nothing has changed: your notes are stored as they were. Free up some space on this device and NewTabNote will try again on its own.",
+  'storage.migration-failed': "NewTabNote couldn't finish changing how your notes are stored, so it kept them as they were.",
   'backup.not-verified':
     "The last backup started {since}. NewTabNote can't open backup files yet, so it can't say whether that file is complete.",
   'sync.not-verified': "Sync is set up and last ran {since}. NewTabNote can't test it yet.",
@@ -156,6 +177,9 @@ export const INCIDENT = Object.freeze({
   'storage/probe-failed': 'A test save failed',
   'capture/capture-failed': "A page capture wasn't saved",
   'storage/scan-findings': "{count} blocks aren't in any note",
+  'storage/migration-pending': 'An update is waiting to finish',
+  'storage/migration-blocked': 'An update is waiting for free space',
+  'storage/migration-failed': "An update couldn't change how your notes are stored",
   'backup/auto-backup-failed': "An automatic backup didn't finish",
   'index/indexer-start-failed': "Search indexing didn't start",
   'index/lagging': 'Search is behind',
@@ -184,6 +208,9 @@ export const RESOLVED = Object.freeze({
   'storage/probe-failed': 'Test saves work again',
   'capture/capture-failed': 'Page captures are saving again',
   'storage/scan-findings': 'Every block is in a note again',
+  'storage/migration-pending': 'The update finished',
+  'storage/migration-blocked': 'The update finished',
+  'storage/migration-failed': 'The update finished',
   'backup/auto-backup-failed': 'Automatic backups are finishing again',
   'index/lagging': 'Search is updating again',
   'index/stalled': 'Search is updating again',

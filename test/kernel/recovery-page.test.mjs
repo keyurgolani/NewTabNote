@@ -15,13 +15,23 @@ import { webcrypto } from 'node:crypto';
 import { waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import { createNewTabAdapter, createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
-import { CONSEQUENCE, INCIDENT, PAGE, REASON, REBUILD, RESOLVED } from '../../js/trust/ui/copy.js';
-import { attentionText, durationText, fill, fixedLine, problemsOf, runResult } from '../../js/trust/ui/model.js';
+import { CONSEQUENCE, INCIDENT, PAGE, REASON, REBUILD, RESOLVED, UPDATE_SAVES, UPDATE_STATUS } from '../../js/trust/ui/copy.js';
+import {
+  attentionText,
+  durationText,
+  fill,
+  fixedLine,
+  problemsOf,
+  recoveryHeadline,
+  runResult,
+  trustHeadline,
+  trustSections,
+} from '../../js/trust/ui/model.js';
 import { FOLLOW_MS, mountRecoveryPage } from '../../js/trust/ui/view.js';
 import { PROVIDERS } from '../../js/trust/core/providers/catalog.js';
 import { REMEDIATIONS, searchEntryOf } from '../../js/trust/core/remediation/catalog.js';
 import { closeAll as closeContexts, legacyContext, legacyEnv } from './legacy-fixture.mjs';
-import { KeyRange } from './migration-support.mjs';
+import { KeyRange, profileWith, synthesized } from './migration-support.mjs';
 import { faultyFactory } from './storage-faults.mjs';
 import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
 import { realTimers, webLocks } from './trust-support.mjs';
@@ -1303,6 +1313,183 @@ describe('a repair the page can only finish after a reload (the lead\'s ruling 4
     } finally {
       root.close();
       closeAll([tab, context]);
+    }
+  });
+});
+
+describe("storage's update states, in the design director's words (change 9, #20 slice 4b)", () => {
+  const AT = new Date(2026, 10, 4, 23, 50).getTime();
+  const SAFE = ['capture', 'editing', 'reading'];
+  /**
+   * Storage's entry in trust.report, its check having reported `consequenceKey`
+   * @param {string} consequenceKey
+   * @param {{capture?: string, evidence?: Record<string, unknown>}} [options]
+   */
+  const storageEntry = (consequenceKey, { capture = 'safe', evidence = {} } = {}) =>
+    /** @type {any} */ ({
+      providerId: 'storage',
+      group: 'storage',
+      core: true,
+      operation: 'storage.probe-readwrite',
+      costClass: 'local-cheap',
+      freshnessMs: 86_400_000,
+      status: 'degraded',
+      receipt: {
+        id: '00000000-0000-4000-8000-0000000000d0',
+        providerId: 'storage',
+        verifiedAt: AT,
+        durationMs: 1,
+        freshnessMs: 86_400_000,
+        operation: 'storage.probe-readwrite',
+        consequenceKey,
+        preserved: SAFE,
+        nextAction: null,
+        executionClass: 'local-cheap',
+        status: 'degraded',
+        capture,
+        evidence: { subjectId: 'CanvasTabDB', ...evidence },
+      },
+      next: null,
+      stillWorks: SAFE,
+    });
+  /** @param {string} faultCode */
+  const incidentOf = faultCode =>
+    /** @type {any} */ ({
+      id: '00000000-0000-4000-8000-0000000000d1',
+      ref: '0000d1',
+      key: `storage/${faultCode}/CanvasTabDB`,
+      providerId: 'storage',
+      faultCode,
+      subjectId: 'CanvasTabDB',
+      severity: 'degraded',
+      state: 'open',
+      dismissed: false,
+      dismissChangedAt: null,
+      firstSeenAt: AT,
+      lastSeenAt: AT,
+      resolvedAt: null,
+      occurrences: 1,
+      affected: [],
+      preserved: SAFE,
+      evidence: {},
+      appliedOps: [],
+    });
+  /**
+   * What each view draws of one update state: the Notes database row, the headline's attention,
+   * and the problem
+   * @param {string} faultCode
+   * @param {{capture?: string, evidence?: Record<string, unknown>}} [options]
+   */
+  function drawn(faultCode, options) {
+    const entry = storageEntry(`storage.${faultCode}`, options);
+    // Saving new notes, verified beside it, as the open check finds it on a version 8 profile
+    const capture = /** @type {any} */ ({
+      ...storageEntry('storage.capture-at-risk'),
+      providerId: 'capture',
+      group: 'capture',
+      operation: 'capture.probe-commit',
+      status: 'verified',
+      receipt: { ...storageEntry('storage.capture-at-risk').receipt, providerId: 'capture', status: 'verified', consequenceKey: null },
+    });
+    const incident = incidentOf(faultCode);
+    const report = /** @type {any} */ ({ records: 'open', providers: [capture, entry], incidents: [incident], copyRead: 'ok', recordsRead: 'ok', runs: [] });
+    const rows = trustSections(report, { now: AT }).flatMap(section => section.rows);
+    const row = /** @type {any} */ (rows.find(candidate => candidate.id === 'storage'));
+    const summary = /** @type {any} */ ({ capture: 'safe', worstCore: 'degraded', records: 'open' });
+    const head = trustHeadline(summary, rows, { now: AT, checking: false });
+    const [problem] = problemsOf([incident], new Map(), () => entry);
+    return { row, head, problem };
+  }
+
+  it("reads a waiting update as Update waiting, in the dashed ring, its row's second line in sight, and counts it as needing attention nowhere", () => {
+    const { row, head, problem } = drawn('migration-pending');
+    assert.deepEqual(
+      [row.statusText, row.tone, row.text, row.attention, row.folded],
+      [UPDATE_STATUS['storage.migration-pending'].text, 'unknown', `${CONSEQUENCE['storage.migration-pending']} ${UPDATE_SAVES}`, false, false],
+    );
+    assert.equal(UPDATE_STATUS['storage.migration-pending'].text, 'Update waiting');
+    // The headline stays "saving normally" while capture is safe, and names no row to look at
+    assert.deepEqual([head.title, head.proof, head.attention], [PAGE.saving, row.text, []]);
+    assert.deepEqual(
+      [problem.title, problem.text, problem.waiting, problem.resolvedTitle],
+      ['An update is waiting to finish', row.text, true, RESOLVED['storage/migration-pending']],
+    );
+    // The Recovery Center: nothing needs the user while it waits
+    assert.equal(recoveryHeadline([], /** @type {any} */ ({ capture: 'safe', records: 'open' }), { now: AT, lastCheckedAt: AT, waiting: 1 }).title, PAGE.nothingNeedsYou);
+  });
+
+  it('reads an update waiting for free space in #17 1b\'s words, which say what to do, and needs the user', () => {
+    const { row, head, problem } = drawn('migration-blocked', { evidence: { errorCode: 'space-short' } });
+    assert.deepEqual(
+      [row.statusText, row.tone, row.text, row.attention],
+      ['Update waiting', 'unknown', CONSEQUENCE['storage.migration-blocked'], true],
+    );
+    assert.ok(!row.text.includes(UPDATE_SAVES));
+    assert.deepEqual(head.attention, [{ id: 'storage', label: row.label }]);
+    assert.deepEqual([problem.title, problem.waiting, problem.dismissable], ['An update is waiting for free space', false, true]);
+  });
+
+  it('reads an update waiting on anything but free space as an update waiting, never as one short of space', () => {
+    for (const evidence of [{ errorCode: 'blocked-upgrade' }, {}]) {
+      const { row, problem } = drawn('migration-blocked', { evidence });
+      assert.deepEqual(
+        [row.statusText, row.text, row.attention],
+        ['Update waiting', `${CONSEQUENCE['storage.migration-pending']} ${UPDATE_SAVES}`, false],
+        JSON.stringify(evidence),
+      );
+      assert.deepEqual([problem.title, problem.waiting], ['An update is waiting to finish', true]);
+    }
+  });
+
+  it("reads an update that didn't finish as Update didn't finish, in the half-filled shape, and needs the user", () => {
+    const { row, head, problem } = drawn('migration-failed', { evidence: { errorCode: 'schema-mismatch' } });
+    assert.deepEqual(
+      [row.statusText, row.tone, row.text, row.attention],
+      ["Update didn't finish", 'partial', `${CONSEQUENCE['storage.migration-failed']} ${UPDATE_SAVES}`, true],
+    );
+    assert.deepEqual(head.attention, [{ id: 'storage', label: row.label }]);
+    assert.deepEqual(
+      [problem.title, problem.waiting, problem.dismissable, problem.resolvedTitle],
+      ["An update couldn't change how your notes are stored", false, true, RESOLVED['storage/migration-failed']],
+    );
+  });
+
+  it("says they save normally only when the check saved its test entry", () => {
+    const { row } = drawn('migration-pending', { capture: /** @type {any} */ (null) });
+    assert.equal(row.text, CONSEQUENCE['storage.migration-pending']);
+  });
+
+  it("draws a version 8 profile's waiting update end to end, with no badge, and the Recovery Center's Nothing needs your attention", async () => {
+    // 1.4.x's database, which the worker's run hasn't upgraded yet
+    const of = /** @type {any} */ (await profileWith(/** @type {any} */ (synthesized().get('v8.basic'))));
+    const local = of.chrome.api.storage.local;
+    const root = createRecoveryRoot({
+      host: {
+        indexedDB: of.real,
+        keyRange: /** @type {any} */ (KeyRange),
+        settings: { get: (/** @type {string[]} */ keys) => local.get(keys), set: (/** @type {Record<string, unknown>} */ items) => local.set(items) },
+        secretSettings: local,
+        locks: webLocks(),
+        crypto: /** @type {any} */ (webcrypto),
+        permissions: grantedAsDeclared(),
+        manifest: MANIFEST,
+        timers: realTimers,
+      },
+    });
+    const page = openPage(root, { hash: '#recovery' });
+    try {
+      await page.ready;
+      await until(() => page.doc.querySelectorAll('li.trust-incident').length > 0, 'the waiting update');
+      assert.equal(headline(page.doc), `${PAGE.recovery}: ${PAGE.nothingNeedsYou}`);
+      assert.match(text(page.doc.getElementById('trust-main')), new RegExp(escape('An update is waiting to finish')));
+      same(page.doc.getElementById('trust-views').querySelector('.trust-count'), null, 'the badge counts it');
+      control(page.doc, PAGE.trust).click();
+      await until(() => page.doc.getElementById('row-storage'), 'the Notes database row');
+      const storage = page.doc.getElementById('row-storage');
+      assert.match(text(storage), new RegExp(`${escape('Update waiting')}.*${escape(CONSEQUENCE['storage.migration-pending'])} ${escape(UPDATE_SAVES)}`));
+      assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.saving}`);
+    } finally {
+      root.close();
     }
   });
 });

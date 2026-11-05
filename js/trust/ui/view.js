@@ -265,9 +265,12 @@ export function mountRecoveryPage({
    */
   const problems = incidents => problemsOf(incidents, state.next, providerOf);
 
-  /** The open problems that aren't dismissed, for the badge and the Recovery Center's headline */
+  /**
+   * The open problems that need the user, for the badge: not dismissed, and not an update
+   * that's waiting, which counts as needing attention nowhere (change 9)
+   */
   const openProblems = () =>
-    problems(state.incidents.filter(incident => incident.state !== 'resolved')).filter(problem => !problem.dismissed);
+    problems(state.incidents.filter(incident => incident.state !== 'resolved')).filter(problem => !problem.dismissed && !problem.waiting);
 
   /** The header: the brand, the two views, the open problems' badge, and the way back */
   function drawHeader() {
@@ -809,7 +812,7 @@ export function mountRecoveryPage({
     const report = /** @type {TrustReport} */ (state.report);
     const all = problems(state.incidents);
     const open = all.filter(problem => !problem.resolved && (!problem.dismissed || state.dismissedHere.has(problem.key)));
-    const counted = open.filter(problem => !problem.dismissed);
+    const counted = open.filter(problem => !problem.dismissed && !problem.waiting);
     const fixed = all.filter(problem => problem.resolved && problem.resolvedAt !== null && now() - problem.resolvedAt < FIXED_FOR_MS);
     const dismissed = all.filter(problem => problem.dismissed && !state.dismissedHere.has(problem.key));
     const times = report.providers.map(entry => (entry.receipt ? entry.receipt.verifiedAt : 0)).filter(at => at > 0);
@@ -817,6 +820,7 @@ export function mountRecoveryPage({
       now: now(),
       lastCheckedAt: times.length > 0 ? Math.max(...times) : null,
       dismissed: all.filter(problem => !problem.resolved && problem.dismissed).length,
+      waiting: open.filter(problem => !problem.dismissed && problem.waiting).length,
     });
     const severity = /** @type {Record<string, string>} */ (SEVERITY);
     // Finished runs only: one waiting for its confirmation, or running, is its panel's

@@ -100,17 +100,35 @@ function migrationFaultOf(state) {
 }
 
 /**
+ * Why a migration waits or failed, as a registered code its evidence can carry, or null: a run
+ * short of space for its copy (`space-short`), an upgrade waiting on another connection
+ * (`blocked-upgrade`), or a failed run's own code. The views tell a wait for free space from any
+ * other wait by it (#20 slice 4b).
+ * @param {unknown} state - an answer migrationFaultOf has read
+ * @param {'migration-pending' | 'migration-failed' | 'migration-blocked'} faultCode
+ * @returns {string | null}
+ */
+function migrationCodeOf(state, faultCode) {
+  const { status, code, blocked } = /** @type {Record<string, unknown>} */ (state);
+  if (faultCode === 'migration-blocked') return status === 'space-blocked' ? 'space-short' : blocked === true ? 'blocked-upgrade' : null;
+  if (faultCode === 'migration-failed') return typeof code === 'string' ? code : null;
+  return null;
+}
+
+/**
  * Storage's answer while CanvasTabDB waits below the latest version: `degraded`, with the
- * migration fault, and capture safe only when the probe committed on capture's path
+ * migration fault and why, when the state says so, and capture safe only when the probe
+ * committed on capture's path
  * @param {'migration-pending' | 'migration-failed' | 'migration-blocked'} faultCode
  * @param {boolean} committed
+ * @param {string | null} [why] - its registered code, migrationCodeOf's
  * @returns {CheckResult}
  */
-function migrationResult(faultCode, committed) {
+function migrationResult(faultCode, committed, why = null) {
   /** @type {CheckResult} */
   const result = {
     status: 'degraded',
-    evidence: { subjectId: 'CanvasTabDB' },
+    evidence: { subjectId: 'CanvasTabDB', ...failureEvidence({ code: why }) },
     consequenceKey: `storage.${faultCode}`,
     preserved: ['capture', 'editing', 'reading'],
     faults: [{ faultCode, subjectId: 'CanvasTabDB', severity: 'degraded', preserved: ['capture', 'editing', 'reading'] }],
@@ -292,9 +310,13 @@ export const storage = Object.freeze({
     // no migration fault
     /** @type {ReturnType<typeof migrationFaultOf>} */
     let migration = null;
+    /** @type {string | null} */
+    let why = null;
     let known = true;
     try {
-      migration = migrationFaultOf(await reader.current());
+      const state = await reader.current();
+      migration = migrationFaultOf(state);
+      if (migration) why = migrationCodeOf(state, migration);
     } catch {
       known = false;
     }
@@ -309,10 +331,10 @@ export const storage = Object.freeze({
     // A versioned open below the latest version: the adapter isn't capture's path, so it
     // probed nothing capture uses
     if (outcome.kind === 'unavailable' && outcome.code === 'migration-required') {
-      return migrationResult(migration || 'migration-pending', false);
+      return migrationResult(migration || 'migration-pending', false, why);
     }
     const failure = failureOf(outcome);
-    if (!failure && migration) return migrationResult(migration, true);
+    if (!failure && migration) return migrationResult(migration, true, why);
     if (!failure) {
       // NewTabNoteTrust is storage too: while it won't take writes, the records layer holds
       // its `storage/open-failed/NewTabNoteTrust` incident, and this check says so rather than

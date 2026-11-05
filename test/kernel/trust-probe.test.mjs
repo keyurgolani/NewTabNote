@@ -166,6 +166,33 @@ describe("capture and storage probe through #17's adapter (#20 slice 2)", () => 
   });
 });
 
+describe('storage says why an update waits or failed (#20 slice 4b, the director\'s change 9)', () => {
+  it('carries a run short of space as space-short, an upgrade waiting on another connection as blocked-upgrade, and a failed run\'s own code, and a plain wait as none', async () => {
+    const of = freshProfile();
+    const adapter = adapterOn(of);
+    await adapter.open();
+    /** @param {Record<string, unknown>} state */
+    const reader = state => ({ current: async () => ({ version: 8, latest: 11, status: null, code: null, blocked: false, ...state }) });
+    for (const [state, faultCode, errorCode] of /** @type {const} */ ([
+      [{ status: 'space-blocked', code: 'space-short' }, 'migration-blocked', 'space-short'],
+      [{ blocked: true }, 'migration-blocked', 'blocked-upgrade'],
+      [{ status: 'failed', code: 'schema-mismatch' }, 'migration-failed', 'schema-mismatch'],
+      [{}, 'migration-pending', undefined],
+    ])) {
+      const { receipt, faults } = await run('storage', { storage: adapter, migration: reader(state) });
+      assert.deepEqual(
+        [receipt.status, receipt.capture, receipt.consequenceKey, receipt.evidence.errorCode, faults.map(fault => fault.faultCode)],
+        ['degraded', 'safe', `storage.${faultCode}`, errorCode, [faultCode]],
+        JSON.stringify(state),
+      );
+    }
+    // A code no list registers isn't carried
+    const { receipt } = await run('storage', { storage: adapter, migration: reader({ status: 'failed', code: 'not-a-code' }) });
+    assert.equal(receipt.evidence.errorCode, undefined);
+    adapter.close();
+  });
+});
+
 // #17's adapter never opens again once its connection is gone: after another context's upgrade
 // or Chrome's close, every call answers reload-required, which no resend fixes (connection.js).
 // The page that holds it reloads to open the database again, so a probe there verified nothing.
