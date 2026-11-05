@@ -564,11 +564,11 @@ describe("the block menus' roles and keys: their chunk at a menu's first open (#
     assert.equal(given.length, 2);
   });
 
-  it("a loader that rejects, or keys that throw, leave a menu the pointer's: it opens all the same, without its keys, and the failure is logged once (#202's review)", async () => {
+  it("a loader that rejects, or keys that throw, leave a menu the pointer's: it opens all the same, without its keys, and each failure is logged (#202's review)", async () => {
     const { env, tabs } = await page();
     const editor = tabs.editor;
-    const logged = [];
-    editor.logger = { warn: (...args) => logged.push(args), error: (...args) => logged.push(args) };
+    // The lines the editor warns with, in the page's console
+    const warned = () => env.logs.filter(entry => entry.level === 'warn' && entry.args[0] === 'Menu keys:').length;
     const settled = () => new Promise((resolve) => setImmediate(resolve));
     // A menu as showBlockActionMenu leaves it, open, before it asks for the keys
     const open = () => {
@@ -588,6 +588,6 @@ describe("the block menus' roles and keys: their chunk at a menu's first open (#
     editor._menuKeys(second, {});
     await settled();
     assert.equal(second.isConnected, true, 'and keys that throw leave it open too');
-    assert.equal(logged.length, 1, 'the failure is logged once');
+    assert.equal(warned(), 2, 'each failure is logged, a line a try');
   });
 });

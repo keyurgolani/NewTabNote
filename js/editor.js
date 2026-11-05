@@ -274,8 +274,6 @@ class BlockEditor {
      * @type {(() => Promise<{status: string, module?: any}>) | null}
      */
     this.loadMenuKeys = config.loadMenuKeys || null;
-    /** Whether a load of the menus' keys has failed already, which the editor logs once (#202's review) */
-    this._menuKeysFailed = false;
     this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
     this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
@@ -6606,7 +6604,7 @@ class BlockEditor {
    * it. Each menu asks the loader, whose module map answers once the chunk is in. Without the
    * port, as for an editor a test makes, or when the chunk doesn't load, the menu is the
    * pointer's, as before, and the loader says why. A load that rejects, or keys that throw, leave
-   * it the pointer's too, and the editor logs the first such failure (#202's review).
+   * it the pointer's too, with a line in the console each time (#202's review).
    * @param {HTMLElement} menu
    * @param {{opener?: HTMLElement, item?: HTMLElement}} how - the menu's opener, or the types' item
    */
@@ -6614,11 +6612,7 @@ class BlockEditor {
     if (!this.loadMenuKeys) return;
     this.loadMenuKeys().then((result) => {
       if (result.status === 'loaded' && menu.isConnected) result.module.menuKeys(this, menu, how);
-    }).catch((error) => {
-      if (this._menuKeysFailed) return;
-      this._menuKeysFailed = true;
-      if (this.logger) this.logger.warn('Editor', "The block menus' keys didn't load", error);
-    });
+    }).catch((error) => console.warn('Menu keys:', error));
   }
 
   // ============ Version History / Snapshots (Req 31) ============
