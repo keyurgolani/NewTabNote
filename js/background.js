@@ -418,9 +418,9 @@ function notifyCapture(title, message) {
  * once they can: one whose deadline passed asks for that drain at once, which waits its turn on
  * the same queue. Without an entry, as when the journal can't be written, it ends as it did
  * before slice 3: saved, refused (the database can't be opened safely), or failed, each with a
- * notification; one whose turn didn't come by its deadline waits its turn on the queue, as
- * 1.5.0's capture waited, since nothing could replay it. A refused or failed one, kept or not, is also a `capture.failed` event, which
- * holds the outcome's cause and code and never what was captured.
+ * notification; one whose turn didn't come by its deadline waits its turn on the queue, as 1.5.0's
+ * capture waited, since nothing could replay it. A refused or failed one, kept or not, is also a
+ * `capture.failed` event, which holds the outcome's cause and code and never what was captured.
  * @param {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} item
  * @returns {Promise<void>}
  */
