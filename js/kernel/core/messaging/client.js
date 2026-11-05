@@ -133,6 +133,10 @@ import { silentLogger } from '../ports/runtime.js';
  *   #17's ledger, read in-process, by which a command whose reply was lost resolves. Without
  *   one, such a command answers unknown at once.
  * @property {JournalReader} [journal] - #17's journal, which resume() reads
+ * @property {boolean} [capped]
+ *   Whether #13's message limits apply to what it sends and hears: MAX_MESSAGE_BYTES, and each
+ *   operation's own maxBytes. True unless it's the worker's own client on the in-process
+ *   transport, since 1.5.0 saves a capture over 1 MiB (#35 slice 4a, the lead's ruling).
  */
 
 /**
@@ -204,6 +208,7 @@ export function createClient({
   hasPendingCommit = () => false,
   ledger,
   journal,
+  capped = true,
 }) {
   const sessionId = ids.next();
   /**
@@ -645,7 +650,7 @@ export function createClient({
     link = opened;
     opened.onMessage(text => {
       if (opened !== link) return;
-      const read = readFrame(text);
+      const read = readFrame(text, { capped });
       if (read.ok) hear(read.frame);
       else warn('client-unreadable-frame', { code: read.code });
     });
@@ -727,7 +732,7 @@ export function createClient({
       } catch {
         return refuse('invalid-payload');
       }
-      if (encodedBytes(text) > Math.min(operation.entry.maxBytes, MAX_MESSAGE_BYTES)) {
+      if (capped && encodedBytes(text) > Math.min(operation.entry.maxBytes, MAX_MESSAGE_BYTES)) {
         return refuse('payload-too-large');
       }
       if (signal) {

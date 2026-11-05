@@ -140,6 +140,11 @@ import { createScopeCheck } from './scope.js';
  *   every welcome goes at once.
  * @property {SessionHooks} [sessions]
  * @property {Logger} [logger]
+ * @property {boolean} [capped]
+ *   Whether #13's message limits apply: MAX_MESSAGE_BYTES to every message and every answer, and
+ *   each operation's own maxBytes. True unless its every connection is the worker's own code on
+ *   the in-process transport, as the worker's own router's is, since 1.5.0 saves a capture over
+ *   1 MiB (#35 slice 4a, the lead's ruling; composition/worker-internal.js).
  */
 
 /**
@@ -210,6 +215,7 @@ export function createRouter({
   settled = undefined,
   sessions = {},
   logger = silentLogger,
+  capped = true,
 }) {
   /** @type {Lookup} the coordinator's own queries first, which nothing it's given replaces */
   const find = name => (Object.hasOwn(SYSTEM_OPERATIONS, name) ? SYSTEM_OPERATIONS[name] : lookup(name));
@@ -525,7 +531,7 @@ export function createRouter({
       tally(counts.refusals, 'invalid-payload');
       return;
     }
-    const checked = checkRequest(frame, bytes, find);
+    const checked = checkRequest(frame, bytes, find, { capped });
     if (!checked.ok) return refuse(peer, requestId, checked.code);
     const { operation, payload } = checked;
     // A name the lookup found is the catalog's, so this counts nothing a sender chose
@@ -631,7 +637,7 @@ export function createRouter({
         return fail(running.isCommand ? 'outcome-unknown' : 'unavailable');
       }
       // A query's answer too large for one message stays that way, so it isn't retryable
-      if (encodedBytes(text) > MAX_MESSAGE_BYTES) {
+      if (capped && encodedBytes(text) > MAX_MESSAGE_BYTES) {
         return fail(running.isCommand ? 'outcome-unknown' : 'payload-too-large');
       }
       end(peer, requestId, running, false);
@@ -675,7 +681,7 @@ export function createRouter({
    */
   const hear = (peer, text) => {
     if (peer.phase === 'closed') return;
-    const read = readFrame(text);
+    const read = readFrame(text, { capped });
     if (!read.ok) {
       tally(counts.refusals, read.code);
       return;
