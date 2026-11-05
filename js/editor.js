@@ -274,6 +274,8 @@ class BlockEditor {
      * @type {(() => Promise<{status: string, module?: any}>) | null}
      */
     this.loadMenuKeys = config.loadMenuKeys || null;
+    /** Whether a load of the menus' keys has failed already, which the editor logs once (#202's review) */
+    this._menuKeysFailed = false;
     this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
     this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
@@ -1732,7 +1734,8 @@ class BlockEditor {
     }
     for (const id of blockIds) {
       const el = this.getBlockElement(id);
-      const target = /** @type {HTMLElement | null} */ (el ? el.querySelector('.block-content, td, th') : null);
+      // Its text, a table's first cell, or a divider's or an image's stop (#202's review)
+      const target = /** @type {HTMLElement | null} */ (el ? el.querySelector('.block-content, td, th, .block-stop') : null);
       if (target) {
         target.focus();
         return;
@@ -2436,6 +2439,10 @@ class BlockEditor {
     const block = this.getBlockById(blockEl.dataset.id);
     if (!block) return;
 
+    // A key an IME composes with is the IME's: its candidates' arrows, and the Enter that commits
+    // its text (#202's review)
+    if (e.isComposing) return;
+
     // With blocks selected, Backspace and Delete delete the selection (onGlobalKeyDown, Req
     // 13.4), so the block they're pressed in leaves them alone (#14 slice 3)
     if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds && this.selectedBlockIds.size > 0) return;
@@ -2475,8 +2482,9 @@ class BlockEditor {
       return;
     }
 
-    // Slash command, which Mod+/ isn't: it opens the block's menu (#14 slice 4)
-    if (e.key === '/' && !e.metaKey && !e.ctrlKey && content && content.textContent === '') {
+    // Slash command, which Mod+/ isn't: it opens the block's menu (#14 slice 4). A '/' typed with
+    // AltGr, which Windows reports as Ctrl and Alt, is one (#202's review)
+    if (e.key === '/' && !e.metaKey && !(e.ctrlKey && !e.altKey) && content && content.textContent === '') {
       e.preventDefault();
       this.showSlashMenu(blockEl);
       return;
@@ -2592,6 +2600,8 @@ class BlockEditor {
     const stop = e.target.matches('.block-stop');
     if ((shortcutAction && shortcutAction.type === 'block-menu') || (stop && ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu'))) {
       e.preventDefault();
+      // The slash menu and the others close first, so the block's shows alone (#202's review)
+      this.hideMenus();
       this.showBlockActionMenu(block.id, blockEl.querySelector('.block-handle'), e.target);
       return;
     }
@@ -2792,13 +2802,20 @@ class BlockEditor {
    * Handle block click
    */
   onBlockClick(e) {
-    // Block handle click — show block action menu with "Turn into..."
+    // A press on a divider or an image leaves no focus on its stop, which only the keys give it
+    // (#202's review): a stop a click focused would take a typed letter, and Backspace would
+    // delete its block. Its mousedown isn't prevented, which would keep the block from a drag.
+    const pressed = e.target.closest('.block-stop');
+    if (pressed && this.doc.activeElement === pressed) pressed.blur();
+
+    // Block handle click — show block action menu with "Turn into...", the others closed first
     if (e.target.closest('.block-handle')) {
       const blockEl = e.target.closest('.block');
       if (blockEl) {
         e.preventDefault();
         e.stopPropagation();
         const handle = e.target.closest('.block-handle');
+        this.hideMenus();
         this.showBlockActionMenu(blockEl.dataset.id, handle);
       }
       return;
@@ -5999,10 +6016,13 @@ class BlockEditor {
     this.clearBlockSelection();
     this.renderBlocks();
 
-    // Focus the block in the selection's place, or after a key's delete the one before it, on its
-    // text or its stop (#14 slice 4), or the first block
-    const focusIdx = Math.max(0, Math.min(firstSelectedIdx - (fromKey ? 1 : 0), this.blocks.length - 1));
-    this.focusBlock(this.blocks[focusIdx].id, true, true);
+    // Focus the block in the selection's place, at its end. After a key's delete, the block before
+    // it has focus, on its text's end or its stop (#14 slice 4), when it takes focus; when it takes
+    // none (a table, a bookmark, a video, a file or an equation) or there is none, the block now in
+    // the deleted one's place has it, at its start (#202's review)
+    const place = Math.max(0, Math.min(firstSelectedIdx, this.blocks.length - 1));
+    if (fromKey && firstSelectedIdx > 0) this.focusBlock(this.blocks[firstSelectedIdx - 1].id, true, true);
+    if (!fromKey || !this.container.contains(this.doc.activeElement)) this.focusBlock(this.blocks[place].id, !fromKey, true);
     this.scheduleSave();
   }
 
@@ -6585,7 +6605,8 @@ class BlockEditor {
    * by key or by click, through App's `loadMenuKeys` port, so the new tab's start holds none of
    * it. Each menu asks the loader, whose module map answers once the chunk is in. Without the
    * port, as for an editor a test makes, or when the chunk doesn't load, the menu is the
-   * pointer's, as before, and the loader says why.
+   * pointer's, as before, and the loader says why. A load that rejects, or keys that throw, leave
+   * it the pointer's too, and the editor logs the first such failure (#202's review).
    * @param {HTMLElement} menu
    * @param {{opener?: HTMLElement, item?: HTMLElement}} how - the menu's opener, or the types' item
    */
@@ -6593,6 +6614,10 @@ class BlockEditor {
     if (!this.loadMenuKeys) return;
     this.loadMenuKeys().then((result) => {
       if (result.status === 'loaded' && menu.isConnected) result.module.menuKeys(this, menu, how);
+    }).catch((error) => {
+      if (this._menuKeysFailed) return;
+      this._menuKeysFailed = true;
+      if (this.logger) this.logger.warn('Editor', "The block menus' keys didn't load", error);
     });
   }
 

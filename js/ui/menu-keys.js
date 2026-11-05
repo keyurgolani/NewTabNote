@@ -105,7 +105,9 @@ export function menuKeys(editor, menu, { opener, item }) {
     else if (key === 'Home') to = 0;
     else if (key === 'End') to = count - 1;
     else if (key === 'Enter' || key === ' ' || (key === 'ArrowRight' && at >= 0 && items[at].ariaHasPopup)) {
-      if (at >= 0) items[at].click();
+      // A held Enter or Space chooses once: its repeats are kept from the items, as #193 keeps a
+      // held Enter from the link field
+      if (at >= 0 && !(e.repeat && key !== 'ArrowRight')) items[at].click();
     } else if (key === 'Escape' || key === 'Tab' || (key === 'ArrowLeft' && item)) {
       if (item && key !== 'Tab') {
         menu.remove();
