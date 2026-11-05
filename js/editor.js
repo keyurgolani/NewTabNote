@@ -1888,6 +1888,8 @@ class BlockEditor {
    * Handle title keydown
    */
   onTitleKeyDown(e) {
+    // A key an IME composes with in the title is the IME's too, as in a block (#202's review)
+    if (e.isComposing) return;
     if (e.key === 'Enter') {
       e.preventDefault();
       // Focus first block or create one
