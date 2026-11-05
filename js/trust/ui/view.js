@@ -57,7 +57,7 @@ import { FINISHED_RUN_STATES } from '../core/vocabulary.js';
  * What the page runs on: its root's clients
  * @typedef {object} PageRoot
  * @property {{whenReady(): Promise<{cause: string, code: string} | null>}} kernel
- * @property {{preferencesOr(defaults: Record<string, unknown>): Promise<Record<string, unknown>>}} settings
+ * @property {() => Promise<string>} theme - the theme setting, `system` when it can't be read
  * @property {{query(query: Record<string, unknown> & {type: string}): Promise<any>, execute(command: Record<string, unknown> & {type: string, commandId: string}): Promise<any>}} trust
  * @property {{next(): string}} ids
  */
@@ -99,7 +99,7 @@ export const FOLLOW_MS = 5 * 60 * 1000;
  *   document: Document,
  *   root: PageRoot,
  *   location?: {hash: string},
- *   addEventListener?: (type: string, listener: () => void) => void,
+ *   onHashChange?: (listener: () => void) => void,
  *   now?: () => number,
  *   newTabUrl?: string,
  *   openSiteAccess?: () => void,
@@ -112,7 +112,7 @@ export function mountRecoveryPage({
   document: doc,
   root,
   location = { hash: '' },
-  addEventListener = () => {},
+  onHashChange = () => {},
   now = () => Date.now(),
   newTabUrl = 'newtab.html',
   openSiteAccess = () => {},
@@ -1339,16 +1339,16 @@ export function mountRecoveryPage({
 
   // ───────── Opening ─────────
 
-  /** @param {Record<string, unknown>} preferences */
-  const applyTheme = preferences => {
+  /** @param {string} theme */
+  const applyTheme = theme => {
     const html = /** @type {HTMLElement} */ (doc.documentElement);
-    html.dataset.scheme = SCHEMES[String(preferences.theme)] || 'system';
+    html.dataset.scheme = SCHEMES[theme] || 'system';
   };
 
   async function open() {
     render();
-    // Its theme, through the settings port; the system's until it answers, or if it can't
-    root.settings.preferencesOr({ theme: 'system' }).then(applyTheme, () => {});
+    // Its theme, through the root's one read; the system's until it answers, or if it can't
+    root.theme().then(applyTheme, () => {});
     const failure = await root.kernel.whenReady();
     if (failure) {
       // The notes database didn't open: the error state, and no row runs
@@ -1371,7 +1371,7 @@ export function mountRecoveryPage({
     live('');
   }
 
-  addEventListener('hashchange', () => {
+  onHashChange(() => {
     const view = viewOf(location.hash);
     if (view && view !== state.view) showView(view, false);
   });

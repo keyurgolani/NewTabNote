@@ -1,5 +1,5 @@
 // recovery.html's views (#20 slice 4b): js/trust/ui/view.js drawn in legacy-env's FakeDocument
-// on the page's real root (js/kernel/composition/recovery.js), over production js/storage.js
+// on the page's real root (js/kernel/composition/recovery.js), over #17's IndexedDB adapter
 // and fake-indexeddb, as the page runs them. The page opens on its notes database: it draws
 // its error state, and runs no row, when that database can't open. Once it opens, it draws the
 // stored receipts, runs the open check, and draws again. One problem's repair runs inline,
@@ -12,17 +12,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { webcrypto } from 'node:crypto';
 
-import { createLegacyAdapter } from '../../js/kernel/adapters/legacy/adapter.js';
-import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
-import { createNewTabClient } from '../../js/kernel/composition/newtab.js';
+import { waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
+import { createNewTabAdapter, createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
 import { CONSEQUENCE, INCIDENT, PAGE, REASON, REBUILD, RESOLVED } from '../../js/trust/ui/copy.js';
 import { attentionText, durationText, fill, fixedLine, problemsOf, runResult } from '../../js/trust/ui/model.js';
 import { FOLLOW_MS, mountRecoveryPage } from '../../js/trust/ui/view.js';
 import { PROVIDERS } from '../../js/trust/core/providers/catalog.js';
 import { REMEDIATIONS, searchEntryOf } from '../../js/trust/core/remediation/catalog.js';
-import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { closeAll as closeContexts, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { KeyRange } from './migration-support.mjs';
+import { faultyFactory } from './storage-faults.mjs';
 import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
 import { realTimers, webLocks } from './trust-support.mjs';
 
@@ -36,7 +36,7 @@ const ROOT = path.join(import.meta.dirname, '..', '..');
 const HEAD = 12;
 
 /**
- * What the page's root reads from its globals, over `context`: its Storage and chrome.*
+ * What the page's root reads from its globals, over `context`: its IndexedDB and chrome.*
  * @param {LegacyContext} context
  * @param {Partial<RecoveryHost>} [extra]
  * @returns {RecoveryHost}
@@ -44,7 +44,6 @@ const HEAD = 12;
 function hostOf(context, extra = {}) {
   const local = context.env.chrome.api.storage.local;
   return {
-    legacy: { storage: context.storage, settings: local },
     indexedDB: context.env.indexedDB,
     keyRange: /** @type {any} */ (KeyRange),
     settings: {
@@ -62,6 +61,37 @@ function hostOf(context, extra = {}) {
     timers: realTimers,
     ...extra,
   };
+}
+
+/** The adapters each context's new tab opened, closed with the context (closeAll) */
+const opened = new Map();
+
+/**
+ * The new tab's client on `context`, on #17's adapter, as its root builds them (newtab.js): it
+ * wakes the worker's run, which legacy-env answers by making the database on a profile with none
+ * @param {LegacyContext} context
+ */
+function newTabOn(context) {
+  const adapter = createNewTabAdapter({
+    indexedDB: context.env.indexedDB,
+    settings: context.env.chrome.api.storage.local,
+    awaitUpgrade: () => waitForWorkerUpgrade({ runtime: context.env.chrome.api.runtime }),
+    locks: context.env.global.navigator.locks || null,
+  });
+  opened.set(context, [...(opened.get(context) || []), adapter]);
+  return createNewTabClient(adapter);
+}
+
+/**
+ * Closes the contexts, and the adapters their new tabs opened
+ * @param {LegacyContext[]} contexts
+ */
+function closeAll(contexts) {
+  for (const context of contexts) {
+    for (const adapter of opened.get(context) || []) adapter.close();
+    opened.delete(context);
+  }
+  closeContexts(contexts);
 }
 
 /**
@@ -95,7 +125,8 @@ function pageDocument() {
  * meet one for real: a run that failed, or a check that couldn't run. An undefined entry is
  * the root's own answer, and a function is called with the root's call and answers what it
  * returns, as a client that stops waiting while the call goes on. The page waits 10 ms where it
- * would wait to read a run again, and reads the time from `now` when one is given.
+ * would wait to read a run again, and reads the time from `now` when one is given. `hashTo`
+ * changes the address's hash as Back and Forward do, and calls the listener the page was handed.
  * @param {RecoveryRoot} root
  * @param {{hash?: string, answers?: Record<string, unknown[]>, now?: () => number}} [options]
  */
@@ -122,10 +153,15 @@ function openPage(root, { hash = '', answers = {}, now } = {}) {
   const doc = pageDocument();
   let reloads = 0;
   const location = { hash };
+  /** @type {Array<() => void>} */
+  const hashListeners = [];
   const { ready } = mountRecoveryPage({
     document: /** @type {any} */ (doc),
     root: { ...root, trust },
     location,
+    onHashChange: listener => {
+      hashListeners.push(listener);
+    },
     newTabUrl: 'chrome-extension://test/newtab.html',
     reload: () => {
       reloads += 1;
@@ -133,7 +169,12 @@ function openPage(root, { hash = '', answers = {}, now } = {}) {
     wait: () => new Promise(resolve => setTimeout(resolve, 10)),
     ...(now ? { now } : {}),
   });
-  return { doc, calls, ready, location, reloads: () => reloads };
+  /** @param {string} next */
+  const hashTo = next => {
+    location.hash = next;
+    for (const listener of hashListeners) listener();
+  };
+  return { doc, calls, ready, location, hashTo, reloads: () => reloads };
 }
 
 /** @param {any} element */
@@ -217,7 +258,7 @@ const result = request =>
  */
 async function profileWithStaleIndex(count) {
   const tab = legacyContext();
-  const newtab = createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local });
+  const newtab = newTabOn(tab);
   assert.equal(await newtab.whenReady(), null);
   for (let n = 0; n < count; n++) {
     const outcome = await newtab.execute({ type: 'createNote', commandId: newtab.ids.next(), noteId: newtab.ids.next(), name: `Note ${n + 1}` });
@@ -300,7 +341,7 @@ describe('recovery.html', () => {
 describe("recovery.html's views on its root (#20 slice 4b)", () => {
   it('opens on its notes database, draws the stored receipts, runs the open check, and draws again', async () => {
     const tab = legacyContext();
-    assert.equal(await createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local }).whenReady(), null);
+    assert.equal(await newTabOn(tab).whenReady(), null);
     await tab.env.chrome.api.storage.local.set({ setting_theme: 'dark' });
     const context = legacyContext(tab.env);
     const root = createRecoveryRoot({ host: hostOf(context) });
@@ -318,7 +359,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
         'recovery.incidents',
       ]);
       assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.saving}`);
-      // The theme, read through the settings port
+      // The theme, read through the root's one query
       assert.equal(page.doc.documentElement.dataset.scheme, 'dark');
       const groups = page.doc.querySelectorAll('h2').map(text);
       assert.deepEqual(groups, PAGE.sections.map(section => section.title));
@@ -330,6 +371,27 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       assert.equal(page.doc.title, `${PAGE.trust} - ${PAGE.brand}`);
       // The open check ran only on the page's own router
       assert.ok(await trustDatabaseMade(context));
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
+  it('shows the view a changed hash names, as Back and Forward change it, through the one listener the entry hands it, and stays put for any other hash', async () => {
+    const tab = legacyContext();
+    assert.equal(await newTabOn(tab).whenReady(), null);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context) });
+    const page = openPage(root);
+    try {
+      await page.ready;
+      assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.saving}`);
+      page.hashTo('#recovery');
+      assert.ok(headline(page.doc).startsWith(`${PAGE.recovery}: `), headline(page.doc));
+      page.hashTo('#elsewhere');
+      assert.ok(headline(page.doc).startsWith(`${PAGE.recovery}: `), headline(page.doc));
+      page.hashTo('#trust');
+      assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.saving}`);
     } finally {
       root.close();
       closeAll([tab, context]);
@@ -359,16 +421,14 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
   });
 
   it("draws its error state when its notes database can't open, with Reload first, and runs no row", async () => {
-    const context = legacyContext();
-    const legacy = createLegacyAdapter({ storage: context.storage, settings: context.env.chrome.api.storage.local, mode: 'existing' });
-    // The database is there, and opening it fails, as a corrupt or locked profile's does
-    const adapter = Object.freeze({
-      ...legacy,
-      open: async () => {
-        throw new UnavailableError('storage', 'open-failed', true);
-      },
-    });
-    const root = createRecoveryRoot({ host: hostOf(context, { adapter: /** @type {any} */ (adapter) }) });
+    const tab = legacyContext();
+    assert.equal(await newTabOn(tab).whenReady(), null);
+    const context = legacyContext(tab.env);
+    // The database is there, and opening it fails, as a corrupt or locked profile's does: #17's
+    // adapter answers it open-failed
+    const faults = faultyFactory(context.env.indexedDB);
+    faults.failNextOpen('CanvasTabDB', 'UnknownError');
+    const root = createRecoveryRoot({ host: hostOf(context, { indexedDB: faults.factory }) });
     const page = openPage(root);
     try {
       await page.ready;
@@ -383,20 +443,18 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       assert.equal(await trustDatabaseMade(context), false);
     } finally {
       root.close();
-      closeAll([context]);
+      closeAll([tab, context]);
     }
   });
 
   it('says the device is out of space, in the Recovery Center\'s words, when that stopped the open, and runs no row', async () => {
-    const context = legacyContext();
-    const legacy = createLegacyAdapter({ storage: context.storage, settings: context.env.chrome.api.storage.local, mode: 'existing' });
-    const adapter = Object.freeze({
-      ...legacy,
-      open: async () => {
-        throw new UnavailableError('quota', 'quota', false);
-      },
-    });
-    const root = createRecoveryRoot({ host: hostOf(context, { adapter: /** @type {any} */ (adapter) }) });
+    const tab = legacyContext();
+    assert.equal(await newTabOn(tab).whenReady(), null);
+    const context = legacyContext(tab.env);
+    // A full disk refuses the open: #17's adapter answers it quota
+    const faults = faultyFactory(context.env.indexedDB);
+    faults.failNextOpen('CanvasTabDB', 'QuotaExceededError');
+    const root = createRecoveryRoot({ host: hostOf(context, { indexedDB: faults.factory }) });
     const page = openPage(root);
     try {
       await page.ready;
@@ -407,7 +465,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       assert.equal(await trustDatabaseMade(context), false);
     } finally {
       root.close();
-      closeAll([context]);
+      closeAll([tab, context]);
     }
   });
 
@@ -586,7 +644,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
       assert.match(text(panel()), /writes 2 new search entries/);
       // A note made on the new tab after the preview, its entry lost with the others
-      const newtab = createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local });
+      const newtab = newTabOn(tab);
       assert.equal(await newtab.whenReady(), null);
       assert.equal((await newtab.execute({ type: 'createNote', commandId: newtab.ids.next(), noteId: newtab.ids.next(), name: 'Later' })).kind, 'committed');
       await withDatabase(tab.env.indexedDB, async db => {
@@ -610,7 +668,7 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
 
   it("says it can't confirm the notes are saving when its health records can't be read, with Reload", async () => {
     const tab = legacyContext();
-    assert.equal(await createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local }).whenReady(), null);
+    assert.equal(await newTabOn(tab).whenReady(), null);
     const context = legacyContext(tab.env);
     const root = createRecoveryRoot({ host: hostOf(context) });
     const page = openPage(root, { answers: { 'trust.summary': [{ kind: 'failed', cause: 'storage', code: 'transaction-failed' }] } });
@@ -809,7 +867,7 @@ describe("recovery.html after #115's design review", () => {
 
   it("says why Recovery points and Local model aren't verified when neither has a receipt: this device never checked them", async () => {
     const tab = legacyContext();
-    assert.equal(await createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local }).whenReady(), null);
+    assert.equal(await newTabOn(tab).whenReady(), null);
     const context = legacyContext(tab.env);
     const root = createRecoveryRoot({ host: hostOf(context) });
     const page = openPage(root);
@@ -840,7 +898,7 @@ describe("recovery.html after #115's design review", () => {
 
   it('says how to reach site access in Chrome under the button that opens its extensions page', async () => {
     const tab = legacyContext();
-    assert.equal(await createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local }).whenReady(), null);
+    assert.equal(await newTabOn(tab).whenReady(), null);
     const context = legacyContext(tab.env);
     // Chrome granted the APIs and none of the AI providers' sites
     const limited = { getAll: async () => ({ permissions: [...MANIFEST.permissions, 'newTabPageOverride'], origins: [] }) };
@@ -1230,7 +1288,7 @@ describe("the Recovery Center's words for what it knows (#115's high review)", (
 describe("recovery.html's root and #14's block family (#14 slice 1)", () => {
   it("reads Block types as verified on the 18 built-ins, from the block family its root registers, and counts them there only", async () => {
     const tab = legacyContext();
-    assert.equal(await createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local }).whenReady(), null);
+    assert.equal(await newTabOn(tab).whenReady(), null);
     const context = legacyContext(tab.env);
     const root = createRecoveryRoot({ host: hostOf(context) });
     const page = openPage(root);
@@ -1284,7 +1342,7 @@ describe("recovery.html while its health records can't be saved (#115's review)"
 
   it("shows what this visit's checks found, the storage row in its provider's words, and no promise over the cards", async () => {
     const tab = legacyContext();
-    assert.equal(await createNewTabClient({ storage: tab.storage, settings: tab.env.chrome.api.storage.local }).whenReady(), null);
+    assert.equal(await newTabOn(tab).whenReady(), null);
     const context = legacyContext(tab.env);
     const root = createRecoveryRoot({ host: hostOf(context, { indexedDB: trustStoreDown(context.env.indexedDB) }) });
     const page = openPage(root);

@@ -3,35 +3,39 @@
  * run on, all in the page. Checks run in the page that asks (#20's scope), and the worker
  * serves none of the trust operations.
  *
- * - A kernel client on CanvasTabDB as it is (mode `existing`, as Side Panel's root opens it:
- *   no repair, upgrade, or maintenance, and none made on a profile without one). The page
- *   reads only its theme through it, with the settings client. Its adapter is also what
- *   capture and storage probe, and what rebuild-index rewrites the search index through.
+ * - A kernel client on CanvasTabDB through #17's IndexedDB adapter, opened as the database is
+ *   on disk (`existing`, as Popup's and Side Panel's roots open it: no repair, upgrade, or
+ *   maintenance). Unlike theirs, it doesn't wait on the worker's migration run, so the page
+ *   never asks the worker to migrate, and makes no database on a profile without one. It
+ *   reads only the theme, with one query (core/application/handlers-recovery.js), and sends
+ *   no note command, so it applies no closing tab's edit and journals nothing. Its adapter is
+ *   also what capture and storage probe, and what rebuild-index rewrites the search index
+ *   through.
  * - NewTabNoteTrust's records and journal, a #15 registry root on the `recovery` host with
  *   slice 2's providers and slice 3's remediations, the use cases over the providers' ports,
- *   and the remediation pipeline.
+ *   and the remediation pipeline. Storage's check reads CanvasTabDB's version against the
+ *   latest, and what the worker recorded of its last run, through the migration port, and a
+ *   recovery point is verified under the points lock, held shared, so the worker's purge never
+ *   changes a point under it.
  * - #14's block registry on the same host, the `block` family with the built-ins, whose
  *   resolution and block-health query the Block types check reads. The page reads no block.
  * - #13's router over them, in the page, reached through the in-process transport as surface
  *   `recovery`, under recovery.html's rows (js/trust/core/router-rows.js), and the client the
  *   views send through, so every call passes the router's schema, deadline, and policy checks.
  *
- * The provider context has a slot for the `migration` port, which storage's check reads once
- * #79 and #90 land. On `next` the notes database is still at version 8 and nothing reads it,
- * so the root passes none until the rebase that brings them.
- *
- * Building the root starts the kernel's open of CanvasTabDB as it is (`existing`), as every
- * root's open starts when it's made: the open writes nothing, and never creates, upgrades, or
- * blocks the database, since another context's upgrade closes this connection
- * (js/kernel/adapters/legacy/adapter.js). The trust records open, and the registry's probes
- * run, on the first request the router serves.
+ * Building the root starts the adapter's open of CanvasTabDB as it is, as every root's open
+ * starts when it's made: the open writes nothing, and never creates, upgrades, or blocks the
+ * database, since another context's upgrade closes this connection
+ * (js/kernel/adapters/indexeddb/connection.js). The trust records open, and the registry's
+ * probes run, on the first request the router serves.
  */
 
-import { createLegacyAdapter } from '../adapters/legacy/adapter.js';
-import { createRecoveryReader, createVectorsReader } from '../adapters/indexeddb/health.js';
+import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
+import { createMigrationReader, createRecoveryReader, createVectorsReader } from '../adapters/indexeddb/health.js';
 import { createLegacySecretReader } from '../adapters/indexeddb/legacy-secrets.js';
 import { DB_VERSION } from '../adapters/indexeddb/schema.js';
 import { TRUST_DB_VERSION, createTrustDatabase } from '../adapters/indexeddb/trust.js';
+import { RECOVERY_HANDLERS } from '../core/application/handlers-recovery.js';
 import { rejected } from '../core/contracts/outcomes.js';
 import { createClient } from '../core/messaging/client.js';
 import { createInProcessTransport } from '../core/messaging/in-process.js';
@@ -52,13 +56,10 @@ import { TRUST_OPERATIONS } from '../../trust/core/trust-operations.js';
 import { createTrustRecords } from '../../trust/core/trust-records.js';
 import { createTrustUseCases } from '../../trust/core/use-cases.js';
 import { createBlockRegistry } from './blocks.js';
-import { kernelClient, legacyHost } from './host.js';
+import { kernelClient } from './host.js';
 import { hostTimers, pageTransport, randomIds } from './messaging.js';
-import { createSettingsClient } from './settings.js';
 
 /** @typedef {import('./host.js').Client} KernelPageClient */
-/** @typedef {import('./host.js').LegacyHost} LegacyHost */
-/** @typedef {import('./settings.js').SettingsClient} SettingsClient */
 /** @typedef {import('../core/messaging/client.js').Client} MessagingClient */
 /** @typedef {import('../core/messaging/router.js').Handler} Handler */
 /** @typedef {import('../core/messaging/router.js').Dispatch} Dispatch */
@@ -76,9 +77,9 @@ import { createSettingsClient } from './settings.js';
 /**
  * What recovery.html's root runs on: the browser's (browserRecoveryHost), or a test's
  * @typedef {object} RecoveryHost
- * @property {LegacyHost} [legacy] - js/storage.js's Storage and chrome.storage.local, under the kernel's adapter
  * @property {KernelAdapter & {open(): Promise<void>}} [adapter]
- *   The notes database's adapter: the legacy one over `legacy`, opened as it is, unless a test passes #17's
+ *   The notes database's adapter: #17's over `indexedDB`, opened as the database is on disk,
+ *   unless a test passes its own, which stays the test's to close
  * @property {IDBFactory} indexedDB
  * @property {typeof IDBKeyRange} keyRange
  * @property {SettingsPort & {getKeys?: () => Promise<string[]>}} settings - chrome.storage.local, with
@@ -103,11 +104,13 @@ import { createSettingsClient } from './settings.js';
 /**
  * What the root hands recovery.html
  * @typedef {object} RecoveryRoot
- * @property {KernelPageClient} kernel - the notes database's client, for `whenReady` and the theme
- * @property {SettingsClient} settings
+ * @property {KernelPageClient} kernel - the notes database's client, for `whenReady`
+ * @property {() => Promise<string>} theme
+ *   The theme setting as stored, read once through the kernel, which the views map to a scheme:
+ *   `system` when nothing is stored, when the notes database didn't open, and when the read fails
  * @property {MessagingClient} trust - #13's client to the page's router, for the rows only
  * @property {Ids} ids - for a command's id, made when the user asks
- * @property {() => void} close - closes both clients
+ * @property {() => void} close - closes both clients, and the adapter the root made
  */
 
 /**
@@ -129,23 +132,12 @@ function recoverySettings(local) {
 }
 
 /**
- * The host's legacy storage, which a host with no adapter of its own must have
- * @param {RecoveryHost} host
- * @returns {LegacyHost}
- */
-function legacyOf(host) {
-  if (!host.legacy) throw new TypeError('recovery.html needs js/storage.js or an adapter');
-  return host.legacy;
-}
-
-/**
  * This page's host: the browser's APIs, each read when the root is made
  * @returns {RecoveryHost}
  */
 export function browserRecoveryHost() {
   const scope = /** @type {{navigator?: {locks?: RecoveryHost['locks']}}} */ (globalThis);
   return {
-    legacy: legacyHost(),
     indexedDB: globalThis.indexedDB,
     keyRange: globalThis.IDBKeyRange,
     settings: recoverySettings(chrome.storage.local),
@@ -199,7 +191,7 @@ const queryHandler = (start, serve) => async payload => {
 };
 
 /**
- * recovery.html's kernel, settings, and trust, on `host`
+ * recovery.html's kernel, theme, and trust, on `host`
  * @param {{host?: RecoveryHost}} [options]
  * @returns {RecoveryRoot}
  */
@@ -209,9 +201,25 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
   const timers = host.timers || hostTimers;
   const extensionVersion = host.manifest.version;
 
-  const adapter = host.adapter || createLegacyAdapter({ ...legacyOf(host), mode: 'existing' });
-  const kernel = kernelClient({ adapter, surface: 'recovery' });
-  const settings = createSettingsClient(kernel);
+  // As the database is on disk, with no wait on the worker's run (no awaitUpgrade), so opening
+  // the page never sets off a migration, and a profile with none is left with none
+  const made = host.adapter
+    ? null
+    : createIndexedDbAdapter({ indexedDB: host.indexedDB, settings: host.settings, keyRange: host.keyRange, mode: 'existing' });
+  const adapter = host.adapter || /** @type {NonNullable<typeof made>} */ (made);
+  const kernel = kernelClient({ adapter, surface: 'recovery', handlers: RECOVERY_HANDLERS });
+
+  /** @type {RecoveryRoot['theme']} */
+  const theme = async () => {
+    try {
+      if (await kernel.whenReady()) return 'system';
+      const state = await kernel.query({ type: 'getPreferences', keys: ['theme'] });
+      const value = state.kind === 'ready' || state.kind === 'stale' ? state.data.theme : undefined;
+      return typeof value === 'string' ? value : 'system';
+    } catch {
+      return 'system';
+    }
+  };
 
   const store = createTrustDatabase({ indexedDB: host.indexedDB, keyRange: host.keyRange });
   const records = createTrustRecords({ store, settings: host.settings, clock, ids, locks: host.locks, timers });
@@ -248,8 +256,16 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
     storage: adapter,
     settings: host.settings,
     secrets: createLegacySecretReader({ indexedDB: host.indexedDB, settings: /** @type {any} */ (host.secretSettings) }),
-    recovery: createRecoveryReader({ indexedDB: host.indexedDB, keyRange: host.keyRange, crypto: /** @type {any} */ (host.crypto) }),
+    // A verification holds the points lock shared, so the worker's purge never changes a point under it
+    recovery: createRecoveryReader({
+      indexedDB: host.indexedDB,
+      keyRange: host.keyRange,
+      crypto: /** @type {any} */ (host.crypto),
+      locks: /** @type {any} */ (host.locks),
+    }),
     vectors: createVectorsReader({ indexedDB: host.indexedDB }),
+    // CanvasTabDB's version and the worker's last run, which storage's check reads at every version
+    migration: createMigrationReader({ indexedDB: host.indexedDB, settings: host.settings }),
     permissions: host.permissions,
     manifest: host.manifest,
     // No pipeline consumes #17's commit feed yet (#22 registers them), so the browser's list is empty
@@ -259,7 +275,6 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
     resolutions: () => [resolution, blocks.resolution],
     blocks: Object.freeze({ health: blocks.health }),
     trust: records,
-    // migration: #79 and #90's port, which storage's check reads once they land
   };
 
   const useCases = createTrustUseCases({
@@ -313,7 +328,8 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
   const router = createRouter({
     lookup,
     handlers,
-    policy: createBaselinePolicy({ rows: RECOVERY_PAGE_ROWS }),
+    // On the catalog the page's kernel table runs on, with the page's own rows for what it doesn't list
+    policy: createBaselinePolicy(RECOVERY_HANDLERS.catalog, { rows: RECOVERY_PAGE_ROWS }),
     clock,
     timers,
     coordinatorId: ids.next(),
@@ -331,13 +347,14 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
 
   return Object.freeze({
     kernel,
-    settings,
+    theme,
     trust,
     ids,
     close: () => {
       trust.close();
       messaging.close();
       router.close();
+      if (made) made.close();
     },
   });
 }

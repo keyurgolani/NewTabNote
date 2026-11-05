@@ -12,6 +12,7 @@ import { webcrypto } from 'node:crypto';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { createRepairPoints } from '../../js/kernel/adapters/indexeddb/repair-points.js';
+import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import {
   listPoints,
   openRecovery,
@@ -360,6 +361,75 @@ describe('rebuild-index (regenerable)', () => {
 
     const again = asRun(await pipeline.run(runOf('rebuild-index')));
     assert.equal(again.outcome, 'nothing-to-do');
+  });
+
+  it("changes nothing but search entries on #17's adapter, at this build's version and on a database the worker's run left at 8: no ledger row, no change-log row, and no note's versions move (#20 slice 4b)", async () => {
+    /**
+     * Every store but the search index, as on disk
+     * @param {IDBFactory} factory
+     */
+    const allButIndex = async factory => {
+      const dump = await legacyEnv.dumpDatabase(factory);
+      const { search_index: entries, ...rest } = dump.stores;
+      return { version: dump.version, stores: rest, entries: entries.records.length };
+    };
+    /** @param {{pipeline: any}} center */
+    const rebuild = async ({ pipeline }) => {
+      const first = asRun(await pipeline.run(runOf('rebuild-index')));
+      assert.equal(first.state, 'awaiting-confirmation', JSON.stringify(first));
+      const done = asRun(
+        await pipeline.run(runOf('rebuild-index', { runId: first.runId, decision: 'confirm', previewDigest: first.previewDigest })),
+      );
+      assert.equal(done.state, 'succeeded', JSON.stringify(done));
+    };
+    const emptied = (/** @type {Profile} */ of) =>
+      legacyEnv.dumpDatabase(of.real).then(async () => {
+        const db = /** @type {IDBDatabase} */ (
+          await new Promise((resolve, reject) => {
+            const request = of.real.open('CanvasTabDB');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          })
+        );
+        const tx = db.transaction('search_index', 'readwrite');
+        tx.objectStore('search_index').clear();
+        await new Promise(resolve => {
+          tx.oncomplete = resolve;
+        });
+        db.close();
+      });
+
+    // At this build's version, after the worker's run, with the ledger, the change log and the rest
+    const latest = await profileCenter('v8.basic');
+    await emptied(latest.of);
+    const before = await allButIndex(latest.of.real);
+    assert.equal(before.version, DB_VERSION);
+    assert.ok(before.stores.operations && before.stores.changes, 'the latest version keeps a ledger and a change log');
+    await rebuild(latest);
+    const after = await allButIndex(latest.of.real);
+    assert.ok(after.entries > 0);
+    assert.deepEqual({ ...after, entries: 0 }, { ...before, entries: 0 });
+    latest.adapter.close();
+
+    // At 8, as recovery.html opens a database the run hasn't upgraded: as it is, on its own adapter
+    const of = await profileWith(/** @type {any} */ (FIXTURES.get('v8.basic')));
+    await emptied(of);
+    const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local, mode: 'existing' });
+    await adapter.open();
+    const locks = runLocks();
+    const old = await remediationCenter({
+      contributions: /** @type {any} */ (REMEDIATIONS),
+      ports: { adapter },
+      locks,
+      clock: manualClock(),
+    });
+    const at8 = await allButIndex(of.real);
+    assert.equal(at8.version, 8);
+    await rebuild(old);
+    const rebuilt = await allButIndex(of.real);
+    assert.ok(rebuilt.entries > 0);
+    assert.deepEqual({ ...rebuilt, entries: 0 }, { ...at8, entries: 0 });
+    adapter.close();
   });
 
   it("matches the indexer's entry for markup, tags, and an untitled note", () => {

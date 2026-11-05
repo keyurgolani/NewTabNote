@@ -5,7 +5,8 @@
 // So does the new tab's since #17 PR 4a, once the worker's run has had its 5 seconds, its one
 // connection since #17 PR 4b, which connects production js/storage.js's shell to its kernel,
 // in test/helpers/legacy-env.js. The worker's maintenance leaves out the integrity check, which
-// it runs when asked (#35 slice 1).
+// it runs when asked (#35 slice 1). recovery.html's opens #17's adapter as it is too, with no
+// wait on the worker's run (#20 slice 4b).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -102,14 +103,13 @@ const databases = async factory =>
   (await factory.databases()).map((/** @type {IDBDatabaseInfo} */ db) => [db.name, db.version]).sort();
 
 /**
- * What recovery.html's root reads from its page's globals: the legacy host, IndexedDB, and
- * chrome.storage.local, chrome.permissions, and the manifest
+ * What recovery.html's root reads from its page's globals: IndexedDB, chrome.storage.local,
+ * chrome.permissions, and the manifest
  * @param {LegacyContext} context
  */
 const recoveryHostOf = context => {
   const local = context.env.chrome.api.storage.local;
   return {
-    legacy: hostOf(context),
     indexedDB: context.env.indexedDB,
     keyRange: /** @type {any} */ (KeyRange),
     settings: {
@@ -124,6 +124,8 @@ const recoveryHostOf = context => {
     crypto: /** @type {any} */ (webcrypto),
     permissions: grantedAsDeclared(),
     manifest: MANIFEST,
+    // The page's chrome.runtime, which a root that woke the worker's run would wake it through
+    runtime: context.env.chrome.api.runtime,
     timers: realTimers,
   };
 };
@@ -354,14 +356,15 @@ describe('each composition root', () => {
     closeAll([fresh, next]);
   });
 
-  it("recovery.html's opens the database as it is, and reads its theme and nothing else", async () => {
+  it("recovery.html's opens #17's adapter as the database is, and reads its theme and nothing else (#20 slice 4b)", async () => {
     const tab = legacyContext();
-    assert.equal(await createNewTabClient(hostOf(tab)).whenReady(), null);
+    const { adapter, client: newtab } = newTabOf(tab);
+    assert.equal(await newtab.whenReady(), null);
     await tab.env.chrome.api.storage.local.set({ setting_theme: 'dark' });
     const page = legacyContext(tab.env);
     const root = createRecoveryRoot({ host: recoveryHostOf(page) });
     assert.equal(await root.kernel.whenReady(), null);
-    assert.deepEqual(await root.settings.preferencesOr({ theme: 'system' }), { theme: 'dark' });
+    assert.equal(await root.theme(), 'dark');
     const created = await root.kernel.execute({ type: 'createNote', commandId: root.kernel.ids.next(), noteId: root.kernel.ids.next() });
     assert.deepEqual(policyRefusal(created), ['policy', 'not-on-surface']);
     assert.deepEqual(await root.kernel.query({ type: 'listNotes', view: 'active' }), {
@@ -369,18 +372,23 @@ describe('each composition root', () => {
       cause: 'policy',
       code: 'not-on-surface',
     });
+    // It opened the database at the version it found, and upgraded nothing
+    assert.deepEqual((await databases(page.env.indexedDB)).filter(([name]) => name === 'CanvasTabDB'), [['CanvasTabDB', DB_VERSION]]);
     root.close();
+    adapter.close();
     closeAll([tab, page]);
   });
 
-  it("recovery.html's makes no database on a profile with none, and its theme falls back to the system's", async () => {
+  it("recovery.html's makes no database on a profile with none, and never wakes the worker's run, which would make one, and its theme falls back to the system's (#20 slice 4b)", async () => {
+    // legacy-env's worker answers a page's wake by making the database (workerRun), as the
+    // service worker's run does on a profile with none
     const page = legacyContext();
     await page.env.chrome.api.storage.local.set({ setting_theme: 'dark' });
     const root = createRecoveryRoot({ host: recoveryHostOf(page) });
     const failure = await root.kernel.whenReady();
     assert.deepEqual(failure && [failure.cause, failure.code], ['storage', 'no-database']);
-    // The open failed, so the settings port answers the defaults rather than a partial read
-    assert.deepEqual(await root.settings.preferencesOr({ theme: 'system' }), { theme: 'system' });
+    // The open failed, so the theme is the system's rather than a partial read
+    assert.equal(await root.theme(), 'system');
     assert.deepEqual(await page.env.indexedDB.databases(), []);
     root.close();
     closeAll([page]);

@@ -5,8 +5,6 @@
  * the new tab's start path: the page is its own entry.
  */
 
-// storage.js puts Storage on window, where the root's legacy adapter finds it
-import './storage.js';
 import { browserRecoveryLinks, createRecoveryRoot } from './kernel/composition/recovery.js';
 import { mountRecoveryPage } from './trust/ui/view.js';
 
@@ -14,7 +12,7 @@ mountRecoveryPage({
   document,
   root: createRecoveryRoot(),
   location: window.location,
-  addEventListener: (type, listener) => window.addEventListener(type, listener),
+  onHashChange: listener => window.addEventListener('hashchange', listener),
   ...browserRecoveryLinks(),
   reload: () => window.location.reload(),
 });

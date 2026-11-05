@@ -18,6 +18,7 @@ import ts from 'typescript';
 import { ALL_HANDLERS, NEWTAB_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
 import { CONTEXT_HANDLERS } from '../../js/kernel/core/application/handlers-newtab.js';
 import { POPUP_HANDLERS } from '../../js/kernel/core/application/handlers-popup.js';
+import { RECOVERY_HANDLERS } from '../../js/kernel/core/application/handlers-recovery.js';
 import { SIDEPANEL_HANDLERS } from '../../js/kernel/core/application/handlers-sidepanel.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
 import { handlerTable } from '../../js/kernel/core/application/handlers.js';
@@ -63,19 +64,22 @@ const APPLIER_MODULES =
   /^js\/kernel\/core\/(application\/close-drafts|domain\/(close-draft|close-draft-format|close-draft-keys|recovered-note))\.js$/;
 
 /**
- * Each page with a kernel: the modules its HTML loads, its surface, its root's table, and
- * whether its root runs startup maintenance as the kernel opens, which sends
- * runStartupMaintenance from the kernel itself (kernel.js, maintain)
- * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, maintains: boolean}>}
+ * Each page with a kernel: the modules its HTML loads, its surface, its root's table, whether
+ * its root runs startup maintenance as the kernel opens, which sends runStartupMaintenance from
+ * the kernel itself (kernel.js, maintain), and whether it writes notes, so its root applies a
+ * closing tab's edits and journals what it sends (#33, #35 slice 3b). recovery.html reads only
+ * its theme through its kernel, so it does neither (#20 slice 4b).
+ * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, maintains: boolean, writesNotes: boolean}>}
  */
 const PAGES = [
-  { page: 'Popup', entries: ['js/popup.js'], surface: 'popup', table: POPUP_HANDLERS, maintains: false },
+  { page: 'Popup', entries: ['js/popup.js'], surface: 'popup', table: POPUP_HANDLERS, maintains: false, writesNotes: true },
   {
     page: 'Side Panel',
     entries: ['js/sidepanel.js', 'js/insights-summary.js'],
     surface: 'sidepanel',
     table: SIDEPANEL_HANDLERS,
     maintains: false,
+    writesNotes: true,
   },
   {
     page: 'the service worker',
@@ -83,6 +87,7 @@ const PAGES = [
     surface: 'worker-internal',
     table: WORKER_HANDLERS,
     maintains: true,
+    writesNotes: true,
   },
   {
     page: 'the new tab',
@@ -90,6 +95,15 @@ const PAGES = [
     surface: 'newtab',
     table: NEWTAB_HANDLERS,
     maintains: true,
+    writesNotes: true,
+  },
+  {
+    page: 'recovery.html',
+    entries: ['js/recovery.js'],
+    surface: 'recovery',
+    table: RECOVERY_HANDLERS,
+    maintains: false,
+    writesNotes: false,
   },
 ];
 
@@ -139,9 +153,35 @@ const isTypeName = name => !!name && (ts.isIdentifier(name) || ts.isStringLitera
 const unwrapped = node => (ts.isParenthesizedExpression(node) ? unwrapped(node.expression) : node);
 
 /**
+ * Where the object a send is built in goes: the property it's the value of, and the call that
+ * takes it, or the object holding that property, as an argument. In
+ * `commitOrThrow(adapter, { command: { type: 'setPreferences' } })`, `key` is `command` and `call`
+ * is `commitOrThrow`. Each is null where the object has none.
+ * @param {ts.Node} object - the object literal whose `type` names the send
+ * @param {ts.SourceFile} source
+ * @returns {{key: string | null, call: string | null}}
+ */
+const holderOf = (object, source) => {
+  /** @param {ts.Node} node */
+  const outside = node => {
+    let { parent } = node;
+    while (parent && ts.isParenthesizedExpression(parent)) parent = parent.parent;
+    return parent;
+  };
+  let around = outside(object);
+  /** @type {string | null} */
+  let key = null;
+  if (around && ts.isPropertyAssignment(around) && ts.isIdentifier(around.name)) {
+    key = around.name.text;
+    around = outside(around.parent);
+  }
+  return { key, call: around && ts.isCallExpression(around) ? around.expression.getText(source) : null };
+};
+
+/**
  * What `files` send to a kernel, as the scan reads them: every catalog type an object's `type`
- * names as a string, wherever the object is built, apart from the kernel's own; and, as
- * file:line, what it can't read: an `.execute({...})` or `.query({...})` whose object's type
+ * names as a string, wherever the object is built, apart from the kernel's own, each with its
+ * site (file:line, and where its object goes: holderOf); and, as file:line, what it can't read: an `.execute({...})` or `.query({...})` whose object's type
  * isn't a string (computed, shorthand, or behind a spread), and a catalog type's name in any
  * other string but another property's key or value, which names something else: a table's key,
  * BULK_ACTIONS' item commands, a change op's name. A call handed a variable is read where its
@@ -151,11 +191,13 @@ const unwrapped = node => (ts.isParenthesizedExpression(node) ? unwrapped(node.e
  * unless given, so a test can plant a send.
  * @param {string[]} files
  * @param {{readFile?: (file: string) => string}} [options]
- * @returns {{types: Set<string>, own: Set<string>, unread: string[]}}
+ * @returns {{types: Set<string>, sites: Site[], own: Set<string>, unread: string[]}}
  */
 function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {}) {
   /** @type {Set<string>} */
   const types = new Set();
+  /** @type {Site[]} */
+  const sites = [];
   /** @type {Set<string>} */
   const own = new Set();
   /** @type {string[]} */
@@ -171,7 +213,13 @@ function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {
       if (ts.isStringLiteralLike(node) && CATALOG_TYPES.has(node.text) && !isSchemaName(node)) {
         const { parent } = node;
         if (!ts.isPropertyAssignment(parent)) unread.push(at(node));
-        else if (parent.initializer === node && isTypeName(parent.name)) (file === KERNEL ? own : types).add(node.text);
+        else if (parent.initializer === node && isTypeName(parent.name)) {
+          if (file === KERNEL) own.add(node.text);
+          else {
+            types.add(node.text);
+            sites.push({ type: node.text, file: path.relative(ROOT, file), at: at(node), ...holderOf(parent.parent, source) });
+          }
+        }
       } else if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
@@ -198,8 +246,13 @@ function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {
     };
     walk(source);
   }
-  return { types, own, unread };
+  return { types, sites, own, unread };
 }
+
+/**
+ * One send the scan read
+ * @typedef {{type: string, file: string, at: string, key: string | null, call: string | null}} Site
+ */
 
 /** @param {HandlerTable} table */
 const registered = table => new Set([...Object.keys(table.commands), ...Object.keys(table.queries)]);
@@ -227,20 +280,53 @@ const allowedOn = (type, surface, table) => {
   return !!entry && entry.surfaces.includes(surface);
 };
 
+/**
+ * The sends the scan reads in a page's modules that never reach its kernel, by page, each pinned
+ * to its one call. recovery.html bundles the trust remediations' catalog
+ * (js/trust/core/remediation/catalog.js), whose safe-disable builds a `setPreferences` command
+ * and hands it to commitOrThrow, which commits it through the remediation's adapter port
+ * (`adapter.commit`, #17's adapter), never a kernel client's execute, so it's adapter-only: no
+ * handler table runs it. And the page's rows run only rebuild-index (js/trust/core/router-rows.js),
+ * so safe-disable never runs there at all (#20 slice 4b). Only that call is left out: the file
+ * builds the type once, there, or the pin fails, and any other send, in that file or any other,
+ * still counts.
+ * @type {Readonly<Record<string, ReadonlyArray<{file: string, type: string, call: string, key: string}>>>}
+ */
+const ADAPTER_ONLY_SENDS = Object.freeze({
+  'recovery.html': Object.freeze([
+    Object.freeze({ file: 'js/trust/core/remediation/catalog.js', type: 'setPreferences', call: 'commitOrThrow', key: 'command' }),
+  ]),
+});
+
 describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
   /**
    * What a page sends: what its modules send, and the kernel's own maintenance when its root
-   * runs it as the kernel opens
-   * @param {{entries: string[], maintains: boolean}} page
+   * runs it as the kernel opens, less the one call ADAPTER_ONLY_SENDS pins for the page. A pin's
+   * file has to build its type exactly once, at that call, so a second one there fails, as does
+   * a pin whose call is gone. `readFile`, as sendsIn's, lets a test plant a send.
+   * @param {{page?: string, entries: string[], maintains: boolean}} page
+   * @param {{readFile?: (file: string) => string}} [options]
    */
-  const sentBy = ({ entries, maintains }) => {
-    const { types, own, unread } = sendsIn(pageModules(entries));
+  const sentBy = ({ page, entries, maintains }, options = {}) => {
+    const { sites, own, unread } = sendsIn(pageModules(entries), options);
+    /** @type {Set<Site>} */
+    const adapterOnly = new Set();
+    for (const pin of (page && ADAPTER_ONLY_SENDS[page]) || []) {
+      const ofType = sites.filter(site => site.file === pin.file && site.type === pin.type);
+      assert.deepEqual(
+        ofType.map(site => `${site.call}'s ${site.key}`),
+        [`${pin.call}'s ${pin.key}`],
+        `${pin.file} builds ${pin.type} once, as ${pin.call}'s ${pin.key}`,
+      );
+      adapterOnly.add(ofType[0]);
+    }
+    const types = sites.filter(site => !adapterOnly.has(site)).map(site => site.type);
     return { sent: new Set([...types, ...(maintains ? own : [])]), own, unread };
   };
 
   for (const { page, entries, surface, table, maintains } of PAGES) {
     it(`${page}: its table holds every command and query its code and its root send`, () => {
-      const { sent, own, unread } = sentBy({ entries, maintains });
+      const { sent, own, unread } = sentBy({ page, entries, maintains });
       assert.ok(sent.size > 0, `${page} sends something`);
       assert.deepEqual([...own], ['runStartupMaintenance'], "the kernel's own send");
       assert.deepEqual(
@@ -262,7 +348,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
 
     if (surface !== 'newtab') {
       it(`${page}: its table holds nothing else, so its start loads no handler it never runs`, () => {
-        assert.deepEqual([...registered(table)].sort(), [...sentBy({ entries, maintains }).sent].sort());
+        assert.deepEqual([...registered(table)].sort(), [...sentBy({ page, entries, maintains }).sent].sort());
       });
     }
 
@@ -322,6 +408,47 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     );
   });
 
+  it("leaves out of recovery.html's sends only safe-disable's one adapter-only call, so a send planted anywhere else still fails, in remediation/catalog.js too (#20 slice 4b)", () => {
+    const recovery = /** @type {(typeof PAGES)[number]} */ (PAGES.find(entry => entry.page === 'recovery.html'));
+    const catalog = 'js/trust/core/remediation/catalog.js';
+    /**
+     * What recovery.html sends with `planted` added to the end of `file`, or with `file`'s text
+     * changed by `edit`
+     * @param {string} file
+     * @param {{planted?: string, edit?: (text: string) => string}} change
+     */
+    const sentWith = (file, { planted = '', edit = text => text }) =>
+      sentBy(recovery, {
+        readFile: read => {
+          const text = fs.readFileSync(read, 'utf8');
+          return path.relative(ROOT, read) === file ? `${edit(text)}\n${planted}\n` : text;
+        },
+      });
+    /** @param {Set<string>} sent */
+    const unheld = sent => [...sent].filter(type => !registered(recovery.table).has(type));
+    // The pin's failure, whose message the diff of the sites it found follows
+    const pinFails = { message: /^js\/trust\/core\/remediation\/catalog\.js builds setPreferences once, as commitOrThrow's command\n/ };
+    // As the page is: the one call is left out, and its table holds what's left
+    const site = sendsIn([path.join(ROOT, catalog)]).sites.filter(found => found.type === 'setPreferences');
+    assert.deepEqual(site.map(found => [found.call, found.key]), [['commitOrThrow', 'command']]);
+    assert.deepEqual([...sentBy(recovery).sent], ['getPreferences']);
+    // A second setPreferences in the same file, sent to a kernel or committed the same way
+    for (const planted of [
+      "export const plantedSend = kernel => kernel.execute({ type: 'setPreferences', commandId: 'p', values: {} });",
+      "export const plantedCommit = adapter => commitOrThrow(adapter, { command: { type: 'setPreferences', commandId: 'p' } });",
+    ]) {
+      assert.throws(() => sentWith(catalog, { planted }), pinFails, planted);
+    }
+    // Another type in the same file, and a setPreferences in another of the page's modules
+    assert.deepEqual(unheld(sentWith(catalog, { planted: "export const planted = { type: 'saveNoteContent', commandId: 'p' };" }).sent), ['saveNoteContent']);
+    assert.deepEqual(
+      unheld(sentWith('js/trust/ui/view.js', { planted: "export const planted = kernel => kernel.execute({ type: 'setPreferences', commandId: 'p', values: {} });" }).sent),
+      ['setPreferences'],
+    );
+    // A pin whose call is gone fails too, so it can't outlive what it pins
+    assert.throws(() => sentWith(catalog, { edit: text => text.replace("type: 'setPreferences'", "type: 'renamedPreferences'") }), pinFails);
+  });
+
   it("ALL_HANDLERS, the tests' table, holds every command and query the catalog has", () => {
     assert.equal(ALL_HANDLERS.catalog, WORKER_CATALOG);
     assert.deepEqual([...registered(ALL_HANDLERS)].sort(), [...CATALOG_TYPES].sort());
@@ -330,10 +457,10 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
   });
 
   it("the close-time drafts' apply is in the table of each page whose root applies them, and not the worker's, which leaves a journaled editor save to the pages (#33, #35 slice 3)", () => {
-    for (const { page, entries, surface, table, maintains } of PAGES) {
-      const pages = surface !== 'worker-internal';
-      assert.equal(sentBy({ entries, maintains }).sent.has('applyCloseDraft'), pages, `${page} sends it`);
-      assert.equal(registered(table).has('applyCloseDraft'), pages, `${page}'s table holds it`);
+    for (const { page, entries, surface, table, maintains, writesNotes } of PAGES) {
+      const applies = surface !== 'worker-internal' && writesNotes;
+      assert.equal(sentBy({ page, entries, maintains }).sent.has('applyCloseDraft'), applies, `${page} sends it`);
+      assert.equal(registered(table).has('applyCloseDraft'), applies, `${page}'s table holds it`);
     }
   });
 
@@ -393,7 +520,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       'js/kernel/adapters/in-context.js',
       'js/kernel/adapters/indexeddb/journal.js',
     ];
-    for (const { page, entries, surface } of PAGES) {
+    for (const { page, entries, surface, writesNotes } of PAGES) {
       if (surface === 'worker-internal') continue;
       // What a page loads before it's ready: its own modules' static imports, and on the new tab
       // the workspace chunk its entry loads at once (js/entries/newtab.js)
@@ -403,7 +530,8 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       );
       assert.ok(start.has('js/kernel/composition/host.js'), `${page}'s start holds the shim`);
       const loaded = pageModules(entries).map(file => path.relative(ROOT, file));
-      assert.ok(loaded.includes(chunk), `${page} loads the chunk`);
+      // A page that writes no note loads no journal, at its start or later
+      assert.equal(loaded.includes(chunk), writesNotes, `${page} loads the chunk`);
       assert.deepEqual(
         chunkOnly.filter(file => start.has(file)),
         [],

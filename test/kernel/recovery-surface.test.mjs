@@ -11,6 +11,7 @@ import { webcrypto } from 'node:crypto';
 
 import { principalOf } from '../../js/kernel/adapters/messaging/runtime-port.js';
 import { browserRecoveryHost, createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
+import { RECOVERY_HANDLERS } from '../../js/kernel/core/application/handlers-recovery.js';
 import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import { rejected } from '../../js/kernel/core/contracts/outcomes.js';
 import { QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
@@ -32,7 +33,7 @@ import { TRIGGERS } from '../../js/trust/core/vocabulary.js';
 import { INCIDENT as TITLES, PAGE, PROVIDER, RESOLVED } from '../../js/trust/ui/copy.js';
 import { PLATFORM } from '../../js/trust/ui/model.js';
 import { EXTENSION_ID } from './chrome-fake.mjs';
-import { KeyRange } from './migration-support.mjs';
+import { KeyRange, profileWith, synthesized } from './migration-support.mjs';
 import { adapterOn } from './storage-fixture.mjs';
 import { CALLERS } from './support.mjs';
 import { MANIFEST, freshProfile, grantedAsDeclared, settingsOf } from './trust-provider-support.mjs';
@@ -61,7 +62,7 @@ const OTHERS = /** @type {Surface[]} */ (SURFACES.filter(surface => surface !== 
 const DENIED = Object.freeze({ allowed: false, code: 'not-on-surface' });
 
 describe("recovery.html's rows in #13's router policy (#20 slice 4b)", () => {
-  const policy = createBaselinePolicy({ rows: RECOVERY_PAGE_ROWS });
+  const policy = createBaselinePolicy(RECOVERY_HANDLERS.catalog, { rows: RECOVERY_PAGE_ROWS });
 
   it('are the reads, the check on open, the check after a repair, dismissal, and rebuild-index, all in the trust catalog', () => {
     assert.deepEqual(Object.keys(RECOVERY_PAGE_ROWS), Object.keys(REQUESTS));
@@ -113,7 +114,9 @@ describe("recovery.html's rows in #13's router policy (#20 slice 4b)", () => {
   });
 
   it("never lets a row widen a kernel catalog entry, whose own surfaces decide", () => {
-    const widened = createBaselinePolicy({ rows: { createNote: { surfaces: ['recovery'] }, listFolders: { surfaces: ['recovery'] } } });
+    const widened = createBaselinePolicy(RECOVERY_HANDLERS.catalog, {
+      rows: { createNote: { surfaces: ['recovery'] }, listFolders: { surfaces: ['recovery'] } },
+    });
     assert.deepEqual(widened.authorize({ type: 'createNote' }, CALLERS.recovery), DENIED);
     assert.deepEqual(widened.authorize({ type: 'listFolders' }, CALLERS.recovery), DENIED);
     assert.deepEqual(widened.authorize({ type: 'createNote' }, CALLERS.newtab), { allowed: true });
@@ -148,7 +151,7 @@ function servedRows() {
   const router = createRouter({
     lookup,
     handlers,
-    policy: createBaselinePolicy({ rows: RECOVERY_PAGE_ROWS }),
+    policy: createBaselinePolicy(RECOVERY_HANDLERS.catalog, { rows: RECOVERY_PAGE_ROWS }),
     clock,
     timers: realTimers,
     coordinatorId: 'recovery-page-router',
@@ -277,11 +280,15 @@ describe("#15's recovery host (#20 slice 4b)", () => {
  * recovery.html's root on a fresh profile, with #17's adapter for its notes database
  * @param {ReturnType<typeof freshProfile>} [of]
  */
-function rootOn(of = freshProfile()) {
+async function rootOn(of = freshProfile()) {
   const local = of.chrome.api.storage.local;
+  // The worker's open makes the database at this build's version, as its run does on a new
+  // profile; the root opens it as it is, on #17's adapter of its own
+  const worker = adapterOn(of);
+  await worker.open();
+  worker.close();
   const root = createRecoveryRoot({
     host: {
-      adapter: adapterOn(of),
       indexedDB: of.faults.factory,
       keyRange: /** @type {any} */ (KeyRange),
       settings: settingsOf(of),
@@ -300,8 +307,8 @@ let commands = 0;
 const commandId = () => `00000000-0000-4000-8000-${(++commands).toString(16).padStart(12, '0')}`;
 
 describe("recovery.html's root", () => {
-  it('serves the reads and the check on open in the page, and storage verifies with no migration port on a version 8 database', async () => {
-    const { root } = rootOn();
+  it("serves the reads and the check on open in the page, and storage verifies on #17's adapter at the latest version, through the migration port", async () => {
+    const { root } = await rootOn();
     try {
       const before = /** @type {any} */ (await root.trust.query({ type: 'trust.summary' }));
       assert.equal(before.kind, 'ready', JSON.stringify(before));
@@ -324,8 +331,49 @@ describe("recovery.html's root", () => {
     }
   });
 
+  it("reads a version 8 database's waiting update as storage degraded with migration-pending, capture safe, and never failed (#20 slice 4b)", async () => {
+    // 1.4.x's database, which the worker's run hasn't upgraded yet
+    const of = /** @type {any} */ (await profileWith(/** @type {any} */ (synthesized().get('v8.basic'))));
+    const local = of.chrome.api.storage.local;
+    const root = createRecoveryRoot({
+      host: {
+        indexedDB: of.faults.factory,
+        keyRange: /** @type {any} */ (KeyRange),
+        settings: { get: (/** @type {string[]} */ keys) => local.get(keys), set: (/** @type {Record<string, unknown>} */ items) => local.set(items) },
+        secretSettings: /** @type {any} */ (local),
+        locks: webLocks(),
+        crypto: /** @type {any} */ (webcrypto),
+        permissions: grantedAsDeclared(),
+        manifest: MANIFEST,
+        timers: realTimers,
+      },
+    });
+    try {
+      assert.equal(await root.kernel.whenReady(), null);
+      const verified = /** @type {any} */ (
+        await root.trust.execute({ type: 'trust.verify', commandId: commandId(), trigger: 'open' })
+      );
+      assert.equal(verified.kind, 'committed', JSON.stringify(verified));
+      const report = /** @type {any} */ (await root.trust.query({ type: 'trust.report' }));
+      const storage = report.data.providers.find((/** @type {any} */ provider) => provider.providerId === 'storage');
+      assert.deepEqual(
+        [storage.status, storage.receipt && storage.receipt.capture, storage.receipt && storage.receipt.consequenceKey],
+        ['degraded', 'safe', 'storage.migration-pending'],
+        JSON.stringify(storage),
+      );
+      const incidents = /** @type {any} */ (await root.trust.query({ type: 'recovery.incidents' }));
+      const faults = incidents.data.incidents.filter((/** @type {any} */ incident) => incident.providerId === 'storage').map((/** @type {any} */ incident) => incident.faultCode);
+      assert.deepEqual(faults, ['migration-pending']);
+      // The page opened it at 8, as it found it, and upgraded nothing
+      const listed = await of.real.databases();
+      assert.deepEqual(listed.filter((/** @type {any} */ db) => db.name === 'CanvasTabDB').map((/** @type {any} */ db) => db.version), [8]);
+    } finally {
+      root.close();
+    }
+  });
+
   it("refuses what its rows don't name from the page itself: another remediation, a verify not on open, and recovery.raise", async () => {
-    const { root } = rootOn();
+    const { root } = await rootOn();
     try {
       const other = /** @type {any} */ (
         await root.trust.execute({ type: 'recovery.run', commandId: commandId(), remediationId: 'retry-open', userInitiated: true })
