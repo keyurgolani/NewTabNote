@@ -281,6 +281,23 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
+  it('reads each module worker a worker starts as a root of its own too: a worker the indexer starts, importing the write adapter, fails (rule 1, #204, F2)', () => {
+    const problems = problemsOf({
+      readFile: planted({
+        'js/workers/indexer.js': text =>
+          `${text}\nexport const nested = () => new Worker(new URL('./nested.js', import.meta.url), { type: 'module' });\n`,
+        'js/workers/nested.js': () =>
+          "import { createIndexedDbAdapter } from '../kernel/adapters/indexeddb/adapter.js';\nexport const planted = createIndexedDbAdapter;\n",
+      }),
+    });
+    assert.ok(
+      problems.some(problem =>
+        problem.startsWith('js/workers/nested.js reaches js/kernel/adapters/indexeddb/adapter.js'),
+      ),
+      problems.join('\n'),
+    );
+  });
+
   it("fails a page's write the list doesn't name (rule 2)", () => {
     const problems = problemsOf({
       readFile: planted({
