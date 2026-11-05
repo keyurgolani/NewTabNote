@@ -129,5 +129,10 @@ export function menuKeys(editor, menu, { opener, item }) {
   });
 
   const first = /** @type {HTMLElement | null} */ (menu.querySelector('[role="menuitem"]'));
-  if (first && (item ? doc.activeElement === item : opener)) first.focus();
+  // focusVisible, since a menu opened by Mod+/ right after a click into the text would otherwise
+  // show no ring: a modified key leaves the page out of keyboard modality. The DOM types this
+  // TypeScript ships don't have the option yet.
+  /** @type {FocusOptions & { focusVisible?: boolean }} */
+  const visibly = { focusVisible: true };
+  if (first && (item ? doc.activeElement === item : opener)) first.focus(visibly);
 }
