@@ -166,6 +166,43 @@ describe("capture and storage probe through #17's adapter (#20 slice 2)", () => 
   });
 });
 
+// #17's adapter never opens again once its connection is gone: after another context's upgrade
+// or Chrome's close, every call answers reload-required, which no resend fixes (connection.js).
+// The page that holds it reloads to open the database again, so a probe there verified nothing.
+describe("a probe on a connection that needs a reload (#20 slice 4b, the lead's call of 2026-10-31 11:55)", () => {
+  it("verifies nothing after another context's upgrade closed the connection: unverified with reload-required, never failed, for capture and storage", async () => {
+    const of = freshProfile();
+    const adapter = adapterOn(of);
+    await adapter.open();
+    // A newer build's upgrade, which closes this connection on versionchange
+    await new Promise((resolve, reject) => {
+      const request = of.real.open('CanvasTabDB', 99);
+      request.onsuccess = () => {
+        request.result.close();
+        resolve(undefined);
+      };
+      request.onerror = () => reject(request.error);
+    });
+    for (const id of /** @type {const} */ (['capture', 'storage'])) {
+      const { receipt, faults } = await run(id, { storage: adapter });
+      assert.deepEqual([receipt.status, receipt.capture, faults], ['unverified', undefined, []], id);
+      assert.deepEqual(receipt.evidence, { cause: 'storage', errorCode: 'reload-required' }, id);
+    }
+    adapter.close();
+  });
+
+  it('verifies nothing on a connection already closed, as one Chrome closed reads', async () => {
+    const of = freshProfile();
+    const adapter = adapterOn(of);
+    await adapter.open();
+    adapter.close();
+    for (const id of /** @type {const} */ (['capture', 'storage'])) {
+      const { receipt, faults } = await run(id, { storage: adapter });
+      assert.deepEqual([receipt.status, faults, receipt.evidence.errorCode], ['unverified', [], 'reload-required'], id);
+    }
+  });
+});
+
 // The legacy adapter's two cases went with it (#17 PR 4a): every root opens #17's adapter, whose
 // verify on a committed write is the first case above, and whose transient failure is this one
 describe("a probe write #17's adapter can't commit, as a transient UnknownError there and on its one more run (#20 slice 2, #17 PR 4a)", () => {

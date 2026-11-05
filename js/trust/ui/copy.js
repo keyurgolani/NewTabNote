@@ -237,6 +237,8 @@ export const REBUILD = Object.freeze({
   // The page followed a run it stopped waiting for as long as it would (view.js's FOLLOW_MS)
   untracked: "NewTabNote can't tell whether the repair finished. Reload the page to check.",
   failed: 'Failed to rebuild the search index: {reason}.',
+  // After a reason that only a reload helps, beside Reload in place of Try again or Check again
+  reloadToTry: 'Reload the page to try again.',
   unchanged: "Your notes didn't change.",
   tryAgain: 'Try again',
   steps: { preview: 'Preview', apply: 'Rebuild', verify: 'Check' },
@@ -256,6 +258,8 @@ export const REASON = Object.freeze({
   'no-locks': "this browser can't keep it to one tab",
   'run-expired': 'the confirmation expired',
   'transaction-failed': 'the database refused the change',
+  // #17's adapter opens no connection again once it's gone, so only a reload helps (the lead's ruling 4)
+  'reload-required': 'this page lost its connection to your notes database',
   'timed-out': 'it took too long',
 });
 

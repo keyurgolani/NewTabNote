@@ -688,22 +688,42 @@ export function mountRecoveryPage({
         h('div', { class: 'trust-flow-actions' }, button(REBUILD.tryAgain, () => startRepair(problem), { primary: true })),
       ];
     } else if (flow.phase === 'not-checked') {
+      // A check that couldn't run because the page's connection needs a reload: only a reload helps
+      const reloads = flow.reason === 'reload-required';
       body = [
-        h('p', { class: 'trust-result', role: 'status' }, glyph('partial'), h('span', {}, REBUILD.notChecked)),
+        h('p', { class: 'trust-result', role: 'status' }, glyph('partial'), h('span', {}, REBUILD.notChecked, reloads ? ` ${REBUILD.reloadToTry}` : null)),
         steps(flow),
-        flow.retryable ? h('div', { class: 'trust-flow-actions' }, button(REBUILD.checkAgain, () => checkRepair(problem), { primary: true })) : null,
+        reloads
+          ? h('div', { class: 'trust-flow-actions' }, button(PAGE.reload, () => reload(), { primary: true, id: nextId(incidentId) }))
+          : flow.retryable
+            ? h('div', { class: 'trust-flow-actions' }, button(REBUILD.checkAgain, () => checkRepair(problem), { primary: true }))
+            : null,
       ];
     } else if (flow.phase === 'failed') {
+      // A run cut off because the page's connection needs a reload: Reload in place of Try again
+      const reloads = flow.reason === 'reload-required';
       body = [
         h(
           'p',
           { class: 'trust-result', role: 'status' },
           glyph('failed'),
-          h('span', {}, h('strong', {}, fill(REBUILD.failed, { reason: reasonText(flow.reason) })), flow.at !== null ? ` Tried ${whenText(flow.at, now())}.` : null),
+          h(
+            'span',
+            {},
+            h('strong', {}, fill(REBUILD.failed, { reason: reasonText(flow.reason) })),
+            reloads ? ` ${REBUILD.reloadToTry}` : null,
+            flow.at !== null ? ` Tried ${whenText(flow.at, now())}.` : null,
+          ),
         ),
         steps(flow),
         h('p', { class: 'trust-muted' }, REBUILD.unchanged),
-        h('div', { class: 'trust-flow-actions' }, button(REBUILD.tryAgain, () => startRepair(problem), { primary: true })),
+        h(
+          'div',
+          { class: 'trust-flow-actions' },
+          reloads
+            ? button(PAGE.reload, () => reload(), { primary: true, id: nextId(incidentId) })
+            : button(REBUILD.tryAgain, () => startRepair(problem), { primary: true }),
+        ),
       ];
     }
     return h(
@@ -1257,11 +1277,31 @@ export function mountRecoveryPage({
     if (checked && checked.kind === 'checked' && checked.result === 'still-there') {
       setFlow(problem, { phase: 'still-there', at: now() });
       live(REBUILD.stillThere);
-    } else {
-      setFlow(problem, { phase: 'not-checked', retryable: Boolean(checked && checked.retryable), at: now() });
-      live(REBUILD.notChecked);
+      await refreshQuietly();
+      return;
     }
+    // Nothing decided: the receipt the check stored says why, as the report reads it, so a check
+    // the page's connection stopped (reload-required) offers Reload, not Check again
     await refreshQuietly();
+    const receipt = checkedReceipt(checked);
+    const code = receipt && receipt.evidence ? /** @type {Record<string, unknown>} */ (receipt.evidence).errorCode : null;
+    setFlow(problem, {
+      phase: 'not-checked',
+      retryable: Boolean(checked && checked.retryable),
+      reason: typeof code === 'string' ? code : null,
+      at: now(),
+    });
+    live(REBUILD.notChecked);
+  }
+
+  /**
+   * The receipt the check after a repair stored, from the report, or null
+   * @param {any} checked - recovery.check's answer
+   */
+  function checkedReceipt(checked) {
+    if (!checked || checked.kind !== 'checked' || !checked.receiptId || !state.report) return null;
+    const entry = state.report.providers.find(candidate => candidate.providerId === checked.providerId);
+    return entry && entry.receipt && entry.receipt.id === checked.receiptId ? entry.receipt : null;
   }
 
   /** @param {Problem} problem */

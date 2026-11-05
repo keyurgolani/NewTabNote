@@ -31,7 +31,10 @@
  * still lands well inside the check's timeout.
  *
  * A retryable failure (a blocked upgrade, an open still pending, a transient abort) verified
- * nothing either way, so it's `unverified` with its code. A record already under the probe's
+ * nothing either way, so it's `unverified` with its code, and so is `reload-required`: #17's
+ * adapter never opens again once its connection is gone, after another context's upgrade or
+ * Chrome's close, so the page that holds it reloads to open the database again, and nothing it
+ * probed says the database fails. A record already under the probe's
  * key is never touched: the probe stops, writes nothing, and reports `unverified`, and so does a
  * read-back that differs (`probe-readback-mismatch`).
  */
@@ -189,6 +192,9 @@ function failureOf(outcome) {
     // nothing, so it's never a failed probe (the connection answers it unretryable once the
     // open was refused)
     if (outcome.code === 'migration-required') return { kind: 'unverified', evidence, code: outcome.code };
+    // A connection that needs a reload, though no resend fixes it: the page reloads, and the
+    // database it probed may be fine (#20 slice 4b; the lead, 2026-10-31 11:55)
+    if (outcome.code === 'reload-required') return { kind: 'unverified', evidence, code: outcome.code };
     return { kind: outcome.retryable ? 'unverified' : 'failed', evidence, code: outcome.code };
   }
   // Rejected (a record under the probe's key), a conflict, or unknown: nothing was verified

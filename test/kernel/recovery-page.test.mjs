@@ -1226,6 +1226,87 @@ describe("recovery.html after #115's design review", () => {
   });
 });
 
+describe('a repair the page can only finish after a reload (the lead\'s ruling 4, #20 slice 4b)', () => {
+  it('says a rebuild stopped because this page lost its connection, with Reload in place of Try again', async () => {
+    const tab = await profileWithStaleIndex(2);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context, searchPipeline(tab.env.indexedDB)) });
+    const failed = {
+      kind: 'remediation', runId: '00000000-0000-4000-8000-0000000000f2', remediationId: 'rebuild-index', class: 'regenerable',
+      state: 'failed', step: 'apply', outcome: 'reload-required', needs: [], impact: null, previewDigest: null,
+      unreadable: [], unreadableCount: 0, fileMayBeEmpty: false,
+    };
+    const page = openPage(root, { hash: '#recovery', answers: { 'recovery.run': [undefined, failed] } });
+    try {
+      await page.ready;
+      const card = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'open');
+      await until(card, 'the lagging problem');
+      control(page.doc, REBUILD.action, card()).click();
+      const panel = () => page.doc.querySelector('section.trust-flow');
+      await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
+      control(page.doc, REBUILD.confirm, panel()).click();
+      await until(() => panel() && panel().getAttribute('data-state') === 'failed', 'the failure');
+      assert.match(
+        text(panel()),
+        new RegExp(`^Rebuild the search index\\s*${escape(fill(REBUILD.failed, { reason: REASON['reload-required'] }))} ${escape(REBUILD.reloadToTry)} Tried at `),
+      );
+      const primary = panel().querySelector('.trust-flow-actions').querySelectorAll('button');
+      // The only way forward, where Try again was; focus stays on the panel's heading, as a failed run's does
+      assert.deepEqual(primary.map(text), [PAGE.reload]);
+      same(page.doc.activeElement, panel().querySelector('h4'), "the panel's heading doesn't keep focus");
+      primary[0].click();
+      assert.equal(page.reloads(), 1);
+      assert.equal(page.calls.filter(type => type === 'recovery.run').length, 2);
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
+  it("says so when the check after the rebuild couldn't run for the same reason, with Reload in place of Check again", async () => {
+    const tab = await profileWithStaleIndex(2);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context, searchPipeline(tab.env.indexedDB)) });
+    // The check's own receipt says why it decided nothing, in the reports the page reads after it
+    const receiptId = '00000000-0000-4000-8000-0000000000e1';
+    let checked = false;
+    const check = () => {
+      checked = true;
+      return { kind: 'checked', incidentId: '', providerId: 'index', result: 'not-checked', retryable: true, receiptId };
+    };
+    /** @param {() => Promise<any>} call */
+    const report = async call => {
+      const answer = await call();
+      if (!checked) return answer;
+      const index = answer.data.providers.find((/** @type {any} */ entry) => entry.providerId === 'index');
+      index.receipt = { ...index.receipt, id: receiptId, status: 'unverified', evidence: { cause: 'storage', errorCode: 'reload-required' } };
+      return answer;
+    };
+    const page = openPage(root, {
+      hash: '#recovery',
+      answers: { 'recovery.check': [check], 'trust.report': Array.from({ length: 40 }, () => report) },
+    });
+    try {
+      await page.ready;
+      const card = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'open');
+      await until(card, 'the lagging problem');
+      control(page.doc, REBUILD.action, card()).click();
+      const panel = () => page.doc.querySelector('section.trust-flow');
+      await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
+      control(page.doc, REBUILD.confirm, panel()).click();
+      await until(() => panel() && panel().getAttribute('data-state') === 'not-checked', "the check that couldn't run");
+      assert.match(text(panel()), new RegExp(`${escape(REBUILD.notChecked)} ${escape(REBUILD.reloadToTry)}`));
+      const primary = panel().querySelector('.trust-flow-actions').querySelectorAll('button');
+      assert.deepEqual(primary.map(text), [PAGE.reload]);
+      primary[0].click();
+      assert.equal(page.reloads(), 1);
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+});
+
 describe("the Recovery Center's words for what it knows (#115's high review)", () => {
   /** An incident as the records hold one, open unless `fields` say otherwise */
   const incident = (/** @type {Record<string, unknown>} */ fields) =>
