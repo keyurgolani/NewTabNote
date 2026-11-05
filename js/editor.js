@@ -588,9 +588,9 @@ class BlockEditor {
     // with nothing typed into it writes no draft (#33)
     this._rememberLoaded(blocksData, openedRevision, openedSeq);
 
-    // Scroll to top of editor
-    // Set editor width
-    const editorContainer = this.root.querySelector('.editor-container') || this.doc.getElementById('editor-container');
+    // Scroll to top of editor: its own pane, which is its root and scrolls (#197). An editor made
+    // with no root uses the main pane, as before
+    const editorContainer = this.root === this.doc ? this.doc.getElementById('editor-container') : this.root;
 
     // Focus first block, then ensure scroll is at top. Not while focus is in an
     // open modal, menu, or dialog: it stays there, as on the onboarding
