@@ -1,5 +1,5 @@
 {
-  "rule": "recovery.html's start takes in the records' catch-up, which only the service worker runs (#35 slice 3c). The plant goes in the page whose start has the most room under its row, so this rule is the one that fails: in the new tab's start it also put the JS over its row (#115). test/budgets.test.js holds the rule to the new tab's start",
+  "rule": "the new tab's start takes in the records' catch-up, which only the service worker runs (#35 slice 3c). The fixture raises the new tab's row in its own build, as budget-forbidden does, so the plant's bytes break no other rule (#115)",
   "expect": [
     "budget/worker-only"
   ],
@@ -8,8 +8,13 @@
   ],
   "edits": [
     {
-      "file": "js/recovery.js",
-      "append": "\nimport { recordCatchUpCommands } from './kernel/core/application/record-catch-up.js';\nwindow.ntnFixtureCatchUp = recordCatchUpCommands;\n"
+      "file": "js/entries/newtab.js",
+      "append": "\nimport { recordCatchUpCommands } from '../kernel/core/application/record-catch-up.js';\nwindow.ntnFixtureCatchUp = recordCatchUpCommands;\n"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 716800, \"gzip\": 204800 }",
+      "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
     }
   ]
 }
