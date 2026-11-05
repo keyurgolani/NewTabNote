@@ -10,8 +10,8 @@
  * In order, each step reporting every problem it finds before the build stops:
  *   1. the toolchain: Node is the version .nvmrc pins, and SOURCE_DATE_EPOCH, if set, is a number
  *   2. the inputs: each one the build lists is there, and the manifest checks
- *   3. the bundle: the pages pass and the background pass, then the classic scripts and the
- *      static files copied
+ *   3. the bundle: the pages pass, recovery.html's of its own, and the background pass, then
+ *      the classic scripts and the static files copied
  *   4. the checks on what it wrote and on the modules the bundle holds: closure, each page's
  *      preloads and classic scripts, remote code, CSP, notices and source maps, vendored files,
  *      environment reads, CommonJS, and the background's own

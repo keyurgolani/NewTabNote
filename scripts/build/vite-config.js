@@ -2,11 +2,13 @@
 
 /**
  * The bundler's configuration (#27 slice 2: "Toolchain" and "Entries"). Vite runs in build
- * mode only, never as a dev server, in three passes into the same staging directory:
- *   pages       the five pages, each an HTML entry. Their module scripts and stylesheets become
- *               content-hashed chunks and CSS under assets/, and a module worker one of them
- *               starts with `new Worker(new URL('…', import.meta.url), {type: 'module'})` becomes
- *               an entry of its own.
+ * mode only, never as a dev server, in four passes into the same staging directory:
+ *   pages       the new tab, Popup, Side Panel and offscreen pages, each an HTML entry. Their
+ *               module scripts and stylesheets become content-hashed chunks and CSS under assets/,
+ *               and a module worker one of them starts with `new Worker(new URL('…',
+ *               import.meta.url), {type: 'module'})` becomes an entry of its own.
+ *   recovery    recovery.html, with the pages pass's settings, in a pass of its own
+ *               (OWN_PASS_PAGES), so it splits no chunk the other pages share.
  *   background  js/background.js, the manifest's module service worker, as one self-contained ES
  *               module at that path: nothing splits off, so nothing loads after the worker starts.
  *   guard       js/network-guard.js, the network guard each page loads as its first script (#21
@@ -53,6 +55,15 @@ const PAGES = Object.freeze({
   offscreen: 'offscreen.html',
   recovery: 'recovery.html',
 });
+
+/**
+ * The pages built in a pass of their own (#115's D, ruling 5): recovery.html's start shares much
+ * of the kernel with the new tab's, Popup's and Side Panel's, and in one pass the bundler splits
+ * each chunk they share by which pages load each module, which cost those pages files and the
+ * compression they shared. In its own pass it carries its own copy of what it imports, and the
+ * pages pass builds the others as it did before it
+ */
+const OWN_PASS_PAGES = Object.freeze(['recovery']);
 
 /** The service worker's entry, which ships at the same path */
 const BACKGROUND_ENTRY = 'js/background.js';
@@ -260,7 +271,7 @@ function workerTerserPlugin() {
 /**
  * @typedef {object} PassOptions
  * @property {string} root - the sources
- * @property {string} outDir - the staging directory both passes write into
+ * @property {string} outDir - the staging directory every pass writes into
  * @property {Mode} mode
  * @property {string} buildId - the build's, which the loader carries (build-info.js's buildId)
  * @property {BundleReport} report - what the passes wrote, filled in as they run
@@ -271,7 +282,7 @@ function workerTerserPlugin() {
  */
 
 /**
- * What both passes share
+ * What every pass shares
  * @param {PassOptions} options
  * @returns {InlineConfig}
  */
@@ -303,14 +314,14 @@ function common({ root, mode, buildId, logger }) {
 }
 
 /**
- * The build options both passes share
+ * The build options every pass shares
  * @param {PassOptions} options
  * @returns {NonNullable<InlineConfig['build']>}
  */
 function buildOptions({ outDir, mode }) {
   return {
     outDir,
-    // The staging directory starts empty, and the second pass writes beside the first
+    // The staging directory starts empty, and each pass writes beside the ones before it
     emptyOutDir: false,
     assetsDir: ASSETS_DIR,
     target: TARGET,
@@ -427,11 +438,37 @@ function preloadsFor(filename, deps) {
 }
 
 /**
- * The pages pass
+ * The pages pass: every page but OWN_PASS_PAGES'
  * @param {PassOptions} options
  * @returns {InlineConfig}
  */
 function pagesConfig(options) {
+  return pagePassConfig(options, Object.keys(PAGES).filter((page) => !OWN_PASS_PAGES.includes(page)));
+}
+
+/**
+ * recovery.html's pass (OWN_PASS_PAGES): the pages pass's settings, for that page alone
+ * @param {PassOptions} options
+ * @returns {InlineConfig}
+ */
+function recoveryConfig(options) {
+  // One page: the block core's dependencies would stay in the page's own entry chunk, which the
+  // core's chunk would import as the entry imports it, a cycle a page's preloads walk back into
+  // its own entry. So here the core's chunk takes them too.
+  return pagePassConfig(options, ['recovery'], { blockDependencies: true });
+}
+
+/**
+ * A pass over `pages`, each an HTML entry, with what every page pass shares: the names, the
+ * preloads, the loader's and the block core's chunks, the workers' build, and the report, which
+ * records its chunks as the pages'
+ * @param {PassOptions} options
+ * @param {readonly string[]} pages - PAGES' names
+ * @param {{blockDependencies?: boolean}} [chunks] - `blockDependencies`: whether the block core's
+ *   chunk takes its modules' dependencies too
+ * @returns {InlineConfig}
+ */
+function pagePassConfig(options, pages, { blockDependencies = false } = {}) {
   const { root, mode, report, onLog } = options;
   const names = {
     entryFileNames: `${ASSETS_DIR}/[name]-[hash].js`,
@@ -447,7 +484,7 @@ function pagesConfig(options) {
       // close-drafts-chunk and journal-chunk preload nothing beside them (preloadsFor).
       modulePreload: { polyfill: false, resolveDependencies: preloadsFor },
       rolldownOptions: {
-        input: Object.fromEntries(Object.entries(PAGES).map(([name, file]) => [name, path.join(root, file)])),
+        input: Object.fromEntries(pages.map((name) => [name, path.join(root, /** @type {Record<string, string>} */ (PAGES)[name])])),
         output: {
           ...names,
           chunkFileNames: chunkFileName(root),
@@ -456,7 +493,7 @@ function pagesConfig(options) {
           codeSplitting: {
             groups: [
               { name: 'loader', test: (id) => loader.has(id) },
-              { name: blockCoreChunk(root), debugName: 'blocks', includeDependenciesRecursively: false },
+              { name: blockCoreChunk(root), debugName: 'blocks', includeDependenciesRecursively: blockDependencies },
             ],
           },
         },
@@ -558,6 +595,8 @@ function guardConfig(options) {
 
 module.exports = {
   MINIMUM_CHROME_VERSION,
+  OWN_PASS_PAGES,
+  recoveryConfig,
   TARGET,
   PAGES,
   BACKGROUND_ENTRY,

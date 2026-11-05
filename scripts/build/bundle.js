@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Runs the bundler's three passes (scripts/build/vite-config.js) and turns what goes wrong into
+ * Runs the bundler's four passes (scripts/build/vite-config.js) and turns what goes wrong into
  * problems (#27 "Failure rules"). An error from the bundler is `build/bundle` (an import it
  * can't resolve, a file it can't parse), `build/css` from the stylesheet pipeline, or
  * `build/terser` from the minifier. Any warning Vite or the bundler prints is
@@ -17,7 +17,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { problem } = require('./diagnostics.js');
-const { pagesConfig, backgroundConfig, guardConfig, BACKGROUND_ENTRY, LOADER } = require('./vite-config.js');
+const { pagesConfig, recoveryConfig, backgroundConfig, guardConfig, BACKGROUND_ENTRY, LOADER } = require('./vite-config.js');
 const { guardOrderProblems, guardRegistry } = require('./guard.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
@@ -263,6 +263,8 @@ async function bundle({ root, outDir, mode, buildId }) {
   const problems = [];
   try {
     await vite.build(pagesConfig(options));
+    // recovery.html in a pass of its own, so it splits no chunk the other pages share
+    await vite.build(recoveryConfig(options));
     await vite.build(backgroundConfig(options));
     // The page guard inlines the registry's rows cut, once they're validated
     const registry = await guardRegistry(root);

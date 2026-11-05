@@ -131,20 +131,46 @@ function prefixOnly(sheets) {
 }
 
 describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
-  it("builds the five pages as HTML entries, and the service worker in a pass of its own as one file at the manifest's path", () => {
+  it("builds four pages as HTML entries, recovery.html in a pass of its own with the same settings, so it splits no chunk the others share, and the service worker in a pass of its own as one file at the manifest's path (#115's D)", () => {
     const pages = config.pagesConfig(passOptions());
     assert.deepEqual(pages.build.rolldownOptions.input, {
       newtab: '/repo/newtab.html', popup: '/repo/popup.html', sidepanel: '/repo/sidepanel.html', offscreen: '/repo/offscreen.html',
-      recovery: '/repo/recovery.html',
     });
+    const recovery = config.recoveryConfig(passOptions());
+    assert.deepEqual(recovery.build.rolldownOptions.input, { recovery: '/repo/recovery.html' });
+    assert.deepEqual(config.OWN_PASS_PAGES, ['recovery']);
+    // Every page in one of the two
+    assert.deepEqual(
+      [...Object.keys(pages.build.rolldownOptions.input), ...Object.keys(recovery.build.rolldownOptions.input)].sort(),
+      Object.keys(config.PAGES).sort(),
+    );
+    // The pages pass's settings but its input: the names, the minifiers, the loader's and the block
+    // core's chunks, the preloads, and the workers' build. In a pass of one page the core's chunk
+    // takes its dependencies too, or it would import them from the page's own entry chunk, which
+    // imports it: a cycle the page's preloads walk back into its own entry
+    const [, pagesBlocks] = pages.build.rolldownOptions.output.codeSplitting.groups;
+    const [, recoveryBlocks] = recovery.build.rolldownOptions.output.codeSplitting.groups;
+    assert.deepEqual([pagesBlocks.includeDependenciesRecursively, recoveryBlocks.includeDependenciesRecursively], [false, true]);
+    const settings = (/** @type {any} */ pass) => {
+      const { output } = pass.build.rolldownOptions;
+      return {
+        names: [output.entryFileNames, output.chunkFileNames({ moduleIds: ['/repo/js/x.js'] }), output.assetFileNames],
+        groups: output.codeSplitting.groups.map((/** @type {any} */ group) => (typeof group.name === 'function' ? group.debugName : group.name)),
+        build: [pass.build.minify, pass.build.cssMinify, pass.build.target, pass.build.terserOptions, pass.build.modulePreload.polyfill],
+        checks: pass.build.rolldownOptions.checks,
+        worker: pass.worker.format,
+        report: pass.plugins.map((/** @type {any} */ plugin) => plugin.name),
+      };
+    };
+    assert.deepEqual(settings(recovery), settings(pages));
     const background = config.backgroundConfig(passOptions());
     assert.deepEqual(background.build.rolldownOptions.input, { background: '/repo/js/background.js' });
     const { output } = background.build.rolldownOptions;
     assert.deepEqual([output.format, output.entryFileNames, output.codeSplitting], ['es', 'js/background.js', false]);
     assert.equal(background.build.modulePreload, false);
     assert.deepEqual(MANIFEST.background, { service_worker: config.BACKGROUND_ENTRY, type: 'module' });
-    // Both passes write into the one staging directory, which the build empties itself
-    for (const pass of [pages, background]) assert.deepEqual([pass.build.outDir, pass.build.emptyOutDir], ['/repo/.dist-staging-x', false]);
+    // The passes write into the one staging directory, which the build empties itself
+    for (const pass of [pages, recovery, background]) assert.deepEqual([pass.build.outDir, pass.build.emptyOutDir], ['/repo/.dist-staging-x', false]);
     // Chrome 116 has modulepreload, so the polyfill would only add code
     assert.equal(pages.build.modulePreload.polyfill, false);
   });
@@ -242,10 +268,15 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
   it('records what each pass wrote: every chunk with the modules it holds, and every asset', () => {
     const options = passOptions();
     const [pagesReport] = config.pagesConfig(options).plugins;
+    const [recoveryReport] = config.recoveryConfig(options).plugins;
     const [backgroundReport] = config.backgroundConfig(options).plugins;
     pagesReport.generateBundle({}, {
       'assets/newtab-A1.js': { type: 'chunk', fileName: 'assets/newtab-A1.js', name: 'newtab', isEntry: true, isDynamicEntry: false, facadeModuleId: '/repo/newtab.html', moduleIds: ['/repo/js/main.js'], imports: ['assets/host-B2.js'], dynamicImports: ['assets/workspace-D4.js'], viteMetadata: { importedCss: new Set(['assets/newtab-C3.css']) } },
       'assets/newtab-C3.css': { type: 'asset', fileName: 'assets/newtab-C3.css' },
+    });
+    // recovery.html's pass records its chunks as the pages', which every check reads alike
+    recoveryReport.generateBundle({}, {
+      'assets/recovery-E5.js': { type: 'chunk', fileName: 'assets/recovery-E5.js', name: 'recovery', isEntry: true, isDynamicEntry: false, facadeModuleId: '/repo/recovery.html', moduleIds: ['/repo/js/recovery.js'], imports: [] },
     });
     backgroundReport.generateBundle({}, {
       'js/background.js': { type: 'chunk', fileName: 'js/background.js', name: 'background', isEntry: true, isDynamicEntry: false, facadeModuleId: '/repo/js/background.js', moduleIds: ['/repo/js/background.js'], imports: [] },
@@ -253,6 +284,7 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     assert.deepEqual(options.report, {
       chunks: [
         chunk('pages', 'newtab', 'assets/newtab-A1.js', { isEntry: true, facadeModuleId: '/repo/newtab.html', moduleIds: ['/repo/js/main.js'], imports: ['assets/host-B2.js'], dynamicImports: ['assets/workspace-D4.js'], importedCss: ['assets/newtab-C3.css'] }),
+        chunk('pages', 'recovery', 'assets/recovery-E5.js', { isEntry: true, facadeModuleId: '/repo/recovery.html', moduleIds: ['/repo/js/recovery.js'] }),
         chunk('background', 'background', 'js/background.js', { isEntry: true, facadeModuleId: '/repo/js/background.js', moduleIds: ['/repo/js/background.js'] }),
       ],
       assets: [{ pass: 'pages', fileName: 'assets/newtab-C3.css' }],
