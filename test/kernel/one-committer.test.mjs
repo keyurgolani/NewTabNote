@@ -255,6 +255,21 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
+  it('reads each module worker a root starts as a root of its own: the indexer importing the write adapter fails (rule 1, #204, F2)', () => {
+    const problems = problemsOf({
+      readFile: planted({
+        'js/workers/indexer.js': text =>
+          `import { createIndexedDbAdapter } from '../kernel/adapters/indexeddb/adapter.js';\nexport const planted = createIndexedDbAdapter;\n${text}`,
+      }),
+    });
+    assert.ok(
+      problems.some(problem =>
+        problem.startsWith('js/workers/indexer.js reaches js/kernel/adapters/indexeddb/adapter.js'),
+      ),
+      problems.join('\n'),
+    );
+  });
+
   it("fails a page's write the list doesn't name (rule 2)", () => {
     const problems = problemsOf({
       readFile: planted({

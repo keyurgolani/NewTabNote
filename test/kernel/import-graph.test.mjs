@@ -64,4 +64,25 @@ describe('import-graph.mjs', () => {
     assert.deepEqual([...modules].map(file => path.basename(file)).sort(), ['a.js', 'b.js', 'chunk.js', 'entry.js']);
     assert.deepEqual(computed, [`${path.join(dir, 'chunk.js')}:2:28`]);
   });
+
+  it('finds each module worker a module starts with new Worker(new URL(literal, import.meta.url)), which reachGraph names and leaves to a root of its own (#204, F2)', () => {
+    const text = [
+      "export const start = () => new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });",
+      "// new Worker(new URL('./comment.js', import.meta.url))",
+      'const words = "new Worker(new URL(\'./string.js\', import.meta.url))";',
+    ].join('\n');
+    assert.deepEqual(loadsOf(text).workers, ['./worker.js']);
+    const dir = path.resolve('/planted');
+    /** @type {Record<string, string>} */
+    const files = {
+      [path.join(dir, 'entry.js')]: text,
+      [path.join(dir, 'worker.js')]: "import './inside.js';",
+    };
+    const { modules, workers } = reachGraph([path.join(dir, 'entry.js')], { readFile: file => files[file] });
+    assert.deepEqual(
+      [...modules].map(file => path.basename(file)),
+      ['entry.js'],
+    );
+    assert.deepEqual(workers, [path.join(dir, 'worker.js')]);
+  });
 });
