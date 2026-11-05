@@ -595,8 +595,9 @@ class BlockEditor {
     // Focus first block, then ensure scroll is at top. Not while focus is in an
     // open modal, menu, or dialog: it stays there, as on the onboarding
     // walkthrough's button over the welcome note, so keys typed there don't
-    // edit the note
-    setTimeout(() => {
+    // edit the note. Kept as a promise, so the tab bar's + can focus the title once
+    // this has run (#197)
+    this.loadFocus = new Promise(resolve => setTimeout(() => {
       const firstContent = this.container.querySelector('.block-content');
       if (firstContent && !this._focusInOverlay()) {
         firstContent.focus();
@@ -606,7 +607,8 @@ class BlockEditor {
       if (editorContainer) {
         editorContainer.scrollTop = 0;
       }
-    }, 50);
+      resolve();
+    }, 50));
 
     this._startSnapshotInterval();
 

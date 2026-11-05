@@ -904,7 +904,13 @@ class TabController {
       if (note) {
         if (this.noteList) await this.noteList.settled();
         await this.openNoteInNewTab(note.id);
-        document.getElementById('page-title').focus();
+        // The title of the pane it opened in, the right pane's when that pane is active, once
+        // the load's own deferred focus of the first block has run, so it keeps the focus. Its
+        // text is selected, so a typed name takes the place of "Untitled" (#197)
+        const editor = this.getEditor();
+        await editor.loadFocus;
+        editor.titleEl.focus();
+        editor.doc.getSelection().selectAllChildren(editor.titleEl);
       }
     }
   }
