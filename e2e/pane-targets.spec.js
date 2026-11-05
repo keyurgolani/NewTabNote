@@ -8,8 +8,12 @@
  *   name goes to that note, with one pane or two. Before, + focused the main pane's title, and
  *   the load's own deferred focus of the first block ran after it, so focus never stayed in a
  *   title.
+ * - The AI title's spinner turns on the title of each editor that holds the note, the
+ *   pop-out's too, for a title asked for and for the automatic one. Before, it turned on the
+ *   main pane's title whenever the active pane held the note.
  *
- * Each case also checks one pane, where the main pane is the active one.
+ * Each case also checks one pane, where the main pane is the active one. The provider is
+ * stubbed on the new tab, as e2e/ai-jobs.spec.js does, so nothing leaves the machine.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
@@ -101,5 +105,51 @@ test("the tab bar's + leaves focus in the title of the pane the new note opened 
   expect.soft(made.where, "focus is in the right pane's title").toBe('secondary-editor-container');
   expect.soft((await storedNote(page, made.noteId)).name, 'the new note takes the name').toBe('Named in the right pane');
   expect.soft((await storedNote(page, mainId)).name, "the main pane's note keeps its name").toBe('Main note');
+  await expectNoUncaught(extension, page);
+});
+
+test("the AI title's spinner turns on the title of each editor that holds the note, the pop-out's too, for a title asked for and the automatic one", async ({ extension }) => {
+  const page = await open(extension, [{ name: 'Main note', blocks: lines('Main', 3) }, { name: 'Untitled', blocks: lines('Right', 3) }]);
+  // Each title call waits until the test answers it, so the spinner can be read while it's pending
+  await page.evaluate(() => {
+    window.__titleAnswers = [];
+    Object.assign(LLM, {
+      isConfigured: () => true,
+      generateTitle: () => new Promise(resolve => window.__titleAnswers.push(resolve)),
+    });
+  });
+  /** Where a spinner shows: each pane's title, and the pop-out's */
+  const spinning = () => page.evaluate(() => {
+    const titles = [...document.querySelectorAll('.page-title')].filter(title => title.classList.contains('title-generating')).map(title => title.closest('.editor-pane').id);
+    const pip = app.tabController.pipEditor;
+    if (pip && pip.titleEl.classList.contains('title-generating')) titles.push('pop-out');
+    return titles;
+  });
+  /** Start a title, read the spinner while the provider's answer is pending, answer, and check it's gone */
+  const spinnerFor = async start => {
+    await page.evaluate(start);
+    await expect.poll(() => page.evaluate(() => window.__titleAnswers.length)).toBe(1);
+    const pending = await spinning();
+    await page.evaluate(() => window.__titleAnswers.shift()('Named by the stub'));
+    await expect.poll(spinning, 'no spinner once it answers').toEqual([]);
+    return pending;
+  };
+  const askForTitle = () => { window.__asked = app.notesManager.generateTitleForNote(app.tabController.getEditor().noteId); };
+
+  expect.soft(await spinnerFor(askForTitle), "with one pane, a title asked for spins on the main pane's title").toEqual(['editor-container']);
+  await page.evaluate(() => window.__asked);
+
+  await rightPaneOn(page, 'Untitled');
+  await page.evaluate(() => chrome.storage.local.set({ setting_autoTitleEnabled: true }));
+  expect.soft(await spinnerFor(() => { window.__auto = app.notesManager.runAutoTitle(); }), "the automatic title spins on the right pane's title alone").toEqual(['secondary-editor-container']);
+  await page.evaluate(() => window.__auto);
+  expect.soft(await spinnerFor(askForTitle), "a title asked for spins on the right pane's title alone").toEqual(['secondary-editor-container']);
+  await page.evaluate(() => window.__asked);
+
+  // The pop-out opens the active pane's note, so its title and the right pane's both spin
+  await page.locator('#pip-toggle').click();
+  await expect.poll(() => page.evaluate(() => Boolean(app.tabController.pipEditor && app.tabController.pipEditor.noteId === app.secondaryEditor.noteId))).toBe(true);
+  expect.soft(await spinnerFor(askForTitle), 'with the note in the pop-out too, its title spins as well').toEqual(['secondary-editor-container', 'pop-out']);
+  await page.evaluate(() => window.__asked);
   await expectNoUncaught(extension, page);
 });

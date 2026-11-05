@@ -29,11 +29,15 @@ class TabController {
     this.activeTabIndex = 0;
     /**
      * What AI chat, NotesManager, and the palette see of the tabs, in place of App's copy of
-     * them: the notes they show, in tab order, and a committed title naming its note's tab.
-     * None of them holds the tab array, which TabController replaces when it restores tabs.
+     * them: the notes they show, in tab order, the editors open on this page, and a committed
+     * title naming its note's tab. None of them holds the tab array, which TabController
+     * replaces when it restores tabs.
      */
     this.noteTabs = Object.freeze({
       openNoteIds: () => this.openTabs.map((tab) => tab.noteId),
+      // Both panes' editors and the pop-out's, as getOpenEditors: the AI title's spinner turns on
+      // each that holds its note (#197)
+      openEditors: () => this.getOpenEditors(),
       showNoteName: (noteId, name) => this.showNoteName(noteId, name),
     });
 

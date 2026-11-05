@@ -82,7 +82,10 @@ class NotesManager {
     this.onOpenNoteInNewTab = null;
     this.onCreateFirstNote = null;
     this.getEditor = null;
-    /** @type {any} TabController's noteTabs, set by App: a committed title names its note's tab */
+    /**
+     * @type {any} TabController's noteTabs, set by App: a committed title names its note's tab,
+     * and the AI title's spinner turns on each open editor that holds its note (#197)
+     */
     this.noteTabs = null;
 
     this.triggerIndexing = Utils.debounce((noteId) => {
@@ -436,15 +439,11 @@ class NotesManager {
       return;
     }
 
-    // Show loading state
-    const editor = this.getEditor ? this.getEditor() : null;
-    const isCurrentNote = editor && editor.noteId === noteId;
-    const pageTitle = document.getElementById('page-title');
+    // Show loading state, on the title of each editor that holds the note
+    const titles = this.titlesOf(noteId);
     const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
 
-    if (isCurrentNote && pageTitle) {
-      pageTitle.classList.add('title-generating');
-    }
+    for (const title of titles) title.classList.add('title-generating');
     if (sidebarItem) {
       sidebarItem.classList.add('generating');
     }
@@ -488,9 +487,7 @@ class NotesManager {
       Utils.showToast('Failed to generate title: ' + error.message, 'error');
     } finally {
       // Remove loading state
-      if (pageTitle) {
-        pageTitle.classList.remove('title-generating');
-      }
+      for (const title of titles) title.classList.remove('title-generating');
       // Sidebar item may have been re-rendered, so query again
       const updatedSidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
       if (updatedSidebarItem) {
@@ -613,6 +610,16 @@ class NotesManager {
   editorHolds(noteId) {
     const editor = this.getEditor ? this.getEditor() : null;
     return Boolean(editor && editor.noteId === noteId);
+  }
+
+  /**
+   * The title of each open editor that holds `noteId` now, in either pane or the pop-out, as
+   * TabController's noteTabs lists them (#197)
+   * @param {string} noteId
+   * @returns {Array<HTMLElement>}
+   */
+  titlesOf(noteId) {
+    return (this.noteTabs?.openEditors() || []).filter(editor => editor.noteId === noteId).map(editor => editor.titleEl);
   }
 
   /**
@@ -868,25 +875,22 @@ class NotesManager {
         // Switched off meanwhile, here or in another tab: no more note text goes to the provider
         if (!(await this.jobEnabled('autoTitleEnabled'))) break;
 
+        // The titles of the editors that hold the note, read once, so the catch takes the
+        // spinner off the same ones
+        const titles = this.titlesOf(noteId);
         try {
           this.logger.debug('NotesManager', `Generating title for note: ${noteId}`);
 
-          const isCurrentNote = this.editorHolds(noteId);
-          const pageTitle = document.getElementById('page-title');
           const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
 
-          if (isCurrentNote && pageTitle) {
-            pageTitle.classList.add('title-generating');
-          }
+          for (const title of titles) title.classList.add('title-generating');
           if (sidebarItem) {
             sidebarItem.classList.add('generating');
           }
 
           const newTitle = await this.llm.generateTitle(content);
 
-          if (pageTitle) {
-            pageTitle.classList.remove('title-generating');
-          }
+          for (const title of titles) title.classList.remove('title-generating');
           const updatedSidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
           if (updatedSidebarItem) {
             updatedSidebarItem.classList.remove('generating');
@@ -905,10 +909,7 @@ class NotesManager {
         } catch (error) {
           console.error(`Failed to generate title for note ${noteId}:`, error);
 
-          const pageTitle = document.getElementById('page-title');
-          if (pageTitle) {
-            pageTitle.classList.remove('title-generating');
-          }
+          for (const title of titles) title.classList.remove('title-generating');
           const sidebarItem = document.querySelector(`.sidebar-note-item[data-note-id="${noteId}"]`);
           if (sidebarItem) {
             sidebarItem.classList.remove('generating');
