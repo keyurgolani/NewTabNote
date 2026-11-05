@@ -739,6 +739,8 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
     await turns();
     // The start's own drain, then the one asked for
     assert.equal(held.drains.length, 2);
+    // Each on the queue, as client() is, so its replays wait their turn (#204's review, T2)
+    assert.equal(held.drains[1].client, coordinator.client(), 'the asked drain runs on the queue');
     held.drains[0].release();
     held.drains[1].release();
     assert.deepEqual(await asked, { status: 'drained', replayed: 1 });
