@@ -40,6 +40,13 @@
  * drain, and one that comes during a drain is welcomed `ready` at once. drain() runs one more
  * when a page wakes the worker for it. system.coordinatorHealth says when the oldest entry the
  * last drain left with no live owner was written, and names the notes it held back (slice 3b).
+ *
+ * One queue runs the kernel's commands one at a time, in the order they came (#35 slice 4a, "One
+ * committer"): what a surface sends through a router's handler (enqueue()), the worker's own
+ * capture among them, and the drain's replays, on client(). A command whose request ended before
+ * its turn never runs. The read-only integrity check, the start's own maintenance and the
+ * coordinator's health aren't on it, since none is a surface's command, and IndexedDB orders the
+ * maintenance's transactions against the queue's.
  */
 
 import { HELD_NOTES_NAMED } from '../core/contracts/operations/system-coordinator-health.js';
@@ -48,6 +55,9 @@ import { systemClock } from '../core/ports/runtime.js';
 import { randomIds } from './messaging.js';
 
 /** @typedef {import('./host.js').Client} Client */
+/** @typedef {import('../core/contracts/commands.js').Command} Command */
+/** @typedef {import('../core/contracts/outcomes.js').Outcome} Outcome */
+/** @typedef {import('../core/contracts/outcomes.js').BulkOutcome} BulkOutcome */
 /** @typedef {import('../core/contracts/outcomes.js').Unavailable} Unavailable */
 /** @typedef {import('../core/contracts/operations/system-coordinator-health.js').CoordinatorHealth} CoordinatorHealth */
 /** @typedef {import('../core/messaging/router.js').CoordinatorStatus} CoordinatorStatus */
@@ -93,7 +103,12 @@ import { randomIds } from './messaging.js';
  * @property {() => CoordinatorStatus} status - what a welcome says now
  * @property {() => CoordinatorHealth} health - what system.coordinatorHealth answers with
  * @property {() => Client} client
- *   The kernel the worker's own handlers run commands on, which counts each outcome by kind
+ *   The kernel the drain runs on, which counts each outcome by kind, with each command on the queue
+ * @property {(command: Command, dispatch?: {begin?: () => boolean}) => Promise<Outcome | BulkOutcome | null>} enqueue
+ *   Runs `command` on the queue for a router's handler, starting the coordinator first. With the
+ *   router's `begin`, it runs only if the request is still waited on at its turn, and answers
+ *   null when it isn't, since the router answered it then. A coordinator that can't serve answers
+ *   as client() does.
  * @property {(reason: unknown) => Promise<void>} installed
  *   Starts it for an onInstalled event, and after an install or an update runs the read-only
  *   integrity check once, after the transforms and the catch-up the start set off: when the
@@ -198,6 +213,35 @@ function blockedRun(built, failure) {
 const reportUnbuilt = error => console.error("NewTabNote: the background coordinator couldn't build its kernel", error);
 
 /**
+ * One FIFO queue (#35 slice 4a, "One committer"): each task runs once the one before it has
+ * settled, in the order they came, and one that throws or rejects answers with that and lets the
+ * next one run. A task given `begin` runs only if `begin()` answers true at its turn, as #13's
+ * router's does while it still waits for the request (core/messaging/router.js, Dispatch), and
+ * answers null when it doesn't.
+ * @returns {{run: <T>(task: () => Promise<T>, begin?: () => boolean) => Promise<T | null>}}
+ */
+export function commandQueue() {
+  /** @type {Promise<unknown>} */
+  let tail = Promise.resolve();
+  return Object.freeze({
+    /**
+     * @template T
+     * @param {() => Promise<T>} task
+     * @param {() => boolean} [begin]
+     * @returns {Promise<T | null>}
+     */
+    run(task, begin = () => true) {
+      const turn = tail.then(() => (begin() ? task() : null));
+      tail = turn.then(
+        () => {},
+        () => {},
+      );
+      return turn;
+    },
+  });
+}
+
+/**
  * The router's handler for system.coordinatorHealth, which asks whichever coordinator
  * `current` gives at the time, since js/background.js installs the router before it builds one
  * @param {() => Coordinator} current
@@ -231,6 +275,7 @@ export function unavailableCoordinator(instanceId) {
       migration: null,
     }),
     client: () => client,
+    enqueue: command => client.execute(command),
     installed: start,
     drain: () => Promise.resolve(null),
   });
@@ -266,6 +311,10 @@ export function createCoordinator({
   let reason = '';
   /** @type {Client | null} */
   let kernel = null;
+  /** The one queue the kernel's commands wait their turn on (#35 slice 4a) */
+  const queue = commandQueue();
+  /** @type {Client | null} the kernel with each command on the queue: what client() hands out and the drain runs on */
+  let queued = null;
   /** What the worker's handlers run on until the kernel is built, and for good if it can't be */
   const unbuilt = unavailableClient(unavailable('coordinator', UNAVAILABLE, false));
   /** @type {Promise<void> | null} */
@@ -303,6 +352,18 @@ export function createCoordinator({
       return outcome;
     };
     // The same overloads as the kernel's own execute, which this calls
+    return Object.freeze({ ...built, execute: /** @type {Client['execute']} */ (/** @type {unknown} */ (execute)) });
+  };
+
+  /**
+   * `built`, with each command it runs waiting its turn on the queue
+   * @param {Client} built
+   * @returns {Client}
+   */
+  const onQueue = built => {
+    /** @param {Command} command */
+    const execute = command => queue.run(() => built.execute(command));
+    // The same overloads as the kernel's own execute, which this calls in its turn
     return Object.freeze({ ...built, execute: /** @type {Client['execute']} */ (/** @type {unknown} */ (execute)) });
   };
 
@@ -354,8 +415,8 @@ export function createCoordinator({
       // A start that opened resolves a coordinator.start-failed an earlier instance raised
       journal(events, 'coordinator.started', {});
       // What a context journaled and didn't live to see answered, after the start, which
-      // nothing that waits on the start waits for (#35 slice 3)
-      drainOn(built);
+      // nothing that waits on the start waits for (#35 slice 3), each replay on the queue
+      drainOn(queued || onQueue(built));
       if (checkWhenReady) {
         checkWhenReady = false;
         await check(built);
@@ -390,6 +451,7 @@ export function createCoordinator({
     startedAt = began;
     try {
       kernel = counted(makeKernel());
+      queued = onQueue(kernel);
     } catch (error) {
       state = 'unavailable';
       reason = UNAVAILABLE;
@@ -482,7 +544,13 @@ export function createCoordinator({
       migration: migrationNow(),
       ...heldNotes(),
     }),
-    client: () => kernel || unbuilt,
+    client: () => queued || unbuilt,
+    enqueue(command, { begin } = {}) {
+      start();
+      const built = kernel;
+      if (!built) return unbuilt.execute(command);
+      return queue.run(() => built.execute(command), begin);
+    },
     async installed(installReason) {
       await start();
       if (!kernel || !CHECKED_ON.includes(/** @type {string} */ (installReason))) return;
@@ -495,8 +563,8 @@ export function createCoordinator({
     },
     async drain() {
       await start();
-      if (state !== 'ready' || !kernel) return null;
-      return drainOn(kernel);
+      if (state !== 'ready' || !queued) return null;
+      return drainOn(queued);
     },
   });
 }
