@@ -563,4 +563,31 @@ describe("the block menus' roles and keys: their chunk at a menu's first open (#
     await settled();
     assert.equal(given.length, 2);
   });
+
+  it("a loader that rejects, or keys that throw, leave a menu the pointer's: it opens all the same, without its keys, and the failure is logged once (#202's review)", async () => {
+    const { env, tabs } = await page();
+    const editor = tabs.editor;
+    const logged = [];
+    editor.logger = { warn: (...args) => logged.push(args), error: (...args) => logged.push(args) };
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+    // A menu as showBlockActionMenu leaves it, open, before it asks for the keys
+    const open = () => {
+      const el = env.document.createElement('div');
+      el.className = 'block-action-menu';
+      env.document.body.appendChild(el);
+      return el;
+    };
+
+    editor.loadMenuKeys = () => Promise.reject(new Error('the chunk failed'));
+    const first = open();
+    editor._menuKeys(first, {});
+    await settled();
+    assert.deepEqual([first.isConnected, first.getAttribute('role')], [true, null], 'a load that rejects leaves the menu open, without its keys');
+    editor.loadMenuKeys = async () => ({ status: 'loaded', module: { menuKeys() { throw new Error('the keys threw'); } } });
+    const second = open();
+    editor._menuKeys(second, {});
+    await settled();
+    assert.equal(second.isConnected, true, 'and keys that throw leave it open too');
+    assert.equal(logged.length, 1, 'the failure is logged once');
+  });
 });

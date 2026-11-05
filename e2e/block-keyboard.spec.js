@@ -18,6 +18,13 @@
  * - Its accessibility tree is a menu named Block actions, with Turn into's types a menu named
  *   Turn into. A click on the handle opens it as before, with focus left where it was, and its
  *   roles and keys are a chunk the tab loads at a menu's first open, by click as by key.
+ * - After #202's review: a click on an image leaves no focus on its stop; a question's Cancel
+ *   gives focus back to a stop; a key's delete puts focus on the block before when it takes
+ *   focus, and else on the block in the deleted one's place; Mod+/ and a click on the handle close
+ *   the slash menu; a held Enter or Space in the menu acts once; an empty image's ring has its
+ *   placeholder's corners. And what no case read before: Tab past the stops and their roles,
+ *   stops first, last and two in a row, Enter and Space on Turn into, the menu key in a block's
+ *   text, the shortcuts list's row, and split view's right pane, on a second note of edges.
  */
 
 const fs = require('fs');
@@ -35,42 +42,64 @@ const CARD = 'opaque-blocks-unknown';
 const IMAGE = `data:image/svg+xml,${encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='360' height='160'><rect width='360' height='160' fill='#8fa9c7'/><circle cx='280' cy='56' r='24' fill='#f2d57e'/><path d='M0 160 L110 70 L190 130 L250 95 L360 160 Z' fill='#5d7a99'/></svg>")}`;
 // The note's blocks in order
 const ORDER = ['stops-first', 'stops-divider', 'stops-second', 'stops-image', 'stops-third', CARD, 'stops-last'];
-
-/**
- * The opaque-blocks fixture with its note's blocks in place of the cards: text, a divider, text,
- * an image, text, the card of a block of a type this build doesn't have, and text. Each block is
- * the fixture's own text record with its own id, type and fields. Answers the blocks by id.
- */
-function stopsFixture() {
-  const fixture = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
-  const stores = Object.fromEntries(fixture.databases[0].stores.map(store => [store.name, store]));
-  const value = id => stores.elements.records.find(record => record.key === id).value;
-  const text = value('opaque-blocks-before');
-  const fields = {
+/** The stops' note: text, a divider, text, an image, text, the card, and text */
+const STOPS = {
+  name: NAME,
+  order: ORDER,
+  fields: {
     'stops-first': { content: 'First line' },
     'stops-divider': { type: 'divider', content: '' },
     'stops-second': { content: 'Second line' },
     'stops-image': { type: 'image', content: '', imageUrl: IMAGE },
     'stops-third': { content: 'Third line' },
     'stops-last': { content: 'Last line' },
-  };
-  const blocks = ORDER.map((id, order) => (id === CARD ? { ...value(CARD), order } : { ...text, ...fields[id], id, order }));
+  },
+};
+/**
+ * The edges' note (#202's review): a divider first and an empty image after it, two stops in a
+ * row; text; a table, which takes no focus; a divider; text; and an image last
+ */
+const EDGES = {
+  name: 'Edges of the stops',
+  order: ['edge-divider', 'edge-empty', 'edge-middle', 'edge-table', 'edge-rule', 'edge-after', 'edge-image'],
+  fields: {
+    'edge-divider': { type: 'divider', content: '' },
+    'edge-empty': { type: 'image', content: '', imageUrl: '' },
+    'edge-middle': { content: 'Middle line' },
+    'edge-table': { type: 'table', content: '', rows: 2, cols: 2, tableData: [['A', 'B'], ['1', '2']], hasHeaderRow: true },
+    'edge-rule': { type: 'divider', content: '' },
+    'edge-after': { content: 'After the table' },
+    'edge-image': { type: 'image', content: '', imageUrl: IMAGE },
+  },
+};
+
+/**
+ * The opaque-blocks fixture with its note's blocks in place of the cards, the stops' note's
+ * unless `layout` names another. Each block is the fixture's own text record with its own id,
+ * type and fields, and the card is the fixture's. Answers the blocks by id.
+ */
+function stopsFixture(layout = STOPS) {
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
+  const stores = Object.fromEntries(fixture.databases[0].stores.map(store => [store.name, store]));
+  const value = id => stores.elements.records.find(record => record.key === id).value;
+  const text = value('opaque-blocks-before');
+  const blocks = layout.order.map((id, order) => (id === CARD ? { ...value(CARD), order } : { ...text, ...layout.fields[id], id, order }));
   stores.elements.records = [
     ...stores.elements.records.filter(record => record.value.canvasId !== NOTE),
     ...blocks.map(block => ({ key: block.id, value: block })),
   ];
-  stores.canvases.records = stores.canvases.records.map(record => (record.key === NOTE ? { ...record, value: { ...record.value, name: NAME } } : record));
+  stores.canvases.records = stores.canvases.records.map(record => (record.key === NOTE ? { ...record, value: { ...record.value, name: layout.name } } : record));
   return { fixture, held: Object.fromEntries(blocks.map(block => [block.id, block])) };
 }
 
-/** A new tab on the note, and its blocks as the fixture holds them */
-async function openStops(extension) {
-  const { fixture, held } = stopsFixture();
+/** A new tab on the note, the stops' unless `layout` names another, and its blocks as the fixture holds them */
+async function openStops(extension, layout = STOPS) {
+  const { fixture, held } = stopsFixture(layout);
   await fixtureHost(extension.worker).loadFixture(fixture);
   await extension.seedOnboarded();
   const page = await driver.openNewTab(extension);
-  await driver.openNote(page, NAME);
-  await expect(page.locator('#blocks-container > .block')).toHaveCount(ORDER.length);
+  await driver.openNote(page, layout.name);
+  await expect(page.locator('#blocks-container > .block')).toHaveCount(layout.order.length);
   return { page, held };
 }
 
@@ -126,7 +155,8 @@ function ringOf(page) {
     const style = getComputedStyle(stop);
     const out = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
     const corners = (/** @type {Element} */ el) => ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'].map(at => getComputedStyle(el)[`border${at}Radius`]).join(' ');
-    const img = stop.querySelector('img');
+    // An image's picture, or an empty image's placeholder
+    const img = stop.querySelector('img, .image-placeholder');
     return {
       height: stop.getBoundingClientRect().height + 2 * out,
       row: stop.closest('.block').getBoundingClientRect().height,
@@ -292,6 +322,17 @@ test("ArrowRight opens Turn into's types, ArrowLeft goes back, and choosing a ty
   await expect(menu, 'and keeps the menu').toBeVisible();
   await expect(turnInto).toHaveAttribute('aria-expanded', 'false');
 
+  // Enter and Space on Turn into open its types too, and Escape in them goes back to it
+  await page.keyboard.press('Enter');
+  await expect(itemOf(types, 'Text'), 'Enter on Turn into opens its types').toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(turnInto, 'Escape in the types goes back to Turn into').toBeFocused();
+  await expect(types).toHaveCount(0);
+  await page.keyboard.press(' ');
+  await expect(itemOf(types, 'Text'), 'Space on Turn into opens its types').toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(turnInto).toBeFocused();
+
   await page.keyboard.press('ArrowRight');
   await expect(itemOf(types, 'Text')).toBeFocused();
   await page.keyboard.press('ArrowDown');
@@ -301,6 +342,15 @@ test("ArrowRight opens Turn into's types, ArrowLeft goes back, and choosing a ty
   await expect(menu, 'and closes the menu').toHaveCount(0);
   await expect(types).toHaveCount(0);
   await expect.poll(() => where(page), 'focus is back in its text, at its end').toBe('Second line, at its end');
+
+  // Space chooses a type too: back to Text
+  await page.keyboard.press('ControlOrMeta+Slash');
+  await expect(turnInto).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(itemOf(types, 'Text')).toBeFocused();
+  await page.keyboard.press(' ');
+  await expect(blockOf(page, 'stops-second'), 'Space chooses a type').toHaveAttribute('data-type', 'text');
+  await expect(menu).toHaveCount(0);
   await expectNoUncaught(extension, page);
 });
 
@@ -441,6 +491,15 @@ test("Shift+F10 or the menu key on a divider's or an image's stop opens its bloc
   await page.keyboard.press('Shift+F10');
   await expect(textOf(page, 'stops-third'), "Shift+F10 in a block's text leaves focus there").toBeFocused();
   await expect(menu, "and opens no block menu").toHaveCount(0);
+
+  // And so does the menu key: the page keeps its default, for the browser's own menu
+  await page.evaluate(() => {
+    window.ntnMenuKeyKept = null;
+    window.addEventListener('keydown', e => { if (e.key === 'ContextMenu') window.ntnMenuKeyKept = !e.defaultPrevented; });
+  });
+  await page.keyboard.press('ContextMenu');
+  expect(await page.evaluate(() => window.ntnMenuKeyKept), "the menu key in a block's text keeps its default").toBe(true);
+  await expect(menu, 'and opens no block menu either').toHaveCount(0);
   await expectNoUncaught(extension, page);
 });
 
@@ -471,5 +530,184 @@ test("a click on the handle opens the menu as before, with focus left where it w
   await page.keyboard.press('ControlOrMeta+Slash');
   await expect(itemOf(blockMenu(page), 'Turn into...'), 'the menu opens by key').toBeFocused();
   expect(asked, 'once').toEqual([chunk]);
+  await expectNoUncaught(extension, page);
+});
+
+// ─── #202's review: the fixes, and the gaps its tests left ───
+
+test("Tab skips a divider's and an image's stop, groups named Divider and Image, for the next block's text, and lands on the card as #183 made it", async ({ extension }) => {
+  const { page } = await openStops(extension);
+  await expect(page.getByRole('group', { name: 'Divider', exact: true }), "the divider's stop is a group named Divider").toHaveCount(1);
+  await expect(page.getByRole('group', { name: 'Image', exact: true }), "the image's stop is a group named Image").toHaveCount(1);
+
+  await textOf(page, 'stops-first').click();
+  await page.keyboard.press('Tab');
+  await expect(textOf(page, 'stops-second'), 'Tab skips the divider').toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(textOf(page, 'stops-third'), 'Tab skips the image').toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(cardOf(page), 'Tab lands on the card').toBeFocused();
+  await expectNoUncaught(extension, page);
+});
+
+test("a click on the image leaves no focus on its stop: Backspace after it deletes nothing, and a letter typed goes to the note's end, as type anywhere puts it", async ({ extension }) => {
+  const { page } = await openStops(extension);
+  await stopOf(page, 'stops-image').locator('img').click();
+  await expect(stopOf(page, 'stops-image'), 'the click leaves the image unfocused').not.toBeFocused();
+  await page.keyboard.press('Backspace');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await shownOrder(page), 'Backspace after the click deletes nothing').toEqual(ORDER);
+  await page.keyboard.press('x');
+  await expect(textOf(page, 'stops-last'), "a letter typed goes to the note's end").toHaveText('Last linex');
+  await expectNoUncaught(extension, page);
+});
+
+test("Cancel on the question a Turn into from the image's menu asks gives focus back to the image's stop", async ({ extension }) => {
+  const { page } = await openStops(extension);
+  const menu = blockMenu(page);
+  const question = page.getByRole('dialog');
+
+  await textOf(page, 'stops-second').click();
+  await caretAt(page, true);
+  await page.keyboard.press('ArrowDown');
+  await expect(stopOf(page, 'stops-image')).toBeFocused();
+  await page.keyboard.press('Shift+F10');
+  await expect(itemOf(menu, 'Turn into...')).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(itemOf(typesMenu(page), 'Text')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(question.locator('.confirm-dialog-cancel'), 'turning the image into text asks first, with Cancel focused').toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(question).toHaveCount(0);
+  await expect(stopOf(page, 'stops-image'), "Cancel gives focus back to the image's stop").toBeFocused();
+  expect(await shownOrder(page)).toEqual(ORDER);
+  await expectNoUncaught(extension, page);
+});
+
+test("on a note whose first and last blocks are stops, with two in a row and a table, the arrows take each stop in turn, and a key's delete puts focus on the block before when it takes focus, else on the block in its place", async ({ extension }) => {
+  const { page } = await openStops(extension, EDGES);
+  const title = page.locator('#page-title');
+
+  // From the title down: the first block's stop, then the empty image's, two stops in a row
+  await title.click();
+  await caretAt(page, true);
+  await page.keyboard.press('ArrowDown');
+  await expect(stopOf(page, 'edge-divider'), "ArrowDown from the title lands on the first block's stop").toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(title, "ArrowUp from the first block's stop goes back to the title").toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(stopOf(page, 'edge-empty'), 'two stops in a row: the next press lands on the second').toBeFocused();
+  const empty = await ringOf(page);
+  expect.soft(empty.corners, "the empty image's ring has its placeholder's corners").toBe(empty.imageCorners);
+  await page.keyboard.press('ArrowDown');
+  expect(await where(page), 'and the next press leaves it, for the text after').toBe('Middle line, at its start');
+
+  // The last block, an image: ArrowDown stays on its stop, and Delete deletes it at once
+  await textOf(page, 'edge-after').click();
+  await caretAt(page, true);
+  await page.keyboard.press('ArrowDown');
+  await expect(stopOf(page, 'edge-image'), 'the last block, an image, takes focus').toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(stopOf(page, 'edge-image'), 'ArrowDown on the last block stays on it').toBeFocused();
+  await page.keyboard.press('Delete');
+  await expect(blockOf(page, 'edge-image'), "Delete on the image's stop deletes it at once").toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await where(page), 'focus goes to the end of the text before').toBe('After the table, at its end');
+
+  // Backspace on the divider after the table deletes it at once. The table takes no focus, so the
+  // block in the divider's place has it, at its start
+  await caretAt(page, false);
+  await page.keyboard.press('ArrowUp');
+  await expect(stopOf(page, 'edge-rule'), 'ArrowUp from the text after the table lands on its divider').toBeFocused();
+  await page.keyboard.press('Backspace');
+  await expect(blockOf(page, 'edge-rule'), 'Backspace on the divider deletes it at once').toHaveCount(0);
+  expect.soft(await where(page), "after a table, which takes no focus, focus goes to the block in the divider's place, at its start").toBe('After the table, at its start');
+
+  // Backspace on the empty image, after the first divider: focus goes onto that stop
+  await textOf(page, 'edge-middle').click();
+  await caretAt(page, false);
+  await page.keyboard.press('ArrowUp');
+  await expect(stopOf(page, 'edge-empty')).toBeFocused();
+  await page.keyboard.press('Backspace');
+  await expect(blockOf(page, 'edge-empty'), 'Backspace on the empty image deletes it at once').toHaveCount(0);
+  await expect(stopOf(page, 'edge-divider'), 'focus goes onto the stop before').toBeFocused();
+
+  // Delete on the first block: none is before it, so the block now first has focus, at its start
+  await page.keyboard.press('Delete');
+  await expect(blockOf(page, 'edge-divider')).toHaveCount(0);
+  expect.soft(await where(page), 'for the first block, focus goes to the block now first, at its start').toBe('Middle line, at its start');
+  await expectNoUncaught(extension, page);
+});
+
+/** An empty line after the last one, with the slash menu open in it */
+async function slashMenuIn(page) {
+  await textOf(page, 'stops-last').click();
+  await caretAt(page, true);
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('/');
+  await expect(page.locator('#slash-menu'), 'the slash menu opens in the empty line').toBeVisible();
+  return page.locator('#blocks-container > .block').last();
+}
+
+test('Mod+/ with the slash menu open closes it, so the block menu shows alone', async ({ extension }) => {
+  const { page } = await openStops(extension);
+  await slashMenuIn(page);
+  await page.keyboard.press('ControlOrMeta+Slash');
+  await expect(itemOf(blockMenu(page), 'Turn into...'), 'the block menu opens').toBeFocused();
+  await expect(page.locator('#slash-menu'), 'Mod+/ closes the slash menu').toBeHidden();
+  await expectNoUncaught(extension, page);
+});
+
+test('a click on the handle with the slash menu open closes it, so the block menu shows alone', async ({ extension }) => {
+  const { page } = await openStops(extension);
+  const line = await slashMenuIn(page);
+  await line.hover();
+  await line.locator('.block-handle').click();
+  await expect(blockMenu(page), 'the block menu opens').toBeVisible();
+  await expect(page.locator('#slash-menu'), 'a click on the handle closes the slash menu').toBeHidden();
+  await expectNoUncaught(extension, page);
+});
+
+test('a held Enter or Space in the menu acts once: a repeat chooses nothing', async ({ extension }) => {
+  const { page } = await openStops(extension);
+  const turnInto = itemOf(blockMenu(page), 'Turn into...');
+  const repeat = key => page.evaluate(key => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key, repeat: true, bubbles: true, cancelable: true })), key);
+
+  await textOf(page, 'stops-second').click();
+  await page.keyboard.press('ControlOrMeta+Slash');
+  await expect(turnInto).toBeFocused();
+  await repeat('Enter');
+  await expect.soft(typesMenu(page), 'a repeated Enter on Turn into opens nothing').toHaveCount(0);
+  await repeat(' ');
+  await expect.soft(typesMenu(page), 'nor does a repeated Space').toHaveCount(0);
+  await expect(turnInto, 'focus stays on Turn into').toBeFocused();
+  await expectNoUncaught(extension, page);
+});
+
+test("the shortcuts list names Mod+/ for the block's menu", async ({ extension }) => {
+  const { page } = await openStops(extension);
+  await page.locator('#shortcuts-btn').click();
+  const row = page.locator('#shortcuts-modal .shortcut-item', { hasText: 'Open Block Menu' });
+  await expect(row, "the list has the block menu's row").toHaveCount(1);
+  await expect(row.locator('.shortcut-key'), 'its key is Mod+/, with Mod as the platform names it').toHaveText(/^(⌘|Ctrl) \+ \/$/);
+  await expectNoUncaught(extension, page);
+});
+
+test("in split view's right pane, the arrows land on its divider and leave it, as in the main pane", async ({ extension }) => {
+  const { page } = await openStops(extension);
+  await driver.openNote(page, 'Groceries');
+  await driver.openSplitView(page);
+  await page.evaluate(id => app.secondaryEditor.loadNote(id), NOTE);
+  const right = page.locator('#secondary-editor-container');
+  const rightBlock = id => right.locator(`.blocks-container > .block[data-id="${id}"]`);
+  await expect(right.locator('.blocks-container > .block'), "the right pane shows the stops' note").toHaveCount(ORDER.length);
+
+  await rightBlock('stops-first').locator('.block-content').click();
+  await caretAt(page, true);
+  await page.keyboard.press('ArrowDown');
+  await expect(rightBlock('stops-divider').locator('.block-stop'), "the right pane's divider has focus").toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(rightBlock('stops-second').locator('.block-content'), 'and the next press leaves it for the text after').toBeFocused();
   await expectNoUncaught(extension, page);
 });

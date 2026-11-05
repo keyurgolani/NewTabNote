@@ -118,6 +118,14 @@ test("editor shortcut resolves Mod+/ to the block's menu, with no Shift or Alt, 
   }
 });
 
+test("Mod+/ is the character, wherever a layout puts it: Mod and the key that types '-' there is the browser's zoom out, and Mod+Shift+7 typing '/' opens the menu (#202's review)", () => {
+  const press = (more) => getEditorShortcutAction({ modKey: true, shiftKey: false, altKey: false, blockType: 'text', ...more });
+  // German, Nordic, Spanish, Italian and Swiss layouts type '-' at the US '/' key, and '/' as Shift+7
+  assert.equal(press({ code: 'Slash', key: '-' }), null, "Mod and the US '/' key typing '-' stays the browser's");
+  assert.deepEqual(press({ code: 'Digit7', key: '/', shiftKey: true }), { type: 'block-menu' }, "Mod+Shift+7 typing '/' opens the block's menu");
+  assert.equal(press({ code: 'Slash', key: '?', shiftKey: true }), null, "Mod+? on a US layout isn't it");
+});
+
 test('clampIndentLevel keeps indentation between zero and four', () => {
   assert.equal(clampIndentLevel(0, -1), 0);
   assert.equal(clampIndentLevel(2, 1), 3);
