@@ -128,9 +128,10 @@ class FormattingToolbar {
       e.preventDefault(); // keep selection alive
       const target = /** @type {HTMLElement} */ (e.target);
       const btn = /** @type {HTMLElement} */ (target.closest('.formatting-toolbar-btn'));
-      // Only the primary button's first press runs one (#193): a right-click does nothing, and so does
-      // a double-click's second press or any later one, as one that lands where ✓ just was
-      if (!btn || e.button || e.detail > 1) return;
+      // Only the primary button's first press runs one (#193): a right-click does nothing, nor does a
+      // Control-click, the Mac's right-click, nor a double-click's second press or any later one, as
+      // one that lands where ✓ just was
+      if (!btn || e.button || e.ctrlKey || e.detail > 1) return;
       this._onButtonClick(btn.dataset.command, btn.dataset.id);
     });
 
@@ -146,10 +147,12 @@ class FormattingToolbar {
     // Enter, in the field or on ✓, applies the link once, on its release, so a held Enter's repeats
     // reach nothing else (#193). It applies the URL the field had at the press, so a key pressed before
     // the release, which the field takes, is dropped with the field. An IME's commit, a press while
-    // composing and a release with no press here, does nothing. Escape, in the field or on ✓, closes
-    // the field and gives back the selection Link saved.
+    // composing and a release with no press here, does nothing, and its press drops a URL a lost
+    // release left. Escape, in the field or on ✓, closes the field and gives back the selection Link
+    // saved.
     this.linkInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.isComposing) {
+      if (e.isComposing) this._url = null;
+      else if (e.key === 'Enter') {
         e.preventDefault();
         if (!e.repeat) this._url = this._linkField.value;
       }
