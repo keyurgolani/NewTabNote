@@ -150,8 +150,9 @@ const isEditorSave = entry =>
  *   clock?: {now(): number},
  *   events?: {event(code: string, fields?: Record<string, unknown>, failure?: unknown): void},
  * }} [globals] - the page's own unless a test passes them, and `events` the page's failure events
- *   (#20), which hear `journal.append-failed` for an entry the journal couldn't take, by its note
- *   and the failure's code only (#35 slice 4a); without them it's on the console alone
+ *   (#20), which hear `journal.append-failed` for the first entry the journal couldn't take in the
+ *   page's load, by its note and the failure's code only (#35 slice 4a); every one is on the
+ *   console, and without them the console is all
  * @returns {Journaling & {applied: Promise<JournalApplyResult | null>}}
  *   `applied`: what the apply did, null when nothing was there for it. Never rejects.
  */
@@ -169,9 +170,13 @@ export function startPageJournal(
   } = {},
 ) {
   const journal = openedJournal(stores);
+  /** Whether journal.append-failed is journaled already, which it is once per page load */
+  let appendFailedJournaled = false;
   /** @type {(noteId: string, error: unknown) => void} */
   const appendFailed = (noteId, error) => {
-    if (events) events.event('journal.append-failed', { subjectId: noteId }, error);
+    if (!events || appendFailedJournaled) return;
+    appendFailedJournaled = true;
+    events.event('journal.append-failed', { subjectId: noteId }, error);
   };
   const journaling = createJournaling({ journal, locks, sessionId, surface, clock, warn: warnOf, appendFailed });
   let woken = false;
