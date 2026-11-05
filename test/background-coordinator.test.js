@@ -809,6 +809,58 @@ describe("captures through the worker's journal (#35 slice 3)", () => {
   });
 });
 
+/**
+ * What a capture says that the coordinator couldn't start by its deadline: it's kept, and the
+ * coordinator's drain adds it once its queue lets it (#35 slice 4a, the director's words). They
+ * promise no time, since the queue may not free before the worker's next start.
+ */
+const KEPT_BUSY = Object.freeze([
+  "Kept for today's note",
+  "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added as soon as NewTabNote can.",
+]);
+
+describe("captures through the worker's own client and the coordinator's queue (#35 slice 4a)", () => {
+  it("saves a capture over 1 MiB, as 1.5.0 does: no message limit applies to the worker's own capture (the lead's ruling for 4a)", async () => {
+    const worker = await loadBackground({ start: false });
+    const content = 'x'.repeat(2 * limits.MAX_MESSAGE_BYTES);
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-selection', selectionText: content }, worker.tab);
+    await worker.drain();
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [
+      ['Captured to New Tab Note', 'Saved selected text'],
+    ]);
+    const dump = await dumpDatabase(worker.indexedDB);
+    const captured = Object.values(recordsOf(dump, 'elements')).filter((element) => element.type === 'text' && String(element.content).startsWith(content));
+    assert.equal(captured.length, 1);
+    assert.deepEqual(await journalOf(worker.indexedDB), []);
+  });
+
+  it("keeps a capture the coordinator couldn't start by its deadline, says so without promising a time, and adds it once the queue lets it", async () => {
+    // A deadline that has always passed, so the worker's own router refuses the capture at once,
+    // as it would one that waited out a held queue; the drain's replay takes no deadline. The
+    // worker started first and its start's drain is done, as when pages' commands hold the queue,
+    // so only the drain the capture asks for adds it.
+    const worker = await loadBackground({
+      rewrite: {
+        'js/kernel/core/contracts/limits.js': (source) => source.replace(
+          'export const COMMAND_DEADLINE_MS = 30_000;',
+          'export const COMMAND_DEADLINE_MS = 0;',
+        ),
+      },
+    });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [[...KEPT_BUSY]]);
+    const dump = await dumpDatabase(worker.indexedDB);
+    const daily = Object.values(recordsOf(dump, 'canvases')).find((record) => record.isDaily);
+    assert.ok(daily, 'the drain made the Daily Note');
+    assert.deepEqual(
+      Object.values(recordsOf(dump, 'elements')).filter((element) => element.canvasId === daily.id).map((element) => element.url),
+      [worker.tab.url],
+    );
+    assert.deepEqual(await journalOf(worker.indexedDB), []);
+  });
+});
+
 describe("an older build's page that keeps the upgrade blocked (#17 PR 1b)", () => {
   // While the upgrade waits, fake-indexeddb keeps the open it blocks queued, so the worker is
   // never idle and drain() can't tell when it's done: these wait in real time instead
