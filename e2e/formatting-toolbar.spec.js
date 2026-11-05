@@ -27,6 +27,17 @@
  *   from the keyboard and Enter still apply the link, and so does a switch to another window,
  *   which leaves the field focused. A press on the toolbar's own frame, or on ✓ until its release,
  *   keeps focus in the field.
+ * - A double-click on ✓ applies the link once. Its second press, which lands where ✓ was, on the
+ *   button that comes back there, does nothing, so the word keeps its formatting. Before, that
+ *   button ran. A double-click on any format button acts once, so a double-clicked Bold bolds the
+ *   word, and a right-click or a Control-click, the Mac's right-click, on one does nothing.
+ * - Enter, in the link field or on ✓, applies the link once, on its release, so a held Enter's
+ *   repeats don't reach the note. Before, they split its block on each repeat. It applies the URL
+ *   as it was at the press, so a key pressed before the release, which the field takes, is dropped
+ *   with the field and doesn't reach the note. An IME's Enter, whose release comes with no press
+ *   before it, or whose press comes while composing, applies nothing, even after a press whose
+ *   release was lost. A release after the row closed applies nothing to the next selection. Escape on
+ *   ✓ closes the field and gives back the selection, as Escape in it does.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -75,6 +86,14 @@ async function selectStart(page, index, length) {
 
 /** Press Link on the toolbar on top, the one a click reaches, as a user's does */
 const pressLink = page => page.locator('.formatting-toolbar.visible').last().locator('.formatting-toolbar-btn[data-id="link"]').click();
+
+/** Where the toolbar on top sits over the selection: the gap below it, and how far its centre is off the selection's */
+const placed = page => page.evaluate(() => {
+  const word = getSelection().getRangeAt(0).getBoundingClientRect();
+  const bars = document.querySelectorAll('.formatting-toolbar.visible');
+  const box = bars[bars.length - 1].getBoundingClientRect();
+  return { gap: Math.round(word.top - box.bottom), offCentre: Math.round(Math.abs((box.left + box.right) / 2 - (word.left + word.right) / 2)) };
+});
 
 /** The links in the block at `index`, each as its href and its text */
 const linksIn = (page, index) => blockContent(page, index).evaluate(el => [...el.querySelectorAll('a')].map(a => [a.getAttribute('href'), a.textContent]));
@@ -385,6 +404,156 @@ test('in link mode, a press on a sidebar button, which selects nothing, closes t
     linkField: getComputedStyle(bar.linkInput).display !== 'none',
   })));
   await expect.poll(toolbars, 'the link field closes, and no toolbar shows').toEqual([{ shows: false, linkField: false }, { shows: false, linkField: false }]);
+  await expectNoUncaught(extension, page);
+});
+
+test("a double-click on ✓ applies the link once and leaves the word's other formatting as it was, a double-click on Bold bolds once, and a right-click or a Control-click on a format button does nothing", async ({ extension }) => {
+  const page = await shortNote(extension);
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(page.locator('.formatting-toolbar-url:visible')).toBeFocused();
+  await page.keyboard.type('https://example.test/a');
+  // The second press lands where ✓ was, on whichever button comes back there
+  const ok = await page.locator('.formatting-toolbar-link-ok:visible').boundingBox();
+  await page.mouse.dblclick(ok.x + ok.width / 2, ok.y + ok.height / 2);
+  await expect.poll(() => linksIn(page, 0), '✓ applies it once').toEqual([['https://example.test/a', 'Before']]);
+  await page.waitForTimeout(200);
+  const tags = await blockContent(page, 0).evaluate(el => [...new Set([...el.querySelectorAll('*')].map(child => child.tagName.toLowerCase()))].sort());
+  expect(tags, "the word's other formatting is as it was").toEqual(['a']);
+
+  // A double-click at Bold's centre, once the toolbar is over the new word, bolds it once
+  await selectStart(page, 1, 'A second'.length);
+  await expect.poll(() => placed(page)).toEqual({ gap: 8, offCentre: 0 });
+  const bar = page.locator('.formatting-toolbar.visible').last();
+  const bold = await bar.locator('.formatting-toolbar-btn[data-id="bold"]').boundingBox();
+  await page.mouse.dblclick(bold.x + bold.width / 2, bold.y + bold.height / 2);
+  await page.waitForTimeout(200);
+  expect(await blockContent(page, 1).evaluate(el => el.innerHTML), 'a double-click on Bold bolds the word once').toBe('<b>A second</b> line');
+
+  // A right-click on Italic leaves the word as it was
+  const italic = await bar.locator('.formatting-toolbar-btn[data-id="italic"]').boundingBox();
+  await page.mouse.click(italic.x + italic.width / 2, italic.y + italic.height / 2, { button: 'right' });
+  await page.waitForTimeout(200);
+  expect(await blockContent(page, 1).evaluate(el => el.innerHTML), 'a right-click on a format button does nothing').toBe('<b>A second</b> line');
+
+  // A Control-click on Bold, the Mac's right-click, leaves the word as it was. On the Mac the
+  // right-click above moves the selection, so the word is selected again first
+  await selectStart(page, 1, 'A second'.length);
+  await expect.poll(() => placed(page)).toEqual({ gap: 8, offCentre: 0 });
+  const boldNow = await bar.locator('.formatting-toolbar-btn[data-id="bold"]').boundingBox();
+  await page.keyboard.down('Control');
+  await page.mouse.click(boldNow.x + boldNow.width / 2, boldNow.y + boldNow.height / 2);
+  await page.keyboard.up('Control');
+  await page.waitForTimeout(200);
+  expect(await blockContent(page, 1).evaluate(el => el.innerHTML), 'a Control-click on a format button does nothing').toBe('<b>A second</b> line');
+  await expectNoUncaught(extension, page);
+});
+
+test('Enter held in the link field, and on ✓, applies the link once and the note keeps its blocks, and Escape on ✓ closes the field and gives back the selection', async ({ extension }) => {
+  const page = await shortNote(extension);
+  const field = page.locator('.formatting-toolbar-url:visible');
+  const ok = page.locator('.formatting-toolbar-link-ok:visible');
+  const blocks = () => page.locator('#blocks-container > .block').count();
+  /** Enter held: a press, two repeats, then the release, as a held key gives them */
+  const holdEnter = async () => {
+    for (let i = 0; i < 3; i++) await page.keyboard.down('Enter');
+    await page.keyboard.up('Enter');
+  };
+
+  // In the field
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.type('https://example.test/a');
+  await holdEnter();
+  await expect.poll(() => linksIn(page, 0), 'the link applies once from the field').toEqual([['https://example.test/a', 'Before']]);
+  await page.waitForTimeout(200);
+  expect(await blocks(), 'the note keeps its blocks after Enter held in the field').toBe(2);
+
+  // On ✓, reached with Tab
+  await selectStart(page, 1, 'A second'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.type('https://example.test/b');
+  await page.keyboard.press('Tab');
+  await expect(ok).toBeFocused();
+  await holdEnter();
+  await expect.poll(() => linksIn(page, 1), 'the link applies once from ✓').toEqual([['https://example.test/b', 'A second']]);
+  await page.waitForTimeout(200);
+  expect(await blocks(), 'the note keeps its blocks after Enter held on ✓').toBe(2);
+
+  // Escape on ✓ closes the field and gives back the selection, as Escape in it does
+  await selectStart(page, 1, 'A second'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(ok).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.formatting-toolbar-url:visible'), 'Escape on ✓ closes the field').toHaveCount(0);
+  expect(await page.evaluate(() => getSelection().toString()), 'Escape on ✓ gives back the selection').toBe('A second');
+  await expect(blockContent(page, 1), "Escape on ✓ puts focus back in the selection's block").toBeFocused();
+  await expectNoUncaught(extension, page);
+});
+
+test("an IME's Enter in the link field applies nothing: a release with no press before it, a composing press, a commit after a lost release, and a release after the row closed", async ({ extension }) => {
+  const page = await shortNote(extension);
+  const field = page.locator('.formatting-toolbar-url:visible');
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.type('https://example.test/a');
+
+  // An IME's commit sends its press while composing, and only its release as a plain Enter
+  await field.evaluate(el => el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })));
+  await page.waitForTimeout(200);
+  expect(await linksIn(page, 0), 'no link applies after a lone release').toEqual([]);
+  await expect(field, 'the field stays open after a lone release').toBeFocused();
+
+  await field.evaluate(el => {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true, bubbles: true, cancelable: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(200);
+  expect(await linksIn(page, 0), 'no link applies after a composing press').toEqual([]);
+  await expect(field, 'the field stays open after a composing press').toBeFocused();
+
+  // A press whose release is lost, as one held through a window switch, then an IME's commit: the
+  // commit's composing press drops the URL that press kept, so the commit's release applies nothing
+  await field.evaluate(el => {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Process', code: 'Enter', isComposing: true, bubbles: true, cancelable: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(200);
+  expect(await linksIn(page, 0), "no link applies on an IME's commit after a press whose release was lost").toEqual([]);
+  await expect(field, "the field stays open after an IME's commit").toBeFocused();
+
+  // A link applied by Enter, then Link on the next block and a release with no press of its own: the
+  // URL Enter's press kept went with the row that closed, so nothing applies to the new selection
+  await page.keyboard.press('Enter');
+  await expect.poll(() => linksIn(page, 0), 'Enter applies the link').toEqual([['https://example.test/a', 'Before']]);
+  await selectStart(page, 1, 'A second'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await field.evaluate(el => el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })));
+  await page.waitForTimeout(200);
+  expect(await linksIn(page, 1), 'a release after the row closed applies nothing to the next selection').toEqual([]);
+  await expectNoUncaught(extension, page);
+});
+
+test("a key pressed while Enter is held in the link field leaves the link as the URL was at Enter's press, and doesn't reach the note", async ({ extension }) => {
+  const page = await shortNote(extension);
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(page.locator('.formatting-toolbar-url:visible')).toBeFocused();
+  await page.keyboard.type('https://example.test/a');
+  // A key pressed before Enter's release, as in fast typing, goes to the field and is dropped with it
+  await page.keyboard.down('Enter');
+  await page.keyboard.press('x');
+  await page.keyboard.up('Enter');
+  await expect.poll(() => linksIn(page, 0), "the link applies the URL as it was at Enter's press").toEqual([['https://example.test/a', 'Before']]);
+  await page.waitForTimeout(200);
+  expect(await blockContent(page, 0).evaluate(el => el.textContent), "the key pressed during the hold doesn't reach the note").toBe('Before the cards');
   await expectNoUncaught(extension, page);
 });
 
