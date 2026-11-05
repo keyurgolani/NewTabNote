@@ -819,7 +819,62 @@ const KEPT_BUSY = Object.freeze([
   "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added as soon as NewTabNote can.",
 ]);
 
+/**
+ * The kernel's capture waits `ms` on the worker's fake clock before its transaction, so it holds
+ * the coordinator's queue as a slow command would (#204's review, its probes)
+ * @param {number} ms
+ */
+const slowCapture = (ms) => ({
+  'js/kernel/core/application/capture.js': (source) => source.replace(
+    "const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);",
+    `await new Promise((resolve) => setTimeout(resolve, ${ms}));\n    const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);`,
+  ),
+});
+
+/** A NewTabNoteJournal that can't be opened, so no capture's entry is written */
+function unwritableJournal(env) {
+  const factory = env.indexedDB;
+  const open = factory.open.bind(factory);
+  factory.open = (name, ...rest) => {
+    if (name === 'NewTabNoteJournal') throw new DOMException('test: the disk is gone', 'UnknownError');
+    return open(name, ...rest);
+  };
+}
+
+/** The urls of the blocks in the worker's Daily Notes */
+async function dailyUrls(worker) {
+  const dump = await dumpDatabase(worker.indexedDB);
+  const dailies = Object.values(recordsOf(dump, 'canvases')).filter((record) => record.isDaily);
+  return Object.values(recordsOf(dump, 'elements'))
+    .filter((element) => element.url && dailies.some((daily) => daily.id === element.canvasId))
+    .map((element) => element.url);
+}
+
+/** Moves the worker's fake clock past a held capture's deadline and its end, draining at each step */
+async function pastTheHold(worker) {
+  for (const step of [31_000, 10_000, 40_000, 40_000]) {
+    worker.env.clock.tick(step);
+    await worker.drain();
+  }
+}
+
 describe("captures through the worker's own client and the coordinator's queue (#35 slice 4a)", () => {
+  it("waits its turn and saves a capture whose entry wasn't written, past its deadline, as 1.5.0 does: two captures behind a held queue both land and say so (#204's review, F1)", async () => {
+    // No journal, so neither capture has an entry the drain could replay; the first holds the
+    // queue for 40 s, past the 30 s deadline of both
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env), rewrite: slowCapture(40_000) });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, { ...worker.tab, url: 'https://example.test/second' });
+    await worker.drain();
+    await pastTheHold(worker);
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => shown.title), [
+      'Captured to New Tab Note',
+      'Captured to New Tab Note',
+    ]);
+    assert.deepEqual((await dailyUrls(worker)).sort(), [worker.tab.url, 'https://example.test/second'].sort());
+  });
+
   it("saves a capture over 1 MiB, as 1.5.0 does: no message limit applies to the worker's own capture (the lead's ruling for 4a)", async () => {
     const worker = await loadBackground({ start: false });
     const content = 'x'.repeat(2 * limits.MAX_MESSAGE_BYTES);
