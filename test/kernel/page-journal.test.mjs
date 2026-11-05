@@ -476,6 +476,39 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
     assert.ok(seen[0][2] && typeof seen[0][2] === 'object', 'the failure, whose code the event keeps');
   });
 
+  it('journals journal.append-failed once per page load: a second entry its journal refuses says so on the console alone (#204, F3)', async () => {
+    const real = new IDBFactory();
+    const faults = faultyFactory(real);
+    const p = pageClient();
+    await noteA(p);
+    /** @type {Array<[string, unknown, unknown]>} */
+    const seen = [];
+    const started = startPageJournal(p.client, 'page-1', 'newtab', {
+      stores: inContextStores({ indexedDB: faults.factory }),
+      locks: legacyEnv.createLockManager(),
+      storage: legacyEnv.createLocalStorage(),
+      runtime: { sendMessage: async () => {} },
+      clock: p.clock,
+      events: { event: (code, fields, failure) => seen.push([code, fields, failure]) },
+    });
+    assert.equal(await started.ready, true);
+    for (const [commandId, text] of [
+      ['c-save-1', 'alpha, edited'],
+      ['c-save-2', 'alpha, edited again'],
+    ]) {
+      const refused = faults.abortAfterNextWrite('entries', 'QuotaExceededError');
+      const answer = started.execute(saveOfA(commandId, text), p.client.execute);
+      await refused;
+      assert.equal((await answer).kind, 'committed');
+      for (let round = 0; round < 5; round++) await tick();
+    }
+    assert.deepEqual(p.sent, ['c-save-1', 'c-save-2']);
+    assert.deepEqual(
+      seen.map(([code, fields]) => [code, fields]),
+      [['journal.append-failed', { subjectId: 'A' }]],
+    );
+  });
+
   it("hands the page's failure events to the chunk's start, which a root without them leaves out (#35 slice 4a)", async () => {
     const p = pageClient();
     /** @type {unknown[]} */

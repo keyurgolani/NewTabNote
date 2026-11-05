@@ -222,6 +222,24 @@ describe("the worker's journal (#35 slice 3)", () => {
     assert.equal(w.events.length, 1);
   });
 
+  it("journals journal.append-failed once in the worker's life: a second entry it can't write says so on the console alone (#204, F3)", async () => {
+    const real = new IDBFactory();
+    const faults = faultyFactory(real);
+    faults.failNextOpen('NewTabNoteJournal', 'UnknownError');
+    faults.failNextOpen('NewTabNoteJournal', 'UnknownError');
+    const w = worker({ factory: faults.factory });
+    assert.equal(await w.journal.keep(capture('c1'), { noteId: 'daily-c1' }), false);
+    assert.equal(await w.journal.keep(capture('c2'), { noteId: 'daily-c2' }), false);
+    assert.deepEqual(
+      w.events.map(([code, fields]) => [code, fields]),
+      [['journal.append-failed', { subjectId: 'daily-c1' }]],
+    );
+    assert.deepEqual(
+      w.warned.map(([event]) => event),
+      ['entry-not-written', 'entry-not-written'],
+    );
+  });
+
   it('reads no journal and makes none on a profile that has none', async () => {
     const w = worker();
     assert.equal(await w.journal.drain(w.client), null);
