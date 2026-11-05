@@ -1,6 +1,6 @@
 /**
- * Split view's right pane, and actions that found their note's parts by the main pane's IDs
- * (#197). Each acts on the pane that holds its note:
+ * Split view's right pane, and four actions that found their note's parts by the main pane's
+ * IDs (#197). Each acts on the pane that holds its note:
  *
  * - A note loading in a pane puts that pane at its top, and leaves the other pane's scroll
  *   where it was. Before, every load reset the main pane's scroll.
@@ -11,6 +11,7 @@
  * - The AI title's spinner turns on the title of each editor that holds the note, the
  *   pop-out's too, for a title asked for and for the automatic one. Before, it turned on the
  *   main pane's title whenever the active pane held the note.
+ * - Extract insights sends its own note's text. Before, it sent the main pane's.
  *
  * Each case also checks one pane, where the main pane is the active one. The provider is
  * stubbed on the new tab, as e2e/ai-jobs.spec.js does, so nothing leaves the machine.
@@ -151,5 +152,33 @@ test("the AI title's spinner turns on the title of each editor that holds the no
   await expect.poll(() => page.evaluate(() => Boolean(app.tabController.pipEditor && app.tabController.pipEditor.noteId === app.secondaryEditor.noteId))).toBe(true);
   expect.soft(await spinnerFor(askForTitle), 'with the note in the pop-out too, its title spins as well').toEqual(['secondary-editor-container', 'pop-out']);
   await page.evaluate(() => window.__asked);
+  await expectNoUncaught(extension, page);
+});
+
+test("Extract insights sends the text of the note it extracts for, the right pane's when that pane is active", async ({ extension }) => {
+  const page = await open(extension, [{ name: 'Main note', blocks: lines('Main', 3) }, { name: 'Right note', blocks: lines('Right', 3) }]);
+  await page.evaluate(() => {
+    window.__insightsSent = [];
+    Object.assign(LLM, {
+      isConfigured: () => true,
+      extractInsights: async text => {
+        window.__insightsSent.push(text);
+        return { todos: ['Buy milk'], reminders: [], deadlines: [], highlights: [], tags: [] };
+      },
+    });
+  });
+  /** What Extract insights sent the provider, for the active pane's note */
+  const sent = async () => {
+    await page.evaluate(() => app.aiChatController.extractInsightsFromChat());
+    return page.evaluate(() => window.__insightsSent.pop());
+  };
+
+  const withOnePane = await sent();
+  expect.soft(withOnePane.includes('Main line 0'), "with one pane, the main pane's note's text").toBe(true);
+
+  await rightPaneOn(page, 'Right note');
+  const fromRight = await sent();
+  expect.soft(fromRight.includes('Right line 0'), "the right pane's note's text").toBe(true);
+  expect.soft(fromRight.includes('Main line'), "none of the main pane's").toBe(false);
   await expectNoUncaught(extension, page);
 });
