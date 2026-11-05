@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
+import { POINTS_LOCK } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
 import { PURGE_MESSAGE, waitForWorkerUpgrade, wakeWorkerToPurge } from '../../js/kernel/composition/host.js';
@@ -25,7 +26,7 @@ import {
   withPurgeWake,
 } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
-import { createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
+import { createRecoveryRoot, recoveryReadersOf } from '../../js/kernel/composition/recovery.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
@@ -391,6 +392,26 @@ describe('each composition root', () => {
     assert.equal(await root.theme(), 'system');
     assert.deepEqual(await page.env.indexedDB.databases(), []);
     root.close();
+    closeAll([page]);
+  });
+
+  it("recovery.html's hands the recovery reader its Web Locks, so a verification holds the points lock shared and the worker's purge never changes a point under it (#115's high review)", async () => {
+    const page = legacyContext();
+    /** @type {Array<[string, string]>} */
+    const held = [];
+    const locks = {
+      /**
+       * @param {string} name
+       * @param {{mode: string}} options
+       * @param {() => Promise<unknown>} body
+       */
+      request: (name, options, body) => (held.push([name, options.mode]), body()),
+    };
+    const { recovery } = recoveryReadersOf(/** @type {any} */ ({ ...recoveryHostOf(page), locks }));
+    // With no recovery database the point reads as discarded, under the lock all the same
+    assert.deepEqual(await recovery.verify('00000000-0000-4000-8000-000000000001'), { ok: false, code: 'point-discarded' });
+    assert.deepEqual(held, [[POINTS_LOCK, 'shared']]);
+    assert.deepEqual(await page.env.indexedDB.databases(), []);
     closeAll([page]);
   });
 

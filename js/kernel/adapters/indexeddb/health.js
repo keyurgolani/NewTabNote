@@ -16,7 +16,8 @@
  * A composition root makes them with the context's IndexedDB, and Web Crypto and IDBKeyRange
  * for verification, and its Web Locks: a verification reads a point across many transactions,
  * so it holds `storage.migrate` shared, and the worker's purge (#17 PR 2b), which holds it
- * exclusive, never changes the point under it. No shipped root does yet.
+ * exclusive, never changes the point under it. recovery.html's root (#20 slice 4b) is the first
+ * shipped root to make them, with `navigator.locks`.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';

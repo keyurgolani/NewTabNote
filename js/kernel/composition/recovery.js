@@ -191,6 +191,26 @@ const queryHandler = (start, serve) => async payload => {
 };
 
 /**
+ * The readers #20's providers read IndexedDB through on recovery.html (health.js), on `host`
+ * @param {RecoveryHost} host
+ */
+export function recoveryReadersOf(host) {
+  return {
+    secrets: createLegacySecretReader({ indexedDB: host.indexedDB, settings: /** @type {any} */ (host.secretSettings) }),
+    // A verification holds the points lock shared, so the worker's purge never changes a point under it
+    recovery: createRecoveryReader({
+      indexedDB: host.indexedDB,
+      keyRange: host.keyRange,
+      crypto: /** @type {any} */ (host.crypto),
+      locks: /** @type {any} */ (host.locks),
+    }),
+    vectors: createVectorsReader({ indexedDB: host.indexedDB }),
+    // CanvasTabDB's version and the worker's last run, which storage's check reads at every version
+    migration: createMigrationReader({ indexedDB: host.indexedDB, settings: host.settings }),
+  };
+}
+
+/**
  * recovery.html's kernel, theme, and trust, on `host`
  * @param {{host?: RecoveryHost}} [options]
  * @returns {RecoveryRoot}
@@ -255,17 +275,7 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
   const context = {
     storage: adapter,
     settings: host.settings,
-    secrets: createLegacySecretReader({ indexedDB: host.indexedDB, settings: /** @type {any} */ (host.secretSettings) }),
-    // A verification holds the points lock shared, so the worker's purge never changes a point under it
-    recovery: createRecoveryReader({
-      indexedDB: host.indexedDB,
-      keyRange: host.keyRange,
-      crypto: /** @type {any} */ (host.crypto),
-      locks: /** @type {any} */ (host.locks),
-    }),
-    vectors: createVectorsReader({ indexedDB: host.indexedDB }),
-    // CanvasTabDB's version and the worker's last run, which storage's check reads at every version
-    migration: createMigrationReader({ indexedDB: host.indexedDB, settings: host.settings }),
+    ...recoveryReadersOf(host),
     permissions: host.permissions,
     manifest: host.manifest,
     // No pipeline consumes #17's commit feed yet (#22 registers them), so the browser's list is empty
