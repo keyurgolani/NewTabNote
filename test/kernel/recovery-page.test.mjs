@@ -26,6 +26,7 @@ import {
   runResult,
   trustHeadline,
   trustSections,
+  whenText,
 } from '../../js/trust/ui/model.js';
 import { FOLLOW_MS, mountRecoveryPage } from '../../js/trust/ui/view.js';
 import { PROVIDERS } from '../../js/trust/core/providers/catalog.js';
@@ -1256,9 +1257,10 @@ describe('a repair the page can only finish after a reload (the lead\'s ruling 4
       await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
       control(page.doc, REBUILD.confirm, panel()).click();
       await until(() => panel() && panel().getAttribute('data-state') === 'failed', 'the failure');
+      // The time with the failure, and the instruction last, beside the button (the design look, round 7)
       assert.match(
         text(panel()),
-        new RegExp(`^Rebuild the search index\\s*${escape(fill(REBUILD.failed, { reason: REASON['reload-required'] }))} ${escape(REBUILD.reloadToTry)} Tried at `),
+        new RegExp(`^Rebuild the search index\\s*${escape(fill(REBUILD.failed, { reason: REASON['reload-required'] }))} Tried at \\d{1,2}:\\d{2} [AP]M\\. ${escape(REBUILD.reloadToTry)}`),
       );
       const primary = panel().querySelector('.trust-flow-actions').querySelectorAll('button');
       // The only way forward, where Try again was; focus stays on the panel's heading, as a failed run's does
@@ -1305,7 +1307,9 @@ describe('a repair the page can only finish after a reload (the lead\'s ruling 4
       await until(() => panel() && panel().getAttribute('data-state') === 'awaiting', 'the preview');
       control(page.doc, REBUILD.confirm, panel()).click();
       await until(() => panel() && panel().getAttribute('data-state') === 'not-checked', "the check that couldn't run");
-      assert.match(text(panel()), new RegExp(`${escape(REBUILD.notChecked)} ${escape(REBUILD.reloadToTry)}`));
+      // f14's ending, since the repair did finish (the design look, round 7)
+      assert.equal(REBUILD.reloadToCheck, 'Reload the page to check.');
+      assert.match(text(panel()), new RegExp(`${escape(REBUILD.notChecked)} ${escape(REBUILD.reloadToCheck)}`));
       const primary = panel().querySelector('.trust-flow-actions').querySelectorAll('button');
       assert.deepEqual(primary.map(text), [PAGE.reload]);
       primary[0].click();
@@ -1408,11 +1412,13 @@ describe("storage's update states, in the design director's words (change 9, #20
       [UPDATE_STATUS['storage.migration-pending'].text, 'unknown', `${CONSEQUENCE['storage.migration-pending']} ${UPDATE_SAVES}`, false, false],
     );
     assert.equal(UPDATE_STATUS['storage.migration-pending'].text, 'Update waiting');
-    // The headline stays "saving normally" while capture is safe, and names no row to look at
-    assert.deepEqual([head.title, head.proof, head.attention], [PAGE.saving, row.text, []]);
+    // The headline is t1's, the full check and its line, since no core row shows the half-filled
+    // shape, and it names no row to look at (the design look, round 7)
+    assert.deepEqual([head.tone, head.title, head.proof, head.attention], ['ok', PAGE.saving, fill(PAGE.savingProof, { when: whenText(AT, AT) }), []]);
+    // Its card: the dashed ring, under Waiting, and no Dismiss, since it counts nowhere
     assert.deepEqual(
-      [problem.title, problem.text, problem.waiting, problem.resolvedTitle],
-      ['An update is waiting to finish', row.text, true, RESOLVED['storage/migration-pending']],
+      [problem.title, problem.text, problem.waiting, problem.resolvedTitle, problem.tone, problem.updateWait, problem.dismissable],
+      ['An update is waiting to finish', row.text, true, RESOLVED['storage/migration-pending'], 'unknown', true, false],
     );
     // The Recovery Center: nothing needs the user while it waits
     assert.equal(recoveryHeadline([], /** @type {any} */ ({ capture: 'safe', records: 'open' }), { now: AT, lastCheckedAt: AT, waiting: 1 }).title, PAGE.nothingNeedsYou);
@@ -1425,8 +1431,18 @@ describe("storage's update states, in the design director's words (change 9, #20
       ['Update waiting', 'unknown', CONSEQUENCE['storage.migration-blocked'], true],
     );
     assert.ok(!row.text.includes(UPDATE_SAVES));
-    assert.deepEqual(head.attention, [{ id: 'storage', label: row.label }]);
-    assert.deepEqual([problem.title, problem.waiting, problem.dismissable], ['An update is waiting for free space', false, true]);
+    // t1's headline, and the attention line names the row
+    assert.deepEqual(
+      [head.tone, head.title, head.proof, head.attention],
+      ['ok', PAGE.saving, fill(PAGE.savingProof, { when: whenText(AT, AT) }), [{ id: 'storage', label: row.label }]],
+    );
+    // Its card: the dashed ring, under Waiting, with Dismiss, since it counts; and the Recovery
+    // Center's headline takes the dashed ring when it's all there is
+    assert.deepEqual(
+      [problem.title, problem.waiting, problem.dismissable, problem.tone, problem.updateWait],
+      ['An update is waiting for free space', false, true, 'unknown', true],
+    );
+    assert.equal(recoveryHeadline([problem], /** @type {any} */ ({ capture: 'safe', records: 'open' }), { now: AT, lastCheckedAt: AT }).tone, 'unknown');
   });
 
   it('reads an update waiting on anything but free space as an update waiting, never as one short of space', () => {
@@ -1437,7 +1453,10 @@ describe("storage's update states, in the design director's words (change 9, #20
         ['Update waiting', `${CONSEQUENCE['storage.migration-pending']} ${UPDATE_SAVES}`, false],
         JSON.stringify(evidence),
       );
-      assert.deepEqual([problem.title, problem.waiting], ['An update is waiting to finish', true]);
+      assert.deepEqual(
+        [problem.title, problem.waiting, problem.tone, problem.updateWait, problem.dismissable],
+        ['An update is waiting to finish', true, 'unknown', true, false],
+      );
     }
   });
 
@@ -1447,11 +1466,13 @@ describe("storage's update states, in the design director's words (change 9, #20
       [row.statusText, row.tone, row.text, row.attention],
       ["Update didn't finish", 'partial', `${CONSEQUENCE['storage.migration-failed']} ${UPDATE_SAVES}`, true],
     );
-    assert.deepEqual(head.attention, [{ id: 'storage', label: row.label }]);
+    // The half-filled shape, as its row shows it, with the row's words
+    assert.deepEqual([head.tone, head.title, head.proof, head.attention], ['partial', PAGE.saving, row.text, [{ id: 'storage', label: row.label }]]);
     assert.deepEqual(
-      [problem.title, problem.waiting, problem.dismissable, problem.resolvedTitle],
-      ["An update couldn't change how your notes are stored", false, true, RESOLVED['storage/migration-failed']],
+      [problem.title, problem.waiting, problem.dismissable, problem.resolvedTitle, problem.tone, problem.updateWait],
+      ["An update couldn't change how your notes are stored", false, true, RESOLVED['storage/migration-failed'], 'partial', false],
     );
+    assert.equal(recoveryHeadline([problem], /** @type {any} */ ({ capture: 'safe', records: 'open' }), { now: AT, lastCheckedAt: AT }).tone, 'partial');
   });
 
   it("says they save normally only when the check saved its test entry", () => {
@@ -1483,11 +1504,24 @@ describe("storage's update states, in the design director's words (change 9, #20
       assert.equal(headline(page.doc), `${PAGE.recovery}: ${PAGE.nothingNeedsYou}`);
       assert.match(text(page.doc.getElementById('trust-main')), new RegExp(escape('An update is waiting to finish')));
       same(page.doc.getElementById('trust-views').querySelector('.trust-count'), null, 'the badge counts it');
+      // Its card under Waiting, after the severity groups, in its row's dashed ring, and with no
+      // Dismiss, since it counts nowhere (the design look, round 7)
+      const waitingHeading = page.doc.getElementById('sev-waiting');
+      assert.ok(waitingHeading, 'no Waiting heading');
+      assert.equal(text(waitingHeading), PAGE.waiting);
+      same(page.doc.getElementById('sev-degraded'), null, 'the card sits under Partly working');
+      const cards = waitingHeading.parentNode.querySelectorAll('li.trust-incident');
+      assert.deepEqual(cards.map((/** @type {any} */ card) => [text(card.querySelector('h3')), card.getAttribute('data-tone')]), [['An update is waiting to finish', 'unknown']]);
+      assert.deepEqual(cards[0].querySelectorAll('button').map(text), []);
       control(page.doc, PAGE.trust).click();
       await until(() => page.doc.getElementById('row-storage'), 'the Notes database row');
       const storage = page.doc.getElementById('row-storage');
       assert.match(text(storage), new RegExp(`${escape('Update waiting')}.*${escape(CONSEQUENCE['storage.migration-pending'])} ${escape(UPDATE_SAVES)}`));
       assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.saving}`);
+      // t1's headline: the full check, and its line
+      const head = page.doc.querySelector('section.trust-headline');
+      assert.equal(head.getAttribute('data-tone'), 'ok');
+      assert.match(text(head.querySelector('.trust-proof')), /^Checked at \d{1,2}:\d{2} [AP]M by saving a test entry and reading it back\.$/);
     } finally {
       root.close();
     }

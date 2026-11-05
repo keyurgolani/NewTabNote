@@ -264,8 +264,10 @@ export const REBUILD = Object.freeze({
   // The page followed a run it stopped waiting for as long as it would (view.js's FOLLOW_MS)
   untracked: "NewTabNote can't tell whether the repair finished. Reload the page to check.",
   failed: 'Failed to rebuild the search index: {reason}.',
-  // After a reason that only a reload helps, beside Reload in place of Try again or Check again
+  // After a reason that only a reload helps, beside Reload in place of Try again
   reloadToTry: 'Reload the page to try again.',
+  // After the check a reload stopped, beside Reload in place of Check again: f14's ending
+  reloadToCheck: 'Reload the page to check.',
   unchanged: "Your notes didn't change.",
   tryAgain: 'Try again',
   steps: { preview: 'Preview', apply: 'Rebuild', verify: 'Check' },
@@ -428,6 +430,9 @@ export const PAGE = Object.freeze({
   problemsProofUnsure: 'Each problem below says what still works and what to do.',
   othersBelow: '{count} below it.',
   fixedJustNow: 'Fixed just now',
+  // The Recovery Center's heading for an update that's waiting, after the severity groups (the
+  // design look, round 7)
+  waiting: 'Waiting',
   // s5's line under a resolved title (change 1)
   fixedAfterRebuild: 'Fixed at {time}, when a check passed after the rebuild.',
   fixedAfterCheck: 'Fixed at {time}, when a check passed.',

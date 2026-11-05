@@ -553,9 +553,13 @@ export function trustHeadline(summary, rows, { now, checking }) {
       attention,
     };
   }
-  if (summary.worstCore === 'degraded') {
-    const degraded = core.find(row => row.status === 'degraded');
-    return { tone: 'partial', title: PAGE.saving, proof: (degraded && degraded.text) || PAGE.partOfDatabase, openRecovery: false, attention };
+  // The half-filled shape only when a core row shows it: a waiting update's row shows the dashed
+  // ring, so the headline stays as when every check passed, and its attention line says the rest
+  // (the design look, round 7)
+  const degraded = core.filter(row => row.status === 'degraded');
+  const partial = degraded.find(row => row.tone === 'partial');
+  if (summary.worstCore === 'degraded' && (partial || degraded.length === 0)) {
+    return { tone: 'partial', title: PAGE.saving, proof: (partial && partial.text) || PAGE.partOfDatabase, openRecovery: false, attention };
   }
   return {
     tone: 'ok',
@@ -604,6 +608,8 @@ export function attentionText(rows) {
  * @property {number | null} resolvedAt
  * @property {string} rowId - the Trust Center row it belongs to
  * @property {boolean} waiting - an update that's waiting, which counts as needing attention nowhere (change 9)
+ * @property {boolean} updateWait - an update waiting, for free space or not, which takes the dashed
+ *   ring and sits under Waiting
  */
 
 /**
@@ -673,13 +679,17 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
     const dismissTimes = list.map(incident => incident.dismissChangedAt).filter(at => typeof at === 'number');
     const rowId = PLATFORM.includes(first.providerId) ? 'platform' : first.providerId;
     const update = first.providerId === 'storage' ? updateKeyOf(first.faultCode, evidence) : null;
+    // An update waiting, for free space or not, takes the dashed ring, its row's shape, and sits
+    // under Waiting (the design look, round 7)
+    const updateWait = update !== null && update !== 'storage.migration-failed';
+    const waiting = update !== null && WAITING.includes(update);
     problems.push({
       key,
       title,
       // By its subject first, so the health records' own database never reads as the notes one
       resolvedTitle: resolvedTitles[subjectKey] || resolvedTitles[key] || title,
       severity,
-      tone: /** @type {Record<string, string>} */ (SEVERITY_TONE)[severity] || 'partial',
+      tone: updateWait ? 'unknown' : /** @type {Record<string, string>} */ (SEVERITY_TONE)[severity] || 'partial',
       incidents: list,
       firstSeenAt: Math.min(...list.map(incident => incident.firstSeenAt)),
       lastSeenAt: Math.max(...list.map(incident => incident.lastSeenAt)),
@@ -694,14 +704,16 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
       stillWorks: preserved,
       notWorking: affected,
       repair,
-      // A capture-risk problem stays in sight until it's fixed
-      dismissable: severity !== 'capture-risk' && !resolved,
+      // A capture-risk problem stays in sight until it's fixed, and an update that's waiting
+      // counts nowhere, so there's nothing to dismiss
+      dismissable: severity !== 'capture-risk' && !resolved && !waiting,
       dismissed,
       dismissedAt: dismissed && dismissTimes.length > 0 ? Math.max(.../** @type {number[]} */ (dismissTimes)) : null,
       resolved,
       resolvedAt: resolved && resolvedTimes.length > 0 ? Math.max(.../** @type {number[]} */ (resolvedTimes)) : null,
       rowId: /** @type {Record<string, unknown>} */ (PROVIDER)[rowId] ? rowId : first.providerId,
-      waiting: update !== null && WAITING.includes(update),
+      waiting,
+      updateWait,
     });
   }
   return problems.sort(
@@ -807,7 +819,12 @@ export function recoveryHeadline(open, summary, { now, lastCheckedAt, dismissed 
     };
   }
   return {
-    tone: open.some(problem => problem.severity === 'data-risk') ? 'action' : 'partial',
+    // An update waiting for free space takes its card's dashed ring when it's all there is
+    tone: open.every(problem => problem.updateWait)
+      ? 'unknown'
+      : open.some(problem => problem.severity === 'data-risk')
+        ? 'action'
+        : 'partial',
     title: fill(PAGE.problems, { count: plural(open.length, 'problem', 'problems') }),
     // "Saving normally" only on the summary's own word for it, and no promise about the cards
     // while the health records can't be saved, when they may not say what still works (N3)

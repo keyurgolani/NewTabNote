@@ -694,7 +694,7 @@ export function mountRecoveryPage({
       // A check that couldn't run because the page's connection needs a reload: only a reload helps
       const reloads = flow.reason === 'reload-required';
       body = [
-        h('p', { class: 'trust-result', role: 'status' }, glyph('partial'), h('span', {}, REBUILD.notChecked, reloads ? ` ${REBUILD.reloadToTry}` : null)),
+        h('p', { class: 'trust-result', role: 'status' }, glyph('partial'), h('span', {}, REBUILD.notChecked, reloads ? ` ${REBUILD.reloadToCheck}` : null)),
         steps(flow),
         reloads
           ? h('div', { class: 'trust-flow-actions' }, button(PAGE.reload, () => reload(), { primary: true, id: nextId(incidentId) }))
@@ -714,8 +714,9 @@ export function mountRecoveryPage({
             'span',
             {},
             h('strong', {}, fill(REBUILD.failed, { reason: reasonText(flow.reason) })),
-            reloads ? ` ${REBUILD.reloadToTry}` : null,
             flow.at !== null ? ` Tried ${whenText(flow.at, now())}.` : null,
+            // The time with the failure, and the instruction last, beside the button
+            reloads ? ` ${REBUILD.reloadToTry}` : null,
           ),
         ),
         steps(flow),
@@ -839,7 +840,7 @@ export function mountRecoveryPage({
           )
         : null,
       SEVERITY_ORDER.map(level => {
-        const list = open.filter(problem => problem.severity === level);
+        const list = open.filter(problem => problem.severity === level && !problem.updateWait);
         if (list.length === 0) return null;
         return h(
           'section',
@@ -848,6 +849,16 @@ export function mountRecoveryPage({
           h('ol', { class: 'trust-incidents' }, list.map(problem => problemCard(problem))),
         );
       }),
+      // An update that's waiting, after the severity groups, in its row's dashed ring (the design
+      // look, round 7)
+      open.some(problem => problem.updateWait)
+        ? h(
+            'section',
+            { class: 'trust-section', 'aria-labelledby': 'sev-waiting' },
+            h('h2', { id: 'sev-waiting' }, PAGE.waiting),
+            h('ol', { class: 'trust-incidents' }, open.filter(problem => problem.updateWait).map(problem => problemCard(problem))),
+          )
+        : null,
       runs.length > 0
         ? h(
             'section',
