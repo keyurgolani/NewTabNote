@@ -26,7 +26,9 @@
  *   incident its failure raised.
  *
  * Building it opens nothing, and nothing here throws into the worker: a journal that can't be
- * written leaves the capture to run as it did before slice 3, and says so on the console.
+ * written leaves the capture to run as it did before slice 3, and says so on the console and as
+ * `journal.append-failed`, by the capture's note and the failure's code only, which raises no
+ * incident (#35 slice 4a).
  */
 
 import { inContextStores } from '../adapters/in-context.js';
@@ -292,6 +294,12 @@ export function createWorkerJournal({
       } catch (error) {
         inFlight.delete(command.commandId);
         warn('entry-not-written', error);
+        try {
+          // By the entry's note and the failure's code only (#35 slice 4a)
+          if (events) events.event('journal.append-failed', { subjectId: noteId }, error);
+        } catch {
+          // Best effort, as unreplayable's event is
+        }
         return false;
       }
     },

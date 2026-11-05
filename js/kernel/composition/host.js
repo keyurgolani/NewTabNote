@@ -218,9 +218,14 @@ export function kernelClient({ adapter, surface, handlers, maintainOnOpen = fals
  */
 
 /**
+ * A page's failure events (#20), as its root hands them to its journal
+ * @typedef {{event(code: string, fields?: Record<string, unknown>, failure?: unknown): void}} PageEvents
+ */
+
+/**
  * The journal's chunk, as a root loads it
  * @template {Client} C
- * @typedef {{startPageJournal: (client: C, sessionId: string, surface: Surface) => PageJournal}} JournalChunk
+ * @typedef {{startPageJournal: (client: C, sessionId: string, surface: Surface, ports?: {events?: PageEvents}) => PageJournal}} JournalChunk
  */
 
 /** How long after a page's first read its journal may wait for the page to go idle (the lead's bound) */
@@ -245,9 +250,11 @@ const JOURNAL_IDLE_CAP_MS = 2000;
  *   loads its journal on its first journaled command alone.
  * @param {string} [sessionId] the page's, which its owner lock and entries name, new for each page
  *   load
+ * @param {PageEvents} [events] the page's failure events, which hear of an entry its journal
+ *   couldn't take (#35 slice 4a), on a page that has them
  * @returns {C & {execute: (command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>}}
  */
-export function journalingClient(client, surface, load, requestIdle, sessionId = randomIds.next()) {
+export function journalingClient(client, surface, load, requestIdle, sessionId = randomIds.next(), events) {
   /** @type {PageJournal | undefined} */
   let journal;
   /** @type {Promise<void> | undefined} */
@@ -256,7 +263,7 @@ export function journalingClient(client, surface, load, requestIdle, sessionId =
   const start = () => {
     loading ||= (async () => {
       try {
-        journal = (await load()).startPageJournal(client, sessionId, surface);
+        journal = (await load()).startPageJournal(client, sessionId, surface, { events });
       } catch {
         // The page goes on as before slice 3
       }
