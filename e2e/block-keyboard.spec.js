@@ -221,6 +221,9 @@ test("Mod+/ in a block's text opens its menu with focus on its first item, and t
   await page.keyboard.press('ControlOrMeta+Slash');
   await expect(menu, 'the menu opens').toBeVisible();
   await expect(itemOf(menu, 'Turn into...'), 'focus is on its first item').toBeFocused();
+  // A click into the text and a modified key leave the page out of keyboard modality, so the
+  // item wouldn't match :focus-visible; the ring shows all the same
+  await expect(itemOf(menu, 'Turn into...'), 'the first item shows the ring').toHaveCSS('outline-style', 'solid');
 
   const steps = [
     ['ArrowDown', 'Rewrite', 'ArrowDown moves focus to the next item'],
