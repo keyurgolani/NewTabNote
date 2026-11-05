@@ -199,7 +199,7 @@ async function nextStartAfter(text) {
     liveOwners: async () => new Set(),
     sessionId: 'page-2',
     locks: null,
-    store: { tell: entry => told.push(entry), tellSaved: () => {} },
+    store: { list: () => [], tell: entry => told.push(entry), tellSaved: () => {} },
     wake: () => {},
   });
   return { next, told, content: (await blockNow()).content, left: w.journal.entries() };

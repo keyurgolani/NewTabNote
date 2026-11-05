@@ -18,6 +18,12 @@
  *   save with a draft at this build's version: those are the worker's to replay or keep
  *   (journal-drain.js), or a newer build's. It leaves one the worker holds, under a tombstone the
  *   sweep keeps for, by the code on its mark (the lead's answer to Q6).
+ * - It leaves an entry that a close-time draft still to apply names, by its page, pane and note
+ *   (#6). That draft holds everything the pane changed within its load of the note, and its apply
+ *   takes the pane's entries for it (close-drafts.js, `forget`), so the entry waits for it. A page
+ *   already open when the closing page went runs this before any start applies the draft, and the
+ *   entry, applied first, could only make a recovered note of its older text. Once no draft names
+ *   it, it's applied as before.
  * - A pane's save carries everything the pane changed since its last commit within its load of
  *   the note, and a pane's id lasts one load, so an entry a later one from the same page's pane,
  *   of the same note, covers is removed first, unapplied (R182's S2): its older text could only
@@ -35,6 +41,7 @@
  * browser API: the ports come in.
  */
 
+import { isId, isRecord } from '../contracts/checks.js';
 import { DRAFTS_LOCK, recoveredIdOf } from '../domain/close-draft-keys.js';
 import { isCloseDraft } from '../domain/close-draft.js';
 import { isPagesSave } from '../domain/journal.js';
@@ -67,7 +74,8 @@ import { isPagesSave } from '../domain/journal.js';
  *   The sessions whose owner lock is held now, or null when that can't be told
  * @property {string} sessionId - this page's own, whose entries its journaling removes
  * @property {DraftLocks | null} [locks]
- * @property {Pick<DraftStore, 'tell' | 'tellSaved'>} store - the untold lists the new tab's toasts read
+ * @property {Pick<DraftStore, 'list' | 'tell' | 'tellSaved'>} store - the close-time drafts still to
+ *   apply, and the untold lists the new tab's toasts read
  * @property {() => void} wake - wakes the worker's drain
  */
 
@@ -87,6 +95,18 @@ const covers = (later, entry) =>
   isCloseDraft(later.draft);
 
 /**
+ * Whether `draft` names `entry`: an editor save of the draft's note from its page's pane, which
+ * the draft's apply takes (forgetCovered, by the same fields)
+ * @param {CloseDraft} draft - one that names its page and pane
+ * @param {JournalRecord} entry
+ */
+const names = (draft, entry) =>
+  entry.noteId === draft.noteId &&
+  entry.pane === draft.pane &&
+  isRecord(entry.draft) &&
+  entry.draft.page === draft.page;
+
+/**
  * Applies the editor saves closed pages left in `journal`. It rejects only when the journal does,
  * and an entry it hadn't removed then stays for the next start.
  * @param {JournalApplyPorts} ports
@@ -99,9 +119,12 @@ export async function applyJournalSaves({ journal, client, liveOwners, sessionId
     const live = await liveOwners();
     // Without them, any entry could be an open page's
     if (!live) return result;
-    const saves = (await journal.list()).filter(
+    const listed = (await journal.list()).filter(
       entry => isPagesSave(entry) && entry.ownerSessionId !== sessionId && !live.has(entry.ownerSessionId),
     );
+    // An entry that a close-time draft still to apply names waits for that draft, whose apply takes it
+    const pending = listed.length > 0 ? store.list().filter(({ draft }) => isId(draft.page) && isId(draft.pane)) : [];
+    const saves = listed.filter(entry => !pending.some(({ draft }) => names(draft, entry)));
     /** @type {string[]} */
     const covered = [];
     /** @type {JournalRecord[]} */

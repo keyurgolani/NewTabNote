@@ -30,9 +30,10 @@
  *   stores it unchanged. `page` names the page load that wrote the draft.
  * - A stack draft's `pane` names the editor pane whose base of the note the draft was made on, as
  *   that pane's saves name it for the page's journal (#6). The draft holds everything that pane
- *   changed within its load of the note, so once it applies, the next start takes that page's
- *   pane's journal entries for the note (application/close-drafts.js). 1.4.3 and 1.5.0 read none
- *   of it, and a draft written with no pane takes no entry.
+ *   changed within its load of the note, so its apply takes that page's pane's journal entries
+ *   for the note, and until it applies, no journal apply takes them (application/close-drafts.js,
+ *   application/journal-apply.js). 1.4.3 and 1.5.0 read none of it, and a draft written with no
+ *   pane takes no entry.
  *
  * Each draft goes by these rules, in this order (decide):
  * 0. Its recovered note is stored already: an earlier start made it, and its page went before
@@ -60,11 +61,10 @@
  * own saves gave. A block at any other order is another writer's reorder since, and then none
  * goes in, so that writer's order stays whole. A reorder that puts each block back on an order
  * the page knows, its base's say, reads as the page's own, so by these rules the moves go over
- * it. The applier drops a draft whose closing save committed before these rules run, by the
- * ledger's record under the draft's id (application/close-drafts.js, #6), so such a reorder
- * stays then. A block no note holds,
- * another note's, or one the draft puts or deletes, is skipped. A recovered note takes no move,
- * and a residue Q5 drops takes its moves with it.
+ * it. A draft whose closing save committed, by the ledger's record under the draft's id, goes by
+ * rules 0 and 1 alone, and is then dropped (application/close-drafts.js, #6), so such a reorder
+ * stays. A block no note holds, another note's, or one the draft puts or deletes, is skipped. A
+ * recovered note takes no move, and a residue Q5 drops takes its moves with it.
  *
  * Nothing here reads a store or a browser API: the handler reads the records and hands them in.
  */

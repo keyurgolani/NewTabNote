@@ -78,12 +78,14 @@ function openedJournal(stores) {
 
 /**
  * The journal entries a close-time draft's close covered go, unapplied (#6): the editor saves of
- * the draft's note that its page's pane issued, which the pages' apply would otherwise take, by
- * the page load's id their drafts carry and the pane's. The draft holds everything that pane
- * changed within its load of the note. Another page's, another pane's, another note's, a newer
- * build's and one the worker holds stay. A profile with no journal opens nothing. Never rejects.
+ * the draft's note that its page's pane issued, which the pages' apply leaves to it
+ * (core/application/journal-apply.js), by the page load's id their drafts carry and the pane's.
+ * The draft holds everything that pane changed within its load of the note. Another page's,
+ * another pane's, another note's, a newer build's and one the worker holds stay. A profile with
+ * no journal opens nothing. Never rejects. It closes its stores' journal for good once it's done,
+ * so each call needs stores of its own, as the default makes them.
  * @param {import('../core/domain/close-draft.js').CloseDraft} draft - one that names its page and pane
- * @param {InContextStores} [stores] - the page's own unless a test passes them
+ * @param {InContextStores} [stores] - this call's own, the page's unless a test passes them
  * @returns {Promise<void>}
  */
 export async function forgetCovered(draft, stores = inContextStores()) {

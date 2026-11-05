@@ -17,7 +17,7 @@
  *   save of the pane's, as its closing save, or one with nothing to keep since the pane's base.
  *   An editor's pane keeps its id on its base of the note, which each load makes anew, so no
  *   save takes an earlier load's entries, and the retry of a save written as the pane left the
- *   note names its save's id. A removal that fails is tried again with the next answer.
+ *   note names its save's pane id. A removal that fails is tried again with the next answer.
  * - A journal that can't take an entry leaves the command to run as before, and says so on the
  *   console, with the failure's code at most. Nothing here throws into the page.
  * - A command that deletes notes for good takes their entries out of the journal once it's

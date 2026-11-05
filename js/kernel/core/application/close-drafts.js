@@ -486,8 +486,9 @@ const nothingApplied = () => ({
  * With `forget`, a draft that names its page and pane takes that pane's journal entries for its
  * note once its apply commits, before the draft is removed, still under the lock (#6). The draft
  * holds everything the pane changed within its load of the note, so nothing an entry holds is
- * lost, and each start applies its drafts before its journal, under the same lock, so no journal
- * apply lists them first. A note gone keeps them for the worker's sweep, which tells a tombstone
+ * lost. Until the draft applies, every journal apply leaves the entries it names
+ * (journal-apply.js), a page's that was open already when the closing page went included, so
+ * none applies them first. A note gone keeps them for the worker's sweep, which tells a tombstone
  * it keeps for from one it deletes for, and so does a draft kept for the next start.
  * @param {{client: DraftClient, store: DraftStore, locks?: DraftLocks | null, logger?: {warn: (event: string, detail: Record<string, unknown>) => void}, tell?: boolean, forget?: (draft: CloseDraft) => Promise<void>}} options
  *   `forget` never rejects

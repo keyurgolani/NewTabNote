@@ -143,6 +143,8 @@ async function world(fixture) {
       sessionId: OWN,
       locks,
       store: {
+        // No close-time draft is stored, so none holds an entry back
+        list: () => [],
         tell: (/** @type {{id: string, of: string}} */ entry) => told.push(entry),
         tellSaved: (/** @type {string} */ id) => toldSaved.push(id),
       },
