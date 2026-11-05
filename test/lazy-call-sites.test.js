@@ -496,3 +496,98 @@ describe("App's reload guard and the PiP window's stylesheets", () => {
     assert.match(read('js/app.js'), /registerExtraDocument: this\.loader \? \(target\) => this\.loader\.registerExtraDocument\(target\) : null,/);
   });
 });
+
+describe("the block menus' roles and keys: their chunk at a menu's first open (#14 slice 4)", () => {
+  it("App's port loads the menu-keys chunk through the loader, with its literal import(), and is none without the loader", async () => {
+    const { env, App } = await page();
+    const asked = [];
+    const module = { menuKeys() {} };
+    const loader = {
+      ...loadingLoader({}),
+      loadChunk: async (name) => {
+        asked.push(name);
+        return { status: 'loaded', module };
+      },
+    };
+    const result = await appOf(env, App, { loader }).menuKeysLoader()();
+    assert.ok(result.module === module, "the loader's answer");
+    assert.deepEqual(asked, ['menu-keys']);
+    assert.equal(appOf(env, App, {}).menuKeysLoader(), null);
+    assert.match(read('js/app.js'), /loader \? \(\) => loader\.loadChunk\('menu-keys', \(\) => import\('\.\/ui\/menu-keys\.js'\)\) : null/);
+  });
+
+  it('is how App gives the editors their ports, which TabController gives the PiP editor', () => {
+    assert.match(read('js/app.js'), /this\.editorPorts = \{\n {8}documentClient: this\.documentClient, navigation: this\.editorNavigation\(\), ai: this\.ai, logger: this\.logger, loadMenuKeys: this\.menuKeysLoader\(\),\n {6}\};/);
+    assert.match(read('js/controllers/tab-controller.js'), /this\.pipEditor = new BlockEditor\(\{\n {8}root: wrapper,\n {8}\.\.\.this\.editorPorts,\n {6}\}\);/);
+  });
+
+  it("each of an editor's menus asks the loader for them, a menu whose chunk didn't load stays the pointer's with the next open trying again, and one closed before its chunk came gets nothing", async () => {
+    const { env, tabs } = await page();
+    const editor = tabs.editor;
+    const given = [];
+    const chunk = { menuKeys: (to, menu, how) => given.push([to === editor, menu.className, how]) };
+    const answers = [{ status: 'failed', reason: 'chunk-missing' }, { status: 'loaded', module: chunk }, { status: 'loaded', module: chunk }];
+    let loads = 0;
+    editor.loadMenuKeys = async () => {
+      loads += 1;
+      return answers.shift();
+    };
+    const menu = (doc, className) => {
+      const el = doc.createElement('div');
+      el.className = className;
+      doc.body.appendChild(el);
+      return el;
+    };
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+    editor._menuKeys(menu(env.document, 'block-action-menu'), { opener: undefined });
+    await settled();
+    assert.deepEqual([loads, given.length], [1, 0], "a failed load gives the menu nothing, so it's the pointer's");
+    const opener = editor.container;
+    editor._menuKeys(menu(env.document, 'block-action-menu'), { opener });
+    await settled();
+    assert.equal(loads, 2, 'the next open tries again');
+    assert.deepEqual(given.map(([same, className, how]) => [same, className, how.opener === opener]), [[true, 'block-action-menu', true]]);
+    editor._menuKeys(menu(env.document, 'turn-into-menu'), { item: opener });
+    await settled();
+    assert.equal(loads, 3, "each menu asks the loader, whose module map answers once the chunk is in");
+    assert.deepEqual(given.slice(1).map(([same, className, how]) => [same, className, how.item === opener]), [[true, 'turn-into-menu', true]]);
+
+    // A menu that closed before its chunk came gets nothing
+    let release = () => {};
+    editor.loadMenuKeys = () => new Promise((resolve) => { release = resolve; });
+    const gone = menu(env.document, 'block-action-menu');
+    editor._menuKeys(gone, {});
+    gone.parentNode.removeChild(gone);
+    release({ status: 'loaded', module: chunk });
+    await settled();
+    assert.equal(given.length, 2);
+  });
+
+  it("a loader that rejects, or keys that throw, leave a menu the pointer's: it opens all the same, without its keys, and each failure is logged (#202's review)", async () => {
+    const { env, tabs } = await page();
+    const editor = tabs.editor;
+    // The lines the editor warns with, in the page's console
+    const warned = () => env.logs.filter(entry => entry.level === 'warn' && entry.args[0] === 'Menu keys:').length;
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+    // A menu as showBlockActionMenu leaves it, open, before it asks for the keys
+    const open = () => {
+      const el = env.document.createElement('div');
+      el.className = 'block-action-menu';
+      env.document.body.appendChild(el);
+      return el;
+    };
+
+    editor.loadMenuKeys = () => Promise.reject(new Error('the chunk failed'));
+    const first = open();
+    editor._menuKeys(first, {});
+    await settled();
+    assert.deepEqual([first.isConnected, first.getAttribute('role')], [true, null], 'a load that rejects leaves the menu open, without its keys');
+    editor.loadMenuKeys = async () => ({ status: 'loaded', module: { menuKeys() { throw new Error('the keys threw'); } } });
+    const second = open();
+    editor._menuKeys(second, {});
+    await settled();
+    assert.equal(second.isConnected, true, 'and keys that throw leave it open too');
+    assert.equal(warned(), 2, 'each failure is logged, a line a try');
+  });
+});

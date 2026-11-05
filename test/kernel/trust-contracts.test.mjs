@@ -291,12 +291,14 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     // The tab's import()s: the root's of the workspace chunk, the loader's retry, the failure
     // events' own, of ./trust.js, the close-time drafts' two: the start's of
     // close-drafts-applier.js, when localStorage gives it work, and applyCloseDraft's wrapper's
-    // of close-drafts-chunk.js, at first use (#33, option 1), and the root's of the journal's
-    // chunk, on the first journaled command or at idle (#35 slice 3b)
+    // of close-drafts-chunk.js, at first use (#33, option 1), the root's of the journal's chunk,
+    // on the first journaled command or at idle (#35 slice 3b), and App's of the block menus'
+    // keys, at a menu's first open (#14 slice 4)
     const dynamic = dynamicImportsIn(newtab.map(file => path.join(ROOT, file)))
       .map(at => path.relative(ROOT, at).split(path.sep).join('/').replace(/:\d+:\d+$/, ''))
       .sort();
     assert.deepEqual(dynamic, [
+      'js/app.js',
       'js/entries/newtab.js',
       'js/kernel/composition/lazy-failure-events.js',
       'js/kernel/composition/newtab.js',
@@ -314,10 +316,15 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
       ['js/kernel/core/application/close-drafts-on-demand.js', ['./close-drafts-chunk.js']],
       // The forget beside the applier loads the journal's chunk, for a draft that names its pane (#6)
       ['js/kernel/composition/close-drafts-applier.js', ['./journal-chunk.js']],
+      ['js/app.js', ['./ui/menu-keys.js']],
     ])) {
       const loads = loadsOf(fs.readFileSync(path.join(ROOT, file), 'utf8')).dynamicLoads.map(load => load.specifier);
       assert.deepEqual(loads, specifiers, file);
     }
+    // The block menus' keys import nothing, so their chunk is that file alone
+    const menuKeys = reachGraph([path.join(ROOT, 'js', 'ui', 'menu-keys.js')]);
+    assert.deepEqual([...menuKeys.modules].map(file => path.relative(ROOT, file).split(path.sep).join('/')), ['js/ui/menu-keys.js']);
+    assert.deepEqual(menuKeys.computed, []);
     for (const chunk of [
       'js/kernel/composition/close-drafts-applier.js',
       'js/kernel/core/application/close-drafts-chunk.js',

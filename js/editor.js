@@ -269,6 +269,11 @@ class BlockEditor {
     this.ai = config.ai || NO_AI;
     /** The tab's logger, whose events a block this editor won't write goes to (Utils.blockRefusal) */
     this.logger = config.logger || null;
+    /**
+     * The page loader's load of the block menus' keys (App's loadMenuKeys, #14 slice 4)
+     * @type {(() => Promise<{status: string, module?: any}>) | null}
+     */
+    this.loadMenuKeys = config.loadMenuKeys || null;
     this.container = this.root.querySelector('.blocks-container') || this.doc.getElementById('blocks-container');
     this.titleEl = this.root.querySelector('.page-title') || this.doc.getElementById('page-title');
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
@@ -1727,7 +1732,8 @@ class BlockEditor {
     }
     for (const id of blockIds) {
       const el = this.getBlockElement(id);
-      const target = /** @type {HTMLElement | null} */ (el ? el.querySelector('.block-content, td, th') : null);
+      // Its text, a table's first cell, or a divider's or an image's stop (#202's review)
+      const target = /** @type {HTMLElement | null} */ (el ? el.querySelector('.block-content, td, th, .block-stop') : null);
       if (target) {
         target.focus();
         return;
@@ -1777,15 +1783,15 @@ class BlockEditor {
   }
 
   /**
-   * Focus a block. With `card`, a card in a safe state takes focus itself, as a keyboard move
-   * leaves it (#14); every other caller still finds nothing to focus in a card, so the arrow keys
-   * still stop above and below one.
+   * Focus a block. With `card`, a block with no text takes focus itself: a card in a safe state,
+   * as a keyboard move leaves it (#14), and a divider's or an image's stop, as the arrow keys and
+   * a key's delete land on it (#14 slice 4). Every other caller finds nothing to focus in one.
    */
   focusBlock(blockId, atEnd = false, card) {
     const el = this.getBlockElement(blockId);
     if (!el) return;
 
-    const content = el.querySelector('.block-content') || (card && el.querySelector('.block-safe-card'));
+    const content = el.querySelector('.block-content') || (card && el.querySelector('.block-safe-card, .block-stop'));
     if (content) {
       content.focus();
       // Only where focus went: a caret in a hidden pane's block would swallow every key typed after it
@@ -1882,6 +1888,8 @@ class BlockEditor {
    * Handle title keydown
    */
   onTitleKeyDown(e) {
+    // A key an IME composes with in the title is the IME's too, as in a block (#202's review)
+    if (e.isComposing) return;
     if (e.key === 'Enter') {
       e.preventDefault();
       // Focus first block or create one
@@ -1893,8 +1901,9 @@ class BlockEditor {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      // Onto the first block, a divider, an image or a card included (#14 slice 4)
       if (this.blocks.length > 0) {
-        this.focusBlock(this.blocks[0].id);
+        this.focusBlock(this.blocks[0].id, false, true);
       }
     }
   }
@@ -2430,6 +2439,10 @@ class BlockEditor {
     const block = this.getBlockById(blockEl.dataset.id);
     if (!block) return;
 
+    // A key an IME composes with is the IME's: its candidates' arrows, and the Enter that commits
+    // its text (#202's review)
+    if (e.isComposing) return;
+
     // With blocks selected, Backspace and Delete delete the selection (onGlobalKeyDown, Req
     // 13.4), so the block they're pressed in leaves them alone (#14 slice 3)
     if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds && this.selectedBlockIds.size > 0) return;
@@ -2469,8 +2482,9 @@ class BlockEditor {
       return;
     }
 
-    // Slash command
-    if (e.key === '/' && content && content.textContent === '') {
+    // Slash command, which Mod+/ isn't: it opens the block's menu (#14 slice 4). A '/' typed with
+    // AltGr, which Windows reports as Ctrl and Alt, is one (#202's review)
+    if (e.key === '/' && !e.metaKey && !(e.ctrlKey && !e.altKey) && content && content.textContent === '') {
       e.preventDefault();
       this.showSlashMenu(blockEl);
       return;
@@ -2580,6 +2594,18 @@ class BlockEditor {
       })
       : null;
 
+    // The block's menu from the keyboard, at its handle, with focus on its first item (#14 slice
+    // 4): Mod+/, where Shift+F10 and the menu key stay the browser's, and those two on a divider's
+    // or an image's stop, which has no text menu to lose. A card has none.
+    const stop = e.target.matches('.block-stop');
+    if ((shortcutAction && shortcutAction.type === 'block-menu') || (stop && ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu'))) {
+      e.preventDefault();
+      // The slash menu and the others close first, so the block's shows alone (#202's review)
+      this.hideMenus();
+      this.showBlockActionMenu(block.id, blockEl.querySelector('.block-handle'), e.target);
+      return;
+    }
+
     if (shortcutAction) {
       e.preventDefault();
 
@@ -2607,13 +2633,25 @@ class BlockEditor {
       }
     }
 
-    // A card in a safe state holds nothing to type in (#14). A key typed on it, Space too, does
-    // nothing: its default is prevented, so the note doesn't take it and Space doesn't scroll, but
-    // it goes on, so the app's shortcuts still hear it. Enter, Backspace, Delete, Tab and the arrow
-    // keys are the browser's, which do nothing on a card but move focus, and so are Alt chords, as
-    // type anywhere leaves them.
-    if (safe) {
-      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
+    // A card in a safe state holds nothing to type in (#14), and nor does a divider's or an
+    // image's stop (#14 slice 4). A key typed on one, Space too, does nothing: its default is
+    // prevented, so the note doesn't take it and Space doesn't scroll, but it goes on, so the app's
+    // shortcuts still hear it. The arrow keys leave it for the block before or after, and Backspace
+    // and Delete delete its block as a selected block is deleted, which asks first for a card.
+    // Enter and Tab are the browser's, which do nothing on one but move focus, and so are Alt
+    // chords, as type anywhere leaves them.
+    if (safe || stop) {
+      const up = e.key === 'ArrowUp';
+      if (up || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = this.blocks[this.blocks.indexOf(block) + (up ? -1 : 1)];
+        if (next) this.focusBlock(next.id, up, true);
+        else if (up) this.titleEl.focus();
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        this.selectedBlockIds = new Set([block.id]);
+        this.deleteSelectedBlocks(true);
+      } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
       return;
     }
 
@@ -2713,26 +2751,26 @@ class BlockEditor {
       }
     }
 
-    // Arrow up - move to previous block
+    // Arrow up - move to previous block, landing on a divider, an image or a card (#14 slice 4)
     if (e.key === 'ArrowUp') {
       if (this.isCaretAtStart(content)) {
         e.preventDefault();
         const index = this.blocks.indexOf(block);
         if (index > 0) {
-          this.focusBlock(this.blocks[index - 1].id, true);
+          this.focusBlock(this.blocks[index - 1].id, true, true);
         } else {
           this.titleEl.focus();
         }
       }
     }
 
-    // Arrow down - move to next block
+    // Arrow down - move to next block, landing on a divider, an image or a card (#14 slice 4)
     if (e.key === 'ArrowDown') {
       if (this.isCaretAtEnd(content)) {
         e.preventDefault();
         const index = this.blocks.indexOf(block);
         if (index < this.blocks.length - 1) {
-          this.focusBlock(this.blocks[index + 1].id);
+          this.focusBlock(this.blocks[index + 1].id, false, true);
         }
       }
     }
@@ -2764,13 +2802,20 @@ class BlockEditor {
    * Handle block click
    */
   onBlockClick(e) {
-    // Block handle click — show block action menu with "Turn into..."
+    // A press on a divider or an image leaves no focus on its stop, which only the keys give it
+    // (#202's review): a stop a click focused would take a typed letter, and Backspace would
+    // delete its block. Its mousedown isn't prevented, which would keep the block from a drag.
+    const pressed = e.target.closest('.block-stop');
+    if (pressed && this.doc.activeElement === pressed) pressed.blur();
+
+    // Block handle click — show block action menu with "Turn into...", the others closed first
     if (e.target.closest('.block-handle')) {
       const blockEl = e.target.closest('.block');
       if (blockEl) {
         e.preventDefault();
         e.stopPropagation();
         const handle = e.target.closest('.block-handle');
+        this.hideMenus();
         this.showBlockActionMenu(blockEl.dataset.id, handle);
       }
       return;
@@ -3221,8 +3266,9 @@ class BlockEditor {
       return;
     }
 
-    // Delete selected blocks: Backspace/Delete with multi-block selection (Req 13.4)
-    if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds.size > 0) {
+    // Delete selected blocks: Backspace/Delete with multi-block selection (Req 13.4), unless the
+    // key's own block took it, as a focused divider, image or card does (#14 slice 4)
+    if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedBlockIds.size > 0 && !e.defaultPrevented) {
       e.preventDefault();
       this.deleteSelectedBlocks();
       return;
@@ -5912,10 +5958,13 @@ class BlockEditor {
   /**
    * Delete all selected blocks (Req 13.4). A selection holding a block this build can't show asks
    * first, since nobody can see what such a block holds (#14 slice 3); the rest delete at once,
-   * as before. One Undo brings them all back, each where it was.
+   * as before. One Undo brings them all back, each where it was. `fromKey` is Backspace or Delete
+   * on a focused divider, image or card, whose block alone is selected (#14 slice 4): its Cancel
+   * leaves no selection, and focus goes to the block before it.
+   * @param {boolean} [fromKey]
    * @returns {Promise<void>}
    */
-  async deleteSelectedBlocks() {
+  async deleteSelectedBlocks(fromKey) {
     if (this.selectedBlockIds.size === 0) return;
 
     const idsToDelete = new Set(this.selectedBlockIds);
@@ -5925,7 +5974,8 @@ class BlockEditor {
       const noteId = this.noteId;
       const focused = this.doc.activeElement;
       if (!(await this._confirmDeleteUnseen(selected.length, safe))) {
-        // The selection stays, for another try
+        // The selection stays, for another try, but a key's delete leaves none
+        if (fromKey) this.clearBlockSelection();
         this._focusAfterCancel(focused, selected.map(b => b.id));
         return;
       }
@@ -5966,9 +6016,13 @@ class BlockEditor {
     this.clearBlockSelection();
     this.renderBlocks();
 
-    // Focus block preceding the selection, or first block
-    const focusIdx = Math.max(0, Math.min(firstSelectedIdx, this.blocks.length - 1));
-    this.focusBlock(this.blocks[focusIdx].id, true);
+    // Focus the block in the selection's place, at its end. After a key's delete, the block before
+    // it has focus, on its text's end or its stop (#14 slice 4), when it takes focus; when it takes
+    // none (a table, a bookmark, a video, a file or an equation) or there is none, the block now in
+    // the deleted one's place has it, at its start (#202's review)
+    const place = Math.max(0, Math.min(firstSelectedIdx, this.blocks.length - 1));
+    if (fromKey && firstSelectedIdx > 0) this.focusBlock(this.blocks[firstSelectedIdx - 1].id, true, true);
+    if (!fromKey || !this.container.contains(this.doc.activeElement)) this.focusBlock(this.blocks[place].id, !fromKey, true);
     this.scheduleSave();
   }
 
@@ -6318,11 +6372,15 @@ class BlockEditor {
   }
 
   /**
-   * Show block action menu anchored to a block handle (Req 12.1).
+   * Show block action menu anchored to a block handle (Req 12.1). Its roles and keys, under #24's
+   * menu pattern, come with its first open (_menuKeys, #14 slice 4).
    * @param {string} blockId - The block ID
    * @param {HTMLElement} anchorEl - The block handle element to anchor the menu to
+   * @param {HTMLElement} [opener] - Where its key was pressed, for a menu a key opens: focus goes
+   *   to its first item, and back here, with the selection, when it closes. A click leaves focus
+   *   where it was.
    */
-  showBlockActionMenu(blockId, anchorEl) {
+  showBlockActionMenu(blockId, anchorEl, opener) {
     this.hideBlockActionMenu();
 
     const block = this.getBlockById(blockId);
@@ -6383,6 +6441,7 @@ class BlockEditor {
     this.doc.body.appendChild(menu);
     // Under the handle, or above it near the bottom, measured first (Utils.placeMenuBeside)
     Utils.placeMenuBeside(menu, anchorEl.getBoundingClientRect(), { gap: 4 });
+    this._menuKeys(menu, { opener });
 
     // Close on outside click (deferred so this click doesn't close it)
     requestAnimationFrame(() => {
@@ -6537,6 +6596,25 @@ class BlockEditor {
     // Right of the item, or left of it near the right edge, moved up near the bottom, measured
     // first, so it shows where it stays (Utils.placeSubmenu)
     Utils.placeSubmenu(submenu, anchorItem.getBoundingClientRect(), { gap: 4 });
+    this._menuKeys(submenu, { item: anchorItem });
+  }
+
+  /**
+   * Give a block's menu, or its Turn into's types, their roles and keys under #24's menu pattern
+   * (#14 slice 4): js/ui/menu-keys.js, a chunk the page's loader loads at a menu's first open,
+   * by key or by click, through App's `loadMenuKeys` port, so the new tab's start holds none of
+   * it. Each menu asks the loader, whose module map answers once the chunk is in. Without the
+   * port, as for an editor a test makes, or when the chunk doesn't load, the menu is the
+   * pointer's, as before, and the loader says why. A load that rejects, or keys that throw, leave
+   * it the pointer's too, with a line in the console each time (#202's review).
+   * @param {HTMLElement} menu
+   * @param {{opener?: HTMLElement, item?: HTMLElement}} how - the menu's opener, or the types' item
+   */
+  _menuKeys(menu, how) {
+    if (!this.loadMenuKeys) return;
+    this.loadMenuKeys().then((result) => {
+      if (result.status === 'loaded' && menu.isConnected) result.module.menuKeys(this, menu, how);
+    }).catch((error) => console.warn('Menu keys:', error));
   }
 
   // ============ Version History / Snapshots (Req 31) ============

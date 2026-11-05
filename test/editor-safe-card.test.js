@@ -205,15 +205,13 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
     return event;
   }
 
-  it('Enter, Backspace and Delete on a focused card do nothing, and a letter or Space does nothing either: the note never takes the key', OPTIONS, async () => {
+  it('Enter on a focused card does nothing, and a letter or Space does nothing either: the note never takes the key', OPTIONS, async () => {
     const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
     asOnAMac(env, editor);
     const focused = [];
     editor.focusBlock = (id) => focused.push(id);
     const card = cardOf(editor, 'k1');
-    for (const key of ['Enter', 'Backspace', 'Delete']) {
-      assert.doesNotThrow(() => press(editor, card, key), key);
-    }
+    assert.doesNotThrow(() => press(editor, card, 'Enter'), 'Enter');
     for (const key of ['x', ' ']) {
       assert.equal(press(editor, card, key).defaultPrevented, true, `${JSON.stringify(key)} is kept from the note, and Space from scrolling`);
     }
@@ -223,16 +221,45 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
     assert.deepEqual(plain((await stored(env)).k1), plain(KANBAN), 'the card stays as loaded');
   });
 
-  it('Tab and the arrow keys keep their own way from a focused card, and the block shortcuts still move it', OPTIONS, async () => {
+  it('Backspace and Delete on a focused card delete it as a selected block is deleted: each asks first, and Cancel keeps it focused, with no block selected (#14 slice 4)', OPTIONS, async () => {
+    const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
+    asOnAMac(env, editor);
+    // The editor's own selection, which makeEditor stubs out
+    delete editor.clearBlockSelection;
+    const overlay = () => env.document.querySelector('.confirm-dialog-overlay');
+    const card = cardOf(editor, 'k1');
+    for (const key of ['Backspace', 'Delete']) {
+      card.focus();
+      const event = press(editor, card, key);
+      assert.equal(event.defaultPrevented, true, key);
+      assert.equal(overlay().querySelector('.confirm-dialog-title').textContent, 'Delete this block?', `${key} asks first`);
+      overlay().querySelectorAll('button').find(button => button.textContent === 'Cancel').click();
+      await runUntil(env, Promise.resolve());
+      assert.equal(overlay(), null);
+      assert.ok(env.document.activeElement === card, `${key}: Cancel leaves the card focused`);
+      assert.deepEqual([...editor.selectedBlockIds], [], `${key}: no block selected after Cancel`);
+    }
+    assert.deepEqual(shownIds(editor), ['a1', 'k1', 'a3']);
+    await runUntil(env, editor.save());
+    assert.deepEqual(plain((await stored(env)).k1), plain(KANBAN), 'the card stays as loaded');
+  });
+
+  it('Tab keeps its own way from a focused card, the arrow keys leave it for the block before or after, and the block shortcuts still move it (#14 slice 4)', OPTIONS, async () => {
     const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
     asOnAMac(env, editor);
     // The editor's own shortcuts, as the new tab loads them
     env.load('js/shortcut-utils.js');
     editor.renderBlocks = () => {};
+    const moved = [];
+    editor.focusBlock = (id, atEnd, card) => moved.push([id, atEnd, card]);
     const card = cardOf(editor, 'k1');
-    for (const key of ['Tab', 'ArrowDown', 'ArrowUp']) {
-      assert.equal(press(editor, card, key, { code: key }).defaultPrevented, false, key);
+    assert.equal(press(editor, card, 'Tab', { code: 'Tab' }).defaultPrevented, false, 'Tab');
+    for (const key of ['ArrowDown', 'ArrowUp']) {
+      assert.equal(press(editor, card, key, { code: key }).defaultPrevented, true, key);
     }
+    // To the start of the block after it going down, the end of the block before it going up,
+    // with a divider's, an image's or a card's stop taking focus there too
+    assert.deepEqual(moved, [['a3', false, true], ['a1', true, true]]);
     assert.equal(press(editor, card, 'x', { metaKey: true }).defaultPrevented, false, "a chord isn't typing");
     press(editor, card, 'ArrowDown', { code: 'ArrowDown', metaKey: true, shiftKey: true });
     assert.deepEqual(plain(editor.blocks.map(b => b.id)), ['a1', 'a3', 'k1'], 'Mod+Shift+ArrowDown moved it down');
@@ -267,9 +294,9 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
     }
   });
 
-  // Only a keyboard move takes focus to a card. Every other way between blocks finds nothing in a
-  // card to focus, so the arrows and Enter stop above and below one, until slice 4 changes them
-  it('the arrows and Enter stop at a card: from the block before it, the block after it and the title, focus stays where it was', OPTIONS, async () => {
+  // A keyboard move and the arrow keys take focus to a card (#14 slice 4). Enter from the title,
+  // which goes to the first block's text, finds nothing in a card to focus, and stops above it
+  it('the arrows land on a card from the block before it, the block after it and the title, and Enter from the title stops at it', OPTIONS, async () => {
     /** The editor's own focus, with the caret at each block's edge and none in the fake window to place */
     const ownFocus = (editor) => {
       delete editor.focusBlock;
@@ -279,8 +306,8 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
     };
     const contentOf = (editor, id) => elementOf(editor, id).querySelector('.block-content');
 
-    // Where focus is after each key: still where it was, each one checked on its own
-    const stayed = [];
+    // Where focus is after each key, each one checked on its own
+    const landed = [];
     const between = await openNote([block('a1', 'N', 0, 'Before'), KANBAN, block('a3', 'N', 2, 'After')]);
     asOnAMac(between.env, between.editor);
     ownFocus(between.editor);
@@ -288,7 +315,7 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
       const content = contentOf(between.editor, id);
       content.focus();
       press(between.editor, content, key);
-      stayed.push([`${key} from ${id}`, between.editor.doc.activeElement === content]);
+      landed.push([`${key} from ${id}`, between.editor.doc.activeElement === cardOf(between.editor, 'k1') ? 'the card' : 'elsewhere']);
     }
 
     // The card first in the note, right under the title
@@ -298,10 +325,11 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
     for (const key of ['ArrowDown', 'Enter']) {
       first.editor.titleEl.focus();
       first.editor.onTitleKeyDown({ key, preventDefault() {} });
-      stayed.push([`${key} from the title`, first.editor.doc.activeElement === first.editor.titleEl]);
+      const at = first.editor.doc.activeElement;
+      landed.push([`${key} from the title`, at === cardOf(first.editor, 'k1') ? 'the card' : at === first.editor.titleEl ? 'the title' : 'elsewhere']);
     }
 
-    assert.deepEqual(stayed, [['ArrowDown from a1', true], ['ArrowUp from a3', true], ['ArrowDown from the title', true], ['Enter from the title', true]]);
+    assert.deepEqual(landed, [['ArrowDown from a1', 'the card'], ['ArrowUp from a3', 'the card'], ['ArrowDown from the title', 'the card'], ['Enter from the title', 'the title']]);
   });
 
   // A card's record can name a list type, which the block shortcuts read for Tab and Mod+Enter
@@ -361,7 +389,7 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
   // The guard reads the state, not the type: a newer block's card and a card in place of a block
   // whose view throws hold nothing to type in either
   for (const [state, record] of [['newer', NEWER], ['render-failed', RELATIVE]]) {
-    it(`on the card of a ${state} block too, a letter or Space does nothing, Enter, Backspace and Delete change nothing, and the card stays as loaded`, OPTIONS, async () => {
+    it(`on the card of a ${state} block too, a letter or Space does nothing, Enter changes nothing, Backspace asks first, and the card stays as loaded`, OPTIONS, async () => {
       const { env, editor } = await openNote([block('a1', 'N', 0, 'Before'), record, block('a3', 'N', 2, 'After')]);
       asOnAMac(env, editor);
       const focused = [];
@@ -370,9 +398,12 @@ describe('a card is a group a keyboard reaches, with nothing in it to type into 
       for (const key of ['x', ' ']) {
         assert.equal(press(editor, card, key).defaultPrevented, true, `${state}: ${JSON.stringify(key)}`);
       }
-      for (const key of ['Enter', 'Backspace', 'Delete']) {
-        assert.doesNotThrow(() => press(editor, card, key), `${state}: ${key}`);
-      }
+      assert.doesNotThrow(() => press(editor, card, 'Enter'), `${state}: Enter`);
+      press(editor, card, 'Backspace');
+      const overlay = env.document.querySelector('.confirm-dialog-overlay');
+      assert.equal(overlay.querySelector('.confirm-dialog-title').textContent, 'Delete this block?', `${state}: Backspace asks first`);
+      overlay.querySelectorAll('button').find(button => button.textContent === 'Cancel').click();
+      await runUntil(env, Promise.resolve());
       assert.deepEqual(focused, [], 'no key moved focus into the note to type there');
       assert.deepEqual(shownIds(editor), ['a1', record.id, 'a3']);
       await runUntil(env, editor.save());

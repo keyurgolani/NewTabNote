@@ -148,6 +148,21 @@ const SAFE_DETAILS = Object.freeze({
 const SAFE_TYPE_ID_LENGTH = 40;
 
 /**
+ * Make `el` a stop the arrow keys land on (#14 slice 4): a group named `name` that takes focus
+ * from them but is no Tab stop, for a block with no text, a divider's or an image's
+ * @param {HTMLElement} el
+ * @param {string} name
+ * @returns {HTMLElement}
+ */
+function blockStop(el, name) {
+  el.classList.add('block-stop');
+  el.tabIndex = -1;
+  el.role = 'group';
+  el.ariaLabel = name;
+  return el;
+}
+
+/**
  * Block class representing a single block in the editor
  */
 class Block {
@@ -268,9 +283,10 @@ class Block {
     block.style.setProperty('--block-indent-level', safe ? 0 : this.indentLevel || 0);
     block.draggable = true;
 
-    // Add drag handle
+    // Add drag handle, the pointer's: the keyboard opens the block's menu with keys (#14 slice 4)
     const handle = document.createElement('div');
     handle.className = 'block-handle';
+    handle.ariaHidden = 'true';
     handle.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor">
       <circle cx="9" cy="6" r="1.5"/>
       <circle cx="15" cy="6" r="1.5"/>
@@ -297,12 +313,13 @@ class Block {
     try {
       switch (this.type) {
         case 'divider':
-          block.appendChild(document.createElement('hr'));
+          // Its stop holds the rule, which focus on the rule itself would read as a splitter
+          block.appendChild(blockStop(document.createElement('div'), 'Divider')).appendChild(document.createElement('hr'));
           break;
 
         case 'image':
-          const imgWrapper = document.createElement('div');
-          imgWrapper.className = 'image-block-wrapper';
+          const imgWrapper = blockStop(document.createElement('div'), 'Image');
+          imgWrapper.classList.add('image-block-wrapper');
 
           if (this.imageUrl) {
             const img = document.createElement('img');

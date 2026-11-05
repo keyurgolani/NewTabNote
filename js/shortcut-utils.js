@@ -83,6 +83,7 @@
   /**
    * @typedef {Object} EditorShortcutParams
    * @property {string} code - KeyboardEvent.code
+   * @property {string} [key] - KeyboardEvent.key, the character, for the block's menu
    * @property {boolean} modKey - Ctrl (or Cmd on macOS) pressed
    * @property {boolean} shiftKey - Shift pressed
    * @property {boolean} altKey - Alt pressed
@@ -96,6 +97,7 @@
    */
   function getEditorShortcutAction({
     code,
+    key,
     modKey,
     shiftKey,
     altKey,
@@ -127,6 +129,13 @@
 
     if (code === 'Tab' && LIST_BLOCK_TYPES.has(blockType)) {
       return { type: 'indent-block', delta: shiftKey ? -1 : 1 };
+    }
+
+    // The block's menu, from the keyboard (#14 slice 4), by the character: where a layout types
+    // '-' at the US '/' key, Mod and that key stays the browser's zoom out, and its Shift+7 '/'
+    // opens the menu (#202's review)
+    if (modKey && !altKey && key === '/') {
+      return { type: 'block-menu' };
     }
 
     return null;

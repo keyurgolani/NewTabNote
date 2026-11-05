@@ -123,9 +123,10 @@ test('each card is a group a keyboard reaches: Tab stops on each in turn, named 
     await expect(cardOf(id)).toHaveAccessibleDescription(description);
   }
 
-  // On the last card, a letter, Space, Enter, Backspace and Delete change nothing, and focus stays
+  // On the last card, a letter, Space and Enter change nothing, and focus stays. Backspace and
+  // Delete delete it once it asks (e2e/block-keyboard.spec.js, #14 slice 4)
   const shown = await driver.blocks(page);
-  for (const key of ['x', 'Space', 'Enter', 'Backspace', 'Delete']) await page.keyboard.press(key);
+  for (const key of ['x', 'Space', 'Enter']) await page.keyboard.press(key);
   await expect(cardOf('opaque-blocks-typeless')).toBeFocused();
   expect(await driver.blocks(page)).toEqual(shown);
   const stored = await storedBlocks(page);

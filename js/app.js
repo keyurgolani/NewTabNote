@@ -263,6 +263,17 @@ class App {
   }
 
   /**
+   * The page loader's load of the block menus' roles and keys (js/ui/menu-keys.js, #14 slice 4),
+   * a chunk the editors load at a menu's first open, by key or by click. Null without the loader,
+   * when the menus are the pointer's, as before.
+   * @returns {(() => Promise<any>) | null}
+   */
+  menuKeysLoader() {
+    const { loader } = this;
+    return loader ? () => loader.loadChunk('menu-keys', () => import('./ui/menu-keys.js')) : null;
+  }
+
+  /**
    * What a part's Reload uses when its library didn't load (js/ui/part-state.js, #27 slice 3b):
    * the loader's reload once every save guard says it saved, its reload without them for "Reload
    * anyway", and the words of the notice an open editor shows for changes it couldn't save, which
@@ -384,7 +395,9 @@ class App {
       }, 2000);
 
       // The PiP editor gets the same ports from TabController
-      this.editorPorts = { documentClient: this.documentClient, navigation: this.editorNavigation(), ai: this.ai, logger: this.logger };
+      this.editorPorts = {
+        documentClient: this.documentClient, navigation: this.editorNavigation(), ai: this.ai, logger: this.logger, loadMenuKeys: this.menuKeysLoader(),
+      };
       this.editor = new BlockEditor({
         root: document.getElementById('editor-container'),
         onChange: editorChangeHandler,

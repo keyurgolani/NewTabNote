@@ -1,0 +1,25 @@
+{
+  "rule": "the new tab's start takes in the block menus' keys, imported statically in place of the loader's load at a menu's first open (#14 slice 4)",
+  "expect": [
+    "budget/lazy-only"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "js/app.js",
+      "prepend": "import * as ntnFixtureMenuKeys from './ui/menu-keys.js';\n"
+    },
+    {
+      "file": "js/app.js",
+      "replace": "return loader ? () => loader.loadChunk('menu-keys', () => import('./ui/menu-keys.js')) : null;",
+      "with": "return () => Promise.resolve({ status: 'loaded', module: ntnFixtureMenuKeys });"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 716800, \"gzip\": 204800 }",
+      "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
+    }
+  ]
+}
