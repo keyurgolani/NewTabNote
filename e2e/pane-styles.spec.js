@@ -7,9 +7,10 @@
  *
  * - In split view, the right pane's padding, its column's width and inset, its title's type and its
  *   outline with focus, its empty title's placeholder and its blocks' minimum height read as the main
- *   pane's, and a click on one of its blocks' handles opens that block's menu.
+ *   pane's, and a click on one of its blocks' handles opens that block's menu. In focus mode, its
+ *   padding and its column read as the main pane's too.
  * - The pop-out reads as the main pane does, its padding included, once its copy of the page's
- *   stylesheet applies.
+ *   stylesheet applies, and its pane has no transition to ease that padding in with.
  * - The main pane reads as it did, in single view and in focus mode, and its focused title shows no
  *   outline. The page's focus ring and the title's rule tie now, and the title's wins by coming later.
  * Each test also fails on an uncaught exception that test/known-defects.json doesn't list.
@@ -121,6 +122,17 @@ test("split view's right pane shows the note's title, its column and its padding
   await page.mouse.click(at.x + at.width / 2, at.y + at.height / 2);
   await expect(page.locator('.block-action-menu'), "a click on the right pane's block handle opens the block's menu").toBeVisible();
   await expect(page.locator(RIGHT), 'and makes the right pane the active one').toHaveClass(/\bactive\b/);
+
+  // Focus mode reaches the right pane too. Both panes' padding moves over their 0.3 s transition,
+  // so the main pane's is read once it ends, and the right pane's until it matches
+  await page.locator('#header').getByRole('button', { name: 'Toggle Focus Mode', exact: true }).click();
+  await expect(page.locator('body')).toHaveClass(/\bfocus-mode\b/);
+  await expect.poll(() => page.locator(MAIN).evaluate(pane => getComputedStyle(pane).paddingBottom), "the main pane's padding in focus mode").toBe('140px');
+  const focusedMain = await page.locator(MAIN).evaluate(readPane);
+  await expect.poll(async () => (await page.locator(RIGHT).evaluate(readPane)).pane, "the right pane's padding in focus mode").toEqual(focusedMain.pane);
+  const focusedRight = await page.locator(RIGHT).evaluate(readPane);
+  expect.soft(focusedRight.column['max-width'], "the right pane's column's max-width in focus mode").toBe(focusedMain.column['max-width']);
+  expect.soft(Math.abs(focusedRight.column.width - focusedMain.column.width), "the right pane's column's width in focus mode, within its left border").toBeLessThanOrEqual(1);
   await expectNoUncaught(extension, page);
 });
 
@@ -137,6 +149,8 @@ test("the pop-out shows the note's title, its column and its padding as the main
   await expect.poll(() => pip.locator('.page-timestamp').evaluate(el => getComputedStyle(el).fontSize), "the pop-out's copy of the page's stylesheet applies").toBe('13px');
 
   const popout = await pip.locator('.pip-editor-wrapper').evaluate(readPane);
+  // Its pane is in the window before the stylesheet applies, so a transition would ease its padding in
+  expect.soft(await pip.locator('.pip-editor-wrapper').evaluate(pane => getComputedStyle(pane).transitionDuration), "the pop-out's pane eases nothing in").toBe('0s');
   expect.soft(popout.pane, "the pop-out's padding").toEqual(main.pane);
   expect.soft(popout.column['max-width'], "the pop-out's column's max-width").toBe(main.column['max-width']);
   expect.soft(popout.title, "the pop-out's title").toEqual(main.title);
