@@ -696,9 +696,11 @@ test("the shortcuts list names Mod+/ for the block's menu", async ({ extension }
 
 test("in split view's right pane, the arrows land on its divider and leave it, as in the main pane", async ({ extension }) => {
   const { page } = await openStops(extension);
+  // With another note in the main pane, split view's right pane opens the stops' note, the other
+  // open tab, as it opens one: a second load of it there could draw it again under the keys
   await driver.openNote(page, 'Groceries');
   await driver.openSplitView(page);
-  await page.evaluate(id => app.secondaryEditor.loadNote(id), NOTE);
+  await expect.poll(() => page.evaluate(() => app.secondaryEditor.noteId), "the right pane opens the stops' note").toBe(NOTE);
   const right = page.locator('#secondary-editor-container');
   const rightBlock = id => right.locator(`.blocks-container > .block[data-id="${id}"]`);
   await expect(right.locator('.blocks-container > .block'), "the right pane shows the stops' note").toHaveCount(ORDER.length);
