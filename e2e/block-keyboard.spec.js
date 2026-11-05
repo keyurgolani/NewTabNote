@@ -115,6 +115,27 @@ function where(page) {
   });
 }
 
+/**
+ * The ring of the stop that has focus, against its block's row: the height of the box its outline
+ * draws (its border box, out by the outline's offset and width on each side), the row's height, and
+ * the stop's corners beside the corners of the image it holds, if it holds one
+ */
+function ringOf(page) {
+  return page.evaluate(() => {
+    const stop = /** @type {HTMLElement} */ (document.activeElement);
+    const style = getComputedStyle(stop);
+    const out = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
+    const corners = (/** @type {Element} */ el) => ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'].map(at => getComputedStyle(el)[`border${at}Radius`]).join(' ');
+    const img = stop.querySelector('img');
+    return {
+      height: stop.getBoundingClientRect().height + 2 * out,
+      row: stop.closest('.block').getBoundingClientRect().height,
+      corners: corners(stop),
+      imageCorners: img ? corners(img) : null,
+    };
+  });
+}
+
 /** The blocks the editor has selected, and the ones the page shows selected */
 function selected(page) {
   return page.evaluate(() => ({
@@ -138,11 +159,16 @@ test('the arrows land on a divider, an image and a card with focus, and leave on
   await caretAt(page, true);
   await page.keyboard.press('ArrowDown');
   await expect(stopOf(page, 'stops-divider'), 'the divider has focus').toBeFocused();
+  // Soft, so a build that misses both rings reports both (the director's look)
+  const divider = await ringOf(page);
+  expect.soft(divider.height, "the divider's ring box spans its row's height, inside it").toBeCloseTo(divider.row, 1);
   await page.keyboard.press('ArrowDown');
   expect(await where(page), 'the next press leaves the divider, for the start of the line after it').toBe('Second line, at its start');
   await caretAt(page, true);
   await page.keyboard.press('ArrowDown');
   await expect(stopOf(page, 'stops-image'), 'the image has focus').toBeFocused();
+  const image = await ringOf(page);
+  expect.soft(image.corners, "the image's ring has the image's corners").toBe(image.imageCorners);
   await page.keyboard.press('ArrowDown');
   expect(await where(page), 'the next press leaves the image').toBe('Third line, at its start');
   await caretAt(page, true);
