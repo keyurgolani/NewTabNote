@@ -446,6 +446,66 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
     }
   });
 
+  it("journals journal.append-failed to the page's failure events, with the entry's note and the failure, for an entry its journal couldn't take, and still sends the command (#35 slice 4a)", async () => {
+    const real = new IDBFactory();
+    const faults = faultyFactory(real);
+    const p = pageClient();
+    await noteA(p);
+    /** @type {Array<[string, unknown, unknown]>} */
+    const seen = [];
+    const started = startPageJournal(p.client, 'page-1', 'newtab', {
+      stores: inContextStores({ indexedDB: faults.factory }),
+      locks: legacyEnv.createLockManager(),
+      storage: legacyEnv.createLocalStorage(),
+      runtime: { sendMessage: async () => {} },
+      clock: p.clock,
+      events: { event: (code, fields, failure) => seen.push([code, fields, failure]) },
+    });
+    assert.equal(await started.ready, true);
+    // The disk refuses the entry's transaction as it commits
+    const refused = faults.abortAfterNextWrite('entries', 'QuotaExceededError');
+    const answer = started.execute(saveOfA('c-save', 'alpha, edited'), p.client.execute);
+    await refused;
+    assert.equal((await answer).kind, 'committed');
+    assert.deepEqual(p.sent, ['c-save']);
+    for (let round = 0; round < 5 && seen.length === 0; round++) await tick();
+    assert.deepEqual(
+      seen.map(([code, fields]) => [code, fields]),
+      [['journal.append-failed', { subjectId: 'A' }]],
+    );
+    assert.ok(seen[0][2] && typeof seen[0][2] === 'object', 'the failure, whose code the event keeps');
+  });
+
+  it("hands the page's failure events to the chunk's start, which a root without them leaves out (#35 slice 4a)", async () => {
+    const p = pageClient();
+    /** @type {unknown[]} */
+    const handed = [];
+    const chunk = {
+      /** @param {unknown} client @param {string} sessionId @param {unknown} surface @param {unknown} [ports] */
+      startPageJournal: (client, sessionId, surface, ports) => {
+        handed.push(ports);
+        return { execute: (/** @type {any} */ command, /** @type {any} */ send) => send(command) };
+      },
+    };
+    const events = { event: () => {} };
+    const withEvents = journalingClient(
+      p.client,
+      'newtab',
+      async () => /** @type {any} */ (chunk),
+      undefined,
+      'page-1',
+      events,
+    );
+    await withEvents.execute(saveOfA('c-1', 'alpha one'));
+    await tick();
+    const without = journalingClient(p.client, 'popup', async () => /** @type {any} */ (chunk), undefined, 'page-2');
+    await without.execute(saveOfA('c-2', 'alpha two'));
+    await tick();
+    assert.equal(handed.length, 2);
+    assert.equal(/** @type {any} */ (handed[0])?.events, events);
+    assert.equal(/** @type {any} */ (handed[1])?.events, undefined);
+  });
+
   it("issues a journaled command's entry in the task that sends it, once the journal is open", async () => {
     const real = new IDBFactory();
     const faults = faultyFactory(real);

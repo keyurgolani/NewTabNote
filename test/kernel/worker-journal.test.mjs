@@ -206,6 +206,22 @@ describe("the worker's journal (#35 slice 3)", () => {
     assert.equal(await w.journal.keep(capture('c2'), { noteId: 'daily-c2' }), true);
   });
 
+  it("journals journal.append-failed, with the capture's note and the failure, for an entry it couldn't write, and raises no incident with it (#35 slice 4a)", async () => {
+    const real = new IDBFactory();
+    const faults = faultyFactory(real);
+    faults.failNextOpen('NewTabNoteJournal', 'UnknownError');
+    const w = worker({ factory: faults.factory });
+    assert.equal(await w.journal.keep(capture('c1'), { noteId: 'daily-c1' }), false);
+    assert.deepEqual(
+      w.events.map(([code, fields]) => [code, fields]),
+      [['journal.append-failed', { subjectId: 'daily-c1' }]],
+    );
+    assert.ok(w.events[0][2] && typeof w.events[0][2] === 'object', 'the failure, whose code the event keeps');
+    // One it writes says nothing
+    assert.equal(await w.journal.keep(capture('c2'), { noteId: 'daily-c2' }), true);
+    assert.equal(w.events.length, 1);
+  });
+
   it('reads no journal and makes none on a profile that has none', async () => {
     const w = worker();
     assert.equal(await w.journal.drain(w.client), null);
