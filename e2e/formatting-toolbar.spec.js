@@ -30,13 +30,14 @@
  * - A double-click on ✓ applies the link once. Its second press, which lands where ✓ was, on the
  *   button that comes back there, does nothing, so the word keeps its formatting. Before, that
  *   button ran. A double-click on any format button acts once, so a double-clicked Bold bolds the
- *   word, and a right-click on one does nothing.
+ *   word, and a right-click or a Control-click, the Mac's right-click, on one does nothing.
  * - Enter, in the link field or on ✓, applies the link once, on its release, so a held Enter's
  *   repeats don't reach the note. Before, they split its block on each repeat. It applies the URL
  *   as it was at the press, so a key pressed before the release, which the field takes, is dropped
  *   with the field and doesn't reach the note. An IME's Enter, whose release comes with no press
- *   before it, or whose press comes while composing, applies nothing. Escape on ✓ closes the field
- *   and gives back the selection, as Escape in it does.
+ *   before it, or whose press comes while composing, applies nothing, even after a press whose
+ *   release was lost. A release after the row closed applies nothing to the next selection. Escape on
+ *   ✓ closes the field and gives back the selection, as Escape in it does.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -406,7 +407,7 @@ test('in link mode, a press on a sidebar button, which selects nothing, closes t
   await expectNoUncaught(extension, page);
 });
 
-test("a double-click on ✓ applies the link once and leaves the word's other formatting as it was, a double-click on Bold bolds once, and a right-click on a format button does nothing", async ({ extension }) => {
+test("a double-click on ✓ applies the link once and leaves the word's other formatting as it was, a double-click on Bold bolds once, and a right-click or a Control-click on a format button does nothing", async ({ extension }) => {
   const page = await shortNote(extension);
   await selectStart(page, 0, 'Before'.length);
   await pressLink(page);
@@ -434,6 +435,17 @@ test("a double-click on ✓ applies the link once and leaves the word's other fo
   await page.mouse.click(italic.x + italic.width / 2, italic.y + italic.height / 2, { button: 'right' });
   await page.waitForTimeout(200);
   expect(await blockContent(page, 1).evaluate(el => el.innerHTML), 'a right-click on a format button does nothing').toBe('<b>A second</b> line');
+
+  // A Control-click on Bold, the Mac's right-click, leaves the word as it was. On the Mac the
+  // right-click above moves the selection, so the word is selected again first
+  await selectStart(page, 1, 'A second'.length);
+  await expect.poll(() => placed(page)).toEqual({ gap: 8, offCentre: 0 });
+  const boldNow = await bar.locator('.formatting-toolbar-btn[data-id="bold"]').boundingBox();
+  await page.keyboard.down('Control');
+  await page.mouse.click(boldNow.x + boldNow.width / 2, boldNow.y + boldNow.height / 2);
+  await page.keyboard.up('Control');
+  await page.waitForTimeout(200);
+  expect(await blockContent(page, 1).evaluate(el => el.innerHTML), 'a Control-click on a format button does nothing').toBe('<b>A second</b> line');
   await expectNoUncaught(extension, page);
 });
 
@@ -483,7 +495,7 @@ test('Enter held in the link field, and on ✓, applies the link once and the no
   await expectNoUncaught(extension, page);
 });
 
-test("an IME's Enter in the link field applies nothing: a release with no press before it, and a composing press", async ({ extension }) => {
+test("an IME's Enter in the link field applies nothing: a release with no press before it, a composing press, a commit after a lost release, and a release after the row closed", async ({ extension }) => {
   const page = await shortNote(extension);
   const field = page.locator('.formatting-toolbar-url:visible');
   await selectStart(page, 0, 'Before'.length);
@@ -504,6 +516,28 @@ test("an IME's Enter in the link field applies nothing: a release with no press 
   await page.waitForTimeout(200);
   expect(await linksIn(page, 0), 'no link applies after a composing press').toEqual([]);
   await expect(field, 'the field stays open after a composing press').toBeFocused();
+
+  // A press whose release is lost, as one held through a window switch, then an IME's commit: the
+  // commit's composing press drops the URL that press kept, so the commit's release applies nothing
+  await field.evaluate(el => {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Process', code: 'Enter', isComposing: true, bubbles: true, cancelable: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(200);
+  expect(await linksIn(page, 0), "no link applies on an IME's commit after a press whose release was lost").toEqual([]);
+  await expect(field, "the field stays open after an IME's commit").toBeFocused();
+
+  // A link applied by Enter, then Link on the next block and a release with no press of its own: the
+  // URL Enter's press kept went with the row that closed, so nothing applies to the new selection
+  await page.keyboard.press('Enter');
+  await expect.poll(() => linksIn(page, 0), 'Enter applies the link').toEqual([['https://example.test/a', 'Before']]);
+  await selectStart(page, 1, 'A second'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await field.evaluate(el => el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })));
+  await page.waitForTimeout(200);
+  expect(await linksIn(page, 1), 'a release after the row closed applies nothing to the next selection').toEqual([]);
   await expectNoUncaught(extension, page);
 });
 
