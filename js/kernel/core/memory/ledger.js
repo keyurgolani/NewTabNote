@@ -16,6 +16,7 @@ import { digestOf } from './fingerprint.js';
 /** @typedef {import('../ports/idempotency-ledger.js').IdempotencyLedger} IdempotencyLedger */
 /** @typedef {import('../ports/idempotency-ledger.js').KeyedCommand} KeyedCommand */
 /** @typedef {import('../ports/idempotency-ledger.js').LedgerRead} LedgerRead */
+/** @typedef {import('../ports/idempotency-ledger.js').LedgerStatus} LedgerStatus */
 
 /**
  * @typedef {IdempotencyLedger & {
@@ -38,13 +39,24 @@ export function createMemoryLedger({ beforeRead = () => {} } = {}) {
   const records = new Map();
 
   /**
-   * @param {KeyedCommand} command
+   * @param {unknown} commandId
    * @returns {string}
    */
-  const keyOf = command => {
-    const commandId = /** @type {unknown} */ (command?.commandId);
+  const keyOf = commandId => {
     if (!isId(commandId)) throw new UnavailableError('adapter', 'invalid-key', false);
     return commandId;
+  };
+
+  /**
+   * What the key's record says, whatever command made it
+   * @param {string} commandId
+   * @returns {LedgerStatus}
+   */
+  const statusOf = commandId => {
+    const kept = records.get(commandId);
+    if (!kept) return { status: 'absent' };
+    const outcome = clone(kept.outcome);
+    return outcome.kind === 'committed' ? { status: 'committed', outcome } : { status: 'conflict', outcome };
   };
 
   /**
@@ -54,20 +66,23 @@ export function createMemoryLedger({ beforeRead = () => {} } = {}) {
    */
   const answer = (command, commandId) => {
     const kept = records.get(commandId);
-    if (!kept) return { status: 'absent' };
-    if (kept.fingerprint !== digestOf(command)) return { status: 'key-reuse' };
-    const outcome = clone(kept.outcome);
-    return outcome.kind === 'committed' ? { status: 'committed', outcome } : { status: 'conflict', outcome };
+    if (kept && kept.fingerprint !== digestOf(command)) return { status: 'key-reuse' };
+    return statusOf(commandId);
   };
 
   return Object.freeze({
     async read(command) {
-      const commandId = keyOf(command);
+      const commandId = keyOf(command?.commandId);
       beforeRead();
       return answer(command, commandId);
     },
+    async status(commandId) {
+      const key = keyOf(commandId);
+      beforeRead();
+      return statusOf(key);
+    },
     record(command, outcome) {
-      const commandId = keyOf(command);
+      const commandId = keyOf(command?.commandId);
       if (outcome?.kind !== 'committed' && outcome?.kind !== 'conflict') {
         throw new TypeError('only a committed or conflict outcome has a record');
       }

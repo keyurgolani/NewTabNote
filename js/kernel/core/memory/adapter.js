@@ -603,6 +603,8 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
   return Object.freeze({
     name: 'memory',
     flags: Object.freeze({ atomicMultiStore: true, revisions: true, idempotency: true, backups: false }),
+    // The ledger it was given, which a use case reads by a key alone (ports/repository.js)
+    ...(ledger ? { ledger } : {}),
 
     recall(command) {
       const kept = keptFor(command.commandId, command);

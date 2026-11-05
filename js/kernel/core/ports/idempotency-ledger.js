@@ -25,6 +25,10 @@
  * ledger is in IndexedDB, and a read that fails rejects with an UnavailableError, never an
  * answer: the client then can't tell, and the outcome stays unknown.
  *
+ * `status` reads a key by itself, with no command to tell apart, for a caller that holds a key
+ * but can't make the command again: the close-time drafts' applier asks whether the closing
+ * save its draft's id keys committed (#6). It answers as a read does, but never key reuse.
+ *
  * Writing a record is the adapter's, in its commit transaction, so the port has no write.
  * test/kernel/idempotency-ledger-suite.mjs is the suite #17's durable ledger runs.
  */
@@ -40,9 +44,10 @@
 /**
  * @typedef {{status: 'absent'}
  *   | {status: 'committed', outcome: Committed}
- *   | {status: 'conflict', outcome: Conflict}
- *   | {status: 'key-reuse'}} LedgerRead
+ *   | {status: 'conflict', outcome: Conflict}} LedgerStatus
  */
+
+/** @typedef {LedgerStatus | {status: 'key-reuse'}} LedgerRead */
 
 /**
  * @typedef {object} IdempotencyLedger
@@ -50,6 +55,9 @@
  *   What the command's key has a record of, told apart from another command under the same
  *   key by the digest of the command it's given against the record's. A command whose commandId isn't a non-empty string
  *   rejects with an UnavailableError, cause `adapter`, code `invalid-key`.
+ * @property {(commandId: string) => Promise<LedgerStatus>} status
+ *   What the key has a record of, whatever command made it. A key that isn't a non-empty
+ *   string rejects as `read` does.
  */
 
 export {};

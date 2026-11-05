@@ -13,7 +13,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createLegacyEnv, createDatabase, dumpDatabase, recordsOf, createLocalStorage, settle, plain, note, block, FakeDocument,
-  makeEditor, releaseStorage, runUntil, startEditorClient,
+  makeEditor, releaseStorage, runUntil, startEditorClient, createLockManager, waitFor,
 } = require('./helpers/legacy-env');
 const { release143 } = require('./helpers/release-143');
 
@@ -77,9 +77,12 @@ function type(editor, text, index = 0) {
 /**
  * A new tab's page on a profile at version 8, as 1.4.x left it, its editors on the real kernel
  * with the page's draft writer: notes A (a1, a2), B (b1) and C (c1, c2), and what `more` adds
- * @param {{localStorage?: Object, notes?: Array<Object>, blocks?: Array<Object>, files?: Array<string>}} [more]
+ * @param {{localStorage?: Object, notes?: Array<Object>, blocks?: Array<Object>, files?: Array<string>, migrated?: boolean}} [more]
+ *   `migrated`: the worker's migration run takes the database to this build's version before the
+ *   page opens it, so #17's ledger keeps each command the page commits, as on a profile the worker
+ *   upgraded. One at version 8 keeps none.
  */
-async function setup({ localStorage = createLocalStorage(), notes = [], blocks = [], files = FILES } = {}) {
+async function setup({ localStorage = createLocalStorage(), notes = [], blocks = [], files = FILES, migrated = false } = {}) {
   const env = createLegacyEnv({ localStorage });
   await createDatabase(env.indexedDB, {
     records: {
@@ -94,6 +97,19 @@ async function setup({ localStorage = createLocalStorage(), notes = [], blocks =
       ],
     },
   });
+  if (migrated) {
+    const { runMigrations } = await import('../js/kernel/adapters/indexeddb/migrate.js');
+    const run = await runMigrations({
+      indexedDB: env.indexedDB,
+      keyRange: env.global.IDBKeyRange,
+      locks: createLockManager(),
+      estimate: null,
+      crypto: globalThis.crypto,
+      clock: { now: () => Date.now() },
+      logger: { warn() {} },
+    });
+    assert.equal(run.status, 'migrated', "the worker's run upgraded the database");
+  }
   env.load(...files);
   await startEditorClient(env);
   return env;
@@ -120,10 +136,17 @@ function drafts(env) {
 
 /**
  * The next start: another new tab on the same profile, whose root applies the drafts before its
- * first read (createNewTabPageClient). Answers what it applied.
+ * first read (createNewTabPageClient), with the root's own applier, whose forget of a draft's
+ * covered journal entries reads the profile's journal (#6). Answers what it applied.
  */
 async function nextStart(env) {
   const newTab = await import('../js/kernel/composition/newtab.js');
+  const { inContextStores } = await import('../js/kernel/adapters/in-context.js');
+  const load = async () => {
+    const applier = await import('../js/kernel/composition/close-drafts-applier.js');
+    const { forgetCovered } = await import('../js/kernel/composition/journal-chunk.js');
+    return { ...applier, forgetCovered: (draft) => forgetCovered(draft, inContextStores({ indexedDB: env.indexedDB })) };
+  };
   const client = newTab.createNewTabPageClient(
     newTab.createNewTabAdapter({
       indexedDB: env.indexedDB,
@@ -131,7 +154,7 @@ async function nextStart(env) {
       awaitUpgrade: async () => {},
       locks: env.global.navigator.locks,
     }),
-    { drafts: { storage: env.global.localStorage, locks: env.global.navigator.locks }, wake: () => {} },
+    { drafts: { storage: env.global.localStorage, locks: env.global.navigator.locks }, wake: () => {}, load },
   );
   const failure = await client.whenReady();
   if (failure) throw new Error(`the next start's kernel didn't start: ${failure.code}`);
@@ -912,9 +935,12 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
       .map((row) => [row.content, row.order]);
   }
 
-  /** The page's main pane and pop-out on C, and the pop-out's edit to c2 stored */
-  async function popOutSavedC2() {
-    const env = await setup();
+  /**
+   * The page's main pane and pop-out on C, and the pop-out's edit to c2 stored
+   * @param {{migrated?: boolean}} [options] - as setup takes it
+   */
+  async function popOutSavedC2(options) {
+    const env = await setup(options);
     const main = editing(makeEditor(env));
     await main.loadNote('C');
     const { pip, pipWindow } = await openPiP(env, 'C');
@@ -948,6 +974,26 @@ describe('a block the closing pane only moved goes in its draft as a move, not w
     assert.deepEqual(result.saved, [], 'its draft finds every block where the closing save put it');
     assert.deepEqual(await recoveredNames(env), []);
     assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['added in the main pane', 1], ['charlie two, from the pop-out', 2]]);
+  });
+
+  it("the same with the closing save committed, then another tab's move of c2 back above the new block: the next start drops the draft, so that tab's order stays (#181's S2, #6)", async () => {
+    // On a database the worker upgraded, whose ledger keeps the closing save
+    const { env, main } = await popOutSavedC2({ migrated: true });
+    const saves = watchSaves(env);
+    main.insertBlockAfter('c1', 'text', 'added in the main pane');
+    closePage(env);
+    assert.equal((await saves[saves.length - 1].done).kind, 'committed', 'the closing save committed');
+    // Another tab moves c2 back where the closing page knew it
+    const other = await secondTab(env);
+    const tabB = editing(makeEditor(other));
+    await tabB.loadNote('C');
+    tabB.moveBlockByDirection('c2', -1);
+    assert.equal(await runUntil(other, tabB.flushSave()), true);
+    assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['charlie two, from the pop-out', 1], ['added in the main pane', 2]]);
+    const result = await nextStart(env);
+    assert.deepEqual([result.saved, result.recovered], [[], []]);
+    assert.deepEqual(await recoveredNames(env), []);
+    assert.deepEqual(await storedInOrder(env), [['charlie', 0], ['charlie two, from the pop-out', 1], ['added in the main pane', 2]]);
   });
 
   it("two tabs: tab A's Enter puts a block above the one tab B saved, and A's closing save is lost: A's new block goes into the note beside B's text, in A's order, with no recovered note", async () => {
@@ -1371,5 +1417,71 @@ describe("1.4.3 reads a draft the stack's writer wrote, on a profile at version 
     assert.equal(rows.blocks.a1.content, 'saved by the stack', 'the note as the stack saved it');
     const copies = Object.values(rows.blocks).filter((row) => row.canvasId === `${draft.id}-recovered`);
     assert.ok(copies.some((row) => row.content === 'then typed as the tab closed'), 'the edit is in the recovered note');
+  });
+});
+
+describe("a close-time draft names the pane of the base it was made on, so the next start can take that pane's journal entries for the note (#6)", () => {
+  /** The pane each of the page's saves names for the journal, by note, in the order they went */
+  function panesOfSaves(env) {
+    const client = env.documentClient;
+    const real = client.saveContent;
+    const panes = [];
+    client.saveContent = (save, options) => {
+      panes.push({ noteId: save.noteId, pane: options && typeof options.pane === 'string' ? options.pane : null });
+      return real(save, options);
+    };
+    return panes;
+  }
+
+  it('of the note the pane shows: the pane its saves named', async () => {
+    const env = await setup();
+    const editor = makeEditor(env);
+    await editor.loadNote('C');
+    const panes = panesOfSaves(env);
+    type(editor, 'charlie, saved');
+    env.clock.tick(500);
+    assert.equal(await runUntil(env, editor.flushSave()), true);
+    type(editor, 'charlie, typed as the tab closed');
+    closePage(env);
+    const [draft] = drafts(env);
+    assert.equal(typeof panes[0].pane, 'string', 'its save named a pane');
+    assert.equal(draft.pane, panes[0].pane);
+  });
+
+  it("of a note the pane left, whose failed save's retry it holds: that save's pane, not the next load's", async () => {
+    const env = await setup({ notes: [note('D', { name: 'Delta' })], blocks: [block('d1', 'D', 0, 'delta')] });
+    const editor = makeEditor(env);
+    await editor.loadNote('C');
+    // Under the pane watch, so a save that fails is seen too
+    failSavesOf(env, 'C');
+    const panes = panesOfSaves(env);
+    // D's read waits while an edit of C goes in, so the switch writes it, and the save fails
+    const client = env.documentClient;
+    const open = client.openNote;
+    let reading = false;
+    let letGo = () => {};
+    const held = new Promise((resolve) => {
+      letGo = resolve;
+    });
+    client.openNote = (noteId, ...rest) => {
+      if (noteId !== 'D' || reading) return open.call(client, noteId, ...rest);
+      reading = true;
+      return held.then(() => open.call(client, noteId, ...rest));
+    };
+    const switching = editor.loadNote('D');
+    await waitFor(() => reading, { message: "D's read" });
+    type(editor, 'charlie, typed while D was read');
+    letGo();
+    await runUntil(env, switching);
+    await settle();
+    assert.equal(editor.noteId, 'D');
+    // The page closes before the retry
+    closePage(env);
+    const ofC = drafts(env).filter((draft) => draft.noteId === 'C');
+    assert.equal(ofC.length, 1, "the left note's draft, from its retry copy");
+    assert.deepEqual(ofC[0].blocks.map((b) => b.content), ['charlie, typed while D was read']);
+    const [switched] = panes.filter((save) => save.noteId === 'C');
+    assert.equal(typeof switched.pane, 'string', "the switch's save named C's pane");
+    assert.equal(ofC[0].pane, switched.pane);
   });
 });

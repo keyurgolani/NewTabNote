@@ -18,8 +18,9 @@ import { journalingClient, kernelClient, pageHost } from './host.js';
  * the worker and waits up to 5 seconds for its migration run (Q12). A database a newer build
  * upgraded is refused as `newer-schema`, and once the worker upgrades the database under it,
  * every call answers `reload-required`. When the page holds a closing tab's edit, its whenReady
- * resolves once the edit is applied, with the applier `load` hands over, the `close-drafts-chunk`
- * chunk Popup imports then (close-drafts.js, #33), so Popup lists its notes with the edit in. It
+ * resolves once the edit is applied, with the applier `load` hands over, close-drafts-applier.js
+ * with the `close-drafts-chunk` chunk under it, which Popup imports then (close-drafts.js, #33),
+ * so Popup lists its notes with the edit in. It
  * runs only what js/popup.js and that apply send (POPUP_HANDLERS). Its quick note goes through the
  * journal once the journal's chunk is in (#35 slice 3b, host.js journalingClient).
  * @param {PageHost} [host]
@@ -29,7 +30,7 @@ import { journalingClient, kernelClient, pageHost } from './host.js';
 export function createPopupClient(
   host = pageHost(),
   drafts = pageDrafts(),
-  load = () => import('../core/application/close-drafts-chunk.js'),
+  load = () => import('./close-drafts-applier.js'),
 ) {
   const adapter = createIndexedDbAdapter({ ...host, mode: 'existing' });
   const client = applyingCloseDrafts(kernelClient({ adapter, surface: 'popup', handlers: POPUP_HANDLERS }), drafts, {

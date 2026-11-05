@@ -34,6 +34,7 @@ import { result } from './requests.js';
 /** @typedef {import('../../core/ports/idempotency-ledger.js').IdempotencyLedger} IdempotencyLedger */
 /** @typedef {import('../../core/ports/idempotency-ledger.js').KeyedCommand} KeyedCommand */
 /** @typedef {import('../../core/ports/idempotency-ledger.js').LedgerRead} LedgerRead */
+/** @typedef {import('../../core/ports/idempotency-ledger.js').LedgerStatus} LedgerStatus */
 
 /**
  * A ledger row
@@ -65,16 +66,22 @@ export function replayFrom(row, command) {
 }
 
 /**
+ * What a row says, whatever command made it
+ * @param {LedgerRow | undefined} row
+ * @returns {LedgerStatus}
+ */
+function statusFrom(row) {
+  if (!row) return { status: 'absent' };
+  const outcome = clone(row.outcome);
+  return outcome.kind === 'committed' ? { status: 'committed', outcome } : { status: 'conflict', outcome };
+}
+
+/**
  * @param {LedgerRow | undefined} row
  * @param {KeyedCommand} command
  * @returns {LedgerRead}
  */
-function readFrom(row, command) {
-  if (!row) return { status: 'absent' };
-  if (row.digest !== digestOf(command)) return { status: 'key-reuse' };
-  const outcome = clone(row.outcome);
-  return outcome.kind === 'committed' ? { status: 'committed', outcome } : { status: 'conflict', outcome };
-}
+const readFrom = (row, command) => (row && row.digest !== digestOf(command) ? { status: 'key-reuse' } : statusFrom(row));
 
 /**
  * What a failed read or sweep answers: the adapter's says reload-required on a connection
@@ -89,18 +96,24 @@ function readFrom(row, command) {
  * @returns {IdempotencyLedger}
  */
 export function createIndexedDbLedger({ database, failure = failureOf }) {
+  /**
+   * The key's row, read in a readonly transaction of its own, or none
+   * @param {unknown} commandId
+   * @returns {Promise<LedgerRow | undefined>}
+   */
+  const rowOf = async commandId => {
+    if (!isId(commandId)) throw new UnavailableError('adapter', 'invalid-key', false);
+    try {
+      const db = database();
+      if (!db.objectStoreNames.contains(OPERATIONS_STORE)) return undefined;
+      const store = db.transaction(OPERATIONS_STORE, 'readonly').objectStore(OPERATIONS_STORE);
+      return /** @type {LedgerRow | undefined} */ (await result(store.get(commandId)));
+    } catch (error) {
+      throw failure(error);
+    }
+  };
   return Object.freeze({
-    async read(command) {
-      const commandId = /** @type {unknown} */ (command?.commandId);
-      if (!isId(commandId)) throw new UnavailableError('adapter', 'invalid-key', false);
-      try {
-        const db = database();
-        if (!db.objectStoreNames.contains(OPERATIONS_STORE)) return { status: 'absent' };
-        const store = db.transaction(OPERATIONS_STORE, 'readonly').objectStore(OPERATIONS_STORE);
-        return readFrom(/** @type {LedgerRow | undefined} */ (await result(store.get(commandId))), command);
-      } catch (error) {
-        throw failure(error);
-      }
-    },
+    read: async command => readFrom(await rowOf(/** @type {unknown} */ (command?.commandId)), command),
+    status: async commandId => statusFrom(await rowOf(commandId)),
   });
 }

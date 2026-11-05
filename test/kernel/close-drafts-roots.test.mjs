@@ -17,6 +17,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { applyCloseDrafts, closeDraftStore } from '../../js/kernel/core/application/close-drafts.js';
+import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { CATCH_UP_KEY, DRAFTS_LOCK, SAVED_UNTOLD_KEY, UNTOLD_KEY } from '../../js/kernel/core/domain/close-draft-keys.js';
 import { applyingCloseDrafts } from '../../js/kernel/composition/close-drafts.js';
 import { waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
@@ -898,6 +899,69 @@ describe('applyingCloseDrafts, on its own', () => {
     await Promise.all([wrapped.whenReady(), wrapped.whenReady(), wrapped.applied()]);
     await wrapped.whenReady();
     assert.equal(loads, 1);
+  });
+});
+
+describe("applyCloseDrafts and the journal entries a draft's close covered (#6)", () => {
+  /**
+   * A stack draft of A's edit that page `page-1` wrote at its close, naming the pane of the base
+   * it was made on unless `pane` is null
+   * @param {string} id
+   * @param {string | null} pane
+   * @param {number} at
+   */
+  const pagedDraft = (id, pane, at) => ({
+    v: 1,
+    id,
+    page: 'page-1',
+    noteId: 'A',
+    at,
+    base: { revision: 0, updatedAt: null, issued: [], name: 'Alpha plan', blocks: {}, issuedSaves: [] },
+    blocks: [block('a1', 'A', 0, 'alpha, edited as the tab closed')],
+    deletedBlockIds: [],
+    preview: 'alpha, edited as the tab closed',
+    todoProgress: null,
+    linkedNames: [],
+    ...(pane ? { pane } : {}),
+  });
+
+  it("asks its forget for a draft that names its page and pane once its apply commits, still under the drafts' lock and before it removes the draft, and never for a note gone, a draft kept for the next start, or one that names no pane", async () => {
+    const storage = legacyEnv.createLocalStorage();
+    const locks = legacyEnv.createLockManager();
+    /** @type {Record<string, string>} what each draft's apply commits with, by its id */
+    const answers = {
+      'd-saved': 'close-draft-saved',
+      'd-in-trash': 'close-draft-saved-in-trash',
+      'd-recovered': 'close-draft-recovered',
+      'd-dropped': 'close-draft-dropped',
+      'd-caught-up': 'close-draft-caught-up',
+      'd-gone': 'close-draft-gone',
+    };
+    const ids = [...Object.keys(answers), 'd-kept', 'd-no-pane'];
+    ids.forEach((id, index) => storage.setItem(`${PREFIX}${id}`, JSON.stringify(pagedDraft(id, id === 'd-no-pane' ? null : 'pane-1', AT + index))));
+    const client = {
+      execute: async (/** @type {any} */ command) =>
+        command.draft.id === 'd-kept'
+          ? unavailable('storage', 'quota', false)
+          : committed(answers[command.draft.id] || 'close-draft-saved', ['A']),
+    };
+    const store = closeDraftStore(storage);
+    /** @type {Array<{id: string, stored: boolean, locked: boolean}>} */
+    const asked = [];
+    const forget = async (/** @type {CloseDraft} */ draft) => {
+      const { held } = await locks.query();
+      const locked = held.some((/** @type {{name: string}} */ lock) => lock.name === DRAFTS_LOCK);
+      asked.push({ id: draft.id, stored: store.present(`${PREFIX}${draft.id}`), locked });
+    };
+    const options = { client, store, locks, forget };
+    const result = await applyCloseDrafts(options);
+    assert.deepEqual(
+      asked.map(entry => entry.id),
+      ['d-saved', 'd-in-trash', 'd-recovered', 'd-dropped', 'd-caught-up'],
+    );
+    assert.ok(asked.every(entry => entry.stored && entry.locked), JSON.stringify(asked));
+    assert.deepEqual(result.kept, ['A']);
+    assert.deepEqual(store.list().map(entry => entry.key), [`${PREFIX}d-kept`]);
   });
 });
 

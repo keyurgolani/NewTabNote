@@ -6,10 +6,10 @@
 //   names, is bound, a helper, a composer, or unshared, so a new js/kernel/core/durable/ or
 //   js/kernel/adapters/<anything>/ module is caught wherever #17 puts it;
 // - its type: an export of a module #12's strict program (tsconfig.kernel.json) checks whose
-//   value, return value, or instance has the members of a port's typedef, each method taking
-//   what the port's passes it (return types aside, since JS infers `string` where the port
-//   says `'absent'`), is an implementation of that port. That catches a ledger, a log, a
-//   repository, or a transport by what it is, whatever it's called;
+//   value, return value, or instance has the members of a port's typedef, but the ones the port
+//   marks optional, each method taking what the port's passes it (return types aside, since JS
+//   infers `string` where the port says `'absent'`), is an implementation of that port. That
+//   catches a ledger, a log, a repository, or a transport by what it is, whatever it's called;
 // - its shape, for what a type can't see: in js/kernel/, an object or class with a `connect`
 //   method is a transport; anywhere, a call of `defineFamily` as imported from
 //   js/kernel/registry/family.js, under any alias, is a registry family; and a module that
@@ -468,7 +468,8 @@ function kernelProgram(tree) {
  */
 function implementsPort(checker, type, port) {
   if (checker.isTypeAssignableTo(type, port)) return true;
-  const wanted = checker.getPropertiesOfType(port);
+  // A member the port marks optional, as KernelAdapter's `ledger`, isn't what makes one
+  const wanted = checker.getPropertiesOfType(port).filter(member => !(member.flags & ts.SymbolFlags.Optional));
   if (wanted.length === 0) return false;
   return wanted.every(member => {
     const own = checker.getPropertyOfType(type, member.name);

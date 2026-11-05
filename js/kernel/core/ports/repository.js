@@ -21,6 +21,7 @@
 /** @typedef {import('../contracts/outcomes.js').Committed} Committed */
 /** @typedef {import('../contracts/outcomes.js').Rejected} Rejected */
 /** @typedef {import('../contracts/outcomes.js').Conflict} Conflict */
+/** @typedef {import('./idempotency-ledger.js').IdempotencyLedger} IdempotencyLedger */
 
 /**
  * Each store and the field, or fields, that key its records. `conflicts` and `tombstones` are
@@ -304,6 +305,10 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   The same export as one object, as Storage.exportAll gave it, each media Blob a data URL:
  *   what sync uploads (#17 PR 4b). Only an adapter with the `backups` flag makes it, and one
  *   without rejects as for exportBackup.
+ * @property {IdempotencyLedger} [ledger]
+ *   #13's ledger over the records this adapter keeps, when it keeps them: what a use case that
+ *   holds another command's key, but not the command, reads by the key alone. The close-time
+ *   drafts' applier asks whether a draft's closing save committed (#6).
  */
 
 /**

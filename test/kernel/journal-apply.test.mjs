@@ -19,6 +19,7 @@ import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
 import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
+import { createMemoryLedger } from '../../js/kernel/core/memory/ledger.js';
 import { journaledLookup } from '../../js/kernel/core/messaging/journaled-operations.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { indexedDbFixture } from './storage-fixture.mjs';
@@ -50,7 +51,8 @@ const FIXTURES = [
   {
     name: 'in-memory',
     async start() {
-      const adapter = createMemoryAdapter();
+      // With a ledger, as #17's adapter keeps one
+      const adapter = createMemoryAdapter({ ledger: createMemoryLedger() });
       const clock = testClock();
       const ids = testIds('page');
       /** @param {string} contextId */
@@ -141,6 +143,8 @@ async function world(fixture) {
       sessionId: OWN,
       locks,
       store: {
+        // No close-time draft is stored, so none holds an entry back
+        list: () => [],
         tell: (/** @type {{id: string, of: string}} */ entry) => told.push(entry),
         tellSaved: (/** @type {string} */ id) => toldSaved.push(id),
       },
@@ -325,6 +329,29 @@ for (const fixture of FIXTURES) {
       assert.ok(await changed.recordOf('notes', 'c-save-3-recovered'));
       assert.deepEqual(changed.journal.entries(), []);
       await changed.close();
+    });
+
+    it("drops an editor save's entry whose save committed before its page removed it, though another writer put its block back since, and removes it (#181's S2, #6)", async () => {
+      const w = await world(fixture);
+      await noteA(w);
+      const save = await saveOf(w, 'c-save-1', 'alpha, edited');
+      assert.equal((await w.page.execute(/** @type {any} */ (save.command))).kind, 'committed');
+      // Another tab puts a1 back to the copy the save's draft was made on
+      const back = await w.page.execute({
+        type: 'saveNoteContent',
+        commandId: 'c-other-tab',
+        noteId: 'A',
+        blocks: [{ id: 'a1', type: 'text', content: 'alpha', order: 0 }],
+        deriveFromStored: true,
+      });
+      assert.equal(back.kind, 'committed', JSON.stringify(back));
+      await w.journal.put(entryOf(save.command, { draft: save.draft }));
+      const result = await w.apply();
+      assert.deepEqual([result.saved, result.recovered], [[], []]);
+      assert.deepEqual(w.sent, ['c-save-1-apply']);
+      assert.deepEqual(w.journal.entries(), []);
+      assert.equal((await blockOf(w, 'a1')).content, 'alpha', "the other tab's copy stays");
+      await w.close();
     });
 
     it("saves an editor save into its note in the Trash, as #33's rules do, and tells that note for the toast", async () => {

@@ -445,12 +445,12 @@ export function withCloseDraftClears(client, { storage, locks, load, logger = cl
 }
 
 /**
- * The close-time drafts' applier, the `close-drafts-chunk` chunk, which the new tab imports only
- * when its localStorage gives it work, as Popup and Side Panel do (close-drafts.js), with the
- * reads its toasts make
+ * The close-time drafts' applier, close-drafts-applier.js with the `close-drafts-chunk` chunk
+ * under it, which the new tab imports only when its localStorage gives it work, as Popup and Side
+ * Panel do (close-drafts.js), with the reads its toasts make
  * @returns {Promise<NewTabApplier>}
  */
-const loadCloseDrafts = () => import('../core/application/close-drafts-chunk.js');
+const loadCloseDrafts = () => import('./close-drafts-applier.js');
 
 /**
  * The client the new tab's root hands out, on `adapter` (createNewTabClient): it wakes the worker

@@ -148,9 +148,12 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     assert.equal(pages.build.modulePreload.polyfill, false);
   });
 
-  it("preloads nothing beside close-drafts-chunk, which the pages import on a start that finds a draft, or beside journal-chunk, which they import on their first journaled command or at idle, and every other import's own list (#33, the lead's trim 2; #35 slice 3b)", () => {
+  it("preloads nothing beside close-drafts-applier, which the pages import on a start that finds a draft, or close-drafts-chunk under it, or beside journal-chunk, which they import on their first journaled command or at idle, and every other import's own list (#33, the lead's trim 2; #35 slice 3b; #6)", () => {
     const { resolveDependencies } = config.pagesConfig(passOptions()).build.modulePreload;
     const deps = ['assets/close-drafts-BkxcNLcj.js', 'assets/checks-RYHEq65f.js', 'assets/host-Bn7ueUNG.js'];
+    for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/workspace-6rz5AjPO.js']) {
+      assert.deepEqual(resolveDependencies('assets/close-drafts-applier-C1e7RqXa.js', [...deps], { hostId, hostType: 'js' }), [], hostId);
+    }
     for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/close-drafts-on-demand-q82KhsV5.js']) {
       assert.deepEqual(resolveDependencies('assets/close-drafts-chunk-B9pzC2hb.js', [...deps], { hostId, hostType: 'js' }), [], hostId);
     }

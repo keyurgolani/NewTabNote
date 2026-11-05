@@ -61,6 +61,8 @@ function spyLedger(inner = createMemoryLedger()) {
       if (fail) throw new UnavailableError('storage', 'read-failed', true);
       return inner.read(command);
     },
+    // The client reads by its command, never by the key alone
+    status: commandId => inner.status(commandId),
   };
   return {
     ledger,
@@ -262,6 +264,7 @@ describe(
       spy.fail = true;
       const odd = /** @type {IdempotencyLedger} */ ({
         read: async () => /** @type {any} */ ({ status: 'committed', outcome: { kind: 'committed' } }),
+        status: async () => /** @type {any} */ ({ status: 'committed', outcome: { kind: 'committed' } }),
       });
       for (const ledger of [spy.ledger, odd]) {
         const { coordinator, client } = await welcomed({ ledger });
@@ -654,7 +657,7 @@ describe('the client: resuming in journal order, by the record first', { timeout
 
 describe("the client: ledger reads that don't answer, and what closing does to a resume", { timeout: 10_000 }, () => {
   /** A ledger that never answers */
-  const silent = /** @type {IdempotencyLedger} */ ({ read: () => new Promise(() => {}) });
+  const silent = /** @type {IdempotencyLedger} */ ({ read: () => new Promise(() => {}), status: () => new Promise(() => {}) });
 
   it('gives a lost reply up as unknown once the ledger has not answered in LEDGER_READ_TIMEOUT_MS, and sends nothing again', async () => {
     const { scheduler, coordinator, client } = await welcomed({ ledger: silent });

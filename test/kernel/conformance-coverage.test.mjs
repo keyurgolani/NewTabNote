@@ -67,7 +67,7 @@ describe('conformance coverage', () => {
 describe('conformance coverage finds an implementation', () => {
   it("under js/kernel/adapters/, as a second durable ledger beside #17's would be, and passes once a suite runs against it", () => {
     const ledger = 'js/kernel/adapters/indexeddb/second-ledger.js';
-    const planted = { [ledger]: 'export function createSecondLedger() { return { read: async () => ({ status: "absent" }) }; }\n' };
+    const planted = { [ledger]: 'export function createSecondLedger() { return { read: async () => ({ status: "absent" }), status: async () => ({ status: "absent" }) }; }\n' };
     const problems = problemsWith(planted);
     assertFlags(problems, /^js\/kernel\/adapters\/indexeddb\/second-ledger\.js is an implementation module with no conformance run/);
     assertFlags(problems, /^js\/kernel\/adapters\/indexeddb\/second-ledger\.js exports createSecondLedger, which is a IdempotencyLedger/);
@@ -92,7 +92,7 @@ describe('conformance coverage finds an implementation', () => {
   });
 
   it('in a new area of js/kernel/, by where it is and by its type', () => {
-    const problems = problemsWith({ 'js/kernel/core/durable/ledger.js': 'export function createDurableLedger() { return { read: async () => ({ status: "absent" }) }; }\n' });
+    const problems = problemsWith({ 'js/kernel/core/durable/ledger.js': 'export function createDurableLedger() { return { read: async () => ({ status: "absent" }), status: async () => ({ status: "absent" }) }; }\n' });
     assertFlags(problems, /^js\/kernel\/core\/durable\/ledger\.js is an implementation module with no conformance run/);
     assertFlags(problems, /^js\/kernel\/core\/durable\/ledger\.js exports createDurableLedger, which is a IdempotencyLedger, so it's a idempotency-ledger implementation/);
   });

@@ -71,6 +71,25 @@ describeIdempotencyLedger({
   },
 });
 
+describe("#17's ledger below version 10, which keeps no ledger", () => {
+  it('reads every key as absent, by a command and by the key alone, and makes no store', async () => {
+    const of = profile();
+    const env = (await import('./storage-fixture.mjs')).legacyEnv;
+    await env.createDatabase(of.real, {});
+    const connection = createConnection({ indexedDB: of.faults.factory, mode: 'existing' });
+    await connection.open();
+    try {
+      const ledger = createIndexedDbLedger({ database: () => connection.database() });
+      const command = { type: 'setPinned', commandId: 'c1', noteId: 'n1', pinned: true };
+      assert.deepEqual(await ledger.read(command), { status: 'absent' });
+      assert.deepEqual(await ledger.status('c1'), { status: 'absent' });
+      assert.equal(connection.database().objectStoreNames.contains('operations'), false);
+    } finally {
+      connection.close();
+    }
+  });
+});
+
 describeCommitLog({
   name: 'IndexedDB (#17)',
   async start() {

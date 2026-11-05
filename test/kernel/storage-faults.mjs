@@ -28,9 +28,10 @@
  *   called `name`, as one the disk refuses at commit does (QuotaExceededError, UnknownError).
  *   Resolves once the abort has reached every listener the transaction had when it aborted,
  *   the adapter's included, so a unit that awaits it is still away when the adapter hears.
- * @property {(store: string, name: string) => void} failNextRead
+ * @property {(store: string, name: string, key?: string) => void} failNextRead
  *   The next read of `store` fails with a DOMException called `name` and its transaction aborts,
- *   as a read of a damaged file does (NotReadableError, UnknownError)
+ *   as a read of a damaged file does (NotReadableError, UnknownError). With `key`, the next read
+ *   of that key alone, so every other read of the store goes through.
  * @property {string[]} deletes - every database name the wrapped factory was asked to delete
  * @property {(database: string, name: string) => void} failNextOpen
  *   The next open of `database` fails with a DOMException called `name`, touching nothing, as
@@ -82,7 +83,7 @@ export function faultyFactory(real) {
   const throwing = [];
   /** @type {Array<{store: string, name: string, delivered: () => void}>} */
   const aborting = [];
-  /** @type {Array<{store: string, name: string}>} */
+  /** @type {Array<{store: string, name: string, key?: string}>} */
   const unreadable = [];
   /** @type {Array<{store: string, name: string}>} */
   const unopenable = [];
@@ -119,7 +120,8 @@ export function faultyFactory(real) {
       const read =
         method =>
         (/** @type {unknown[]} */ ...args) => {
-          const fault = take(unreadable, storeName);
+          const aimed = unreadable.findIndex(plan => plan.store === storeName && (plan.key === undefined || plan.key === args[0]));
+          const fault = aimed === -1 ? undefined : unreadable.splice(aimed, 1)[0];
           if (!fault) return /** @type {any} */ (source)[method](...args);
           // A request that fails, as fake-indexeddb has no way to fail a real one
           const request = /** @type {any} */ ({ result: undefined, error: null, readyState: 'pending' });
@@ -287,8 +289,8 @@ export function faultyFactory(real) {
       new Promise(resolve => {
         aborting.push({ store, name, delivered: () => resolve(undefined) });
       }),
-    failNextRead: (store, name) => {
-      unreadable.push({ store, name });
+    failNextRead: (store, name, key) => {
+      unreadable.push({ store, name, key });
     },
     deletes,
     failNextOpen: (database, name) => {

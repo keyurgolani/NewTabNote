@@ -5,7 +5,7 @@
  * js/close-drafts.js), every field under its own name, type and meaning, so the 1.4.3 a rollback
  * brings back reads the stack's drafts too, plus the stack's own fields (the lead's Q1):
  *
- *   {v: 1, id, page?, noteId, at, base: {revision, updatedAt, issued, name?, blocks?, orders?, issuedSaves?},
+ *   {v: 1, id, page?, pane?, noteId, at, base: {revision, updatedAt, issued, name?, blocks?, orders?, issuedSaves?},
  *    blocks, orders?, deletedBlockIds, name?, titleOrigin?, preview, todoProgress, linkedNames}
  *
  * - `blocks` holds the blocks changed since the base, as the editor has them, and
@@ -28,6 +28,12 @@
  *   still the page's own. One more entry, with no name, holds the page's own serialization of a
  *   block stored in a shape the page doesn't write, which is that block as another tab's save
  *   stores it unchanged. `page` names the page load that wrote the draft.
+ * - A stack draft's `pane` names the editor pane whose base of the note the draft was made on, as
+ *   that pane's saves name it for the page's journal (#6). The draft holds everything that pane
+ *   changed within its load of the note, so its apply takes that page's pane's journal entries
+ *   for the note, and until it applies, no journal apply takes them (application/close-drafts.js,
+ *   application/journal-apply.js). 1.4.3 and 1.5.0 read none of it, and a draft written with no
+ *   pane takes no entry.
  *
  * Each draft goes by these rules, in this order (decide):
  * 0. Its recovered note is stored already: an earlier start made it, and its page went before
@@ -54,10 +60,11 @@
  * together, and only over orders the page knows the blocks by: the one its base had, or one its
  * own saves gave. A block at any other order is another writer's reorder since, and then none
  * goes in, so that writer's order stays whole. A reorder that puts each block back on an order
- * the page knows, its base's say, reads as the page's own, so the moves go over it: the next
- * start can't tell a closing save that committed from one that didn't. A block no note holds,
- * another note's, or one the draft puts or deletes, is skipped. A recovered note takes no move,
- * and a residue Q5 drops takes its moves with it.
+ * the page knows, its base's say, reads as the page's own, so by these rules the moves go over
+ * it. A draft whose closing save committed, by the ledger's record under the draft's id, goes by
+ * rules 0 and 1 alone, and is then dropped (application/close-drafts.js, #6), so such a reorder
+ * stays. A block no note holds, another note's, or one the draft puts or deletes, is skipped. A
+ * recovered note takes no move, and a residue Q5 drops takes its moves with it.
  *
  * Nothing here reads a store or a browser API: the handler reads the records and hands them in.
  */
@@ -91,6 +98,7 @@ export { CLOSE_DRAFT_VERSION, blockDigest, digest, fingerprint };
  * @property {1} v
  * @property {string} id
  * @property {string} [page]
+ * @property {string} [pane]
  * @property {string} noteId
  * @property {number} at
  * @property {DraftBase} base

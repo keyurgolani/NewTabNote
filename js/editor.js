@@ -4405,9 +4405,12 @@ class BlockEditor {
      * block whose stored shape differs (a 1.4.x record, a capture). `revision` is the content
      * revision, null when it isn't known, `updatedAt` the stored stamp as last read, which the
      * editor's own saves never move (QA1), `name` the name, and `seq` the base's place in the
-     * page's save order. Kept for the loaded note and for each note with a save in flight or
-     * waiting to retry, on a page that keeps drafts.
-     * @type {Map<string, {seq: number, revision: (number|null), updatedAt: (number|null), name: (string|undefined), stored: Map<string, string>, sent: Map<string, string>, orders: Map<string, number>}>}
+     * page's save order. `pane` is the pane's id for the page's journal, set at the base's first
+     * save with a draft, which every save drafted on the base names, a retry after the pane left
+     * the note included, and which a load's new base doesn't have (#35 slice 3b, #6). Kept for
+     * the loaded note and for each note with a save in flight or waiting to retry, on a page that
+     * keeps drafts.
+     * @type {Map<string, {seq: number, revision: (number|null), updatedAt: (number|null), name: (string|undefined), stored: Map<string, string>, sent: Map<string, string>, orders: Map<string, number>, pane?: string}>}
      */
     this._seen = new Map();
     /**
@@ -4422,11 +4425,6 @@ class BlockEditor {
      * page's journal (#35 slice 3b)
      */
     this._closingIds = new Map();
-    /**
-     * @type {string|null} This pane's id for its load of the note, which its saves name for the
-     * page's journal, and which each load drops (#35 slice 3b)
-     */
-    this._pane = null;
   }
 
   /**
@@ -4551,9 +4549,9 @@ class BlockEditor {
    * The loaded note is what's stored, as the open read it: its close-time draft holds what
    * changes from here (#33). The base takes the open's revision and stamp, each block's digest
    * as stored, and the editor's own serialization's where the two differ. Notes with nothing in
-   * flight or waiting to retry are forgotten. The pane's id goes too, so its saves from here,
-   * which carry nothing it changed before this base, take none of its earlier entries for the
-   * page's journal (#35 slice 3b).
+   * flight or waiting to retry are forgotten. The new base has no pane id yet, so the saves
+   * drafted on it, which carry nothing the pane changed before it, take none of the pane's
+   * earlier entries for the page's journal (#35 slice 3b).
    * @param {Array<Object>} records - the blocks as the open read them
    * @param {number|null} revision - the note's content revision as the open read it
    * @param {number} seq - the page's save order when the open began
@@ -4562,7 +4560,6 @@ class BlockEditor {
   _rememberLoaded(records, revision, seq) {
     if (!this._drafts()) return;
     this._forgetIdleBases();
-    this._pane = null;
     const noteId = this.noteId;
     this._seen.set(noteId, {
       seq,
@@ -4867,7 +4864,9 @@ class BlockEditor {
    * failed, or refused because the page lost its connection (V7). Each draft's id is the
    * commandId the closing save of its note takes, if the editor issues one. A draft that doesn't
    * fit is skipped, and the closing write still runs. Nothing for a note the editor found deleted,
-   * or one whose blocks a revert is replacing, whose typing goes to version history instead.
+   * or one whose blocks a revert is replacing, whose typing goes to version history instead. Each
+   * draft names the pane id of its note's base, which the saves drafted on that base name, so once
+   * it applies, the next start can take that load's journal entries for the note (#6).
    * @returns {void}
    */
   _writeCloseDraft() {
@@ -4892,8 +4891,9 @@ class BlockEditor {
     for (const fields of edits) {
       if (!fields) continue;
       const id = this.documentClient.newId();
+      const pane = this._seen.get(fields.noteId)?.pane;
       // Its note's closing save takes its id, and goes covered by it, only once it's written
-      if (drafts.write({ id, ...fields })) this._closingIds.set(fields.noteId, id);
+      if (drafts.write({ id, ...fields, pane })) this._closingIds.set(fields.noteId, id);
     }
   }
 
@@ -4901,24 +4901,27 @@ class BlockEditor {
    * What a save tells the page's journal (#35 slice 3b). The closing save goes under the id of the
    * close-time draft its editor wrote for the same edit, covered by it. Any other carries its edit,
    * as the close-time draft of it on the base this pane last saw commit, with the saves the page
-   * issued since, and this pane's id, so the next page applies it by #33's rules if this one goes
-   * before it's answered: the document client makes the draft under the save's commandId. One
-   * that changes nothing since the base needs no entry, and a page that keeps no drafts gives none.
-   * A covered save names the pane too, once it has one, so its commit takes the pane's earlier
-   * entries for the note, as any other save's does.
+   * issued since, and the base's pane id, so the next page applies it by #33's rules if this one
+   * goes before it's answered: the document client makes the draft under the save's commandId.
+   * One that changes nothing since the base needs no entry, and a page that keeps no drafts gives
+   * none. A covered save names the base's pane too, once it has one, so its commit takes the
+   * pane's earlier entries for the note, as any other save's does. The id is the base's of the
+   * save's own note, whichever note the pane shows by then, so the retry of a save written as the
+   * pane left its note names that save's pane (#6). A save of a note with no base names none, and
+   * its commit takes no entry.
    * @param {EditorSaveState} state
    * @param {{preview: string, todoProgress: Object|null, text: string}} meta
    * @param {string|undefined} closingId - the id of the close-time draft written for the save's edit
    * @returns {{commandId?: string, covered?: boolean, edit?: Object, pane?: string}|undefined}
    */
   _journalOptions(state, meta, closingId) {
-    const pane = this._pane || undefined;
-    if (closingId) return { commandId: closingId, covered: true, pane };
+    const seen = this._seen.get(state.noteId);
+    if (closingId) return { commandId: closingId, covered: true, pane: seen?.pane };
     if (!this._drafts()) return undefined;
     const edit = this._closeDraftOf(state.noteId, state.blocks, state.title, meta);
-    if (!edit) return { covered: true, pane };
-    if (!this._pane) this._pane = this.documentClient.newId();
-    return { edit, pane: this._pane };
+    if (!edit) return { covered: true, pane: seen?.pane };
+    if (seen && !seen.pane) seen.pane = this.documentClient.newId();
+    return { edit, pane: seen?.pane };
   }
 
   /**
