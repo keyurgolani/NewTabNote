@@ -232,15 +232,17 @@ export function consequenceOf(providerId, receipt, now) {
 
 /**
  * The update state storage's fault `faultCode` stands for, as the consequence its words are
- * under, or null for any other fault: a wait for free space only when the run said so
- * (`space-short`), and any other wait, such as an upgrade waiting on another connection, as
- * waiting (#20 slice 4d says what to do about that one)
+ * under, or null for any other fault. `evidence` says why: a blocked update is a wait for free
+ * space when the run said so (`space-short`), and any other wait, such as an upgrade waiting on
+ * another connection, reads as waiting (#20 slice 4d says what to do about that one). With
+ * nothing that says why (null), as after a later check's receipt took the update's place, a
+ * blocked update reads as the wait for free space, which needs the user (#115's high review)
  * @param {string} faultCode
- * @param {Readonly<Record<string, unknown>>} evidence - the receipt's, and the incident's when it has some
+ * @param {Readonly<Record<string, unknown>> | null} evidence - whyOf's
  * @returns {string | null}
  */
 export function updateKeyOf(faultCode, evidence) {
-  if (faultCode === 'migration-blocked') return evidence.errorCode === 'space-short' ? 'storage.migration-blocked' : 'storage.migration-pending';
+  if (faultCode === 'migration-blocked') return evidence && evidence.errorCode !== 'space-short' ? 'storage.migration-pending' : 'storage.migration-blocked';
   if (faultCode === 'migration-pending' || faultCode === 'migration-failed') return `storage.${faultCode}`;
   return null;
 }
@@ -253,6 +255,20 @@ function updateOf(receipt) {
   const key = receipt && receipt.consequenceKey;
   if (!key || !key.startsWith('storage.migration-')) return null;
   return updateKeyOf(key.slice('storage.'.length), /** @type {Record<string, unknown>} */ (receipt.evidence || {}));
+}
+
+/**
+ * What says why storage's update is where it is: its latest receipt's evidence when that receipt
+ * reports the update, with the incident's own over it, or null when neither says anything. A
+ * check's incidents carry no evidence of their own (checks.js), and a later check's receipt that
+ * isn't the update's, such as one that timed out, says nothing about it
+ * @param {HealthReceipt | null | undefined} receipt
+ * @param {Readonly<Record<string, unknown>>} [own] - the incident's
+ * @returns {Record<string, unknown> | null}
+ */
+function whyOf(receipt, own = {}) {
+  if (receipt && updateOf(receipt) !== null) return { ...(receipt.evidence || {}), ...own };
+  return Object.keys(own).length > 0 ? { ...own } : null;
 }
 
 /** An update that's waiting needs no one, as the worker finishes it on its own: it counts as attention nowhere */
@@ -413,13 +429,15 @@ function rowText(rowId, status, entries, now) {
 /**
  * A row's one action, from its next action (next-action.js), as this page can take it: the
  * repair it runs, the problem in the Recovery Center, or Chrome's site access. A check, a
- * Settings area, or another remediation has no action here yet.
+ * Settings area, or another remediation has no action here yet. The Recovery Center is offered
+ * only for an incident in `counted`: a dismissed one, or an update that's waiting, asks nothing
+ * of the user, and its card has nothing to do (the design look, change 6).
  * @param {string} rowId
  * @param {ProviderEntry[]} entries
- * @param {Incident[]} open
+ * @param {Incident[]} counted - the row's open incidents that need the user
  * @returns {RowAction | null}
  */
-function rowAction(rowId, entries, open) {
+function rowAction(rowId, entries, counted) {
   const next = entries.map(entry => entry.next).find(Boolean) || null;
   if (next && next.kind === 'remediation' && RUNS_HERE.includes(next.remediationId) && next.incidentId) {
     return { kind: 'repair', label: REBUILD.action, incidentId: next.incidentId };
@@ -427,7 +445,8 @@ function rowAction(rowId, entries, open) {
   if (next && next.kind === 'site-access' && rowId === 'permissions') {
     return { kind: 'site-access', label: 'Review site access in Chrome', incidentId: null };
   }
-  const incidentId = next && 'incidentId' in next && next.incidentId ? next.incidentId : open.length > 0 ? open[0].id : null;
+  const named = next && 'incidentId' in next && next.incidentId ? next.incidentId : null;
+  const incidentId = named && counted.some(incident => incident.id === named) ? named : counted.length > 0 ? counted[0].id : null;
   if (incidentId) return { kind: 'recovery', label: PAGE.seeInRecovery, incidentId };
   return null;
 }
@@ -459,11 +478,11 @@ export function trustSections(report, { now, checking = new Set() }) {
     // Storage's update state, when its check reported one: its own words and shape, and a wait
     // that needs no one (change 9)
     const update = rowId === 'storage' && status === 'degraded' ? updateOf(entries[0].receipt) : null;
-    const evidenceNow = /** @type {Record<string, unknown>} */ ((entries[0].receipt && entries[0].receipt.evidence) || {});
     const waits = (/** @type {Incident} */ incident) =>
-      incident.providerId === 'storage' && WAITING.includes(String(updateKeyOf(incident.faultCode, evidenceNow)));
+      incident.providerId === 'storage' && WAITING.includes(String(updateKeyOf(incident.faultCode, whyOf(entries[0].receipt, incident.evidence))));
     const waiting = update !== null && WAITING.includes(update);
-    const attention = open.some(incident => !waits(incident)) || (ATTENTION.includes(status) && !waiting);
+    const counted = open.filter(incident => !waits(incident));
+    const attention = counted.length > 0 || (ATTENTION.includes(status) && !waiting);
     const showsTime = !['not-configured', 'off', 'unsupported', 'checking', 'unverified'].includes(status);
     const verifiedTimes = entries
       .filter(entry => entry.receipt && (rowId !== 'platform' || entry.status === 'verified'))
@@ -493,7 +512,7 @@ export function trustSections(report, { now, checking = new Set() }) {
       stillWorks: stillWorks.filter(capability => !notWorking.includes(capability)),
       notWorking,
       open,
-      action: rowAction(rowId, entries, open),
+      action: rowAction(rowId, entries, counted),
       evidence: /** @type {Evidence[]} */ (entries.map(entry => evidenceOf(entry, now)).filter(Boolean)),
       destinations: rowId === 'permissions',
       pending:
@@ -614,17 +633,19 @@ export function attentionText(rows) {
 
 /**
  * An incident's title. A check's incident carries no evidence of its own (checks.js), so its
- * counts come from `evidence`, its provider's latest receipt's.
+ * counts come from `evidence`, its provider's latest receipt's, and why an update waits from
+ * `why` (whyOf's)
  * @param {Incident} incident
  * @param {Record<string, unknown>} [evidence]
+ * @param {Readonly<Record<string, unknown>> | null} [why]
  */
-export function incidentTitle(incident, evidence = {}) {
+export function incidentTitle(incident, evidence = {}, why = { ...evidence, ...(incident.evidence || {}) }) {
   const titles = /** @type {Record<string, string>} */ (INCIDENT);
   evidence = /** @type {Record<string, any>} */ ({ ...evidence, ...(incident.evidence || {}) });
   const long = `${incident.providerId}/${incident.faultCode}/${incident.subjectId}`;
   const short = `${incident.providerId}/${incident.faultCode}`;
   // An update waiting on anything but free space reads as an update waiting (change 9)
-  if (incident.providerId === 'storage' && updateKeyOf(incident.faultCode, evidence) === 'storage.migration-pending') {
+  if (incident.providerId === 'storage' && updateKeyOf(incident.faultCode, why) === 'storage.migration-pending') {
     return titles['storage/migration-pending'];
   }
   return fill(titles[long] || titles[short] || 'Part of NewTabNote needs a look', { count: evidence.count });
@@ -646,10 +667,15 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
     const entry = providerOf(providerId);
     return /** @type {Record<string, unknown>} */ ((entry && entry.receipt && entry.receipt.evidence) || {});
   };
+  /** @param {Incident} incident */
+  const whyFor = incident => {
+    const entry = providerOf(incident.providerId);
+    return whyOf(entry ? entry.receipt : null, incident.evidence || {});
+  };
   /** @type {Map<string, Incident[]>} */
   const byTitle = new Map();
   for (const incident of incidents) {
-    const title = incidentTitle(incident, evidenceOf(incident.providerId));
+    const title = incidentTitle(incident, evidenceOf(incident.providerId), whyFor(incident));
     const list = byTitle.get(title) || [];
     list.push(incident);
     byTitle.set(title, list);
@@ -678,7 +704,7 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
     const dismissed = !resolved && list.every(incident => incident.dismissed);
     const dismissTimes = list.map(incident => incident.dismissChangedAt).filter(at => typeof at === 'number');
     const rowId = PLATFORM.includes(first.providerId) ? 'platform' : first.providerId;
-    const update = first.providerId === 'storage' ? updateKeyOf(first.faultCode, evidence) : null;
+    const update = first.providerId === 'storage' ? updateKeyOf(first.faultCode, whyFor(first)) : null;
     // An update waiting, for free space or not, takes the dashed ring, its row's shape, and sits
     // under Waiting (the design look, round 7)
     const updateWait = update !== null && update !== 'storage.migration-failed';

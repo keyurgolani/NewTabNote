@@ -1385,7 +1385,20 @@ describe("storage's update states, in the design director's words (change 9, #20
    * @param {{capture?: string, evidence?: Record<string, unknown>}} [options]
    */
   function drawn(faultCode, options) {
-    const entry = storageEntry(`storage.${faultCode}`, options);
+    const { row, head, problems } = drawnWith(storageEntry(`storage.${faultCode}`, options), [incidentOf(faultCode)]);
+    return { row, head, problem: problems[0] };
+  }
+
+  /**
+   * What each view draws with storage's entry `entry` and the records' `incidents`: the Notes
+   * database row, the headline, and the problems. Storage's next action is trust.report's: the
+   * worst open incident that isn't dismissed, in the Recovery Center (next-action.js)
+   * @param {any} entry
+   * @param {any[]} incidents
+   */
+  function drawnWith(entry, incidents) {
+    const [worst] = incidents.filter(incident => !incident.dismissed);
+    entry = { ...entry, next: worst ? { kind: 'recovery-center', incidentId: worst.id } : null };
     // Saving new notes, verified beside it, as the open check finds it on a version 8 profile
     const capture = /** @type {any} */ ({
       ...storageEntry('storage.capture-at-risk'),
@@ -1395,14 +1408,13 @@ describe("storage's update states, in the design director's words (change 9, #20
       status: 'verified',
       receipt: { ...storageEntry('storage.capture-at-risk').receipt, providerId: 'capture', status: 'verified', consequenceKey: null },
     });
-    const incident = incidentOf(faultCode);
-    const report = /** @type {any} */ ({ records: 'open', providers: [capture, entry], incidents: [incident], copyRead: 'ok', recordsRead: 'ok', runs: [] });
+    const report = /** @type {any} */ ({ records: 'open', providers: [capture, entry], incidents, copyRead: 'ok', recordsRead: 'ok', runs: [] });
     const rows = trustSections(report, { now: AT }).flatMap(section => section.rows);
     const row = /** @type {any} */ (rows.find(candidate => candidate.id === 'storage'));
     const summary = /** @type {any} */ ({ capture: 'safe', worstCore: 'degraded', records: 'open' });
     const head = trustHeadline(summary, rows, { now: AT, checking: false });
-    const [problem] = problemsOf([incident], new Map(), () => entry);
-    return { row, head, problem };
+    const problems = problemsOf(incidents, new Map(), () => entry);
+    return { row, head, problems };
   }
 
   it("reads a waiting update as Update waiting, in the dashed ring, its row's second line in sight, and counts it as needing attention nowhere", () => {
@@ -1473,6 +1485,73 @@ describe("storage's update states, in the design director's words (change 9, #20
       ["An update couldn't change how your notes are stored", false, true, RESOLVED['storage/migration-failed'], 'partial', false],
     );
     assert.equal(recoveryHeadline([problem], /** @type {any} */ ({ capture: 'safe', records: 'open' }), { now: AT, lastCheckedAt: AT }).tone, 'partial');
+  });
+
+  it("offers the Recovery Center from the Notes database row only for an update that needs the user, as for a dismissed problem (the design look, change 6)", () => {
+    // A waiting update asks nothing, and its card has nothing to do: the row's foot keeps How
+    // this was checked alone
+    same(drawn('migration-pending').row.action, null, 'a waiting update offers the Recovery Center');
+    for (const [faultCode, evidence] of /** @type {Array<[string, Record<string, unknown>]>} */ ([
+      ['migration-blocked', { errorCode: 'space-short' }],
+      ['migration-failed', { errorCode: 'schema-mismatch' }],
+    ])) {
+      const { row, problem } = drawn(faultCode, { evidence });
+      assert.deepEqual(row.action, { kind: 'recovery', label: PAGE.seeInRecovery, incidentId: problem.incidents[0].id }, faultCode);
+    }
+  });
+
+  // A check's incidents carry no evidence of their own (checks.js), so only storage's latest
+  // receipt says why an update is blocked, and a later check's that isn't the update's says
+  // nothing about it (#115's high review)
+  it("reads a blocked update as the wait for free space once a later check's receipt has taken the update's place, since nothing then says why", () => {
+    for (const later of [
+      { status: 'action-required', consequenceKey: 'storage.quota', capture: 'at-risk', evidence: { cause: 'quota', errorCode: 'quota' } },
+      { status: 'unverified', consequenceKey: null, capture: undefined, evidence: { errorCode: 'check-timed-out' } },
+    ]) {
+      const entry = storageEntry('storage.migration-blocked', { evidence: { errorCode: 'space-short' } });
+      const receipt = { ...entry.receipt, status: later.status, consequenceKey: later.consequenceKey, capture: later.capture, evidence: { subjectId: 'CanvasTabDB', ...later.evidence } };
+      const { row, problems } = drawnWith({ ...entry, status: later.status, receipt }, [incidentOf('migration-blocked')]);
+      const [problem] = problems;
+      assert.equal(row.attention, true, later.status);
+      assert.deepEqual(
+        [problem.title, problem.text, problem.waiting, problem.dismissable, problem.tone, problem.updateWait],
+        ['An update is waiting for free space', CONSEQUENCE['storage.migration-blocked'], false, true, 'unknown', true],
+        later.status,
+      );
+      assert.deepEqual(row.action, { kind: 'recovery', label: PAGE.seeInRecovery, incidentId: problem.incidents[0].id }, later.status);
+    }
+  });
+
+  it("counts a waiting update nowhere beside another problem or a dismissed one, and each headline's tone follows what counts (#115's high review)", () => {
+    const waits = incidentOf('migration-pending');
+    const other = { ...incidentOf('write-failed'), id: '00000000-0000-4000-8000-0000000000d2', ref: '0000d2', key: 'storage/write-failed/NewTabNoteTrust', subjectId: 'NewTabNoteTrust', lastSeenAt: AT - 1 };
+    const summary = /** @type {any} */ ({ capture: 'safe', records: 'open' });
+    /**
+     * The Recovery Center's headline over `problems`, counted as the view counts them (view.js)
+     * @param {any[]} problems
+     */
+    const recoveryOver = problems =>
+      recoveryHeadline(
+        problems.filter(problem => !problem.dismissed && !problem.waiting),
+        summary,
+        { now: AT, lastCheckedAt: AT, dismissed: problems.filter(problem => problem.dismissed).length, waiting: problems.filter(problem => !problem.dismissed && problem.waiting).length },
+      );
+    // Beside another problem: that one counts, and the row offers it
+    const beside = drawnWith(storageEntry('storage.migration-pending'), [waits, other]);
+    assert.deepEqual(beside.problems.map(problem => [problem.title, problem.waiting, problem.dismissable]), [
+      ['An update is waiting to finish', true, false],
+      [INCIDENT['storage/write-failed'], false, true],
+    ]);
+    assert.deepEqual([beside.row.attention, beside.row.action && beside.row.action.incidentId], [true, other.id]);
+    assert.deepEqual([beside.head.tone, beside.head.title, beside.head.attention], ['ok', PAGE.saving, [{ id: 'storage', label: beside.row.label }]]);
+    const besideHead = recoveryOver(beside.problems);
+    assert.deepEqual([besideHead.tone, besideHead.title], ['partial', fill(PAGE.problems, { count: '1 problem' })]);
+    // Beside a dismissed one: nothing counts, and the row offers nothing
+    const dismissed = drawnWith(storageEntry('storage.migration-pending'), [waits, { ...other, dismissed: true, dismissChangedAt: AT }]);
+    assert.deepEqual([dismissed.row.attention, dismissed.row.action], [false, null]);
+    assert.deepEqual([dismissed.head.tone, dismissed.head.attention], ['ok', []]);
+    const dismissedHead = recoveryOver(dismissed.problems);
+    assert.deepEqual([dismissedHead.tone, dismissedHead.title], ['ok', PAGE.nothingNeedsYou]);
   });
 
   it("says they save normally only when the check saved its test entry", () => {
