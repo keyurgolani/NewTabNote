@@ -875,6 +875,18 @@ describe("captures through the worker's own client and the coordinator's queue (
     assert.deepEqual((await dailyUrls(worker)).sort(), [worker.tab.url, 'https://example.test/second'].sort());
   });
 
+  it("keeps a journaled capture that started and ran past its deadline, asks the drain, and adds it once, with its entry gone (#204's review, T1)", async () => {
+    // The capture holds the queue for 40 s, so the worker's own client gives up on it at 31 s
+    // (unknown), while it still runs; the drain's replay waits behind it on the same queue
+    const worker = await loadBackground({ rewrite: slowCapture(40_000) });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    await pastTheHold(worker);
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [[...KEPT_BUSY]]);
+    assert.deepEqual(await dailyUrls(worker), [worker.tab.url], 'it lands once');
+    assert.deepEqual(await journalOf(worker.indexedDB), [], 'its entry goes');
+  });
+
   it("saves a capture over 1 MiB, as 1.5.0 does: no message limit applies to the worker's own capture (the lead's ruling for 4a)", async () => {
     const worker = await loadBackground({ start: false });
     const content = 'x'.repeat(2 * limits.MAX_MESSAGE_BYTES);
