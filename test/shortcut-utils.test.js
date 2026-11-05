@@ -106,7 +106,7 @@ test('editor shortcut resolves list indentation only for list-like blocks', () =
   }), null);
 });
 
-test("editor shortcut resolves Mod+/ to the block's menu, with no Shift or Alt, and no app shortcut takes it (#14 slice 4)", () => {
+test("editor shortcut resolves Mod+/ to the block's menu, with no Alt, and not Mod+? on a US layout, and no app shortcut takes it (#14 slice 4)", () => {
   const press = (more) => getEditorShortcutAction({ code: 'Slash', key: '/', modKey: true, shiftKey: false, altKey: false, blockType: 'text', ...more });
   assert.deepEqual(press({}), { type: 'block-menu' });
   assert.deepEqual(press({ blockType: 'divider' }), { type: 'block-menu' });

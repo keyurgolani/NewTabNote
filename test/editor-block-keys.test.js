@@ -95,6 +95,16 @@ describe("the keys an IME composes with are the IME's (#202's review)", () => {
     const slash = press(editor, content, '/', { code: 'Slash', ctrlKey: true, isComposing: true });
     assert.deepEqual([opened.length, slash.defaultPrevented], [0, false], 'Mod+/ during a composition is the IME\'s');
   });
+
+  it("in the title too: during a composition, ArrowDown and the Enter that commits the IME's text leave focus in the title, before a first block that's a divider, each with its default kept (#202's delta check)", OPTIONS, async () => {
+    const { env, editor } = await openNote([DIVIDER('d1', 0), block('a1', 'N', 1, 'Some text')]);
+    editor.titleEl.focus();
+    for (const key of ['ArrowDown', 'Enter']) {
+      const event = { key, isComposing: true, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+      editor.onTitleKeyDown(event);
+      assert.deepEqual([env.document.activeElement === editor.titleEl, event.defaultPrevented], [true, false], `${key} during a composition in the title is the IME's`);
+    }
+  });
 });
 
 describe("focus on and after a stop (#202's review)", () => {
@@ -104,6 +114,16 @@ describe("focus on and after a stop (#202's review)", () => {
     stop.focus();
     click(editor, stop.querySelector('img'));
     assert.ok(env.document.activeElement !== stop, "the image's stop keeps no focus from the press");
+  });
+
+  it("and so does a press on an empty image's placeholder, which sits in its stop (#202's delta check)", OPTIONS, async () => {
+    const { env, editor } = await openNote([block('t1', 'N', 0, 'Before'), { ...IMAGE('e1', 1), imageUrl: '' }]);
+    const stop = elementOf(editor, 'e1').querySelector('.block-stop');
+    const placeholder = stop.querySelector('.image-placeholder');
+    assert.ok(placeholder, 'the empty image shows its placeholder in its stop');
+    stop.focus();
+    click(editor, placeholder);
+    assert.ok(env.document.activeElement !== stop, "the empty image's stop keeps no focus from the press");
   });
 
   it("a question's Cancel, when what had focus is gone, gives focus back to the block's stop, as after a Turn into from an image's menu", OPTIONS, async () => {

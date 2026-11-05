@@ -669,7 +669,7 @@ test('a click on the handle with the slash menu open closes it, so the block men
   await expectNoUncaught(extension, page);
 });
 
-test('a held Enter or Space in the menu acts once: a repeat chooses nothing', async ({ extension }) => {
+test('a held Enter or Space in the menu acts once: a repeat chooses nothing, and after a choice its repeats reach nothing until it comes up', async ({ extension }) => {
   const { page } = await openStops(extension);
   const turnInto = itemOf(blockMenu(page), 'Turn into...');
   const repeat = key => page.evaluate(key => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key, repeat: true, bubbles: true, cancelable: true })), key);
@@ -682,6 +682,19 @@ test('a held Enter or Space in the menu acts once: a repeat chooses nothing', as
   await repeat(' ');
   await expect.soft(typesMenu(page), 'nor does a repeated Space').toHaveCount(0);
   await expect(turnInto, 'focus stays on Turn into').toBeFocused();
+
+  // A chosen Enter held down: the choice closes the menu and focus goes back to the text, where its
+  // repeats add no block. The next Enter, after it came up, splits the line as before (#202's delta check)
+  await page.keyboard.press('ArrowRight');
+  await expect(itemOf(typesMenu(page), 'Text')).toBeFocused();
+  await page.keyboard.down('Enter');
+  await expect(blockMenu(page), 'the choice closes the menu').toHaveCount(0);
+  await expect(textOf(page, 'stops-second'), 'focus is back in the text').toBeFocused();
+  for (let i = 0; i < 3; i++) await repeat('Enter');
+  expect(await shownOrder(page), "the held Enter's repeats after the choice add no block").toEqual(ORDER);
+  await page.keyboard.up('Enter');
+  await page.keyboard.press('Enter');
+  expect((await shownOrder(page)).length, 'the next Enter, after it came up, splits the line as before').toBe(ORDER.length + 1);
   await expectNoUncaught(extension, page);
 });
 
