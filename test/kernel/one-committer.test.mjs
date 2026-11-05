@@ -1,9 +1,10 @@
 // #35's architecture test (scope AC1, "One committer"; slice 4a): every repository write commits
 // through the background coordinator, in the service worker, apart from the in-context writes
 // docs/architecture/committers.json lists. It reads every root the build has, each page in
-// scripts/build/vite-config.js's PAGES by the scripts its HTML loads and the worker from
-// manifest.json, through static imports and every import() of a literal (import-graph.mjs), so a
-// root #2 or #3 adds is checked with no edit here. Three rules:
+// scripts/build/vite-config.js's PAGES by the scripts its HTML loads, the worker from
+// manifest.json, and each module worker a root starts (and each one that worker starts), through
+// static imports and every import() of a literal (import-graph.mjs), so a root #2 or #3 adds is
+// checked with no edit here. Three rules:
 // 1. Only the worker's graph reaches a module that writes CanvasTabDB (`indexeddb`'s writers),
 //    but for a page on `untilMoved`, whose graph may hold #17's adapter and what it imports until
 //    its own slice, and a module `reads` names for a page that loads it only to read.
@@ -141,15 +142,25 @@ function problemsOf({
   /** @type {Map<string, string[]>} each root's graph, `js/lib/` left out */
   const graphs = new Map();
   const roots = rootsOf({ pages, readFile });
-  for (const root of roots) {
+  /** @type {Set<string>} each module worker read as a root already, by its path */
+  const workerRoots = new Set();
+  // A worklist: each module worker a root starts joins it, so one a worker starts does too
+  for (let index = 0; index < roots.length; index++) {
+    const root = roots[index];
     if (root.entries.length === 0) {
       problems.push(`${root.name} loads no script the test can read`);
       continue;
     }
-    const { modules, computed } = reachGraph(
+    const { modules, computed, workers } = reachGraph(
       root.entries.map(entry => path.join(ROOT, entry)),
       { readFile },
     );
+    // A module worker runs in a realm of its own, so it's a root of its own, never on untilMoved
+    for (const started of workers.map(relative)) {
+      if (workerRoots.has(started)) continue;
+      workerRoots.add(started);
+      roots.push({ name: started, worker: false, entries: [started] });
+    }
     const graph = [...modules].map(relative).filter(file => !file.startsWith('js/lib/'));
     graphs.set(root.name, graph);
     for (const at of computed) {
