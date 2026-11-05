@@ -813,6 +813,16 @@ for (const fixture of FIXTURES) {
         assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-gone', []]);
       });
 
+      it('still answers recovered, and writes nothing, when an earlier start made its recovered note, as rule 0 runs before the drop', async () => {
+        await profileOf(ctx);
+        const draft = stackDraft();
+        await closingSaveOf(ctx, draft);
+        await seed(ctx, 'notes', [note(recoveredIdOf(draft), { name: 'Recovered: Alpha plan (an earlier start)' })]);
+        const before = await recordOf(ctx, 'notes', 'A');
+        assert.deepEqual(said(await apply(ctx, draft)), ['close-draft-recovered', []]);
+        assert.deepEqual(await recordOf(ctx, 'notes', 'A'), before, 'nothing is written');
+      });
+
       it("drops one in 1.4.3's format the same way, with no recovered note", async () => {
         await profileOf(ctx);
         const draft = legacyDraft();

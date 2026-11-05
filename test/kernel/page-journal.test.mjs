@@ -477,20 +477,23 @@ describe("a page's journal shim and chunk (#35 slice 3b)", () => {
 });
 
 describe("the journal entries a close-time draft's close covered (#6, #191's known limit 2)", () => {
-  /** What the closed page's pane wrote of note A's a1, on a1 as stored, before its close */
-  const baseOf = async (/** @type {ReturnType<typeof pageClient>} */ p) => {
-    const [a1] = (await p.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === 'a1');
-    return { revision: await p.revisionOf('A'), updatedAt: null, issued: [], name: 'Alpha plan', blocks: { a1: blockDigest(a1, 'A') }, issuedSaves: [] };
+  /** What the closed page's pane wrote of note A's block `id`, a1 unless named, on it as stored, before its close */
+  const baseOf = async (/** @type {ReturnType<typeof pageClient>} */ p, id = 'a1') => {
+    const [row] = (await p.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === id);
+    return { revision: await p.revisionOf('A'), updatedAt: null, issued: [], name: 'Alpha plan', blocks: { [id]: blockDigest(row, 'A') }, issuedSaves: [] };
   };
 
   /**
-   * An editor save of `noteId`'s first block that page `page`'s pane `pane` left in the journal,
-   * with its draft on `base`, as 3b's journaling writes one
+   * An editor save of `noteId`'s block `block`, its first unless named, that page `page`'s pane
+   * `pane` left in the journal, with its draft on `base`, as 3b's journaling writes one
    * @param {string} opId
-   * @param {{noteId?: string, page?: string, pane?: string, seq?: number, base?: Row, text?: string, v?: number}} [options]
+   * @param {{noteId?: string, page?: string, pane?: string, seq?: number, base?: Row, text?: string, v?: number, block?: string, order?: number}} [options]
    */
-  const leftBy = (opId, { noteId = 'A', page = 'page-w1', pane = 'pane-1', seq = 1, base = {}, text = 'typed', v = 1 } = {}) => {
-    const blocks = [{ id: `${noteId.toLowerCase()}1`, type: 'text', content: text, order: 0 }];
+  const leftBy = (
+    opId,
+    { noteId = 'A', page = 'page-w1', pane = 'pane-1', seq = 1, base = {}, text = 'typed', v = 1, block = `${noteId.toLowerCase()}1`, order = 0 } = {},
+  ) => {
+    const blocks = [{ id: block, type: 'text', content: text, order }];
     const command = { type: 'saveNoteContent', commandId: opId, noteId, blocks, deriveFromStored: true };
     return journalEntry({
       command: /** @type {any} */ (command),
@@ -578,6 +581,43 @@ describe("the journal entries a close-time draft's close covered (#6, #191's kno
     assert.deepEqual(await real.databases(), []);
   });
 
+  it("forgetCovered resolves when the journal can't open, and leaves its entries, and the drafts' apply goes on to the next draft, whose forget takes its own pane's", async t => {
+    const warned = t.mock.method(console, 'warn', () => {});
+    const real = new IDBFactory();
+    const p = pageClient();
+    await noteA(p);
+    const base = await baseOf(p);
+    const writer = inContextStores({ indexedDB: real }).journal();
+    await writer.open();
+    await writer.put(leftBy('c-s1', { base, text: 'alpha, first' }));
+    await writer.put(leftBy('c-t1', { pane: 'pane-2', seq: 2, base, text: 'alpha, from the other pane' }));
+    writer.close();
+    const storage = legacyEnv.createLocalStorage();
+    storage.setItem('ntn-close-draft:c-closing', JSON.stringify(closingDraft(base, 'alpha, first and more')));
+    // The same page's other pane on the note closed later, on the text the first draft saves
+    const second = { ...closingDraft(base, 'alpha, first and more'), id: 'c-closing-2', pane: 'pane-2', at: NOW + 2 };
+    storage.setItem('ntn-close-draft:c-closing-2', JSON.stringify(second));
+    const faults = faultyFactory(real);
+    faults.failNextOpen('NewTabNoteJournal', 'UnknownError');
+    const forgetCovered = await forgetOf();
+    const store = closeDraftStore(storage);
+    // Each forget on stores of its own, as the roots' applier hands it: one closes its journal for good
+    const options = {
+      client: p.client,
+      store,
+      locks: legacyEnv.createLockManager(),
+      forget: (/** @type {unknown} */ draft) => forgetCovered(draft, inContextStores({ indexedDB: faults.factory })),
+    };
+    const result = await applyCloseDrafts(options);
+    assert.deepEqual([result.saved, result.dropped], [['A'], ['A']], 'both drafts apply');
+    assert.deepEqual(await opIdsIn(real), ['c-s1'], "the first draft's entry stays, and the second's goes");
+    assert.equal(store.has(), false, 'both drafts go');
+    assert.deepEqual(
+      warned.mock.calls.map(call => call.arguments[0]),
+      ['NewTabNote journal: entries-not-forgotten'],
+    );
+  });
+
   it("at the next start, the draft of a close that died before its closing save's answer takes its pane's earlier entries before the journal's apply lists them, so the older text makes no recovered note", async () => {
     const real = new IDBFactory();
     const p = pageClient();
@@ -614,6 +654,120 @@ describe("the journal entries a close-time draft's close covered (#6, #191's kno
     const [a1] = (await p.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === 'a1');
     assert.equal(a1.content, 'alpha, first and more');
     assert.equal(await p.adapter.read(['notes'], tx => tx.get('notes', 'c-s1-recovered')), undefined);
+  });
+
+  /**
+   * The closed page's pane kept a save of a1 that never committed, `c-s1`, then closed with more
+   * typed, and its closing save under the draft's id committed before the page could hear, or
+   * never did. A page already open when it went runs its journal apply, at its first journaled
+   * command or at idle, before the next start's drafts apply, or after.
+   * @param {{journalFirst: boolean, closingCommitted: boolean}} order
+   */
+  async function closedBesideAnOpenPage({ journalFirst, closingCommitted }) {
+    const real = new IDBFactory();
+    const p = pageClient({ ledger: createMemoryLedger() });
+    await noteA(p);
+    const base = await baseOf(p);
+    const writer = inContextStores({ indexedDB: real }).journal();
+    await writer.open();
+    await writer.put(leftBy('c-s1', { base, text: 'alpha, first' }));
+    writer.close();
+    // The draft knows c-s1, a save its pane issued since the base, as the editor's draft does
+    const issued = blockDigest({ id: 'a1', type: 'text', content: 'alpha, first', order: 0 }, 'A');
+    const draft = closingDraft({ ...base, issuedSaves: [{ blocks: { a1: issued } }] }, 'alpha, first and more');
+    const storage = legacyEnv.createLocalStorage();
+    storage.setItem('ntn-close-draft:c-closing', JSON.stringify(draft));
+    if (closingCommitted) {
+      assert.equal((await p.kernel.execute(saveOfA('c-closing', 'alpha, first and more'))).kind, 'committed');
+    }
+    const locks = legacyEnv.createLockManager();
+    const forgetCovered = await forgetOf();
+    const stores = inContextStores({ indexedDB: real });
+    const drafts = () =>
+      applyCloseDrafts({
+        client: p.client,
+        store: closeDraftStore(storage),
+        locks,
+        forget: (/** @type {unknown} */ closing) => forgetCovered(closing, stores),
+      });
+    const journal = () =>
+      startPageJournal(p.client, 'page-open', 'newtab', {
+        stores: inContextStores({ indexedDB: real }),
+        locks,
+        storage,
+        runtime: { sendMessage: async () => {} },
+        clock: p.clock,
+      }).applied;
+    let applied;
+    if (journalFirst) {
+      applied = await journal();
+      await drafts();
+    } else {
+      await drafts();
+      applied = await journal();
+    }
+    const [a1] = (await p.blocksOf('A')).filter((/** @type {Row} */ block) => block.id === 'a1');
+    return {
+      a1: a1.content,
+      recovered: (applied?.recovered ?? []).map(made => made.recoveredId),
+      made: (await p.adapter.read(['notes'], tx => tx.get('notes', 'c-s1-recovered'))) !== undefined,
+      left: await opIdsIn(real),
+    };
+  }
+
+  /** What every order below ends with: the closing text in the note, no recovered note, no entry */
+  const closingTextAlone = { a1: 'alpha, first and more', recovered: [], made: false, left: [] };
+
+  it("a page already open when the closing page went leaves the entries its draft names to that draft, so when its journal apply runs before the next start's drafts apply, the older text still makes no recovered note", async () => {
+    assert.deepEqual(await closedBesideAnOpenPage({ journalFirst: true, closingCommitted: true }), closingTextAlone);
+  });
+
+  it("the same close, with the next start's drafts applied before the open page's journal: no recovered note", async () => {
+    assert.deepEqual(await closedBesideAnOpenPage({ journalFirst: false, closingCommitted: true }), closingTextAlone);
+  });
+
+  it("the open page's journal apply first, over a closing save that never committed: the draft goes by the rules, knows the entry's save, and makes no recovered note", async () => {
+    assert.deepEqual(await closedBesideAnOpenPage({ journalFirst: true, closingCommitted: false }), closingTextAlone);
+  });
+
+  it("applies an entry it left for a close-time draft as before once no draft names it, as when that draft is dropped as unreadable, so none waits for good, and holds back no other pane's entry", async () => {
+    const real = new IDBFactory();
+    const p = pageClient();
+    await noteA(p);
+    const base = await baseOf(p);
+    const writer = inContextStores({ indexedDB: real }).journal();
+    await writer.open();
+    await writer.put(leftBy('c-s1', { base, text: 'alpha, first' }));
+    // The same page's other pane on the note, which the draft doesn't name, typed in a2
+    const otherPane = { pane: 'pane-2', seq: 2, base: await baseOf(p, 'a2'), block: 'a2', order: 1, text: 'alpha two, from the other pane' };
+    await writer.put(leftBy('c-other-pane', otherPane));
+    writer.close();
+    const storage = legacyEnv.createLocalStorage();
+    storage.setItem('ntn-close-draft:c-closing', JSON.stringify(closingDraft(base, 'alpha, first and more')));
+    const locks = legacyEnv.createLockManager();
+    /** @param {string} sessionId */
+    const journalOf = sessionId =>
+      startPageJournal(p.client, sessionId, 'newtab', {
+        stores: inContextStores({ indexedDB: real }),
+        locks,
+        storage,
+        runtime: { sendMessage: async () => {} },
+        clock: p.clock,
+      }).applied;
+    /** Note A's blocks' text, by id */
+    const textOf = async () =>
+      Object.fromEntries((await p.blocksOf('A')).map((/** @type {Row} */ block) => [block.id, block.content]));
+    const first = await journalOf('page-open');
+    assert.deepEqual(await opIdsIn(real), ['c-s1'], 'the entry the draft names waits for it');
+    assert.deepEqual(first?.saved, ['A'], "the other pane's entry is applied");
+    assert.deepEqual(await textOf(), { a1: 'alpha', a2: 'alpha two, from the other pane' }, 'a1 waits with its entry');
+    // The draft can't be read now, so the next apply's list drops it, and no draft names the entry
+    storage.setItem('ntn-close-draft:c-closing', '{"v":1,');
+    const next = await journalOf('page-open-2');
+    assert.deepEqual(next?.saved, ['A'], 'the entry is applied as before');
+    assert.deepEqual(await textOf(), { a1: 'alpha, first', a2: 'alpha two, from the other pane' });
+    assert.deepEqual(await opIdsIn(real), []);
+    assert.equal(storage.getItem('ntn-close-draft:c-closing'), null, 'the unreadable draft is gone');
   });
 
   it("leaves the pane's entries for the worker's sweep when the note of a committed close was deleted for good since, as 3b leaves a gone note's entries", async () => {
