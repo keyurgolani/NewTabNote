@@ -238,16 +238,19 @@ class FormattingToolbar {
     let top = rect.top - toolbarHeight - gap + window.scrollY;
     let left = rect.left + (rect.width / 2) + window.scrollX;
 
-    // Ensure toolbar stays within viewport horizontally
+    // It stays 4 px inside its pane's border box and the window, so by a pane's edge it doesn't
+    // cross the other pane or the sidebar (#196). A toolbar whose root is a document has no pane
+    // and keeps to the window. In a pane narrower than itself, it starts 4 px in from the pane's left
     const toolbarWidth = this.el.offsetWidth || 240;
     const halfWidth = toolbarWidth / 2;
     const viewportWidth = this.doc.defaultView.innerWidth;
+    const pane = this.root.nodeType === Node.ELEMENT_NODE ? /** @type {Element} */ (this.root).getBoundingClientRect() : null;
+    const lo = Math.max(pane ? pane.left : 0, 0) + 4 + halfWidth;
+    const hi = Math.min(pane ? pane.right : viewportWidth, viewportWidth) - 4 - halfWidth;
+    left = hi < lo ? lo : Math.min(Math.max(left, lo), hi);
 
-    if (left - halfWidth < 4) left = halfWidth + 4;
-    if (left + halfWidth > viewportWidth - 4) left = viewportWidth - halfWidth - 4;
-
-    // If not enough room above, show below
-    if (top < window.scrollY + 4) {
+    // Below the selection when above would cross the pane's top or the window's
+    if (top < Math.max(pane ? pane.top : 0, 0) + window.scrollY + 4) {
       top = rect.bottom + gap + window.scrollY;
     }
 

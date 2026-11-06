@@ -41,6 +41,12 @@
  * - In focus mode, Escape in the link field or on ✓ closes the field and gives back the selection,
  *   and focus mode stays on. Before, the app's own Escape ran after the field's and turned focus
  *   mode off too. An Escape nothing else takes still turns it off.
+ * - #196: it opens inside its selection's pane, 4 px in from the pane's edges. In split view at
+ *   1440, a word by the divider, on either side, or by the sidebar opens it there. Before, it only
+ *   kept inside the window, so it crossed into the other pane or over the sidebar by about 60 px.
+ *   Where above would cross the pane's top, it opens below, as at the window's top. Before, in
+ *   split view stacked under 1000 px, a word at the top of the lower pane opened it over the upper
+ *   pane.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -100,6 +106,87 @@ const placed = page => page.evaluate(() => {
   const word = getSelection().getRangeAt(0).getBoundingClientRect();
   const box = bars[bars.length - 1].getBoundingClientRect();
   return { gap: Math.round(word.top - box.bottom), offCentre: Math.round(Math.abs((box.left + box.right) / 2 - (word.left + word.right) / 2)) };
+});
+
+// #196's notes for split view, whose right pane takes the older one. Each line starts by its pane's
+// left edge, and WIDE's second block wraps, so its first line ends by the divider
+const RIGHT_NOTE = { name: 'Right pane', blocks: [{ type: 'text', content: 'Right pane, first line' }] };
+const WIDE = { name: 'Wide', blocks: [{ type: 'text', content: 'Start of a line' }, { type: 'text', content: Array.from({ length: 40 }, () => 'word').join(' ') }] };
+const MAIN = '#editor-container';
+const RIGHT = '#secondary-editor-container';
+
+/** A new tab at `width` by 900 on the newer of two notes, the older one in split view's right pane */
+async function splitView(extension, [older, newer], width) {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [older, newer]);
+  const page = await driver.openNewTab(extension);
+  await page.setViewportSize({ width, height: 900 });
+  await expect(page.locator(`${MAIN} .page-title`)).toHaveText(newer.name);
+  await driver.openSplitView(page);
+  await expect(page.locator(`${RIGHT} .page-title`)).toHaveText(older.name);
+  // The workspace and its panes ease their sizes for 0.3 s, so the panes' edges are read once they stop
+  await expect.poll(() => page.evaluate(() => [document.getElementById('workspace-container'), ...document.querySelectorAll('.editor-pane')]
+    .some(el => el.getAnimations().length > 0)), "split view's panes stop moving").toBe(false);
+  return page;
+}
+
+/** The text block at `index` in the pane `pane` */
+const paneBlock = (page, pane, index) => page.locator(`${pane} .blocks-container > .block`).nth(index).locator('.block-content');
+
+/**
+ * Where the toolbar on top sits in the pane `pane`, once it shows over `word` selected there: how
+ * far each of its edges is inside the pane's border box, its gap above or below the word, and the
+ * word's top in the pane
+ */
+async function inPane(page, pane, word) {
+  await expect.poll(() => page.evaluate(() => getSelection().toString()), `${word} is selected`).toBe(word);
+  await expect(page.locator('.formatting-toolbar.visible')).toHaveCount(1);
+  // The selection's last selectionchange places the toolbar, and can come after the last key
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 50))));
+  return page.evaluate((selector) => {
+    const box = document.querySelector(selector).getBoundingClientRect();
+    const bar = document.querySelector('.formatting-toolbar.visible').getBoundingClientRect();
+    const range = getSelection().getRangeAt(0).getBoundingClientRect();
+    return {
+      left: Math.round(bar.left - box.left),
+      right: Math.round(box.right - bar.right),
+      top: Math.round(bar.top - box.top),
+      above: Math.round(range.top - bar.bottom),
+      below: Math.round(bar.top - range.bottom),
+      wordTop: Math.round(range.top - box.top),
+    };
+  }, pane);
+}
+
+/** Select the first `length` characters of the pane's block at `index`, from the keyboard */
+async function selectStartIn(page, pane, index, length) {
+  await paneBlock(page, pane, index).click();
+  await page.keyboard.press('Home');
+  for (let i = 0; i < length; i++) await page.keyboard.press('Shift+ArrowRight');
+}
+
+/**
+ * Select the last word of the first line of the pane's block at `index`, where the block wraps, in
+ * one go as a double-click does. Answers the word.
+ */
+const selectEndOfFirstLine = (page, pane, index) => paneBlock(page, pane, index).evaluate((el) => {
+  el.focus({ preventScroll: true });
+  const node = el.firstChild;
+  const range = document.createRange();
+  const topAt = (i) => {
+    range.setStart(node, i);
+    range.setEnd(node, i + 1);
+    return Math.round(range.getBoundingClientRect().top);
+  };
+  // The second line's first character, then back over the space the line breaks at, and the word
+  const first = topAt(0);
+  let end = 0;
+  while (end < node.length && topAt(end) <= first) end++;
+  while (end > 0 && node.data[end - 1] === ' ') end--;
+  let start = end;
+  while (start > 0 && node.data[start - 1] !== ' ') start--;
+  getSelection().setBaseAndExtent(node, start, node, end);
+  return node.data.slice(start, end);
 });
 
 /** The links in the block at `index`, each as its href and its text */
@@ -270,16 +357,18 @@ test("after Link, a selection of another word in the same pane closes the link f
   const page = await driver.openNewTab(extension);
   await page.setViewportSize({ width: 1440, height: 900 });
   // For the main pane's toolbar and the right pane's: whether it shows, whether its link field is
-  // open, and how far its centre is off the selection's, to the pixel
+  // open, and where it is by the selection: its gap above it, and whether it spans the selection's
+  // centre. By the divider the right pane's keeps inside its pane rather than centring there (#196)
   const read = () => page.evaluate(() => {
     const sel = getSelection();
     const word = sel.rangeCount > 0 ? sel.getRangeAt(0).getBoundingClientRect() : null;
     return [app.editor, app.secondaryEditor].map(({ formattingToolbar: bar }) => {
       const box = bar.el.getBoundingClientRect();
+      const centre = word ? (word.left + word.right) / 2 : null;
       return {
         shows: bar.el.classList.contains('visible'),
         linkField: getComputedStyle(bar.linkInput).display !== 'none',
-        offCentre: word ? Math.round(Math.abs((box.left + box.right) / 2 - (word.left + word.right) / 2)) : null,
+        over: word ? { gap: Math.round(word.top - box.bottom), spans: box.left <= centre && centre <= box.right } : null,
       };
     });
   });
@@ -303,7 +392,7 @@ test("after Link, a selection of another word in the same pane closes the link f
     await page.mouse.dblclick(at.x, at.y);
     await expect.poll(async () => (await read()).map(bar => bar.linkField), 'the link field closes').toEqual([false, false]);
     await expect.poll(async () => (await read()).map(bar => bar.shows), "that pane's toolbar alone").toEqual(own === 0 ? [true, false] : [false, true]);
-    await expect.poll(async () => (await read())[own].offCentre, 'over the new word').toBe(0);
+    await expect.poll(async () => (await read())[own].over, 'over the new word').toEqual({ gap: 8, spans: true });
   };
 
   await linkThenWord('#editor-container', 0);
@@ -622,5 +711,53 @@ test("a selected word still opens it 8 px above the word, centred on it, and Bol
   await selectStart(page, 1, 'A second'.length);
   await page.keyboard.press('ControlOrMeta+b');
   await expect(blockContent(page, 1)).toHaveJSProperty('innerHTML', '<b>A second</b> line');
+  await expectNoUncaught(extension, page);
+});
+
+test("in split view, a word by a pane's edge opens the toolbar inside that pane, 4 px in from its edges: by the divider on either side, and by the sidebar", async ({ extension }) => {
+  test.setTimeout(60_000);
+  const page = await splitView(extension, [RIGHT_NOTE, WIDE], 1440);
+  // The sidebar is open, so the main pane's left edge is the sidebar's
+  await expect(page.locator('#sidebar')).not.toHaveClass(/\bcollapsed\b/);
+
+  // The first word of the right pane's line, by the divider
+  await selectStartIn(page, RIGHT, 0, 'Right'.length);
+  const right = await inPane(page, RIGHT, 'Right');
+  expect.soft(right.left, "the right pane's first word: the toolbar's left, inside the pane").toBeGreaterThanOrEqual(4);
+  expect.soft(right.above, "the right pane's first word: the toolbar, 8 px above it").toBe(8);
+
+  // The first word of the main pane's line, by the sidebar
+  await selectStartIn(page, MAIN, 0, 'Start'.length);
+  const first = await inPane(page, MAIN, 'Start');
+  expect.soft(first.left, "the main pane's first word: the toolbar's left, inside the pane").toBeGreaterThanOrEqual(4);
+  expect.soft(first.above, "the main pane's first word: the toolbar, 8 px above it").toBe(8);
+
+  // The last word of the main pane's first full line, by the divider
+  const last = await inPane(page, MAIN, await selectEndOfFirstLine(page, MAIN, 1));
+  expect.soft(last.right, "the main pane's last word: the toolbar's right, inside the pane").toBeGreaterThanOrEqual(4);
+  expect.soft(last.above, "the main pane's last word: the toolbar, 8 px above it").toBe(8);
+  await expectNoUncaught(extension, page);
+});
+
+test("where above a word would cross its pane's top, the toolbar opens below it: in split view stacked under 1000 px, at the top of the lower pane", async ({ extension }) => {
+  test.setTimeout(60_000);
+  const page = await splitView(extension, [MANY, NOTE], 960);
+  const [main, right] = await Promise.all([MAIN, RIGHT].map(pane => page.locator(pane).boundingBox()));
+  expect(right.y, 'the right pane is under the main one').toBeGreaterThanOrEqual(main.y + main.height - 1);
+
+  // A line of the lower pane scrolled to 12 px under its top, so a toolbar above it, 44 px with
+  // its gap, would reach into the upper pane
+  await paneBlock(page, RIGHT, 6).evaluate((el) => {
+    const pane = el.closest('.editor-pane');
+    pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top - 12;
+  });
+  await paneBlock(page, RIGHT, 6).evaluate((el) => {
+    el.focus({ preventScroll: true });
+    getSelection().setBaseAndExtent(el.firstChild, 0, el.firstChild, 'Line'.length);
+  });
+  const placed = await inPane(page, RIGHT, 'Line');
+  expect(placed.wordTop, "the word stays by the lower pane's top").toBeLessThan(44);
+  expect.soft(placed.top, "the toolbar's top, inside the lower pane").toBeGreaterThanOrEqual(4);
+  expect.soft(placed.below, 'the toolbar, 8 px below the word').toBe(8);
   await expectNoUncaught(extension, page);
 });

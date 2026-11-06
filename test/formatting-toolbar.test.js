@@ -70,4 +70,16 @@ describe("the formatting toolbar's pane (#14)", () => {
     select('secondary-editor-container');
     assert.equal(toolbar.visible, false, 'it hides for one in the other pane');
   });
+
+  it('in a pane narrower than itself, it starts 4 px in from the pane\'s left (#196)', () => {
+    const { doc, panes, FormattingToolbar, select } = page();
+    const { pane } = panes['editor-container'];
+    // 200 px wide from 100 px in. The selection's box is at 300 to 340, and with no layout here the
+    // toolbar is its 240 px fallback, placed by its centre
+    pane.nodeType = 1;
+    pane.getBoundingClientRect = () => ({ left: 100, right: 300, top: 0, bottom: 900, width: 200, height: 900 });
+    const toolbar = new FormattingToolbar({ doc, root: pane });
+    select('editor-container');
+    assert.equal(toolbar.el.style.left, `${100 + 4 + 120}px`, "its left is 4 px past the pane's");
+  });
 });
