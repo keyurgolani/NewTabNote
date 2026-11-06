@@ -18,7 +18,8 @@
  * got, run its use case, commit, and publish what changed. Once the kernel is ready nothing
  * before the commit is awaited, so saveNoteContent opens its transaction in the task that
  * calls it. Whatever a policy, a use case, an adapter, a listener, or the logger does,
- * execute() answers with an outcome.
+ * execute() answers with an outcome. A command the coordinator's queue runs carries its turn's
+ * `live` (#35 slice 4b-1), and commits nothing once the queue has cut that turn.
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
@@ -78,6 +79,12 @@ import { createCommitFeed } from './feed.js';
 export const NOT_REGISTERED = 'not-registered';
 
 /**
+ * The code a command answers, `unavailable` and retryable, when the coordinator's queue cut its turn
+ * before it committed (#35 slice 4b-1): nothing of it landed, so it can be sent again
+ */
+export const TURN_EXCEEDED = 'turn-exceeded';
+
+/**
  * @typedef {object} KernelOptions
  * @property {KernelAdapter} adapter
  * @property {PolicyPort} policy
@@ -104,14 +111,20 @@ export const NOT_REGISTERED = 'not-registered';
  */
 
 /**
+ * How a command runs (#35 slice 4b-1). `live` is what the coordinator's queue gives each turn: it
+ * answers false once the queue has cut that turn, and the command commits nothing from then on.
+ * @typedef {{live?: () => boolean}} ExecuteOptions
+ */
+
+/**
  * What execute() answers. A bulk command that ran answers with a BulkOutcome, and one that
  * didn't (the policy refused it, its action was unknown, storage failed to open, or #13 lost
  * the reply) with a plain Outcome. Every other command answers with an Outcome.
  * @typedef {object} Execute
  * @property {{
- *   (command: RunBulkAction): Promise<BulkOutcome | Outcome>,
- *   (command: Exclude<Command, RunBulkAction>): Promise<Outcome>,
- *   (command: Command): Promise<BulkOutcome | Outcome>,
+ *   (command: RunBulkAction, options?: ExecuteOptions): Promise<BulkOutcome | Outcome>,
+ *   (command: Exclude<Command, RunBulkAction>, options?: ExecuteOptions): Promise<Outcome>,
+ *   (command: Command, options?: ExecuteOptions): Promise<BulkOutcome | Outcome>,
  * }} execute
  */
 
@@ -283,14 +296,22 @@ export function createKernel({
   };
 
   /**
-   * A use case's work committed, or the outcome it answered with itself.
+   * A use case's work committed, or the outcome it answered with itself. When the command's turn on
+   * the coordinator's queue gave a `live`, it's checked right before the adapter's commit (#35 slice
+   * 4b-1): once the queue has cut the turn, nothing commits, so a command the queue gave up on never
+   * lands after a later one. A commit already inside the adapter ends on its own, since an IndexedDB
+   * transaction can't be held open across anything else.
    * @param {UseCaseResult} result
+   * @param {(() => boolean) | null} live
    * @returns {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>}
    */
-  const commitResult = result =>
-    isWork(result)
-      ? Promise.resolve(adapter.commit(result)).then(commitResultOf)
-      : Promise.resolve({ outcome: result, replayed: false });
+  const commitResult = (result, live) => {
+    if (!isWork(result)) return Promise.resolve({ outcome: result, replayed: false });
+    if (live && live() !== true) {
+      return Promise.resolve({ outcome: unavailable('coordinator', TURN_EXCEEDED, true), replayed: false });
+    }
+    return Promise.resolve(adapter.commit(result)).then(commitResultOf);
+  };
 
   /**
    * Reports a command or query the policy allowed that this context's table doesn't hold, a
@@ -310,11 +331,14 @@ export function createKernel({
   };
 
   /**
-   * Runs a command the caller can no longer change.
+   * Runs a command the caller can no longer change, its commit fenced by `live` when its turn on the
+   * coordinator's queue gave one. A bulk command's items run through `context.run`, unfenced: no bulk
+   * command is sent on the queue yet, and the slice that sends the first fences them too
    * @param {unknown} copy
+   * @param {(() => boolean) | null} [live]
    * @returns {Promise<Outcome | BulkOutcome>}
    */
-  function dispatch(copy) {
+  function dispatch(copy, live = null) {
     if (!isRecord(copy)) return Promise.resolve(rejected('validation', 'invalid-command'));
     if (!isCommandType(copy.type)) return Promise.resolve(rejected('policy', 'unknown-command'));
     const decision = decide(copy);
@@ -348,7 +372,9 @@ export function createKernel({
         return Promise.resolve(remembered);
       }
       const result = handler(command, context);
-      pending = isThenable(result) ? Promise.resolve(result).then(commitResult) : commitResult(result);
+      pending = isThenable(result)
+        ? Promise.resolve(result).then(done => commitResult(done, live))
+        : commitResult(result, live);
     } catch (error) {
       pending = Promise.reject(error);
     }
@@ -375,23 +401,27 @@ export function createKernel({
   /**
    * @overload
    * @param {RunBulkAction} command
+   * @param {ExecuteOptions} [options]
    * @returns {Promise<BulkOutcome | Outcome>}
    */
   /**
    * @overload
    * @param {Exclude<Command, RunBulkAction>} command
+   * @param {ExecuteOptions} [options]
    * @returns {Promise<Outcome>}
    */
   /**
    * @overload
    * @param {Command} command
+   * @param {ExecuteOptions} [options]
    * @returns {Promise<BulkOutcome | Outcome>}
    */
   /**
    * @param {unknown} input
+   * @param {ExecuteOptions} [options]
    * @returns {Promise<Outcome | BulkOutcome>}
    */
-  function execute(input) {
+  function execute(input, options) {
     // The copy is taken now, so what the caller changes later can't reach the command, even
     // while it waits for storage to open
     /** @type {unknown} */
@@ -401,7 +431,10 @@ export function createKernel({
     } catch {
       return Promise.resolve(rejected('validation', 'not-cloneable'));
     }
-    return whenOpen(() => dispatch(copy));
+    // A live() that isn't a function throws where the commit calls it, so the command answers
+    // unavailable and commits nothing
+    const live = options?.live || null;
+    return whenOpen(() => dispatch(copy, live));
   }
 
   /**

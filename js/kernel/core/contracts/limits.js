@@ -37,6 +37,15 @@ export const QUERY_DEADLINE_MS = 15_000;
 export const MAINTENANCE_DEADLINE_MS = 120_000;
 
 /**
+ * How long one turn on the coordinator's queue may run, from the turn's start, not its request's,
+ * before the queue cuts it and starts the next (#35 slice 4b-1): four command deadlines. The
+ * integrity check, the longest thing the worker runs, is off the queue, and every caller of a turn
+ * this long has had its answer from its own client for at least 89 s, since a client gives up
+ * 31 s after it sends, and a turn starts no earlier than its send.
+ */
+export const TURN_LIMIT_MS = 120_000;
+
+/**
  * How long past a request's deadline a client waits for its answer before it gives up. The
  * router answers at the deadline itself, so this only covers the answer's way back, and no
  * client timeout is shorter than the deadline.

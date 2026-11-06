@@ -8,11 +8,13 @@
  *
  * No string here is free: a record id has a UUID's or a legacy id's shape (whose suffix can
  * still spell a short word), and a provider, a remediation, a subject that isn't a record, and
- * every code, reason, exception, and capability is one codes.js lists. So no title, key, host, or message fits in
- * any field. A field outside this list, or a value its schema refuses, is refused whole.
+ * every code, reason, exception, and capability is one codes.js lists, as a command's type is one
+ * the worker's catalog holds (command-names.js). So no title, key, host, or message fits in any
+ * field. A field outside this list, or a value its schema refuses, is refused whole.
  */
 
 import * as v from '../../lib/valibot/index.mjs';
+import { COMMAND_NAMES } from '../../kernel/core/contracts/command-names.js';
 import { commitSeq, count, revision, timestamp } from '../../kernel/core/contracts/fields.js';
 import { FAIL_CAUSES } from '../../kernel/core/contracts/outcomes.js';
 import { SURFACES } from '../../kernel/core/contracts/surfaces.js';
@@ -124,6 +126,8 @@ export const EVIDENCE_FIELDS = Object.freeze({
   surface: v.picklist(SURFACES),
   trigger: v.picklist(TRIGGERS),
   costClass: v.picklist(COST_CLASSES),
+  // A command's type, a name the worker's catalog holds, never what it carries (#35 slice 4b-1)
+  commandType: v.picklist(COMMAND_NAMES),
   retryable: v.boolean(),
   // Counts and sizes
   count,
