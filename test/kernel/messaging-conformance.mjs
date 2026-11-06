@@ -1,7 +1,8 @@
 // #13's transport conformance suite (AC2): one set of tests every transport passes, through one
 // JSON codec, with a client on one side and the router on the other: correlation, deadlines,
 // cancellation with too-late, typed errors, the compatibility handshake, round-trip fidelity,
-// a coordinator that goes away, and the sessions the router's hooks hear of. The in-process
+// a coordinator that goes away, the sessions the router's hooks hear of, and a frame that reaches
+// the router after its deadline, on a link that holds it (#35 slice 4b-1, T6). The in-process
 // transport runs it in conformance-in-process.test.mjs, and the runtime port on the Chrome
 // fake in conformance-runtime-port.test.mjs. Streams with backpressure, and MessagePorts, join
 // it with streams (slice 4).
@@ -19,7 +20,7 @@ import {
   PROTOCOL_VERSION,
   QUERY_DEADLINE_MS,
 } from '../../js/kernel/core/contracts/limits.js';
-import { committed, failed, ready, rejected, unknown } from '../../js/kernel/core/contracts/outcomes.js';
+import { committed, failed, ready, rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
 import { createLookup, operationOf } from '../../js/kernel/core/messaging/operations.js';
@@ -109,6 +110,46 @@ function kernelHandlers(kernel) {
     ]),
     ...QUERY_TYPES.map(type => [type, /** @type {Handler} */ (payload => kernel.query(/** @type {any} */ (payload)))]),
   ]);
+}
+
+/**
+ * `transport`, with each frame its client sends held on the way while the test holds them, until
+ * the test lets the oldest go (#35 slice 4b-1, T6): a link that delays, as a port to a busy worker
+ * can, so a frame reaches the router later than it was sent
+ * @param {Transport} transport
+ */
+function heldTransport(transport) {
+  let holding = false;
+  /** @type {Array<() => void>} */
+  const held = [];
+  return {
+    transport: /** @type {Transport} */ ({
+      connect() {
+        const link = transport.connect();
+        return {
+          send: (/** @type {string} */ text) => {
+            if (holding) held.push(() => link.send(text));
+            else link.send(text);
+          },
+          onMessage: (/** @type {(text: string) => void} */ listener) => link.onMessage(listener),
+          onClose: (/** @type {(reason: import('../../js/kernel/core/messaging/link.js').CloseReason) => void} */ listener) =>
+            link.onClose(listener),
+          close: () => link.close(),
+        };
+      },
+    }),
+    /** Holds each frame sent from now on */
+    hold() {
+      holding = true;
+    },
+    /** How many frames it holds */
+    waiting: () => held.length,
+    /** Lets the oldest frame it holds go on */
+    release() {
+      const next = held.shift();
+      if (next) next();
+    },
+  };
 }
 
 /** A kernel over its own memory store, on `clock`, as the new tab's */
@@ -234,6 +275,47 @@ export function describeConformance(name, connect) {
       assert.equal(answers.length, 1);
       await scheduler.advance(1);
       assert.deepEqual(answers[1], unknown('deadline-exceeded', 'c1'));
+    });
+
+    it("refuses a query and a command whose frames reach it after their deadline: neither handler runs, and the client answers each as the router refused it (#35 slice 4b-1, T6)", async () => {
+      /** @type {string[]} */
+      const ran = [];
+      const { client, scheduler, harness } = await start({
+        getNote: payload => {
+          ran.push(`getNote ${/** @type {any} */ (payload).noteId}`);
+          return ready(NOW, { note: { id: /** @type {any} */ (payload).noteId } });
+        },
+        setPinned: (payload, context) => {
+          ran.push('setPinned');
+          return context.begin() ? committed('note-pinned', ['n1']) : rejected('validation', 'cancelled');
+        },
+      });
+      const gate = heldTransport(harness.transport('newtab'));
+      const remote = client('newtab', { transport: gate.transport });
+      // Welcomed first, with nothing held
+      assert.equal((await remote.query({ type: 'getNote', noteId: 'n0' })).kind, 'ready');
+      gate.hold();
+      /** @type {unknown[]} */
+      const answers = [];
+      void remote.query({ type: 'getNote', noteId: 'n1' }).then(answer => answers.push(answer));
+      void remote
+        .execute({ type: 'setPinned', commandId: 'c1', noteId: 'n1', pinned: true })
+        .then(answer => answers.push(answer));
+      await settle();
+      assert.equal(gate.waiting(), 2, 'both frames held on their way');
+      // Each reaches the router past its deadline, and before the client gives up on it
+      await scheduler.advance(QUERY_DEADLINE_MS + DEADLINE_GRACE_MS / 2);
+      gate.release();
+      await settle();
+      assert.deepEqual(answers, [failed('coordinator', 'deadline-exceeded')]);
+      await scheduler.advance(COMMAND_DEADLINE_MS - QUERY_DEADLINE_MS);
+      gate.release();
+      await settle();
+      assert.deepEqual(answers, [
+        failed('coordinator', 'deadline-exceeded'),
+        unavailable('coordinator', 'deadline-exceeded', true),
+      ]);
+      assert.deepEqual(ran, ['getNote n0'], 'neither late frame ran');
     });
 
     it('cancels a query and a command that has not begun, and answers too-late with the outcome once one has', async () => {
