@@ -31,10 +31,10 @@ import {
   SCHEMA_KEY,
   legacySchema,
   schemaAt,
-} from './registry.js';
+} from './registry-names.js';
 
-/** @typedef {import('./registry.js').StoreShape} StoreShape */
-/** @typedef {import('./registry.js').IndexShape} IndexShape */
+/** @typedef {import('./registry-names.js').StoreShape} StoreShape */
+/** @typedef {import('./registry-names.js').IndexShape} IndexShape */
 
 /**
  * A receipt (migrate.js), as `migrations` holds it: ids, versions, times, and a failure code,

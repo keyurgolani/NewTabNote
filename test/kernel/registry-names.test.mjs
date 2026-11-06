@@ -6,7 +6,19 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { LATEST_STRUCTURAL, STRUCTURAL_VERSIONS } from '../../js/kernel/adapters/indexeddb/registry-names.js';
+import {
+  CHANGES_STORE,
+  CONFLICTS_STORE,
+  DAILY_INDEX_STORE,
+  LATEST_STRUCTURAL,
+  LEGACY_STORE_NAMES,
+  META_STORE,
+  MIGRATIONS_STORE,
+  OPERATIONS_STORE,
+  STRUCTURAL_VERSIONS,
+  TOMBSTONES_STORE,
+  schemaAt,
+} from '../../js/kernel/adapters/indexeddb/registry-names.js';
 import { STEPS } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 
@@ -17,4 +29,21 @@ it("names each structural version the registry's steps leave, in order, and the 
   );
   assert.equal(LATEST_STRUCTURAL, Math.max(8, ...STEPS.map(step => step.to)));
   assert.equal(LATEST_STRUCTURAL, DB_VERSION);
+});
+
+it('schemaAt(11) lists the ten legacy stores and the seven later ones, by their names', () => {
+  assert.deepEqual(
+    Object.keys(/** @type {Record<string, unknown>} */ (schemaAt(11))).sort(),
+    [
+      ...LEGACY_STORE_NAMES,
+      META_STORE,
+      MIGRATIONS_STORE,
+      OPERATIONS_STORE,
+      CHANGES_STORE,
+      CONFLICTS_STORE,
+      TOMBSTONES_STORE,
+      DAILY_INDEX_STORE,
+    ].sort(),
+  );
+  assert.equal(LEGACY_STORE_NAMES.length, 10);
 });

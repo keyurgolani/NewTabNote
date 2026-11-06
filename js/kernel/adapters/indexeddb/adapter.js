@@ -108,6 +108,7 @@ import {
   META_STORE,
   OPERATIONS_STORE,
   TOMBSTONES_STORE,
+  pendingStructural,
 } from './registry.js';
 import { abort, endOf, indexValue, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
@@ -543,6 +544,9 @@ export function createIndexedDbAdapter({
     requireCore,
     awaitUpgrade,
     beforeOpen: copiesMissingStores ? () => copyMissingStores({ indexedDB, settings, clock, locks }) : null,
+    // The registry's steps, which make a new database in a versioned open: only this adapter
+    // hands them in (#35 slice 4b-0)
+    steps: pendingStructural,
   });
   const database = () => connection.database();
 

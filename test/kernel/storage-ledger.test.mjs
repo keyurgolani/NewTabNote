@@ -14,6 +14,7 @@ import {
   SWEPT_KEY,
   sweepLedger,
 } from '../../js/kernel/adapters/indexeddb/ledger-sweep.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { result } from '../../js/kernel/adapters/indexeddb/requests.js';
 import { isId } from '../../js/kernel/core/contracts/checks.js';
 import { UnavailableError, committed } from '../../js/kernel/core/contracts/outcomes.js';
@@ -26,12 +27,13 @@ import { NOW } from './support.mjs';
 /** @typedef {import('./storage-fixture.mjs').Profile} Profile */
 
 /**
- * A profile's database at this build's version, opened as the worker opens it
+ * A profile's database at this build's version, opened as the worker opens it, with the
+ * registry's steps #17's adapter hands in
  * @returns {Promise<{of: Profile, database: () => IDBDatabase, close: () => void}>}
  */
 async function opened() {
   const of = profile();
-  const connection = createConnection({ indexedDB: of.faults.factory, mode: 'versioned' });
+  const connection = createConnection({ indexedDB: of.faults.factory, mode: 'versioned', steps: pendingStructural });
   await connection.open();
   return { of, database: () => connection.database(), close: () => connection.close() };
 }
