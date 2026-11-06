@@ -10,7 +10,7 @@
  *   padding, corners, alignment and line height. Its icon sits on the item's centre line, in the
  *   item's color.
  * - In the insights' action list, an item keeps its card: the secondary background, its padding
- *   and its 6 px corners, with its icon in the accent color, 2 px down.
+ *   and its 6 px corners, with its icon 2 px down.
  * Each test also fails on an uncaught exception that test/known-defects.json doesn't list.
  */
 
