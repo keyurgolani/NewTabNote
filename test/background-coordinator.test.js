@@ -977,6 +977,36 @@ describe("a turn the coordinator's queue cuts, through the worker (#35 slice 4b-
     assert.deepEqual(plain(worker.env.global.liveSeen), ['function', 'function'], "the turn's live went with each attempt");
     assert.deepEqual(await dailyUrls(worker), [worker.tab.url], 'the second attempt saved it');
   });
+
+  it("says Not captured at 240 s for a capture with no entry whose rerun is cut, and its capture.failed evidence names turn-exceeded (#224's review, F1)", async () => {
+    // The journal can't open, so the capture has no entry, and the kernel's capture waits 130 s
+    // before its work. The worker's client gives up on it at 31 s, so it runs again on the queue
+    // with no client deadline, behind its own first turn. The queue cuts that turn at 120 s, the
+    // rerun's turn starts then, and the queue cuts it at 240 s, so the capture answers the cut.
+    // The fake clock runs what a timer starts once its tick ends, so a tick ends at the first cut.
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env), rewrite: slowCapture(130_000) });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    const titles = () => plain(worker.env.chrome.notifications).map((shown) => shown.title);
+    for (const step of [31_000, 89_000, 119_000]) {
+      worker.env.clock.tick(step);
+      await worker.drain();
+    }
+    assert.deepEqual(titles(), [], 'nothing is said while the rerun waits and runs');
+    worker.env.clock.tick(1_000);
+    await worker.drain();
+    assert.deepEqual(titles(), ['Not captured'], "the rerun's cut says Not captured");
+    const { fields } = await trustOf(worker.indexedDB);
+    const failed = fields.filter(([code]) => code === 'capture.failed').map(([, journaled]) => journaled);
+    assert.equal(failed.length, 1, JSON.stringify(failed));
+    const { commandId, ...evidence } = failed[0];
+    assert.equal(typeof commandId, 'string');
+    assert.deepEqual(
+      evidence,
+      { cause: 'coordinator', errorCode: 'turn-exceeded', retryable: true, surface: 'worker-internal' },
+      'its evidence says the turn limit was why',
+    );
+  });
 });
 
 describe("an older build's page that keeps the upgrade blocked (#17 PR 1b)", () => {
