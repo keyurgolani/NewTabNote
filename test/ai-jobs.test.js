@@ -770,6 +770,24 @@ describe('a committed title or insights show in every open editor that holds the
     assert.deepEqual([meanwhile, [placeholders(right), placeholders(popOut)], sectionsOfB(main)], [[1, 1], [0, 0], [true]]);
     assert.ok(toasts.some((toast) => toast.kind === 'error' && /HTTP 401/.test(toast.message)), 'the error shows in a toast');
   });
+
+  it('when the provider fails, each editor takes only its own pane\'s "Extracting..." away, and another note\'s stays', async () => {
+    const { env } = await setup({ notes: NOTES_A_B });
+    const [main, right] = panedEditors(env, 2);
+    await drive(env, main.loadNote('B'));
+    await drive(env, right.loadNote('A'));
+    // B's own extraction shows "Extracting..." in the main pane, first in the document, as the editor draws it
+    const elsewhere = env.document.createElement('div');
+    elsewhere.id = 'note-insights';
+    elsewhere.className = 'note-insights insights-loading';
+    main.titleEl.after(elsewhere);
+    const tabs = [{ noteId: 'B', name: 'Note B' }, { noteId: 'A', name: 'Note A' }];
+    const ai = { ...heldAI().port, extractInsights: async () => { throw new Error('HTTP 401'); } };
+    const manager = notesManager(env, { ai, editor: right, tabs, bar: tabBar(env, tabs, [main, right]) });
+    await drive(env, manager.extractInsightsForNote('A'));
+    // [the main pane's placeholders, B's; the right pane's]
+    assert.deepEqual([placeholders(main), placeholders(right)], [1, 0]);
+  });
 });
 
 describe("the sidebar lists a committed title (review F1, as 4b1's save showed it)", () => {
