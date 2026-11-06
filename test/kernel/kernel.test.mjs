@@ -1,6 +1,7 @@
 // The kernel's dispatcher: the policy before any adapter call, for every command and query
 // in the catalog, the worker's part with it; saveNoteContent's transaction opening in the
-// calling task; deferred init; and the logger never hearing a payload.
+// calling task; deferred init; the logger never hearing a payload; and the fence a turn the
+// coordinator's queue cut puts before the commit (#35 slice 4b-1).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,8 +9,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createKernel } from './test-kernel.mjs';
+import { ALL_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
+import { handlerTable } from '../../js/kernel/core/application/handlers.js';
 import { UnavailableError, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import {
+  WORKER_CATALOG,
   WORKER_COMMANDS as COMMANDS,
   WORKER_COMMAND_TYPES as COMMAND_TYPES,
   WORKER_QUERY_TYPES as QUERY_TYPES,
@@ -458,6 +462,55 @@ describe('the kernel', () => {
         JSON.stringify(outcome),
       );
     }
+  });
+
+  it("commits nothing once its turn's live() answers false, and answers unavailable, retryable, turn-exceeded (#35 slice 4b-1, F4)", async () => {
+    /** @type {() => void} */
+    let settle = () => {};
+    const held = new Promise(resolve => {
+      settle = () => resolve(undefined);
+    });
+    const createNote = /** @type {(command: any, context: any) => any} */ (ALL_HANDLERS.commands.createNote);
+    const handlers = handlerTable(
+      {
+        commands: {
+          ...ALL_HANDLERS.commands,
+          // A use case that awaits before its work, as one waiting on a lock another context holds
+          createNote: async (/** @type {any} */ command, /** @type {any} */ context) => {
+            await held;
+            return createNote(command, context);
+          },
+        },
+        queries: ALL_HANDLERS.queries,
+        refusals: ALL_HANDLERS.refusals,
+      },
+      WORKER_CATALOG,
+    );
+    /** @type {string[]} */
+    const log = [];
+    const kernel = createKernel({
+      adapter: spyAdapter(createMemoryAdapter(), log),
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+      handlers,
+    });
+    let live = true;
+    const cut = kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' }, { live: () => live });
+    // The queue cuts the turn while the use case waits, and the use case settles after the cut
+    live = false;
+    settle();
+    const answer = await cut;
+    assert.equal((await kernel.query({ type: 'getNote', noteId: 'n1' })).kind, 'empty', 'the store holds no note');
+    assert.deepEqual(
+      log.filter(entry => entry.startsWith('commit')),
+      [],
+      'nothing reached the commit',
+    );
+    assert.deepEqual(answer, unavailable('coordinator', 'turn-exceeded', true));
+    // While the turn is live, the same command commits
+    assert.equal((await kernel.execute({ type: 'createNote', commandId: 'c2', noteId: 'n2' }, { live: () => true })).kind, 'committed');
   });
 
   it('emits no note:saved event anywhere in js/kernel/', () => {

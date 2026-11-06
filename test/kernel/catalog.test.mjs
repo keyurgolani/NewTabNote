@@ -276,6 +276,29 @@ describe('the catalog (#13, "Desired behavior")', () => {
     }
   });
 
+  it("lists every command name the worker's catalog holds in command-names.js, and nothing else, with neither catalog imported (#35 slice 4b-1)", async () => {
+    // Imported here, so the file's other cases run on a build without the module
+    const { COMMAND_NAMES } = await import('../../js/kernel/core/contracts/command-names.js');
+    const listed = new Set(COMMAND_NAMES);
+    assert.equal(listed.size, COMMAND_NAMES.length, 'each name once');
+    assert.deepEqual(
+      WORKER_COMMAND_TYPES.filter(type => !listed.has(type)),
+      [],
+      "a command the worker's catalog holds is missing from the list",
+    );
+    assert.deepEqual(
+      COMMAND_NAMES.filter(name => !Object.hasOwn(WORKER_COMMANDS, name)),
+      [],
+      "the list names a command the worker's catalog doesn't hold",
+    );
+    assert.ok(Object.isFrozen(COMMAND_NAMES));
+    // A literal list: what reads it loads no catalog, and no schema
+    const graph = [...importGraph(path.join(CONTRACTS_DIR, 'command-names.js'))].map(full =>
+      path.relative(CONTRACTS_DIR, full),
+    );
+    assert.deepEqual(graph, ['command-names.js']);
+  });
+
   it("composes each shared entry as it is, but a grant's, which adds worker-internal and changes nothing else", () => {
     assert.deepEqual(Object.keys(WORKER_GRANTS).sort(), ['createNote', 'insertBlocks', 'runStartupMaintenance']);
     for (const type of COMMAND_TYPES) {
@@ -576,6 +599,40 @@ describe('schema modules (#13, AC1)', () => {
       { total: 1, notes: notes.slice(0, 1), text: 'Call the plumber' },
     ]) {
       assert.equal(parses({ ...health, held }), false, JSON.stringify(held));
+    }
+  });
+
+  it("system.coordinatorHealth may say which command holds the queue, by its type's name, when its turn began and how many wait behind it, and how many turns the queue cut, and an answer without them, as an older worker's, still parses (#35 slice 4b-1)", () => {
+    const health = {
+      status: 'ready',
+      coordinatorId: 'c1',
+      startedAt: NOW,
+      commands: [],
+      oldestOrphanedEntryAt: null,
+      migration: null,
+    };
+    const { result } = moduleOf('system.coordinatorHealth');
+    /** @param {unknown} data */
+    const parses = data => v.safeParse(result, { kind: 'ready', asOf: NOW, data }).success;
+    assert.equal(parses(health), true, "an older worker's answer");
+    const running = { type: 'captureToDailyNote', since: NOW, waiting: 2 };
+    assert.equal(parses({ ...health, running }), true);
+    assert.equal(parses({ ...health, running: { ...running, type: 'createNote', waiting: 0 } }), true);
+    assert.equal(parses({ ...health, cutTurns: 3 }), true);
+    assert.equal(parses({ ...health, running, cutTurns: 1 }), true);
+    for (const data of [
+      { ...health, running: { ...running, type: 'notACommand' } },
+      { ...health, running: { ...running, type: 'Call the plumber' } },
+      { ...health, running: { type: 'createNote', since: NOW } },
+      { ...health, running: { ...running, since: 'just now' } },
+      { ...health, running: { ...running, waiting: -1 } },
+      // Never what a command carries
+      { ...health, running: { ...running, noteId: 'n1' } },
+      { ...health, running: { ...running, payload: { name: 'Call the plumber' } } },
+      { ...health, cutTurns: -1 },
+      { ...health, cutTurns: 1.5 },
+    ]) {
+      assert.equal(parses(data), false, JSON.stringify(data));
     }
   });
 
