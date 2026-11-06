@@ -39,9 +39,11 @@ export const MAINTENANCE_DEADLINE_MS = 120_000;
 /**
  * How long one turn on the coordinator's queue may run, from the turn's start, not its request's,
  * before the queue cuts it and starts the next (#35 slice 4b-1): four command deadlines. The
- * integrity check, the longest thing the worker runs, is off the queue, and every caller of a turn
- * this long has had its answer from its own client for at least 89 s, since a client gives up
- * 31 s after it sends, and a turn starts no earlier than its send.
+ * integrity check, the longest thing the worker runs, is off the queue. A caller with a client
+ * deadline has had its answer from that client for at least 89 s by then, since a client gives up
+ * 31 s after it sends, and a turn starts no earlier than its send. One that sends with none, as the
+ * journal drain's replays and js/background.js's rerun of a capture with no entry do, gets its
+ * answer from the cut.
  */
 export const TURN_LIMIT_MS = 120_000;
 
