@@ -209,11 +209,24 @@ describe('the diagnostics export with events a later build journaled (#214)', ()
       'the events this build knows are kept, in their order',
     );
     assert.equal(report.journalLeftOut, 2, 'both later events are left out, and counted');
-    assert.deepEqual(
-      Object.keys(report).slice(11, 14),
-      ['journal', 'journalLeftOut', 'rejected'],
-      'the count is beside the journal',
-    );
+    // Every key the report holds, the count beside the journal, and nothing else of what was left out
+    assert.deepEqual(Object.keys(report), [
+      'format',
+      'formatVersion',
+      'createdAt',
+      'installId',
+      'versions',
+      'records',
+      'recordsFailure',
+      'migrations',
+      'receipts',
+      'incidents',
+      'runs',
+      'journal',
+      'journalLeftOut',
+      'rejected',
+    ]);
+    assert.doesNotMatch(exported.serialized, /later/, 'nothing of a left-out event reaches the file');
     assert.ok(
       exported.fields.some(field => field.field === 'journalLeftOut' && field.value === 2),
       'the preview lists the count, as it lists every field',
@@ -243,6 +256,7 @@ describe('the diagnostics export with events a later build journaled (#214)', ()
       2,
       'the event with the refused value and the one with the later key are left out',
     );
+    assert.doesNotMatch(exported.serialized, /later/, 'nothing of a left-out event reaches the file');
   });
 
   it('says nothing of a count when no event was left out, so such a report is as it was (#214)', async () => {
