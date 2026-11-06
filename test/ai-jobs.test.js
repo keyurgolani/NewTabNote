@@ -101,24 +101,24 @@ const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 /**
  * TabController's tab bar on `tabs` as its open tabs, as App hands its noteTabs to NotesManager
- * and AI chat. It counts what it draws and saves, in `drawn` and `saved`, and keeps both off
- * the page.
+ * and AI chat, with `editors` as the main and right panes' editors, as App sets them. It counts
+ * what it draws and saves, in `drawn` and `saved`, and keeps both off the page.
  */
-function tabBar(env, tabs) {
+function tabBar(env, tabs, editors = []) {
   const bar = new (env.get('TabController'))({
     settings: env.settingsClient, domRefs: null, logger: quietLogger, documentClient: env.documentClient,
   });
-  Object.assign(bar, { openTabs: tabs, drawn: 0, saved: 0 });
+  Object.assign(bar, { openTabs: tabs, drawn: 0, saved: 0, editor: editors[0] || null, secondaryEditor: editors[1] || null });
   bar.renderTabs = () => { bar.drawn += 1; };
   bar.saveTabs = async () => { bar.saved += 1; };
   return bar;
 }
 
 /**
- * NotesManager as App wires it, with the editor as the one getEditor answers, and the open
- * tabs as `tabs`, on `bar`
+ * NotesManager as App wires it, with the editor as the one getEditor answers and the main pane's
+ * on the tab bar, and the open tabs as `tabs`, on `bar`
  */
-function notesManager(env, { ai, editor, tabs = [], bar = tabBar(env, tabs) }) {
+function notesManager(env, { ai, editor, tabs = [], bar = tabBar(env, tabs, [editor]) }) {
   const NotesManager = env.get('NotesManager');
   const manager = new NotesManager({
     storage: env.stores.searchIndex,
@@ -140,8 +140,11 @@ function notesManager(env, { ai, editor, tabs = [], bar = tabBar(env, tabs) }) {
  */
 const jobsOn = (env) => env.chrome.api.storage.local.set({ setting_autoTitleEnabled: true, setting_insightsEnabled: true });
 
-/** AIChatController as App wires it, with its chat log reduced to a list */
-function aiChat(env, { ai, editor, tabs = [], bar = tabBar(env, tabs) }) {
+/**
+ * AIChatController as App wires it, with the editor as the one getEditor answers and the main
+ * pane's on the tab bar, and its chat log reduced to a list
+ */
+function aiChat(env, { ai, editor, tabs = [], bar = tabBar(env, tabs, [editor]) }) {
   const AIChatController = env.get('AIChatController');
   const chat = new AIChatController({
     settings: env.settingsClient,
@@ -406,7 +409,7 @@ describe('T3: a title set by hand stays', () => {
     const editor = editorWith(env, ai.port);
     await drive(env, editor.loadNote('A'));
     const tabs = [{ noteId: 'A', name: 'Untitled' }];
-    const bar = tabBar(env, tabs);
+    const bar = tabBar(env, tabs, [editor]);
     const manager = notesManager(env, { ai: ai.port, editor, tabs, bar });
     await jobsOn(env);
     const job = manager.runAutoTitle();
@@ -620,6 +623,92 @@ describe('the editor shows committed titles and insights without saving', () => 
       [editor.noteData.name, editor.noteData.pinned, plain(editor.noteData.insights), editor.noteData.lastInsightsExtractedAt],
       ['Note A', false, { todos: ['x'] }, 5],
     );
+  });
+});
+
+describe('a committed title or insights show in every open editor that holds the note (#201)', () => {
+  /**
+   * Two editors on A, as split view's two panes hold one note, on the tab bar with A's tab. The
+   * right pane's is the one getEditor answers.
+   */
+  async function twoPanes() {
+    const { env } = await setup();
+    const ai = heldAI();
+    const main = editorWith(env, ai.port);
+    const right = editorWith(env, ai.port);
+    await drive(env, main.loadNote('A'));
+    await drive(env, right.loadNote('A'));
+    const tabs = [{ noteId: 'A', name: 'Note A' }];
+    return { env, ai, main, right, tabs, bar: tabBar(env, tabs, [main, right]) };
+  }
+
+  it("NotesManager's shows a title in both, and names the tab once", async () => {
+    const { env, ai, main, right, tabs, bar } = await twoPanes();
+    const manager = notesManager(env, { ai: ai.port, editor: right, tabs, bar });
+    await manager.showCommittedTitle('A', 'Groceries');
+    assert.deepEqual(
+      [main.titleEl.textContent, right.titleEl.textContent, tabs[0].name, bar.drawn, bar.saved],
+      ['Groceries', 'Groceries', 'Groceries', 1, 1],
+    );
+  });
+
+  it('with a title typed in one that no save has stored, that one keeps it, the other shows the committed one, and the tab waits for the save', async () => {
+    const { env, ai, main, right, tabs, bar } = await twoPanes();
+    const manager = notesManager(env, { ai: ai.port, editor: right, tabs, bar });
+    typeTitle(right, 'Typed');
+    tabs[0].name = 'Typed'; // as the title edit renames its tab
+    await manager.showCommittedTitle('A', 'Groceries');
+    assert.deepEqual(
+      [main.titleEl.textContent, right.titleEl.textContent, tabs[0].name, bar.saved],
+      ['Groceries', 'Typed', 'Typed', 0],
+    );
+  });
+
+  it("NotesManager's shows insights in both, and leaves an editor on another note alone", async () => {
+    const { env, ai, main, right, tabs, bar } = await twoPanes();
+    // The pop-out, on B
+    bar.pipEditor = editorWith(env, ai.port);
+    await drive(env, bar.pipEditor.loadNote('B'));
+    const manager = notesManager(env, { ai: ai.port, editor: right, tabs, bar });
+    manager.showCommittedInsights('A', { todos: ['Buy milk'] });
+    assert.deepEqual(
+      [plain(main.noteData.insights), plain(right.noteData.insights), bar.pipEditor.noteData.insights ?? null],
+      [{ todos: ['Buy milk'] }, { todos: ['Buy milk'] }, null],
+    );
+  });
+
+  it("AI chat's shows a title in both, and names the tab once", async () => {
+    const { env, ai, main, right, tabs, bar } = await twoPanes();
+    const chat = aiChat(env, { ai: ai.port, editor: right, tabs, bar });
+    await chat.showCommittedTitle('A', 'Weekly shop');
+    assert.deepEqual(
+      [main.titleEl.textContent, right.titleEl.textContent, tabs[0].name, bar.drawn, bar.saved],
+      ['Weekly shop', 'Weekly shop', 'Weekly shop', 1, 1],
+    );
+  });
+
+  it('two editors with panes of their own in one document each keep their own insights section, through two draws each', async () => {
+    const { env } = await setup({
+      notes: [note('A', { insights: { todos: ['Call the bakery'] } }), note('B', { insights: { todos: ['Plan the week'] } })],
+    });
+    const BlockEditor = env.get('BlockEditor');
+    // Each pane in the page's document, as App gives each page editor its pane
+    const [main, right] = [0, 1].map(() => {
+      const pane = env.document.body.appendChild(env.document.createElement('div'));
+      pane.className = 'editor-pane';
+      const editor = makeEditor(env, env.document, { root: pane });
+      editor.ai = heldAI().port;
+      editor.renderInsights = BlockEditor.prototype.renderInsights;
+      return editor;
+    });
+    await drive(env, main.loadNote('A'));
+    await drive(env, right.loadNote('B'));
+    await drive(env, main.renderInsights());
+    await drive(env, right.renderInsights());
+    const sections = (editor) => editor.root.querySelectorAll('.note-insights').map((section) => section.textContent);
+    assert.deepEqual([sections(main).length, sections(right).length], [1, 1]);
+    assert.match(sections(main)[0], /Call the bakery/);
+    assert.match(sections(right)[0], /Plan the week/);
   });
 });
 
