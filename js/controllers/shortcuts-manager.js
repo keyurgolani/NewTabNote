@@ -98,6 +98,9 @@ class ShortcutsManager {
           if (this.onToggleShortcutsModal) this.onToggleShortcutsModal();
           return;
         case 'escape':
+          // An Escape the page took first, as the link field and the editor's menus take theirs,
+          // closes only that: focus mode stays on, and nothing else closes (#200)
+          if (e.defaultPrevented) return;
           e.preventDefault();
           if (this.focusMode) {
             this.toggleFocusMode(false);
