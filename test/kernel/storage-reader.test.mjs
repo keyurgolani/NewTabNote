@@ -31,6 +31,8 @@ const INDEXEDDB = 'js/kernel/adapters/indexeddb';
 
 /** @type {{forceCloseDatabase: (db: IDBDatabase) => void}} */
 const fake = createRequire(import.meta.url)('fake-indexeddb');
+/** @type {{scanSource: (file: string, text: string) => {hits: Array<{call: string}>, problems: string[]}}} */
+const { scanSource } = createRequire(import.meta.url)('../../scripts/write-paths.js');
 
 /** Every store #17's adapter reads */
 const STORE_NAMES = /** @type {StoreName[]} */ (Object.keys(IDB_STORES));
@@ -722,5 +724,26 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
       .map(file => path.relative(ROOT, file).split(path.sep).join('/'))
       .filter(file => writers.has(file));
     assert.deepEqual(reached, []);
+  });
+
+  it('makes no write the write scan sees, in the reader or the read half, which no page loads yet', () => {
+    // check:write-paths leaves js/kernel to one-committer, which scans only what a page loads
+    for (const file of ['reader.js', 'reads.js']) {
+      const at = `${INDEXEDDB}/${file}`;
+      const { hits, problems } = scanSource(at, fs.readFileSync(path.join(ROOT, at), 'utf8'));
+      assert.deepEqual(
+        hits.map(hit => hit.call),
+        [],
+        at,
+      );
+      // All it can't trace is the settings read's store binding, which its twin in #17's
+      // adapter has too
+      const untraced = `${at} assigns an object store to store, so its writes can't be traced: bind it with const`;
+      assert.deepEqual(
+        problems.map(problem => problem.replace(/:\d+ /, ' ')),
+        file === 'reader.js' ? [untraced] : [],
+        at,
+      );
+    }
   });
 });
