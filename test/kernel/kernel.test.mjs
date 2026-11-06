@@ -513,6 +513,22 @@ describe('the kernel', () => {
     assert.equal((await kernel.execute({ type: 'createNote', commandId: 'c2', noteId: 'n2' }, { live: () => true })).kind, 'committed');
   });
 
+  it("fails closed on a live that is neither null nor a function, a falsy one too: the command answers unavailable and commits nothing (#224's review)", async () => {
+    for (const live of [false, 0, '']) {
+      /** @type {string[]} */
+      const log = [];
+      const kernel = kernelWith({ adapter: spyAdapter(createMemoryAdapter(), log) });
+      const what = JSON.stringify(live);
+      const answer = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'n1' }, /** @type {any} */ ({ live }));
+      assert.deepEqual(answer, unavailable('adapter', 'adapter-failed', true), `a live of ${what} answers unavailable`);
+      assert.deepEqual(log.filter(entry => entry.startsWith('commit')), [], `nothing reached the commit for ${what}`);
+      assert.equal((await kernel.query({ type: 'getNote', noteId: 'n1' })).kind, 'empty', `the store holds no note for ${what}`);
+    }
+    // A null live is no turn, so the command commits as one sent without a turn does
+    const kernel = kernelWith();
+    assert.equal((await kernel.execute({ type: 'createNote', commandId: 'c2', noteId: 'n2' }, /** @type {any} */ ({ live: null }))).kind, 'committed');
+  });
+
   it('emits no note:saved event anywhere in js/kernel/', () => {
     /** @param {string} dir @returns {string[]} */
     const walk = dir =>
