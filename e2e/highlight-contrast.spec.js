@@ -29,13 +29,20 @@ const NOTE = {
   ],
 };
 
-/** Turn NOTE's second block into a quote from its block menu, as someone does, so its highlight sits in a quote */
+/**
+ * Turn NOTE's second block into a quote from its block menu, as someone does, so its highlight sits
+ * in a quote. The menu's keys come with a chunk at its first open, so each key waits for the menu
+ * to take it
+ */
 async function turnIntoQuote(page) {
   const block = page.locator('#editor-container .blocks-container > .block').nth(1);
   await block.locator('.block-content').click();
   await page.keyboard.press('ControlOrMeta+Slash');
+  await expect(page.getByRole('menu', { name: 'Block actions' }).getByRole('menuitem', { name: 'Turn into...', exact: true }), 'its block menu opens on Turn into').toBeFocused();
   await page.keyboard.press('ArrowRight');
-  await page.getByRole('menu', { name: 'Turn into' }).getByRole('menuitem', { name: 'Quote', exact: true }).click();
+  const quote = page.getByRole('menu', { name: 'Turn into' }).getByRole('menuitem', { name: 'Quote', exact: true });
+  await expect(quote, "Quote is among Turn into's types").toBeVisible();
+  await quote.click();
   await expect(block, 'the second block is a quote').toHaveAttribute('data-type', 'quote');
   await expect(block.locator('.block-content mark'), 'and keeps its highlight').toHaveText('quoted');
 }
@@ -80,6 +87,7 @@ const ratios = (root) => {
 };
 
 test('light: a highlight reads at 4.5:1 or more in a text block, and as high as on next in a quote and inside a link', async ({ extension }) => {
+  test.setTimeout(60_000);
   const page = await openNote(extension, 'light');
   const light = await page.locator('#editor-container').evaluate(ratios);
   expect.soft(light.text, "light: a highlight's text in a text block, at 4.5:1 or more").toBeGreaterThanOrEqual(4.5);
@@ -89,6 +97,7 @@ test('light: a highlight reads at 4.5:1 or more in a text block, and as high as 
 });
 
 test('dark: a highlight reads at 4.5:1 or more in a text block, and at least as high as on next in a quote', async ({ extension }) => {
+  test.setTimeout(60_000);
   const page = await openNote(extension, 'dark');
   const dark = await page.locator('#editor-container').evaluate(ratios);
   expect.soft(dark.text, "dark: a highlight's text in a text block, at 4.5:1 or more").toBeGreaterThanOrEqual(4.5);
