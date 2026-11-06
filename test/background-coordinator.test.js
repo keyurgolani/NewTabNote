@@ -103,6 +103,10 @@ function pagePort(surface = 'popup') {
     hello(sessionId) {
       this.send({ frame: 'hello', protocol: { ...limits.PROTOCOL_VERSION }, extensionVersion: '1.4.1', surface, sessionId });
     },
+    /** Close the port from the page's end, as a page that goes does */
+    close() {
+      for (const listener of onDisconnect) listener();
+    },
   };
 }
 
@@ -1199,6 +1203,28 @@ function requestOn(page, requestId, payload) {
   page.send({ frame: 'request', requestId, operation: payload.type, version: 1, deadline: Date.now() + 10_000, payload });
 }
 
+/**
+ * Puts a quick note Popup journaled into `env`'s journal, as its journal writes one before it sends
+ * the command, under the session its hello names
+ * @param {any} env
+ * @param {{sessionId: string}} options
+ */
+async function journaledByPopup(env, { sessionId }) {
+  const journals = await journalModules();
+  const store = journals.createJournalDatabase({ indexedDB: env.indexedDB });
+  await store.open();
+  await store.put(journals.journalEntry({
+    command: { ...QUICK_NOTE },
+    v: 1,
+    noteId: QUICK_NOTE.noteId,
+    surface: 'popup',
+    ownerSessionId: sessionId,
+    seq: 1,
+    createdAt: Date.now(),
+  }));
+  store.close();
+}
+
 /** Whether `worker`'s CanvasTabDB holds the note `id` */
 async function holdsNote(worker, id) {
   return Object.values(recordsOf(await dumpDatabase(worker.indexedDB), 'canvases')).some((record) => record.id === id);
@@ -1215,5 +1241,31 @@ describe("Popup's commands over the port, in the worker (#35 slice 4b-2)", () =>
     const answer = page.received.find((frame) => frame.requestId === 'q1');
     assert.deepEqual(answer && [answer.frame, answer.result && answer.result.kind], ['response', 'committed'], JSON.stringify(answer));
     assert.equal(await holdsNote(worker, 'n-quick'), true);
+  });
+
+  it("drains a Popup port's session once the port closes and the page's owner lock goes: a quick note it journaled lands then, not at the next start (#35 slice 4b-2, rule 7)", async () => {
+    /** @type {() => void} */
+    let goes = () => {};
+    const lives = new Promise((resolve) => {
+      goes = () => resolve(undefined);
+    });
+    const worker = await loadBackground({ start: false, setup: async (env) => {
+      await journaledByPopup(env, { sessionId: 'popup-closing' });
+      // The open Popup holds its owner lock for as long as it lives
+      void env.global.navigator.locks.request('journal.owner.popup-closing', { mode: 'exclusive' }, () => lives);
+    } });
+    const page = pagePort('popup');
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('popup-closing');
+    await worker.drain();
+    // The start's drain leaves it while its owner lives
+    assert.equal(await holdsNote(worker, 'n-quick'), false, 'not while Popup is open');
+    page.close();
+    await worker.drain();
+    assert.equal(await holdsNote(worker, 'n-quick'), false, 'not while its owner lock is held');
+    goes();
+    await worker.drain();
+    assert.equal(await holdsNote(worker, 'n-quick'), true, 'once its owner lock goes');
+    assert.deepEqual(await journalOf(worker.indexedDB), []);
   });
 });

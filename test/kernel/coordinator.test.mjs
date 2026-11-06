@@ -1227,3 +1227,42 @@ describe("the coordinator's stand-in and instance id", () => {
     }
   });
 });
+
+describe("a closed port's session (#35 slice 4b-2, rule 7)", () => {
+  it('drains a closed session once the journal says its owner is gone, and not while it lives (#35 slice 4b-2, rule 7)', async () => {
+    const kernel = fakeKernel();
+    const held = heldJournal();
+    /** @type {Array<{sessionId: string, gone: () => void}>} */
+    const owners = [];
+    const journal = {
+      ...held.journal,
+      /** @param {string} sessionId */
+      ownerGone: sessionId =>
+        new Promise(resolve => {
+          owners.push({ sessionId, gone: () => resolve(undefined) });
+        }),
+    };
+    const { coordinator } = coordinatorOn(kernel, { journal });
+    kernel.open();
+    await coordinator.start();
+    await turns();
+    // The start's own drain
+    assert.equal(held.drains.length, 1);
+    held.drains[0].release();
+    const hooked = /** @type {any} */ (coordinator);
+    assert.equal(typeof hooked.closed, 'function', 'the coordinator hears of a closed session');
+    hooked.closed({ surface: 'popup', sessionId: 'popup-1' });
+    await turns();
+    assert.deepEqual(
+      owners.map(owner => owner.sessionId),
+      ['popup-1'],
+    );
+    assert.equal(held.drains.length, 1, 'no drain while its owner lives');
+    owners[0].gone();
+    await turns();
+    assert.equal(held.drains.length, 2, 'one once its owner is gone');
+    // On the queue, as every drain is, so its replays wait their turn
+    assert.equal(held.drains[1].client, coordinator.client());
+    held.drains[1].release();
+  });
+});
