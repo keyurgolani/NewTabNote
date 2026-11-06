@@ -59,7 +59,10 @@ const CUT_MODULES = Object.freeze([
   'js/kernel/core/application/integrity-check.js',
 ]);
 
-/** The close-time drafts' applier, which only the pages run (#33, #35 slice 3b) */
+/**
+ * The close-time drafts' applier, which the pages run, and the worker for the apply Popup sends
+ * over the port (#33, #35 slice 3b; slice 4b-2, rule 6)
+ */
 const APPLIER_MODULES =
   /^js\/kernel\/core\/(application\/close-drafts|domain\/(close-draft|close-draft-format|close-draft-keys|recovered-note))\.js$/;
 
@@ -297,16 +300,36 @@ const allowedOn = (type, surface, table) => {
  * and hands it to commitOrThrow, which commits it through the remediation's adapter port
  * (`adapter.commit`, #17's adapter), never a kernel client's execute, so it's adapter-only: no
  * handler table runs it. And the page's rows run only rebuild-index (js/trust/core/router-rows.js),
- * so safe-disable never runs there at all (#20 slice 4b). Only that call is left out: the file
- * builds the type once, there, or the pin fails, and any other send, in that file or any other,
- * still counts.
- * @type {Readonly<Record<string, ReadonlyArray<{file: string, type: string, call: string, key: string}>>>}
+ * so safe-disable never runs there at all (#20 slice 4b). The service worker loads
+ * core/application/close-drafts.js for applyCloseDraft's handler, which it runs for the apply
+ * Popup sends over the port (#35 slice 4b-2, rule 6). With it comes the pages' start-time apply,
+ * applyCloseDrafts, whose `client.execute` sends applyCloseDraft. Nothing in the worker's graph
+ * calls applyCloseDrafts, as a case below pins, so that send never runs there. And the worker's
+ * own table rightly lacks the command, which the catalog grants only to the new tab, Popup and
+ * Side Panel (contracts/commands.js). Only each pin's call is left out: its file builds the type
+ * once, there, or the pin fails, and any other send, in that file or any other, still counts.
+ * @type {Readonly<Record<string, ReadonlyArray<{file: string, type: string, call: string, key: string | null}>>>}
  */
 const ADAPTER_ONLY_SENDS = Object.freeze({
   'recovery.html': Object.freeze([
     Object.freeze({ file: 'js/trust/core/remediation/catalog.js', type: 'setPreferences', call: 'commitOrThrow', key: 'command' }),
   ]),
+  'the service worker': Object.freeze([
+    Object.freeze({
+      file: 'js/kernel/core/application/close-drafts.js',
+      type: 'applyCloseDraft',
+      call: 'client.execute',
+      key: null,
+    }),
+  ]),
 });
+
+/**
+ * Where a pinned send's object goes: the call that takes it, with the property it's the value of,
+ * or as the call's own argument where it has none
+ * @param {{call: string | null, key: string | null}} held
+ */
+const heldAs = ({ call, key }) => (key === null ? `${call}'s argument` : `${call}'s ${key}`);
 
 describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
   /**
@@ -323,11 +346,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     const adapterOnly = new Set();
     for (const pin of (page && ADAPTER_ONLY_SENDS[page]) || []) {
       const ofType = sites.filter(site => site.file === pin.file && site.type === pin.type);
-      assert.deepEqual(
-        ofType.map(site => `${site.call}'s ${site.key}`),
-        [`${pin.call}'s ${pin.key}`],
-        `${pin.file} builds ${pin.type} once, as ${pin.call}'s ${pin.key}`,
-      );
+      assert.deepEqual(ofType.map(heldAs), [heldAs(pin)], `${pin.file} builds ${pin.type} once, as ${heldAs(pin)}`);
       adapterOnly.add(ofType[0]);
     }
     const types = sites.filter(site => !adapterOnly.has(site)).map(site => site.type);
@@ -525,16 +544,42 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     assert.deepEqual(Object.keys(CONTEXT_HANDLERS.queries).filter(type => !Object.hasOwn(QUERIES, type)), []);
   });
 
-  it("the worker loads none of the close-time drafts' applier, which only the pages run (#33, #35 slice 3b)", () => {
+  it("the worker loads the close-time drafts' applier, exactly its five modules, for the apply Popup sends over the port (#33; #35 slice 4b-2's rule 6, in place of #182's ruling for the worker)", () => {
     const loaded = pageModules(['js/background.js']).map(file => path.relative(ROOT, file));
-    assert.deepEqual(
-      loaded.filter(file => APPLIER_MODULES.test(file)),
-      [],
-    );
-    // And the new tab loads all five, at its first apply (close-drafts-on-demand.js), so the
-    // check above isn't empty
+    assert.deepEqual(loaded.filter(file => APPLIER_MODULES.test(file)).sort(), [
+      'js/kernel/core/application/close-drafts.js',
+      'js/kernel/core/domain/close-draft-format.js',
+      'js/kernel/core/domain/close-draft-keys.js',
+      'js/kernel/core/domain/close-draft.js',
+      'js/kernel/core/domain/recovered-note.js',
+    ]);
+    // And the new tab still loads all five, at its first apply (close-drafts-on-demand.js)
     const newtab = pageModules(['js/entries/newtab.js']).map(file => path.relative(ROOT, file));
     assert.equal(newtab.filter(file => APPLIER_MODULES.test(file)).length, 5);
+  });
+
+  it("the worker never runs the pages' start-time apply, so the send its pin leaves out never runs there: no module it loads names applyCloseDrafts but at its declaration (#35 slice 4b-2, rule 6)", () => {
+    const declaring = 'js/kernel/core/application/close-drafts.js';
+    /** @type {string[]} */
+    const named = [];
+    let declared = 0;
+    for (const file of pageModules(['js/background.js'])) {
+      const relative = path.relative(ROOT, file);
+      const text = fs.readFileSync(file, 'utf8');
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+      /** @param {ts.Node} node */
+      const walk = node => {
+        if (ts.isIdentifier(node) && node.text === 'applyCloseDrafts') {
+          const declaration = ts.isFunctionDeclaration(node.parent) && node.parent.name === node;
+          if (relative === declaring && declaration) declared += 1;
+          else named.push(`${relative}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
+        }
+        ts.forEachChild(node, walk);
+      };
+      walk(source);
+    }
+    assert.equal(declared, 1, `the worker loads ${declaring}, where it's declared`);
+    assert.deepEqual(named, [], 'a module the worker loads names applyCloseDrafts');
   });
 
   it("each page loads its journal chunk later, never at its start, and the chunk holds none of the worker's part (#35 slice 3b)", () => {
