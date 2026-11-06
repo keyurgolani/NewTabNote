@@ -267,6 +267,8 @@ class FakeElement {
   }
   removeAttribute(name) { delete this.attributes[name]; }
   hasAttribute(name) { return this.getAttribute(name) !== null; }
+  /** The names setAttribute gave it, as the pop-out's mirror of the page's <html> reads them (#198) */
+  getAttributeNames() { return Object.keys(this.attributes); }
 
   addEventListener(type, fn) {
     (this.listeners[type] = this.listeners[type] || []).push(fn);
