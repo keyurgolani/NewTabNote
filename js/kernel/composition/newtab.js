@@ -465,9 +465,12 @@ const loadCloseDrafts = () => import('./close-drafts-applier.js');
  * `closeDraftToasts` answers the toasts for what they held once the apply is done (V3). Its
  * commands go through the journal once the journal's chunk is in (#35 slice 3b, host.js
  * journalingClient), which the page's first journaled command, or its first read at idle, loads.
+ * An entry its journal couldn't take is `journal.append-failed` on the tab's failure events (#35
+ * slice 4a).
  * @param {IndexedDbAdapter} adapter
- * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<NewTabApplier>, journal?: () => Promise<import('./host.js').JournalChunk<Client>>}} [page]
- *   the page's drafts and its wake, from its globals, the applier's load, and the journal chunk's
+ * @param {{drafts?: ReturnType<typeof pageDrafts>, wake?: () => void, load?: () => Promise<NewTabApplier>, journal?: () => Promise<import('./host.js').JournalChunk<Client>>, events?: import('./host.js').PageEvents}} [page]
+ *   the page's drafts and its wake, from its globals, the applier's load, the journal chunk's, and
+ *   the tab's failure events (createNewTabFailureEvents)
  * @returns {NewTabPageClient}
  */
 export function createNewTabPageClient(
@@ -477,6 +480,7 @@ export function createNewTabPageClient(
     wake = () => wakeWorkerToPurge(),
     load = loadCloseDrafts,
     journal = () => import('./journal-chunk.js'),
+    events,
   } = {},
 ) {
   const client = withCloseDraftClears(withPurgeWake(createNewTabClient(adapter), wake), {
@@ -500,6 +504,8 @@ export function createNewTabPageClient(
     'newtab',
     journal,
     globalThis.requestIdleCallback,
+    undefined,
+    events,
   );
   return Object.freeze({
     ...page,
@@ -712,14 +718,15 @@ export function startNewTab({ loader = null } = {}) {
     const page = /** @type {NewTabPage} */ (/** @type {unknown} */ (globalThis));
     const host = newTabHost();
     const adapter = createNewTabAdapter(host);
-    const kernel = createNewTabPageClient(adapter);
+    // Before the client, whose journal tells them of an entry it couldn't take (#35 slice 4a)
+    const events = createNewTabFailureEvents();
+    const kernel = createNewTabPageClient(adapter, { events });
     const noteList = createNewTabNoteList(kernel);
     /** @type {NewTabApp | null} */
     let built = null;
     const storageState = createNewTabStorageState(adapter);
     const stores = createNewTabLegacyStores(kernel, host, storageState);
     connectNewTabStorage(kernel, host, storageState);
-    const events = createNewTabFailureEvents();
     const app = new page.App({
       kernel,
       documentClient: createNewTabDocumentClient(kernel, adapter),

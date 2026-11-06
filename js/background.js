@@ -8,8 +8,9 @@
  * the listeners below register, and a throw there stops the worker with no menus or
  * commands, so no module in this graph may throw, or use top-level await, while it loads.
  * `npm run check:dist` checks the await, and e2e/worker.spec.js the registrations. In this
- * file every listener registers first, and #35's coordinator is built last, in a try/catch
- * (test/background-coordinator.test.js lists each listener, and which start it).
+ * file every listener registers first, and #35's coordinator is built last, then the worker's own
+ * client its capture goes through, each in a try/catch (test/background-coordinator.test.js
+ * lists each listener, and which start it).
  */
 
 // The network guard first, ahead of every other module (#21 slice 1b): it wraps the worker's
@@ -33,6 +34,7 @@ import {
 import { DRAIN_MESSAGE, createWorkerJournal } from './kernel/composition/journal.js';
 import { randomIds } from './kernel/composition/messaging.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
+import { createWorkerInternalClient, createWorkerInternalRouter } from './kernel/composition/worker-internal.js';
 import { installWorkerNetwork } from './kernel/composition/worker-network.js';
 
 /** @typedef {import('./kernel/composition/background.js').WorkerClient} WorkerClient */
@@ -62,6 +64,15 @@ let coordinator = unavailableCoordinator(instanceId);
  * @type {import('./kernel/composition/journal.js').WorkerJournal | null}
  */
 let captureJournal = null;
+
+/**
+ * The worker's own client (#35 slice 4a, "One committer"), set at the end of this file, after the
+ * coordinator: #13's client on the in-process transport, as worker-internal, to the worker's own
+ * router on its catalog, which hands the capture to the coordinator's queue. Until then, and for
+ * good if building it threw, a capture runs on the queue directly, as the drain's replays do.
+ * @type {ReturnType<typeof createWorkerInternalClient> | null}
+ */
+let ownClient = null;
 
 /**
  * The worker's failure events (#20, "Diagnostic journal"), set with the coordinator at the end
@@ -216,6 +227,9 @@ const KEPT_CAPTURE = Object.freeze({
   newerSchema: "Update NewTabNote to add this. A newer version upgraded your notes. It's kept on this device until then.",
   blockedUpgrade: "Close or reload your open NewTabNote tabs and windows to finish an update and add this. It's kept on this device until then.",
   missingStores: 'Open a new tab to export a copy. Your notes database is incomplete. What you added is kept on this device.',
+  // #35 slice 4a: the coordinator didn't start it by its deadline, so the drain adds it once the
+  // queue lets it, which may be at the worker's next start (the director's words)
+  busy: "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added as soon as NewTabNote can.",
 });
 const UNREPLAYABLE_CAPTURE = Object.freeze({
   title: 'Not captured',
@@ -241,8 +255,16 @@ function captureRefusal({ cause, code }) {
 }
 
 /**
+ * The code #13's client answers a capture with when the coordinator didn't start it by its
+ * deadline (#35 slice 4a): `unavailable` when it never started, and `unknown` when it started
+ * and its answer didn't come in time
+ */
+const DEADLINE_EXCEEDED = 'deadline-exceeded';
+
+/**
  * What a kept capture says for the answer that kept it: what will add it, when that's up to
- * the user, and otherwise that it's added when the notes open
+ * the user, that it's added as soon as it can be, when the coordinator was busy, and otherwise
+ * that it's added when the notes open
  * @param {{cause?: string, code?: string}} answer
  * @returns {string}
  */
@@ -250,6 +272,7 @@ function keptMessage({ cause, code }) {
   if (cause === 'newer-schema') return KEPT_CAPTURE.newerSchema;
   if (code === 'blocked-upgrade') return KEPT_CAPTURE.blockedUpgrade;
   if (code === 'missing-core-stores') return KEPT_CAPTURE.missingStores;
+  if (code === DEADLINE_EXCEEDED) return KEPT_CAPTURE.busy;
   return KEPT_CAPTURE.message;
 }
 
@@ -387,13 +410,17 @@ function notifyCapture(title, message) {
  * Capture a page, or selected text and the page it came from, to today's Daily Note with the
  * kernel's captureToDailyNote command. Its journal entry is written first, before the
  * coordinator starts (#35 slice 3), and goes once the capture is answered for good: saved, or
- * refused for what it holds. A capture the notes can't take now (they won't open, an older
- * build's page holds their upgrade, or a write failed) is kept, says so and what will add it
+ * refused for what it holds. The command goes through the worker's own client to the
+ * coordinator's queue (#35 slice 4a), so it waits its turn behind what the pages sent. A capture
+ * the notes can't take now (they won't open, an older build's page holds their upgrade, a write
+ * failed, or its turn didn't come by its deadline) is kept, says so and what will add it
  * (keptMessage), and the coordinator's drain adds it to the Daily Note of the day it was made
- * once they can. Without an entry, as when the journal can't be written, it ends as it did
+ * once they can: one whose deadline passed asks for that drain at once, which waits its turn on
+ * the same queue. Without an entry, as when the journal can't be written, it ends as it did
  * before slice 3: saved, refused (the database can't be opened safely), or failed, each with a
- * notification. A refused or failed one, kept or not, is also a `capture.failed` event, which
- * holds the outcome's cause and code and never what was captured.
+ * notification; one whose turn didn't come by its deadline waits its turn on the queue, as 1.5.0's
+ * capture waited, since nothing could replay it. A refused or failed one, kept or not, is also a
+ * `capture.failed` event, which holds the outcome's cause and code and never what was captured.
  * @param {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} item
  * @returns {Promise<void>}
  */
@@ -438,7 +465,11 @@ async function captureToDailyNote(item) {
       failureEvents.event('capture.failed', {}, failure);
       return;
     }
-    const outcome = await kernel.execute(command);
+    // Through the worker's own client, or on the queue directly when it couldn't be built
+    let outcome = ownClient ? await ownClient.execute(command) : await kernel.execute(command);
+    // An entry that wasn't written has nothing to replay it, so a deadline answer waits its turn on the
+    // queue, as 1.5.0's capture waited; #17's ledger answers one that had started
+    if (!kept && outcome.code === DEADLINE_EXCEEDED) outcome = await kernel.execute(command);
     if (outcome.kind !== 'committed') {
       const refusal = captureRefusal(outcome);
       // An outcome holds its kind, cause, and code, and never what was captured
@@ -448,6 +479,9 @@ async function captureToDailyNote(item) {
       // Unavailable or unanswered, it may land later; refused for what it holds, it never will
       if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
         notTaken(words, outcome);
+        // The notes are open and the queue was busy: the drain adds it once its turn comes,
+        // in the background, and never rejects
+        if (kept && outcome.code === DEADLINE_EXCEEDED) coordinator.drain();
       } else {
         if (kept) await captureJournal.settle(command.commandId);
         notifyCapture('Not captured', words);
@@ -536,4 +570,19 @@ try {
   // hears why
   console.error("NewTabNote: the background coordinator couldn't be built", error);
   journal(failureEvents, 'coordinator.start-failed', {}, error);
+}
+try {
+  // The worker's own client and router (#35 slice 4a), which the capture goes through to the
+  // coordinator's queue. Building them opens nothing: the client says hello on its first capture,
+  // and its welcome waits for the start, as a page's does.
+  const router = createWorkerInternalRouter({
+    coordinatorId: instanceId,
+    status: () => coordinator.status(),
+    settled: () => coordinator.start(),
+    enqueue: (command, dispatch) => coordinator.enqueue(command, dispatch),
+  });
+  ownClient = createWorkerInternalClient({ router });
+} catch (error) {
+  // A capture runs on the queue directly, as the drain's replays do
+  console.error("NewTabNote: the worker's own client couldn't be built", error);
 }

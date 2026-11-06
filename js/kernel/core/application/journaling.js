@@ -19,7 +19,9 @@
  *   save takes an earlier load's entries, and the retry of a save written as the pane left the
  *   note names its save's pane id. A removal that fails is tried again with the next answer.
  * - A journal that can't take an entry leaves the command to run as before, and says so on the
- *   console, with the failure's code at most. Nothing here throws into the page.
+ *   console, with the failure's code at most, and to `appendFailed` by the entry's note and the
+ *   failure (#35 slice 4a), which the page's root journals as `journal.append-failed`. Nothing
+ *   here throws into the page.
  * - A command that deletes notes for good takes their entries out of the journal once it's
  *   answered, whoever wrote them (`forget`), so a deleted note's text doesn't wait there for the
  *   next drain (the lead's call on 3b). The drain's sweep stays the retry, for a removal that
@@ -97,10 +99,19 @@ const deletedBy = outcome => {
  *   surface: Surface,
  *   clock: {now(): number},
  *   warn?: (event: string, error: unknown) => void,
- * }} options
+ *   appendFailed?: (noteId: string, error: unknown) => void,
+ * }} options - `appendFailed` hears of each entry the journal couldn't take, by its note
  * @returns {Journaling}
  */
-export function createJournaling({ journal, locks, sessionId, surface, clock, warn = () => {} }) {
+export function createJournaling({
+  journal,
+  locks,
+  sessionId,
+  surface,
+  clock,
+  warn = () => {},
+  appendFailed = () => {},
+}) {
   let held = false;
   let seq = 0;
   /** @type {Map<string, {noteId: string, pane: string | undefined, seq: number}>} this page's entries still in the journal */
@@ -235,6 +246,11 @@ export function createJournaling({ journal, locks, sessionId, surface, clock, wa
           kept = false;
           own.delete(record.opId);
           warn('entry-not-written', error);
+          try {
+            appendFailed(noteId, error);
+          } catch {
+            // Best effort: nothing it throws reaches the page
+          }
         }
         const outcome = await answer;
         if (!kept || !ENDS.includes(outcome.kind)) return outcome;

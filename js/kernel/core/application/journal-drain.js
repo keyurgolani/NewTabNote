@@ -51,8 +51,9 @@
  * at, count}`, until the third raises it, and an incident raised there for anything else starts
  * the count again. Where that mark can't be written, as on a full disk, the context remembers
  * what it raised and counted for its life (`raised`, `stops`), so its next drain doesn't raise it
- * again, and still counts. The mark never keeps an entry from replaying: a build that can read it
- * replays it.
+ * again, and still counts. An entry that isn't a journal record has no mark, so a stop for good
+ * at its keep is raised once in the context's life, by `raised` alone (probe E4, #35 slice 4a).
+ * The mark never keeps an entry from replaying: a build that can read it replays it.
  *
  * What it answers holds counts, codes and note ids. `oldestOrphanedEntryAt` is when the oldest
  * entry it left whose owner is gone was written, an editor save's the pages haven't taken yet
@@ -271,6 +272,26 @@ export async function drainJournal({
   };
 
   /**
+   * Raises the incident of `entry`, which isn't a journal record, for `code`, as a stop, once in
+   * this context's life (probe E4, #35 slice 4a): with no record to mark, only what this context
+   * raised keeps its next drain from raising it again, so a later worker raises it once more
+   * @param {Record<string, unknown> & {opId: string}} entry
+   * @param {string} code
+   */
+  const raiseUnmarked = (entry, code) => {
+    const key = JSON.stringify([entry.opId, code]);
+    if (raised !== undefined && raised.has(key)) return;
+    if (raised) raised.add(key);
+    // What unreplayable reads of a record, its surface and its command, it reads as it is here
+    const unread = /** @type {JournalRecord} */ (/** @type {unknown} */ (entry));
+    try {
+      if (unreplayable) unreplayable(unread, code, { stop: true });
+    } catch {
+      // Best effort, as raise() is
+    }
+  };
+
+  /**
    * Counts a drain that stopped at `entry` on `code`, which it can retry, and raises the entry's
    * incident for it, as a stop, on the third in a row (the lead's call on 3b's plan). The count is
    * the mark's or this context's, whichever is higher, so it holds where the mark can't be written.
@@ -297,7 +318,9 @@ export async function drainJournal({
   /**
    * A stop at `entry` on `code`: one that says storage itself can't answer stops the drain, and
    * any other holds back the entry's note, which an entry with no note can't be. A stop it can't
-   * retry raises the entry's incident, as a stop, and one it can is counted. Answers true when
+   * retry raises the entry's incident, as a stop, and one it can is counted. An entry that isn't
+   * a journal record, whose keep stopped, stops the drain, and a stop it can't retry raises its
+   * incident once in this context's life, since it has no mark (raiseUnmarked). Answers true when
    * the drain has to stop.
    * @param {unknown} entry
    * @param {string} code
@@ -308,7 +331,12 @@ export async function drainJournal({
     result.status = 'stopped';
     result.code = code;
     const wide = STORAGE_WIDE.includes(code);
-    if (!isJournalRecord(entry)) return true;
+    if (!isJournalRecord(entry)) {
+      if (!canRetry && isRecord(entry) && isId(entry.opId)) {
+        raiseUnmarked(/** @type {Record<string, unknown> & {opId: string}} */ (entry), code);
+      }
+      return true;
+    }
     if (!canRetry) await raise(entry, code, { stop: true });
     else if (!wide) await counted(entry, code);
     if (wide || !isId(entry.noteId)) return true;

@@ -26,7 +26,9 @@
  *   incident its failure raised.
  *
  * Building it opens nothing, and nothing here throws into the worker: a journal that can't be
- * written leaves the capture to run as it did before slice 3, and says so on the console.
+ * written leaves the capture to run as it did before slice 3, and says so on the console each time,
+ * and once in the worker's life as `journal.append-failed`, by the capture's note and the
+ * failure's code only, which raises no incident (#35 slice 4a).
  */
 
 import { inContextStores } from '../adapters/in-context.js';
@@ -149,6 +151,8 @@ export function createWorkerJournal({
   /** How many drains in a row stopped at each entry on a code they can retry, for its life */
   /** @type {Map<string, number>} */
   const stops = new Map();
+  /** Whether journal.append-failed is journaled already, which it is once in the worker's life */
+  let appendFailedJournaled = false;
 
   /**
    * Takes this instance's owner lock once, and holds it for as long as the worker lives.
@@ -292,6 +296,17 @@ export function createWorkerJournal({
       } catch (error) {
         inFlight.delete(command.commandId);
         warn('entry-not-written', error);
+        try {
+          // By the entry's note and the failure's code only (#35 slice 4a), once in the worker's
+          // life, so a journal that stays broken can't fill the diagnostic journal (#204's review);
+          // the console line says each one
+          if (events && !appendFailedJournaled) {
+            appendFailedJournaled = true;
+            events.event('journal.append-failed', { subjectId: noteId }, error);
+          }
+        } catch {
+          // Best effort, as unreplayable's event is
+        }
         return false;
       }
     },

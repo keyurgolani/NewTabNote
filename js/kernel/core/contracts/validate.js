@@ -81,18 +81,25 @@ export function check(schema, value) {
  */
 
 /**
+ * What a size check takes: `capped` unless the transport the message came on carries no limit,
+ * as only the worker's own in-process router and client do (#35 slice 4a, composition/worker-internal.js)
+ * @typedef {{capped?: boolean}} Limits
+ */
+
+/**
  * A message as it arrived, read as one frame of `schema`'s
  * @template {v.GenericSchema} S
  * @param {S} schema
  * @param {unknown} text
+ * @param {boolean} capped - whether MAX_MESSAGE_BYTES applies
  * @returns {{ok: true, frame: v.InferOutput<S>, bytes: number} | {ok: false, code: TransportCode, issues: Issue[]}}
  */
-function readAs(schema, text) {
+function readAs(schema, text, capped) {
   if (typeof text !== 'string') return { ok: false, code: 'invalid-payload', issues: [] };
   // Each UTF-16 unit takes at least one byte, so a longer text can't fit
-  if (text.length > MAX_MESSAGE_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
+  if (capped && text.length > MAX_MESSAGE_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
   const bytes = encodedBytes(text);
-  if (bytes > MAX_MESSAGE_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
+  if (capped && bytes > MAX_MESSAGE_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
   /** @type {unknown} */
   let message;
   try {
@@ -108,12 +115,13 @@ function readAs(schema, text) {
 
 /**
  * A message as it arrived, read as one frame. Any message over MAX_MESSAGE_BYTES fails
- * before it's parsed, as does one that isn't JSON the codec carries.
+ * before it's parsed, unless `capped` is false, as does one that isn't JSON the codec carries.
  * @param {unknown} text
+ * @param {Limits} [limits]
  * @returns {ReadFrame}
  */
-export function readFrame(text) {
-  return readAs(frameSchema, text);
+export function readFrame(text, { capped = true } = {}) {
+  return readAs(frameSchema, text, capped);
 }
 
 /**
@@ -128,7 +136,7 @@ export function readFrame(text) {
  * @returns {ReadChannelFrame}
  */
 export function readChannelFrame(text) {
-  return readAs(channelFrameSchema, text);
+  return readAs(channelFrameSchema, text, true);
 }
 
 /**
@@ -144,18 +152,20 @@ export function readChannelFrame(text) {
  * Valibot's copy: that copy drops a `__proto__`, `constructor`, or `prototype` key a loose
  * object such as a block holds, and the kernel keeps such a key as data. That's safe because
  * no contract schema transforms, defaults, or drops what it accepts, which
- * test/kernel/contract-schema-lint.test.mjs holds them to.
+ * test/kernel/contract-schema-lint.test.mjs holds them to. With `capped` false, the operation's
+ * own maxBytes doesn't apply either.
  * @param {RequestFrame} request
  * @param {number} bytes
  * @param {(name: string) => Operation | undefined} lookup
+ * @param {Limits} [limits]
  * @returns {CheckedRequest}
  */
-export function checkRequest(request, bytes, lookup) {
+export function checkRequest(request, bytes, lookup, { capped = true } = {}) {
   const operation = lookup(request.operation);
   if (!operation) return { ok: false, code: 'unknown-operation', issues: [] };
   // maxBytes is this version's, so a request for another version is refused for its version
   if (request.version !== operation.entry.version) return { ok: false, code: 'unsupported-version', issues: [] };
-  if (bytes > operation.entry.maxBytes) return { ok: false, code: 'payload-too-large', issues: [] };
+  if (capped && bytes > operation.entry.maxBytes) return { ok: false, code: 'payload-too-large', issues: [] };
   const payload = check(operation.payload, request.payload);
   if (!payload.ok) return { ok: false, code: 'invalid-payload', issues: payload.issues };
   return { ok: true, operation, payload: request.payload };

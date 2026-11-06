@@ -739,6 +739,8 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
     await turns();
     // The start's own drain, then the one asked for
     assert.equal(held.drains.length, 2);
+    // Each on the queue, as client() is, so its replays wait their turn (#204's review, T2)
+    assert.equal(held.drains[1].client, coordinator.client(), 'the asked drain runs on the queue');
     held.drains[0].release();
     held.drains[1].release();
     assert.deepEqual(await asked, { status: 'drained', replayed: 1 });
@@ -806,6 +808,174 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
       assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
       assert.equal(await coordinator.drain(), null);
     }
+  });
+});
+
+/**
+ * A kernel that opens at once and holds each command until the test lets it answer, keeping
+ * when each one started and ended, in order. `fail` makes one command's call reject.
+ */
+function heldKernel() {
+  /** @type {string[]} */
+  const log = [];
+  /** @type {Map<string, (outcome?: unknown) => void>} */
+  const held = new Map();
+  /** @type {Map<string, (error: unknown) => void>} */
+  const failing = new Map();
+  let next = 0;
+  const client = {
+    execute: (/** @type {Record<string, unknown>} */ command) =>
+      new Promise((resolve, reject) => {
+        const commandId = String(command.commandId);
+        log.push(`start ${commandId}`);
+        held.set(commandId, () => {
+          log.push(`end ${commandId}`);
+          resolve({ kind: 'committed', code: 'held', changedIds: [] });
+        });
+        failing.set(commandId, error => {
+          log.push(`threw ${commandId}`);
+          reject(error);
+        });
+      }),
+    query: async () => ({ kind: 'empty', asOf: 0 }),
+    subscribe: () => () => {},
+    whenReady: async () => null,
+    ids: { next: () => `id-${++next}` },
+  };
+  return {
+    client: /** @type {any} */ (client),
+    log,
+    /** @param {string} commandId */
+    release: commandId => /** @type {() => void} */ (held.get(commandId))(),
+    /** @param {string} commandId */
+    fail: commandId => /** @type {(error: unknown) => void} */ (failing.get(commandId))(new Error('the kernel threw')),
+  };
+}
+
+/**
+ * A capture as the worker sends it
+ * @param {string} commandId
+ */
+const captureOf = commandId => ({
+  type: /** @type {const} */ ('captureToDailyNote'),
+  commandId,
+  noteId: `${commandId}-daily`,
+  blockId: `${commandId}-block`,
+  capture: { type: /** @type {const} */ ('bookmark'), url: 'https://example.test/', title: 'Example' },
+});
+
+describe("the coordinator's one queue (#35 slice 4a, one committer)", () => {
+  it('runs one command at a time, in the order they came: the second starts once the first has its outcome', async () => {
+    const kernel = heldKernel();
+    const { coordinator } = coordinatorOn(kernel);
+    await coordinator.start();
+    const first = coordinator.client().execute(captureOf('c-1'));
+    const second = coordinator.client().execute(captureOf('c-2'));
+    const third = coordinator.client().execute(captureOf('c-3'));
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1']);
+    kernel.release('c-1');
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1', 'end c-1', 'start c-2']);
+    kernel.release('c-2');
+    await turns();
+    kernel.release('c-3');
+    assert.deepEqual(
+      (await Promise.all([first, second, third])).map(outcome => outcome.kind),
+      ['committed', 'committed', 'committed'],
+    );
+    assert.deepEqual(kernel.log, ['start c-1', 'end c-1', 'start c-2', 'end c-2', 'start c-3', 'end c-3']);
+  });
+
+  it("puts the drain's replays on the same queue, so a command sent while a replay runs starts once the replay has its outcome", async () => {
+    const kernel = heldKernel();
+    const held = heldJournal();
+    const { coordinator } = coordinatorOn(kernel, { journal: held.journal });
+    await coordinator.start();
+    await turns();
+    assert.equal(held.drains.length, 1);
+    // The drain replays an entry on the client it was given
+    const drainClient = /** @type {any} */ (held.drains[0].client);
+    const replay = drainClient.execute(captureOf('c-replayed'));
+    const capture = coordinator.client().execute(captureOf('c-1'));
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-replayed']);
+    kernel.release('c-replayed');
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-replayed', 'end c-replayed', 'start c-1']);
+    kernel.release('c-1');
+    assert.deepEqual([(await replay).kind, (await capture).kind], ['committed', 'committed']);
+    held.drains[0].release();
+  });
+
+  it('never runs a command whose request ended before its turn, and runs the one after it', async () => {
+    const kernel = heldKernel();
+    const { coordinator } = coordinatorOn(kernel);
+    await coordinator.start();
+    const first = coordinator.client().execute(captureOf('c-1'));
+    // A router's request is still waited on until its deadline, a cancel, or its connection's close
+    let waited = true;
+    const ended = coordinator.enqueue(captureOf('c-2'), { begin: () => waited });
+    const after = coordinator.enqueue(captureOf('c-3'), { begin: () => true });
+    await turns();
+    // Its deadline comes while it waits, so the router answers it and stops waiting
+    waited = false;
+    kernel.release('c-1');
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1', 'end c-1', 'start c-3']);
+    assert.equal(await ended, null);
+    kernel.release('c-3');
+    assert.deepEqual([(await first).kind, (await after)?.kind], ['committed', 'committed']);
+  });
+
+  it("answers a command enqueued on the stand-in, or on one whose kernel couldn't be built, as unavailable", async () => {
+    assert.deepEqual(await unavailableCoordinator('coordinator-1').enqueue(captureOf('c-1')), UNAVAILABLE);
+    const { coordinator } = coordinatorOn(
+      {
+        client: null,
+      },
+      {
+        makeKernel: () => {
+          throw new Error('the kernel threw as it was built');
+        },
+      },
+    );
+    assert.deepEqual(await coordinator.enqueue(captureOf('c-2'), { begin: () => true }), UNAVAILABLE);
+  });
+
+  it('runs the next command when one throws or its kernel rejects, and answers the one that did with that', async () => {
+    const kernel = heldKernel();
+    const { coordinator } = coordinatorOn(kernel);
+    await coordinator.start();
+    const first = coordinator.client().execute(captureOf('c-1'));
+    const second = coordinator.client().execute(captureOf('c-2'));
+    await turns();
+    kernel.fail('c-1');
+    await assert.rejects(first, /the kernel threw/);
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1', 'threw c-1', 'start c-2']);
+    kernel.release('c-2');
+    assert.equal((await second).kind, 'committed');
+  });
+
+  it('runs the integrity check, and answers system.coordinatorHealth, while a command holds the queue: neither is on it', async () => {
+    const kernel = heldKernel();
+    const { coordinator } = coordinatorOn(kernel);
+    await coordinator.start();
+    const capture = coordinator.client().execute(captureOf('c-1'));
+    await turns();
+    const installed = coordinator.installed('install');
+    await turns();
+    assert.equal(kernel.log.length, 2, JSON.stringify(kernel.log));
+    assert.equal(kernel.log[0], 'start c-1');
+    assert.match(kernel.log[1], /^start id-\d+$/, 'the check runs at once, off the queue');
+    const handlers = coordinatorHandlers(() => coordinator);
+    const health = handlers['system.coordinatorHealth'](undefined, /** @type {any} */ ({}));
+    assert.equal(/** @type {any} */ (health).kind, 'ready', 'the health answers at once, off the queue');
+    kernel.release(kernel.log[1].slice('start '.length));
+    await installed;
+    kernel.release('c-1');
+    assert.equal((await capture).kind, 'committed');
   });
 });
 

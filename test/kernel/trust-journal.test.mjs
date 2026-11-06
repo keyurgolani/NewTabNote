@@ -153,6 +153,10 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
     });
   });
 
+  it("lists journal.append-failed with the entry's note and the failure's code alone, and no incident (#35 slice 4a, the lead's ruling)", () => {
+    assert.deepEqual(EVENT_CODES['journal.append-failed'], { fields: ['errorCode', 'subjectId'] });
+  });
+
   it('holds only ids, codes, counts, enums, durations, versions, times, revisions, seq, and hashes', () => {
     assert.deepEqual(EVIDENCE_FIELD_NAMES, [
       'ageMs',

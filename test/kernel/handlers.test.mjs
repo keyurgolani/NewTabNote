@@ -46,10 +46,11 @@ const CATALOG_TYPES = new Set([...WORKER_COMMAND_TYPES, ...WORKER_QUERY_TYPES]);
 
 /**
  * The modules only the worker loads: its part of the catalog, its table, the capture, the drain,
- * the records' catch-up and the integrity check's command (#35 slice 3c)
+ * the records' catch-up and the integrity check's command (#35 slice 3c), and the coordinator
+ * with its queue and the worker's own router and client (slice 4a)
  */
 const WORKER_ONLY_MODULES =
-  /^js\/kernel\/(core\/contracts\/worker-catalog|core\/application\/(capture|handlers-worker|handlers-all|journal|journal-drain|record-catch-up|integrity-check))\.js$/;
+  /^js\/kernel\/(core\/contracts\/worker-catalog|core\/application\/(capture|handlers-worker|handlers-all|journal|journal-drain|record-catch-up|integrity-check)|composition\/(coordinator|worker-internal))\.js$/;
 
 /** The worker's handler modules #35 slice 3c took off the new tab's start */
 const CUT_MODULES = Object.freeze([

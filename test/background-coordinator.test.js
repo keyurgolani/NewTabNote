@@ -809,6 +809,125 @@ describe("captures through the worker's journal (#35 slice 3)", () => {
   });
 });
 
+/**
+ * What a capture says that the coordinator couldn't start by its deadline: it's kept, and the
+ * coordinator's drain adds it once its queue lets it (#35 slice 4a, the director's words). They
+ * promise no time, since the queue may not free before the worker's next start.
+ */
+const KEPT_BUSY = Object.freeze([
+  "Kept for today's note",
+  "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added as soon as NewTabNote can.",
+]);
+
+/**
+ * The kernel's capture waits `ms` on the worker's fake clock before its transaction, so it holds
+ * the coordinator's queue as a slow command would (#204's review, its probes)
+ * @param {number} ms
+ */
+const slowCapture = (ms) => ({
+  'js/kernel/core/application/capture.js': (source) => source.replace(
+    "const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);",
+    `await new Promise((resolve) => setTimeout(resolve, ${ms}));\n    const { dailyNoteTemplate: templateId } = await adapter.readSettings('preferences', ['dailyNoteTemplate']);`,
+  ),
+});
+
+/** A NewTabNoteJournal that can't be opened, so no capture's entry is written */
+function unwritableJournal(env) {
+  const factory = env.indexedDB;
+  const open = factory.open.bind(factory);
+  factory.open = (name, ...rest) => {
+    if (name === 'NewTabNoteJournal') throw new DOMException('test: the disk is gone', 'UnknownError');
+    return open(name, ...rest);
+  };
+}
+
+/** The urls of the blocks in the worker's Daily Notes */
+async function dailyUrls(worker) {
+  const dump = await dumpDatabase(worker.indexedDB);
+  const dailies = Object.values(recordsOf(dump, 'canvases')).filter((record) => record.isDaily);
+  return Object.values(recordsOf(dump, 'elements'))
+    .filter((element) => element.url && dailies.some((daily) => daily.id === element.canvasId))
+    .map((element) => element.url);
+}
+
+/** Moves the worker's fake clock past a held capture's deadline and its end, draining at each step */
+async function pastTheHold(worker) {
+  for (const step of [31_000, 10_000, 40_000, 40_000]) {
+    worker.env.clock.tick(step);
+    await worker.drain();
+  }
+}
+
+describe("captures through the worker's own client and the coordinator's queue (#35 slice 4a)", () => {
+  it("waits its turn and saves a capture whose entry wasn't written, past its deadline, as 1.5.0 does: two captures behind a held queue both land and say so (#204's review, F1)", async () => {
+    // No journal, so neither capture has an entry the drain could replay; the first holds the
+    // queue for 40 s, past the 30 s deadline of both
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env), rewrite: slowCapture(40_000) });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, { ...worker.tab, url: 'https://example.test/second' });
+    await worker.drain();
+    await pastTheHold(worker);
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => shown.title), [
+      'Captured to New Tab Note',
+      'Captured to New Tab Note',
+    ]);
+    assert.deepEqual((await dailyUrls(worker)).sort(), [worker.tab.url, 'https://example.test/second'].sort());
+  });
+
+  it("keeps a journaled capture that started and ran past its deadline, asks the drain, and adds it once, with its entry gone (#204's review, T1)", async () => {
+    // The capture holds the queue for 40 s, so the worker's own client gives up on it at 31 s
+    // (unknown), while it still runs; the drain's replay waits behind it on the same queue
+    const worker = await loadBackground({ rewrite: slowCapture(40_000) });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    await pastTheHold(worker);
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [[...KEPT_BUSY]]);
+    assert.deepEqual(await dailyUrls(worker), [worker.tab.url], 'it lands once');
+    assert.deepEqual(await journalOf(worker.indexedDB), [], 'its entry goes');
+  });
+
+  it("saves a capture over 1 MiB, as 1.5.0 does: no message limit applies to the worker's own capture (the lead's ruling for 4a)", async () => {
+    const worker = await loadBackground({ start: false });
+    const content = 'x'.repeat(2 * limits.MAX_MESSAGE_BYTES);
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-selection', selectionText: content }, worker.tab);
+    await worker.drain();
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [
+      ['Captured to New Tab Note', 'Saved selected text'],
+    ]);
+    const dump = await dumpDatabase(worker.indexedDB);
+    const captured = Object.values(recordsOf(dump, 'elements')).filter((element) => element.type === 'text' && String(element.content).startsWith(content));
+    assert.equal(captured.length, 1);
+    assert.deepEqual(await journalOf(worker.indexedDB), []);
+  });
+
+  it("keeps a capture the coordinator couldn't start by its deadline, says so without promising a time, and adds it once the queue lets it", async () => {
+    // A deadline that has always passed, so the worker's own router refuses the capture at once,
+    // as it would one that waited out a held queue; the drain's replay takes no deadline. The
+    // worker started first and its start's drain is done, as when pages' commands hold the queue,
+    // so only the drain the capture asks for adds it.
+    const worker = await loadBackground({
+      rewrite: {
+        'js/kernel/core/contracts/limits.js': (source) => source.replace(
+          'export const COMMAND_DEADLINE_MS = 30_000;',
+          'export const COMMAND_DEADLINE_MS = 0;',
+        ),
+      },
+    });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    assert.deepEqual(plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]), [[...KEPT_BUSY]]);
+    const dump = await dumpDatabase(worker.indexedDB);
+    const daily = Object.values(recordsOf(dump, 'canvases')).find((record) => record.isDaily);
+    assert.ok(daily, 'the drain made the Daily Note');
+    assert.deepEqual(
+      Object.values(recordsOf(dump, 'elements')).filter((element) => element.canvasId === daily.id).map((element) => element.url),
+      [worker.tab.url],
+    );
+    assert.deepEqual(await journalOf(worker.indexedDB), []);
+  });
+});
+
 describe("an older build's page that keeps the upgrade blocked (#17 PR 1b)", () => {
   // While the upgrade waits, fake-indexeddb keeps the open it blocks queued, so the worker is
   // never idle and drain() can't tell when it's done: these wait in real time instead

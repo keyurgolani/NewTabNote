@@ -973,6 +973,55 @@ describe('the journal drain (#35 slice 3)', () => {
     );
   });
 
+  it("raises once per worker the incident of an entry that isn't a journal record when its keep stops for good, with no mark (probe E4, #35 slice 4a)", async () => {
+    /** @type {import('../../js/kernel/core/contracts/outcomes.js').Unavailable} */
+    const cannotRetry = {
+      kind: 'unavailable',
+      cause: 'adapter',
+      code: 'not-cloneable',
+      retryable: false,
+      messageKey: 'unavailable.not-cloneable',
+      severity: 'error',
+    };
+    const w = world();
+    // No owner, so no record to mark: a damaged entry whose conflict record can't be written for good
+    /** @type {Record<string, unknown>} */
+    const damaged = { ...entryOf(quickNote('c-no-owner', 'n-no-owner')) };
+    delete damaged.ownerSessionId;
+    await w.journal.put(/** @type {any} */ (damaged));
+    const client = {
+      /** @param {any} command */
+      execute: async command => (command.type === 'keepJournalEntry' ? cannotRetry : w.worker.execute(command)),
+      /** @param {any} query */
+      query: query => w.worker.query(query),
+    };
+    // What the worker remembers it raised, for its life
+    const raised = new Set();
+    const drains = [await w.drain({ client, raised }), await w.drain({ client, raised })];
+    assert.deepEqual(
+      drains.map(result => [result.status, result.code, result.left]),
+      [
+        ['stopped', 'not-cloneable', 1],
+        ['stopped', 'not-cloneable', 1],
+      ],
+    );
+    // Once, though two drains stopped at it, and as a stop, since the entry is still there
+    assert.deepEqual(w.told, [['c-no-owner', 'not-cloneable']]);
+    assert.deepEqual(w.stops, ['c-no-owner']);
+    // Nothing is marked on an entry that isn't a record
+    assert.deepEqual(
+      w.journal.entries().map(entry => [entry.opId, entry.unreplayable]),
+      [['c-no-owner', undefined]],
+    );
+    // A later worker, with nothing remembered, raises it once more
+    const later = await w.drain({ client, raised: new Set() });
+    assert.equal(later.status, 'stopped');
+    assert.deepEqual(w.told, [
+      ['c-no-owner', 'not-cloneable'],
+      ['c-no-owner', 'not-cloneable'],
+    ]);
+  });
+
   it('answers empty for an empty journal, and sends nothing', async () => {
     const w = world();
     const result = await w.drain();

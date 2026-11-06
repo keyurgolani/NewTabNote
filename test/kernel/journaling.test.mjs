@@ -69,10 +69,11 @@ function heldLocks() {
 
 /**
  * A new tab's kernel on a memory adapter, the page's journal, and its journaling, whose owner
- * lock is granted unless the test holds it back
- * @param {{granted?: boolean}} [options]
+ * lock is granted unless the test holds it back, and which tells `appendFailed` of an entry its
+ * journal can't take when the test gives one
+ * @param {{granted?: boolean, appendFailed?: (noteId: string, error: unknown) => void}} [options]
  */
-async function page({ granted = true } = {}) {
+async function page({ granted = true, appendFailed } = {}) {
   const adapter = createMemoryAdapter();
   const clock = testClock();
   const kernel = createKernel({
@@ -100,6 +101,7 @@ async function page({ granted = true } = {}) {
     surface: 'newtab',
     clock,
     warn: (event, error) => warned.push([event, error]),
+    ...(appendFailed ? { appendFailed } : {}),
   });
   if (granted) {
     locks.grantAll();
@@ -519,6 +521,24 @@ describe("a page's journaling (#35 slice 3b)", () => {
       w.warned.map(([event]) => event),
       ['entry-not-written'],
     );
+  });
+
+  it("tells its appendFailed port of an entry its journal could not take, once, by the entry's note and the failure (#35 slice 4a)", async () => {
+    /** @type {Array<[string, unknown]>} */
+    const appended = [];
+    const w = await page({ appendFailed: (noteId, error) => appended.push([noteId, error]) });
+    w.journal.failNext('put');
+    const answer = await w.journaling.execute(quickNote('c-1'), w.send);
+    assert.equal(answer.kind, 'committed');
+    assert.deepEqual(w.sent, ['c-1']);
+    assert.deepEqual(
+      appended.map(([noteId]) => noteId),
+      ['note-c-1'],
+    );
+    assert.ok(appended[0][1], 'the failure');
+    // One the journal takes tells it nothing
+    await w.journaling.execute(quickNote('c-2'), w.send);
+    assert.equal(appended.length, 1);
   });
 
   it("removes the entries of notes deleted for good, whatever they hold, and leaves the others'", async () => {

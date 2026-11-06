@@ -111,6 +111,12 @@ export const EVENT_CODES = Object.freeze({
       preserved: Object.freeze(['capture', 'editing', 'reading']),
     }),
   }),
+  // #35 slice 4a: a journal that couldn't take a command's entry, in the worker or on a page, by
+  // the entry's note and the failure's code only (the lead's ruling), once in the worker's life
+  // and once per page load, and on the console every time. The command still runs, as it does
+  // unjournaled. No incident in 4a: #20's next incident work takes it up with
+  // journal.entry-unreplayable.
+  'journal.append-failed': Object.freeze({ fields: Object.freeze(['errorCode', 'subjectId']) }),
   // The successes at those sites, each resolving its site's incident
   'capture.committed': Object.freeze({ fields: Object.freeze(['surface', 'commandId']), resolves: 'capture.failed' }),
   'backup.auto-succeeded': Object.freeze({ fields: Object.freeze([]), resolves: 'backup.auto-failed' }),

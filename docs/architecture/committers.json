@@ -1,0 +1,117 @@
+{
+  "about": "#35's one committer (scope AC1, slice 4a): every repository write commits through the background coordinator, in the service worker, apart from the in-context writes listed here. test/kernel/one-committer.test.mjs reads this file against every root the build has: each page in scripts/build/vite-config.js's PAGES, by the scripts its HTML loads, and the worker from manifest.json, each through its static imports and every import() of a literal. Each module worker a root starts with new Worker(new URL(literal, import.meta.url)), as the new tab starts js/workers/indexer.js, is a root of its own, and so is each one that worker starts in turn; no module worker is on `untilMoved`. A root #2 or #3 adds is checked with no edit to the test. `untilMoved` lists the pages that still commit in-process, each until the slice that moves its writes onto #13's port, and only shrinks. `inContext` lists what a page writes itself, or typing would wait on the worker. `reads` lists a module that writes, which a page loads only to read. `handles` lists a write through a handed-in handle, which no scan sees. `indexeddb` classifies every module under js/kernel/adapters/indexeddb/, so a new one can't land without a decision. #6's ntn.continuity, #16's appearance mirror, #1's product session (js/product/topology.js, which no root loads yet) and recovery.html's remediations under storage.restore (#20) join when they land.",
+  "worker": "js/background.js",
+  "writeAdapter": "js/kernel/adapters/indexeddb/adapter.js",
+  "untilMoved": [
+    {
+      "root": "popup",
+      "builds": "js/kernel/composition/popup.js",
+      "writes": "CanvasTabDB and its settings, through #17's adapter",
+      "owner": 35,
+      "removeWhen": "#35 slice 4b moves Popup's writes onto #13's port"
+    },
+    {
+      "root": "sidepanel",
+      "builds": "js/kernel/composition/sidepanel.js",
+      "writes": "CanvasTabDB and its settings, through #17's adapter",
+      "owner": 35,
+      "removeWhen": "#35 slice 4c moves Side Panel's writes onto #13's port"
+    },
+    {
+      "root": "newtab",
+      "builds": "js/kernel/composition/newtab.js",
+      "writes": "CanvasTabDB and its settings, through #17's adapter, for the new tab and the PiP editor in its realm",
+      "owner": 35,
+      "removeWhen": "#35 slice 4d moves the new tab's and PiP's writes onto #13's port"
+    }
+  ],
+  "inContext": [
+    {
+      "file": "js/kernel/adapters/indexeddb/journal.js",
+      "writes": "NewTabNoteJournal, through js/kernel/adapters/in-context.js: each page journals what it sends",
+      "owner": 35
+    },
+    {
+      "file": "js/kernel/adapters/indexeddb/trust.js",
+      "writes": "NewTabNoteTrust, through js/kernel/adapters/in-context.js: the Trust Center's events, receipts and incidents",
+      "owner": 20
+    },
+    {
+      "file": "js/kernel/composition/trust.js",
+      "writes": "#20's chrome.storage.local keys: the sightings held while NewTabNoteTrust won't open",
+      "owner": 20
+    },
+    {
+      "file": "js/kernel/composition/host.js",
+      "writes": "chrome.storage.local, through its settings handles: #11's and #19's holder settings and #17's session-state keys, with #17's adapter's settings until each page moves",
+      "owner": 17
+    }
+  ],
+  "reads": [
+    {
+      "file": "js/kernel/adapters/indexeddb/recovery-points.js",
+      "roots": ["newtab"],
+      "why": "the new tab reads the pre-update copy for its export (legacy-export.js); its writes are the worker's migration run's (migrate.js)",
+      "owner": 17
+    }
+  ],
+  "handles": [
+    {
+      "file": "js/kernel/composition/close-draft-writer.js",
+      "writes": "#33's close-time drafts in localStorage, at pagehide",
+      "owner": 33
+    },
+    {
+      "file": "js/kernel/core/application/close-drafts.js",
+      "writes": "the removal of #33's close-time drafts, 1.4.3's catch-up key and the untold lists from localStorage, under DRAFTS_LOCK",
+      "owner": 33
+    },
+    {
+      "file": "js/kernel/composition/holder-settings.js",
+      "writes": "#11's and #19's settings under setting_<key>, through js/kernel/composition/host.js",
+      "owner": 11
+    }
+  ],
+  "computedImports": [
+    {
+      "file": "js/runtime/lazy.js",
+      "loads": "the vendored libraries under js/lib/, by URL (loadLibrary), which hold no repository write"
+    }
+  ],
+  "indexeddb": {
+    "adapter.js": "writer",
+    "backups.js": "writer",
+    "changes.js": "writer",
+    "conflicts.js": "shared",
+    "connection.js": "shared",
+    "daily-answer.js": "shared",
+    "data-urls.js": "shared",
+    "deletion.js": "writer",
+    "failures.js": "shared",
+    "health.js": "shared",
+    "integrity.js": "shared",
+    "journal.js": "in-context",
+    "ledger-sweep.js": "writer",
+    "ledger.js": "shared",
+    "legacy-export.js": "shared",
+    "legacy-secrets.js": "shared",
+    "migrate.js": "writer",
+    "purge.js": "writer",
+    "raw-export.js": "shared",
+    "records.js": "shared",
+    "recovery-copies.js": "writer",
+    "recovery-points.js": "writer",
+    "registry.js": "writer",
+    "repair-points.js": "writer",
+    "requests.js": "shared",
+    "salvage-reader.js": "shared",
+    "schema.js": "shared",
+    "settings.js": "shared",
+    "shapes.js": "shared",
+    "space.js": "shared",
+    "transforms.js": "writer",
+    "trust.js": "in-context",
+    "versions.js": "writer",
+    "worker-tasks.js": "writer"
+  }
+}

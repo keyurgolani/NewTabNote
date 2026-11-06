@@ -161,6 +161,10 @@ test('hooks a module worker the same way', async ({ playwright, headless }) => {
 
 test('still sees what the worker throws after it restarts, and fails while it is stopped', async ({ extension }) => {
   const page = await extension.openSurface('popup');
+  // Popup's start wakes the worker on purpose while the database is below this build's version,
+  // with storage.migrate, and waits for the worker's run (#17, Q12), so a stop sent before that
+  // start settles can be undone at once. Popup lists its notes once it has.
+  await expect(page.locator('#page-list')).not.toContainText('Loading...');
   const instance = () => extension.worker.evaluate(() => self.__ntnHarness.instance);
   const before = await instance();
 
