@@ -108,6 +108,9 @@ function world({ live = [LIVE], inFlight = [] } = {}) {
       liveOwners: async () => holders,
       own: { sessionId: OWN, inFlight: () => flying },
       clock,
+      // Every entry here is one its own surface could send, so these cases hold the drain's own
+      // rules: worker-journal.test.mjs holds the judge the worker passes (#35 slice 4b-1, F5)
+      permits: () => null,
       unreplayable: (entry, code, how) => {
         told.push([entry.opId, code]);
         if (how?.stop) stops.push(entry.opId);

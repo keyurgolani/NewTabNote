@@ -2,7 +2,9 @@
 // entries, written before a capture is sent and removed once it's answered for good, and the
 // coordinator's drain of every context's, under Web Lock journal.replay. It opens nothing until
 // a capture or a drain needs the journal, holds its owner lock before its first entry, leaves an
-// entry in flight to its capture, and tells the diagnostic journal what it couldn't replay.
+// entry in flight to its capture, and tells the diagnostic journal what it couldn't replay. Each
+// replay is judged as the surface that wrote its entry, as the port router judges that surface's
+// own request (#35 slice 4b-1, F5).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -458,5 +460,68 @@ describe("the worker's journal (#35 slice 3)", () => {
     await w.journal.drain(w.client);
     assert.equal(w.events.length, 2);
     assert.deepEqual(w.notified, ['c-newer']);
+  });
+
+  it("replays no entry its surface couldn't have sent, refused with the router's code: a Popup capture is unknown-operation and a Popup append forbidden-for-surface, neither runs and both stay, and the worker's own capture still replays (#35 slice 4b-1, F5)", async () => {
+    const w = worker();
+    const stores = inContextStores({ indexedDB: w.faults.factory });
+    const database = stores.journal();
+    await database.open();
+    // A Popup page's entries, its owner gone: a capture, which only the worker sends, and an
+    // append, which only the new tab sends
+    await database.put(
+      journalEntry({
+        command: /** @type {any} */ (capture('c-popup')),
+        v: 1,
+        noteId: 'daily-c-popup',
+        surface: 'popup',
+        ownerSessionId: 'page-gone',
+        seq: 1,
+        createdAt: NOW - 3000,
+      }),
+    );
+    await database.put(
+      journalEntry({
+        command: {
+          type: 'insertBlocks',
+          commandId: 'c-append',
+          noteId: 'n1',
+          blocks: [{ id: 'b2', type: 'text', content: 'From the popup' }],
+          atOrder: 1,
+        },
+        v: 1,
+        noteId: 'n1',
+        surface: 'popup',
+        ownerSessionId: 'page-gone',
+        seq: 2,
+        createdAt: NOW - 2000,
+      }),
+    );
+    // The worker's own capture, from the instance before this one
+    await database.put(
+      journalEntry({
+        command: /** @type {any} */ (capture('c-own')),
+        v: 1,
+        noteId: 'daily-c-own',
+        surface: 'worker-internal',
+        ownerSessionId: 'coordinator-0',
+        seq: 1,
+        createdAt: NOW - 1000,
+      }),
+    );
+    database.close();
+    const result = await w.journal.drain(w.client);
+    assert.deepEqual(w.sent, ['c-own'], 'only what its own surface could send runs');
+    assert.deepEqual([result?.replayed, result?.left], [1, 2]);
+    assert.deepEqual(w.events, [
+      ['journal.entry-unreplayable', { surface: 'popup' }, { code: 'unknown-operation' }],
+      ['journal.entry-unreplayable', { surface: 'popup' }, { code: 'forbidden-for-surface' }],
+      ['capture.committed', {}, undefined],
+    ]);
+    assert.deepEqual((await storedIn(w.real)).sort(), ['c-append', 'c-popup'], 'both stay');
+    // Once each
+    await w.journal.drain(w.client);
+    assert.deepEqual(w.sent, ['c-own']);
+    assert.equal(w.events.length, 3);
   });
 });

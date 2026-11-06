@@ -162,6 +162,8 @@ async function world(fixture) {
       liveOwners: async () => holders,
       own: { sessionId: 'coordinator-1', inFlight: () => new Set() },
       clock: ctx.clock,
+      // Each entry here is the new tab's own, which it could send (#35 slice 4b-1, F5)
+      permits: () => null,
     });
   /**
    * @param {string} store
