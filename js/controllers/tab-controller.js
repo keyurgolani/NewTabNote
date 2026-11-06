@@ -35,8 +35,8 @@ class TabController {
      */
     this.noteTabs = Object.freeze({
       openNoteIds: () => this.openTabs.map((tab) => tab.noteId),
-      // Both panes' editors and the pop-out's, as getOpenEditors: the AI title's spinner turns on
-      // each that holds its note (#197)
+      // Both panes' editors and the pop-out's, as getOpenEditors: the AI title's spinner and
+      // "Extracting..." show in each that holds their note (#197, #201)
       openEditors: () => this.getOpenEditors(),
       showCommittedTitle: (noteId, name) => this.showCommittedTitle(noteId, name),
       showCommittedInsights: (noteId, fields) => this.showCommittedInsights(noteId, fields),

@@ -85,7 +85,7 @@ class NotesManager {
     /**
      * @type {any} TabController's noteTabs, set by App: a committed title or insights show in
      * each open editor that holds the note, the title naming its tab too, and the AI title's
-     * spinner turns on each of them (#197, #201)
+     * spinner and "Extracting..." show in each of them (#197, #201)
      */
     this.noteTabs = null;
 
@@ -518,12 +518,9 @@ class NotesManager {
       sidebarItem.classList.add('generating');
     }
 
-    // Show loading state in insights section if this is the current note
-    const editor = this.getEditor ? this.getEditor() : null;
-    const isCurrentNote = editor && editor.noteId === noteId;
-    if (isCurrentNote) {
-      this.showInsightsLoading();
-    }
+    // Show loading state in the insights section of each editor that holds the note, in either
+    // pane or the pop-out (#201)
+    for (const editor of this.editorsOf(noteId)) editor.showInsightsLoadingInEditor();
 
     /** @type {Object|null} The insights stored, which the editor shows once the mark is cleared */
     let stored = null;
@@ -569,10 +566,8 @@ class NotesManager {
     } catch (error) {
       console.error('Failed to extract insights:', error);
       Utils.showToast('Failed to extract insights: ' + error.message, 'error');
-      // Remove loading state from insights on error, while the editor still shows that note
-      if (this.editorHolds(noteId)) {
-        this.hideInsightsLoading();
-      }
+      // Remove loading state from insights on error, in each editor that still shows that note
+      for (const editor of this.editorsOf(noteId)) editor.hideInsightsLoadingInEditor();
     } finally {
       // Clear extraction state
       await this.markInsightsPending(noteId, false);
@@ -604,23 +599,22 @@ class NotesManager {
   }
 
   /**
-   * Whether the editor getEditor answers holds `noteId` now
+   * Each open editor that holds `noteId` now, in either pane or the pop-out, as TabController's
+   * noteTabs lists them (#197, #201)
    * @param {string} noteId
-   * @returns {boolean}
+   * @returns {Array<BlockEditor>}
    */
-  editorHolds(noteId) {
-    const editor = this.getEditor ? this.getEditor() : null;
-    return Boolean(editor && editor.noteId === noteId);
+  editorsOf(noteId) {
+    return (this.noteTabs?.openEditors() || []).filter(editor => editor.noteId === noteId);
   }
 
   /**
-   * The title of each open editor that holds `noteId` now, in either pane or the pop-out, as
-   * TabController's noteTabs lists them (#197)
+   * The title of each open editor that holds `noteId` now (#197)
    * @param {string} noteId
    * @returns {Array<HTMLElement>}
    */
   titlesOf(noteId) {
-    return (this.noteTabs?.openEditors() || []).filter(editor => editor.noteId === noteId).map(editor => editor.titleEl);
+    return this.editorsOf(noteId).map(editor => editor.titleEl);
   }
 
   /**
@@ -698,52 +692,6 @@ class NotesManager {
   async recordJobRun(job) {
     const outcome = await this.documentClient.recordJobRun(job);
     if (outcome.kind !== 'committed') throw notStored(`the ${job} run`, outcome);
-  }
-
-  /**
-   * Show loading indicator in insights section
-   */
-  showInsightsLoading() {
-    // Remove existing insights section
-    const existingInsights = document.getElementById('note-insights');
-    if (existingInsights) {
-      existingInsights.remove();
-    }
-
-    // Create loading placeholder
-    const loadingEl = document.createElement('div');
-    loadingEl.id = 'note-insights';
-    loadingEl.className = 'note-insights insights-loading';
-    loadingEl.innerHTML = `
-      <div class="note-insights-header">
-        <div class="note-insights-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path>
-          </svg>
-          <span>AI Insights</span>
-        </div>
-        <div class="insights-loading-indicator">
-          <div class="insights-spinner"></div>
-          <span>Extracting...</span>
-        </div>
-      </div>
-    `;
-
-    // Insert after timestamp
-    const timestamp = document.getElementById('page-timestamp');
-    if (timestamp) {
-      timestamp.after(loadingEl);
-    }
-  }
-
-  /**
-   * Hide loading indicator in insights section
-   */
-  hideInsightsLoading() {
-    const loadingEl = document.getElementById('note-insights');
-    if (loadingEl && loadingEl.classList.contains('insights-loading')) {
-      loadingEl.remove();
-    }
   }
 
   // ─── Auto-Title ───

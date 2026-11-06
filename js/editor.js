@@ -995,7 +995,8 @@ class BlockEditor {
   }
 
   /**
-   * Show loading indicator in insights section (called from editor)
+   * Show loading indicator in this editor's insights section: from its own render, and from
+   * NotesManager's Extract insights in each editor that holds the note (#201)
    */
   showInsightsLoadingInEditor() {
     // Remove existing insights section, its own pane's (#201)
@@ -1030,6 +1031,13 @@ class BlockEditor {
     } else {
       this.titleEl.after(loadingEl);
     }
+  }
+
+  /**
+   * Hide that loading indicator, if this editor's pane shows it (#201)
+   */
+  hideInsightsLoadingInEditor() {
+    this.root.querySelector('.insights-loading')?.remove();
   }
 
   /**
