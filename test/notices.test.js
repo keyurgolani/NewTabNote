@@ -23,15 +23,15 @@ const policy = read('PRIVACY_POLICY.md');
 
 /** Valibot's code as terser leaves it in a chunk: its Standard Schema object and a "~run" call */
 const VALIBOT = 'function $(e){return e["~standard"]={version:1,vendor:"valibot",validate:t=>e["~run"]({value:t},S())},e}';
-// A piece of the named character references as #14's entities.js packs them, which only the
-// block core's chunk carries, the one the new tab's workspace chunk and recovery.html load
+// A piece of the named character references as #14's entities.js packs them, which the new
+// tab's workspace chunk and the block core's chunk recovery.html's own pass writes carry
 const ENTITIES = 'const k=["ClockwiseContourIntegral:1,CounterClockwiseContourIntegral:1"].join(",");';
 /**
  * The chunks the bundler folds Valibot into, the pages' shared trust chunk, recovery.html's own
- * chunk, which its own pass bundles, and the service worker, and the block core's chunk, which
- * holds #14's table
+ * chunk, which its own pass bundles, and the service worker, and the two that hold #14's table:
+ * the new tab's workspace chunk, and the block core's chunk recovery.html's pass writes
  */
-const CHUNKS = { 'assets/trust-YdWbqFjr.js': `${VALIBOT}export{$ as t};`, 'assets/recovery-Rk8vB2xQ.js': `${VALIBOT}export{};`, 'js/background.js': `${VALIBOT}self.ntn=1;`, 'assets/newtab-D3k5NAfy.js': 'import"./trust-YdWbqFjr.js";', 'assets/workspace-Q7bL2xVe.js': 'import"./blocks-Hc4tWq2A.js";', 'assets/blocks-Hc4tWq2A.js': ENTITIES };
+const CHUNKS = { 'assets/trust-YdWbqFjr.js': `${VALIBOT}export{$ as t};`, 'assets/recovery-Rk8vB2xQ.js': `${VALIBOT}import"./blocks-Hc4tWq2A.js";export{};`, 'js/background.js': `${VALIBOT}self.ntn=1;`, 'assets/newtab-D3k5NAfy.js': 'import"./trust-YdWbqFjr.js";', 'assets/workspace-Q7bL2xVe.js': `${ENTITIES}export{};`, 'assets/blocks-Hc4tWq2A.js': ENTITIES };
 
 /** A zip laid out like the package, built from the repository files and CHUNKS. */
 async function packageZip({ omit = [], replace = {} } = {}) {
@@ -208,6 +208,12 @@ describe('license notices (AC8)', () => {
       `assets/sidepanel-DgtwzUbD.js carries ${valibot}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
       `assets/sidepanel-DgtwzUbD.js carries ${emoji}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
     ]);
+    // #14's table in the new tab's workspace chunk, with the In: line naming the block core's
+    // chunk alone, as it did when the pages pass split the core out (#115)
+    assert.deepEqual(
+      checkBundledNotices(filesOf(CHUNKS, read('THIRD_PARTY_NOTICES').replace('In:        assets/workspace-*.js and assets/blocks-*.js:', 'In:        assets/blocks-*.js:'))),
+      [`assets/workspace-Q7bL2xVe.js carries HTML Standard named character references's code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`],
+    );
     // #14's table of character references moves from the block core's chunk into the popup's
     const entities = 'HTML Standard named character references';
     assert.deepEqual(

@@ -144,18 +144,23 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
       [...Object.keys(pages.build.rolldownOptions.input), ...Object.keys(recovery.build.rolldownOptions.input)].sort(),
       Object.keys(config.PAGES).sort(),
     );
-    // The pages pass's settings but its input: the names, the minifiers, the loader's and the block
-    // core's chunks, the preloads, and the workers' build. In a pass of one page the core's chunk
-    // takes its dependencies too, or it would import them from the page's own entry chunk, which
-    // imports it: a cycle the page's preloads walk back into its own entry
-    const [, pagesBlocks] = pages.build.rolldownOptions.output.codeSplitting.groups;
+    // The block core's chunk is recovery.html's pass's alone. In the pages pass only the new tab
+    // reaches the core, through its workspace chunk, which keeps it as it did before #115, so the
+    // new tab's start pays for no split (#27). In a pass of one page the core's chunk takes its
+    // dependencies too, or it would import them from the page's own entry chunk, which imports
+    // it: a cycle the page's preloads walk back into its own entry
+    const groupNames = (/** @type {any} */ pass) =>
+      pass.build.rolldownOptions.output.codeSplitting.groups.map((/** @type {any} */ group) => (typeof group.name === 'function' ? group.debugName : group.name));
+    assert.deepEqual([groupNames(pages), groupNames(recovery)], [['loader'], ['loader', 'blocks']]);
     const [, recoveryBlocks] = recovery.build.rolldownOptions.output.codeSplitting.groups;
-    assert.deepEqual([pagesBlocks.includeDependenciesRecursively, recoveryBlocks.includeDependenciesRecursively], [false, true]);
+    assert.equal(recoveryBlocks.includeDependenciesRecursively, true);
+    // Otherwise the pages pass's settings but its input: the names, the minifiers, the loader's
+    // chunk, the preloads, and the workers' build
     const settings = (/** @type {any} */ pass) => {
       const { output } = pass.build.rolldownOptions;
       return {
         names: [output.entryFileNames, output.chunkFileNames({ moduleIds: ['/repo/js/x.js'] }), output.assetFileNames],
-        groups: output.codeSplitting.groups.map((/** @type {any} */ group) => (typeof group.name === 'function' ? group.debugName : group.name)),
+        loader: output.codeSplitting.groups[0].name,
         build: [pass.build.minify, pass.build.cssMinify, pass.build.target, pass.build.terserOptions, pass.build.modulePreload.polyfill],
         checks: pass.build.rolldownOptions.checks,
         worker: pass.worker.format,
@@ -733,11 +738,11 @@ describe("the block core's chunk (#115's review: scripts/build/vite-config.js)",
   };
   const ctx = { getModuleInfo: (/** @type {string} */ id) => ({ importers: (IMPORTERS[id.slice('/repo/'.length)] || []).map(at) }) };
 
-  it('names `blocks` what only the block registry and the projections import, through the core or not, and nothing else', () => {
-    const { output } = config.pagesConfig(passOptions()).build.rolldownOptions;
+  it("names `blocks` what only the block registry and the projections import, through the core or not, and nothing else, in recovery.html's pass", () => {
+    const { output } = config.recoveryConfig(passOptions()).build.rolldownOptions;
     const group = output.codeSplitting.groups[1];
-    // Its own modules only: their dependencies would pull the note domain's back in
-    assert.equal(group.includeDependenciesRecursively, false);
+    // In a pass of one page it takes its own modules' dependencies too (above)
+    assert.equal(group.includeDependenciesRecursively, true);
     for (const file of ['index', 'builtins', 'catalog', 'models', 'html-text', 'entities', 'one', 'two']) {
       assert.equal(group.name(at(`${BLOCKS}/${file}.js`), ctx), 'blocks', file);
     }
@@ -756,8 +761,8 @@ describe("the loader's chunk (#27 slice 3: scripts/build/vite-config.js, scripts
   it('puts the loader alone in a chunk the pages pass writes at its own path, and every other chunk under assets/, hashed', () => {
     const { output } = config.pagesConfig(passOptions()).build.rolldownOptions;
     const [group] = output.codeSplitting.groups;
-    // The loader's group, then the block core's (below)
-    assert.equal(output.codeSplitting.groups.length, 2);
+    // The loader's group alone: the block core's is recovery.html's pass's (below)
+    assert.equal(output.codeSplitting.groups.length, 1);
     assert.equal(group.test(LOADER_ID), true);
     assert.equal(group.test('/repo/js/main.js'), false);
     const named = (moduleIds) => output.chunkFileNames({ name: 'x', isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds, exports: [] });

@@ -102,11 +102,13 @@ const ROWS_MODULE = 'js/kernel/composition/destination-rows.js';
 const LOADER = 'js/runtime/lazy.js';
 
 /**
- * #14's block core, which the pages pass writes as a chunk of its own, `blocks` (#115's review):
- * what only the block registry (js/kernel/composition/blocks.js) and the projections the new
- * tab's legacy scripts read (js/kernel/composition/block-projections.js) import, html-text.js's
- * tokenizer and its named character references among them. THIRD_PARTY_NOTICES' In: line names
- * the chunk, so its name has to hold whichever pages share it.
+ * #14's block core, which recovery.html's own pass writes as a chunk of its own, `blocks`
+ * (#115's review): what only the block registry (js/kernel/composition/blocks.js) and the
+ * projections the new tab's legacy scripts read (js/kernel/composition/block-projections.js)
+ * import, html-text.js's tokenizer and its named character references among them. In the pages
+ * pass only the new tab reaches the core, through its workspace chunk, which keeps it: a chunk of
+ * its own there cost the new tab's start about 620 bytes gzip (#27). THIRD_PARTY_NOTICES' In: line
+ * names both, so their names have to hold whichever pages share them.
  */
 const BLOCK_CORE = 'js/kernel/core/blocks';
 const BLOCK_ROOTS = Object.freeze(['js/kernel/composition/blocks.js', 'js/kernel/composition/block-projections.js']);
@@ -369,9 +371,8 @@ function loaderIds(root) {
  * the block core whose every importer is one of the block roots or a module of the core's chunk
  * itself. A block module anything else imports, as the note domain does its previews and wiki
  * links, stays in the chunks that hold what imports it, and so does each block module only it
- * imports, so the Popup and the Side Panel never load the core. The group takes only these
- * modules, not their dependencies (`includeDependenciesRecursively: false`), or it would pull
- * those back in.
+ * imports, so the Popup and the Side Panel never load the core. Only recovery.html's pass of one
+ * page writes the chunk, and there it takes these modules' dependencies too (recoveryConfig).
  * @param {string} root
  * @returns {(id: string, ctx: {getModuleInfo(id: string): {importers: readonly string[]} | null}) => string | null}
  */
@@ -452,23 +453,23 @@ function pagesConfig(options) {
  * @returns {InlineConfig}
  */
 function recoveryConfig(options) {
-  // One page: the block core's dependencies would stay in the page's own entry chunk, which the
-  // core's chunk would import as the entry imports it, a cycle a page's preloads walk back into
-  // its own entry. So here the core's chunk takes them too.
-  return pagePassConfig(options, ['recovery'], { blockDependencies: true });
+  // The block core's chunk, here only. One page: the core's dependencies would stay in the page's
+  // own entry chunk, which the core's chunk would import as the entry imports it, a cycle a page's
+  // preloads walk back into its own entry. So the core's chunk takes them too.
+  return pagePassConfig(options, ['recovery'], { blockChunk: true });
 }
 
 /**
  * A pass over `pages`, each an HTML entry, with what every page pass shares: the names, the
- * preloads, the loader's and the block core's chunks, the workers' build, and the report, which
- * records its chunks as the pages'
+ * preloads, the loader's chunk, the workers' build, and the report, which records its chunks as
+ * the pages'
  * @param {PassOptions} options
  * @param {readonly string[]} pages - PAGES' names
- * @param {{blockDependencies?: boolean}} [chunks] - `blockDependencies`: whether the block core's
- *   chunk takes its modules' dependencies too
+ * @param {{blockChunk?: boolean}} [chunks] - `blockChunk`: whether the pass writes the block
+ *   core's chunk, with its modules' dependencies
  * @returns {InlineConfig}
  */
-function pagePassConfig(options, pages, { blockDependencies = false } = {}) {
+function pagePassConfig(options, pages, { blockChunk = false } = {}) {
   const { root, mode, report, onLog } = options;
   const names = {
     entryFileNames: `${ASSETS_DIR}/[name]-[hash].js`,
@@ -488,12 +489,13 @@ function pagePassConfig(options, pages, { blockDependencies = false } = {}) {
         output: {
           ...names,
           chunkFileNames: chunkFileName(root),
-          // The loader alone in a chunk, whichever chunks import it (#27 slice 3), and the block
-          // core in one of its own, named for what it is (#115's review)
+          // The loader alone in a chunk, whichever chunks import it (#27 slice 3), and in
+          // recovery.html's pass the block core in one of its own, named for what it is (#115's
+          // review)
           codeSplitting: {
             groups: [
               { name: 'loader', test: (id) => loader.has(id) },
-              { name: blockCoreChunk(root), debugName: 'blocks', includeDependenciesRecursively: blockDependencies },
+              ...(blockChunk ? [{ name: blockCoreChunk(root), debugName: 'blocks', includeDependenciesRecursively: true }] : []),
             ],
           },
         },
