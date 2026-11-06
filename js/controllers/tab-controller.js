@@ -913,6 +913,9 @@ class TabController {
         // text is selected, so a typed name takes the place of "Untitled" (#197)
         const editor = this.getEditor();
         await editor.loadFocus;
+        // Unless its pane no longer holds the new note by then: a click made the other pane
+        // active, or another note's load came first, so the title isn't this note's
+        if (editor !== this.getEditor() || editor.noteId !== note.id) return;
         editor.titleEl.focus();
         editor.doc.getSelection().selectAllChildren(editor.titleEl);
       }
