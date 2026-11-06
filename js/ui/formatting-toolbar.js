@@ -429,7 +429,10 @@ class FormattingToolbar {
       this._linkField.value = '';
     }
 
+    // A link's old address opens selected, so a typed one replaces it, and an arrow key or a click in
+    // the field edits it instead (#199). An empty field has nothing to select
     this._linkField.focus();
+    this._linkField.select();
   }
 
   _hideLinkInput() {

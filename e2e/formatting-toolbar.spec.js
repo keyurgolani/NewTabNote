@@ -27,6 +27,9 @@
  *   from the keyboard and Enter still apply the link, and so does a switch to another window,
  *   which leaves the field focused. A press on the toolbar's own frame, or on ✓ until its release,
  *   keeps focus in the field.
+ * - Link on a word with a link opens the field with that link's address all selected, so a typed
+ *   address replaces it, and an arrow key or a click in the field edits it. Before, the caret sat
+ *   at the end, so a typed address ran on from the old one.
  * - A double-click on ✓ applies the link once. Its second press, which lands where ✓ was, on the
  *   button that comes back there, does nothing, so the word keeps its formatting. Before, that
  *   button ran. A double-click on any format button acts once, so a double-clicked Bold bolds the
@@ -431,6 +434,48 @@ test('in link mode, ✓ from the keyboard or by the mouse, and Enter in the fiel
   await linkFor(3, 'A fourth'.length, 'https://example.test/d');
   await page.keyboard.press('Enter');
   await expect.poll(() => linksIn(page, 3), 'Enter in the field applies it').toEqual([['https://example.test/d', 'A fourth']]);
+  await expectNoUncaught(extension, page);
+});
+
+test('Link on a linked word opens the field with its address selected, so a typed address replaces it, and an arrow key or a click in the field edits it', async ({ extension }) => {
+  const page = await shortNote(extension);
+  const field = page.locator('.formatting-toolbar-url:visible');
+  /** The field's value, and the part of it that's selected */
+  const inField = () => field.evaluate(el => ({ value: el.value, selected: el.value.slice(el.selectionStart, el.selectionEnd) }));
+  /** Link pressed on "Before" */
+  const linkBefore = async () => {
+    await selectStart(page, 0, 'Before'.length);
+    await pressLink(page);
+    await expect(field).toBeFocused();
+  };
+
+  // The word gets its link through Link
+  await linkBefore();
+  await page.keyboard.type('https://a.example/');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => linksIn(page, 0), 'the word links to the first address').toEqual([['https://a.example/', 'Before']]);
+
+  // Link again: the old address opens all selected, and a typed one replaces it
+  await linkBefore();
+  expect(await inField(), 'the old address is all selected').toEqual({ value: 'https://a.example/', selected: 'https://a.example/' });
+  await page.keyboard.type('https://b.example/');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => linksIn(page, 0), 'a typed address replaces the old one').toEqual([['https://b.example/', 'Before']]);
+
+  // An arrow key, then a key typed, edits the address where the caret is
+  await linkBefore();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.type('x');
+  expect(await inField(), 'after an arrow key, a key typed edits the address').toEqual({ value: 'https://b.example/x', selected: '' });
+  await page.keyboard.press('Escape');
+
+  // So does a click in the field, here at its start
+  await linkBefore();
+  const box = await field.boundingBox();
+  await page.mouse.click(box.x + 2, box.y + box.height / 2);
+  await page.keyboard.type('x');
+  expect(await inField(), 'after a click in the field, a key typed edits the address').toEqual({ value: 'xhttps://b.example/', selected: '' });
+  await page.keyboard.press('Escape');
   await expectNoUncaught(extension, page);
 });
 
