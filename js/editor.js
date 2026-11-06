@@ -598,16 +598,20 @@ class BlockEditor {
     // edit the note. Kept as a promise, so the tab bar's + can focus the title once
     // this has run (#197)
     this.loadFocus = new Promise(resolve => setTimeout(() => {
-      const firstContent = this.container.querySelector('.block-content');
-      if (firstContent && !this._focusInOverlay()) {
-        firstContent.focus();
-        this.placeCaretAtEnd(firstContent);
+      // It settles even if the focus throws, so the tab bar's + never waits on it forever
+      try {
+        const firstContent = this.container.querySelector('.block-content');
+        if (firstContent && !this._focusInOverlay()) {
+          firstContent.focus();
+          this.placeCaretAtEnd(firstContent);
+        }
+        // Reset scroll after focus (focus can cause scroll)
+        if (editorContainer) {
+          editorContainer.scrollTop = 0;
+        }
+      } finally {
+        resolve();
       }
-      // Reset scroll after focus (focus can cause scroll)
-      if (editorContainer) {
-        editorContainer.scrollTop = 0;
-      }
-      resolve();
     }, 50));
 
     this._startSnapshotInterval();
