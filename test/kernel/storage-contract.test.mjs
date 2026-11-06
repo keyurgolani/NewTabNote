@@ -2,7 +2,7 @@
 // adapter passes #12's contract suite alongside the in-memory adapter"), over fake-indexeddb
 // behind the fault-injecting wrapper. And which composition roots load it: the service worker,
 // Popup, and Side Panel since #17 PR 1b, the new tab since #17 PR 4a, and recovery.html since
-// #20 slice 4b.
+// #20 slice 4b. Since #35 slice 4b-2, Popup's root opens #17's read-only reader in its place.
 
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,6 +21,8 @@ const ROOT = path.join(import.meta.dirname, '..', '..');
 const { readScriptGraph } = createRequire(import.meta.url)('../../scripts/lib/script-graph.js');
 
 const ADAPTER = 'js/kernel/adapters/indexeddb/adapter.js';
+/** #17's read-only reader, which Popup's root opens in the adapter's place (#35 slice 4b-2) */
+const READER = 'js/kernel/adapters/indexeddb/reader.js';
 const RUNNER = 'js/kernel/adapters/indexeddb/migrate.js';
 /**
  * The worker's own modules, which no page may reach, with what a problem calls each: the
@@ -78,8 +80,8 @@ function pageGraphs(readFile) {
 
 /**
  * What a page's graph breaks of the roots rule: a page that reaches one of the worker's own
- * modules, Popup, Side Panel, or the new tab without #17's adapter, the offscreen document with
- * any adapter, and an import() no reading can follow but the loader's
+ * modules, Side Panel or the new tab without #17's adapter, Popup without #17's reader, the
+ * offscreen document with any adapter, and an import() no reading can follow but the loader's
  * @param {(file: string) => string} [readFile]
  * @returns {string[]}
  */
@@ -89,6 +91,8 @@ function rootProblems(readFile) {
     for (const [file, what] of Object.entries(WORKER_ONLY)) if (modules.has(file)) problems.push(`${page} reaches ${what}`);
     if (page === 'offscreen.html') {
       for (const file of modules) if (file.startsWith('js/kernel/adapters/')) problems.push(`${page} reaches ${file}`);
+    } else if (page === 'popup.html') {
+      if (!modules.has(READER)) problems.push(`${page} doesn't load #17's reader`);
     } else if (!modules.has(ADAPTER)) {
       problems.push(`${page} doesn't load #17's adapter`);
     }
@@ -99,16 +103,16 @@ function rootProblems(readFile) {
   return problems;
 }
 
-it('every root loads the IndexedDB adapter, and the legacy one is gone; only the worker runs migrations, transforms, and the purge', () => {
+it("every root loads the IndexedDB adapter but Popup's, which loads #17's reader (#35 slice 4b-2), and the legacy one is gone; only the worker runs migrations, transforms, and the purge", () => {
   const { all, pages } = pageGraphs();
   assert.deepEqual(all.problems, []);
   // #17 PR 1b: the worker upgrades the database through the runner, then opens #17's adapter
   assert.ok(all.workerFiles.has(ADAPTER), 'the worker loads the adapter');
   for (const [file, what] of Object.entries(WORKER_ONLY)) assert.ok(all.workerFiles.has(file), `the worker loads ${what}`);
   assert.ok(!fs.existsSync(path.join(ROOT, LEGACY_ADAPTER)), 'the legacy adapter went with #17 PR 4a');
-  // Popup and Side Panel open it as it is (Q3), and so does the new tab since #17 PR 4a, every
-  // chunk each loads included, and none runs a migration; the offscreen document only makes
-  // #21's API requests, and opens no storage
+  // Side Panel opens it as it is (Q3), and so does the new tab since #17 PR 4a, and Popup opens
+  // #17's reader in its place since #35 slice 4b-2, every chunk each loads included, and none
+  // runs a migration; the offscreen document only makes #21's API requests, and opens no storage
   assert.deepEqual(rootProblems(), []);
   // The new tab reaches its composition root through the workspace chunk, which the boot root
   // loads at once through the loader (#27 slice 3), and the trust chunk, and reads the

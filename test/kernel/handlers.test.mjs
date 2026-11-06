@@ -15,12 +15,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 
+import { POPUP_SENDS } from '../../js/kernel/composition/popup-send-chunk.js';
 import { ALL_HANDLERS, NEWTAB_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
 import { CONTEXT_HANDLERS } from '../../js/kernel/core/application/handlers-newtab.js';
 import { POPUP_HANDLERS } from '../../js/kernel/core/application/handlers-popup.js';
 import { RECOVERY_HANDLERS } from '../../js/kernel/core/application/handlers-recovery.js';
 import { SIDEPANEL_HANDLERS } from '../../js/kernel/core/application/handlers-sidepanel.js';
-import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
+import { WORKER_HANDLERS, WORKER_PAGE_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
 import { handlerTable } from '../../js/kernel/core/application/handlers.js';
 import { NOT_REGISTERED, createKernel } from '../../js/kernel/core/application/kernel.js';
 import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
@@ -71,11 +72,20 @@ const APPLIER_MODULES =
  * its root runs startup maintenance as the kernel opens, which sends runStartupMaintenance from
  * the kernel itself (kernel.js, maintain), and whether it writes notes, so its root applies a
  * closing tab's edits and journals what it sends (#33, #35 slice 3b). recovery.html reads only
- * its theme through its kernel, so it does neither (#20 slice 4b).
- * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, maintains: boolean, writesNotes: boolean}>}
+ * its theme through its kernel, so it does neither (#20 slice 4b). `sends` looks up the commands a
+ * page's root sends the worker over #13's port, not its kernel, as Popup's does (#35 slice 4b-2).
+ * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, sends?: (type: string) => unknown, maintains: boolean, writesNotes: boolean}>}
  */
 const PAGES = [
-  { page: 'Popup', entries: ['js/popup.js'], surface: 'popup', table: POPUP_HANDLERS, maintains: false, writesNotes: true },
+  {
+    page: 'Popup',
+    entries: ['js/popup.js'],
+    surface: 'popup',
+    table: POPUP_HANDLERS,
+    sends: POPUP_SENDS,
+    maintains: false,
+    writesNotes: true,
+  },
   {
     page: 'Side Panel',
     entries: ['js/sidepanel.js', 'js/insights-summary.js'],
@@ -353,15 +363,15 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     return { sent: new Set([...types, ...(maintains ? own : [])]), own, unread };
   };
 
-  for (const { page, entries, surface, table, maintains } of PAGES) {
+  for (const { page, entries, surface, table, sends, maintains } of PAGES) {
     it(`${page}: its table holds every command and query its code and its root send`, () => {
       const { sent, own, unread } = sentBy({ page, entries, maintains });
       assert.ok(sent.size > 0, `${page} sends something`);
       assert.deepEqual([...own], ['runStartupMaintenance'], "the kernel's own send");
       assert.deepEqual(
-        [...sent].filter(type => !registered(table).has(type)),
+        [...sent].filter(type => !registered(table).has(type) && !sends?.(type)),
         [],
-        `${page} sends what its table doesn't hold`,
+        `${page} sends what its table and its sends to the worker don't hold`,
       );
       if (surface === 'newtab') {
         // The new tab's facade sends types the scan can't read, so its table holds every one
@@ -377,7 +387,10 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
 
     if (surface !== 'newtab') {
       it(`${page}: its table holds nothing else, so its start loads no handler it never runs`, () => {
-        assert.deepEqual([...registered(table)].sort(), [...sentBy({ page, entries, maintains }).sent].sort());
+        assert.deepEqual(
+          [...registered(table)].sort(),
+          [...sentBy({ page, entries, maintains }).sent].filter(type => !sends?.(type)).sort(),
+        );
       });
     }
 
@@ -503,11 +516,12 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     assert.deepEqual(bulkWithoutRefusal(ALL_HANDLERS), []);
   });
 
-  it("the close-time drafts' apply is in the table of each page whose root applies them, and not the worker's, which leaves a journaled editor save to the pages (#33, #35 slice 3)", () => {
-    for (const { page, entries, surface, table, maintains, writesNotes } of PAGES) {
+  it("the close-time drafts' apply is in the table of each page whose root applies them, or in its sends to the worker, as Popup's is, and not the worker's table, which leaves a journaled editor save to the pages (#33, #35 slices 3 and 4b-2)", () => {
+    for (const { page, entries, surface, table, sends, maintains, writesNotes } of PAGES) {
       const applies = surface !== 'worker-internal' && writesNotes;
       assert.equal(sentBy({ page, entries, maintains }).sent.has('applyCloseDraft'), applies, `${page} sends it`);
-      assert.equal(registered(table).has('applyCloseDraft'), applies, `${page}'s table holds it`);
+      assert.equal(registered(table).has('applyCloseDraft'), applies && !sends, `${page}'s table holds it`);
+      assert.equal(!!sends?.('applyCloseDraft'), applies && !!sends, `${page}'s sends to the worker hold it`);
     }
   });
 
@@ -704,7 +718,7 @@ describe('a command or query the policy allows that a table lacks (#17 PR 4b)', 
     ]);
   });
 
-  it('holds no key, so the same command commits once the page has its handler', async () => {
+  it("holds no key, so the same command commits once a table has its handler, as the worker's for pages has Popup's quick note's (#35 slice 4b-2)", async () => {
     const adapter = createMemoryAdapter();
     /** @param {HandlerTable} table */
     const on = table =>
@@ -719,7 +733,7 @@ describe('a command or query the policy allows that a table lacks (#17 PR 4b)', 
     /** @type {Command} */
     const command = { type: 'createNote', commandId: 'c1', noteId: 'n1', name: 'Kept' };
     assert.equal((await on(handlerTable({})).execute(command)).code, NOT_REGISTERED);
-    assert.equal((await on(POPUP_HANDLERS).execute(command)).kind, 'committed');
+    assert.equal((await on(WORKER_PAGE_HANDLERS).execute(command)).kind, 'committed');
   });
 
   it("a type the policy refuses on the surface is still the policy's not-on-surface, and logs nothing", async () => {

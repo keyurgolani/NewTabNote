@@ -726,7 +726,7 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
     assert.deepEqual(reached, []);
   });
 
-  it('makes no write the write scan sees, in the reader or the read half, which no page loads yet', () => {
+  it("makes no write the write scan sees, in the reader or the read half, which Popup's root loads (#35 slice 4b-2)", () => {
     // check:write-paths leaves js/kernel to one-committer, which scans only what a page loads
     for (const file of ['reader.js', 'reads.js']) {
       const at = `${INDEXEDDB}/${file}`;

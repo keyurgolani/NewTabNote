@@ -4,13 +4,6 @@
   "writeAdapter": "js/kernel/adapters/indexeddb/adapter.js",
   "untilMoved": [
     {
-      "root": "popup",
-      "builds": "js/kernel/composition/popup.js",
-      "writes": "CanvasTabDB and its settings, through #17's adapter",
-      "owner": 35,
-      "removeWhen": "#35 slice 4b moves Popup's writes onto #13's port"
-    },
-    {
       "root": "sidepanel",
       "builds": "js/kernel/composition/sidepanel.js",
       "writes": "CanvasTabDB and its settings, through #17's adapter",
@@ -55,6 +48,12 @@
     }
   ],
   "reads": [
+    {
+      "file": "js/kernel/adapters/indexeddb/connection.js",
+      "roots": ["popup"],
+      "why": "Popup reads through #17's read-only reader (reader.js), whose open in existing mode makes and upgrades nothing: its indexedDB.open is the one write the scan sees; Popup's writes go to the worker over #13's port (#35 slice 4b-2)",
+      "owner": 35
+    },
     {
       "file": "js/kernel/adapters/indexeddb/recovery-points.js",
       "roots": ["newtab", "recovery"],

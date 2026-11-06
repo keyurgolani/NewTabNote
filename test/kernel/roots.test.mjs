@@ -1,12 +1,14 @@
 // What each composition root builds (#12, "Where the kernel runs"; #17 PR 1b): one kernel per
 // context, with its surface as the caller the policy checks, and since #17 PR 4b the table of
 // the handlers its page sends (core/application/handlers.js). The worker's runs #17's migration
-// run first, then opens #17's adapter, and Popup's and Side Panel's open #17's adapter as it is.
+// run first, then opens #17's adapter, and Side Panel's opens #17's adapter as it is.
 // So does the new tab's since #17 PR 4a, once the worker's run has had its 5 seconds, its one
 // connection since #17 PR 4b, which connects production js/storage.js's shell to its kernel,
 // in test/helpers/legacy-env.js. The worker's maintenance leaves out the integrity check, which
 // it runs when asked (#35 slice 1). recovery.html's opens #17's adapter as it is too, with no
-// wait on the worker's run (#20 slice 4b).
+// wait on the worker's run (#20 slice 4b). Popup's opens #17's read-only reader as it is, and sends
+// its writes to the worker over #13's port (#35 slice 4b-2), here a stand-in for it
+// (popup-worker.mjs).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,6 +32,7 @@ import { createRecoveryRoot, recoveryReadersOf } from '../../js/kernel/compositi
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { popupWorker } from './popup-worker.mjs';
 import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
 import { realTimers } from './trust-support.mjs';
 
@@ -84,6 +87,21 @@ const pageHostOf = (context, waits = { count: 0 }) => ({
 });
 
 /**
+ * Popup's client on `context`'s profile, its writes to a stand-in for the worker there, which the
+ * case closes
+ * @param {LegacyContext} context
+ */
+const popupOn = context => {
+  const standIn = popupWorker({ indexedDB: context.env.indexedDB, settings: context.env.chrome.api.storage.local });
+  const client = createPopupClient({
+    ...pageHostOf(context),
+    runtime: standIn.runtime,
+    extensionVersion: standIn.extensionVersion,
+  });
+  return { client, standIn };
+};
+
+/**
  * What the worker's root reads from its globals
  * @param {LegacyContext} context
  */
@@ -136,7 +154,7 @@ describe('each composition root', () => {
     const tab = legacyContext();
     const { client: newtab } = newTabOf(tab);
     assert.equal(await newtab.whenReady(), null);
-    const popup = createPopupClient(pageHostOf(tab));
+    const { client: popup, standIn } = popupOn(tab);
     const panel = createSidePanelClient(pageHostOf(tab));
     const worker = createWorkerClient(workerHostOf(tab));
     /** @param {Client} client */
@@ -150,11 +168,16 @@ describe('each composition root', () => {
       cause: 'policy',
       code: 'not-on-surface',
     });
-    // Popup saves a quick note, and renames nothing
+    // Popup saves a quick note, in the worker, and renames nothing: its client sends the worker
+    // nothing else (#35 slice 4b-2)
     assert.equal((await popup.execute({ type: 'createNote', ...ids(popup), name: 'Quick note' })).kind, 'committed');
+    assert.deepEqual(
+      standIn.handed.map(one => [one.surface, one.type]),
+      [['popup', 'createNote']],
+    );
     const [noteId] = created.kind === 'committed' ? created.changedIds : [];
     const renamed = await popup.execute({ type: 'renameNote', commandId: popup.ids.next(), noteId, name: 'Renamed' });
-    assert.deepEqual(policyRefusal(renamed), ['policy', 'not-on-surface']);
+    assert.deepEqual(policyRefusal(renamed), ['validation', 'unknown-operation']);
     // Side Panel reads, and writes nothing
     const listed = await panel.query({ type: 'listNotes', view: 'sidePanel' });
     assert.deepEqual(listed.kind === 'ready' && listed.data.map(note => note.name).sort(), [
@@ -185,6 +208,7 @@ describe('each composition root', () => {
       cause: 'policy',
       code: 'not-on-surface',
     });
+    standIn.close();
     closeAll([tab]);
   });
 
@@ -205,11 +229,12 @@ describe('each composition root', () => {
     const entry = { type: 'saveNoteContent', commandId: 'c-entry', noteId: 'n1', blocks: [] };
     const capture = /** @type {const} */ ({ type: 'text', content: 'From a page' });
     // A page's kernel and policy are on the shared catalog, which doesn't have them, so each is
-    // refused as unknown before any handler
-    for (const [page, client] of /** @type {Array<[string, Client]>} */ ([
-      ['the new tab', newtab],
-      ['Popup', popup],
-      ['Side Panel', panel],
+    // refused as unknown before any handler. Popup's client, which sends the worker its two
+    // commands alone, refuses them before they go (#35 slice 4b-2)
+    for (const [page, client, refusal] of /** @type {Array<[string, Client, string[]]>} */ ([
+      ['the new tab', newtab, ['policy', 'unknown-command']],
+      ['Popup', popup, ['validation', 'unknown-operation']],
+      ['Side Panel', panel, ['policy', 'unknown-command']],
     ])) {
       const kept = await client.execute({
         type: 'keepJournalEntry',
@@ -218,7 +243,7 @@ describe('each composition root', () => {
         noteId: 'n1',
         command: entry,
       });
-      assert.deepEqual(policyRefusal(kept), ['policy', 'unknown-command'], page);
+      assert.deepEqual(policyRefusal(kept), refusal, page);
       assert.deepEqual(
         await client.query({ type: 'findTombstones', noteIds: ['n1'] }),
         { kind: 'failed', cause: 'policy', code: 'unknown-query' },
@@ -231,7 +256,7 @@ describe('each composition root', () => {
         blockId: client.ids.next(),
         capture,
       });
-      assert.deepEqual(policyRefusal(captured), ['policy', 'unknown-command'], page);
+      assert.deepEqual(policyRefusal(captured), refusal, page);
     }
     // The worker runs its own, and the shared commands it's granted
     const kept = await worker.execute({

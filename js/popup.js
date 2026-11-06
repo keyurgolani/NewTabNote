@@ -364,6 +364,16 @@ async function init() {
     }
 
     renderRecentNotes(await listNotes(kernel));
+    // The start waits at most 2 s for its apply of closing tabs' edits (#35 slice 4b-2, Q11), so
+    // once the apply is done, the notes it saved, recovered or caught up are listed again
+    kernel.applied().then(async (result) => {
+      if (!result || [result.saved, result.recovered, result.caughtUp].every((list) => list.length === 0)) return;
+      try {
+        renderRecentNotes(await listNotes(kernel));
+      } catch (error) {
+        console.error('Failed to load notes:', error);
+      }
+    });
   } catch (error) {
     if (error && error.code === 'NEWER_SCHEMA') {
       guarded = true;

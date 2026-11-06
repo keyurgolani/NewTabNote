@@ -64,7 +64,8 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 | New tab | `@xenova/transformers`, `chart.js`, `fuse.js`, `jszip` (lazy, through the loader), `valibot` (lazy, in the trust chunk) |
 | Service worker | `valibot` |
 | `recovery.html` | `valibot` |
-| Popup, Side Panel, offscreen, Moment | none |
+| Popup | `valibot`, lazy only (`lazyDependencies`), in its send chunk |
+| Side Panel, offscreen, Moment | none |
 
 ## How each gate runs
 

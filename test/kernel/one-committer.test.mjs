@@ -229,7 +229,7 @@ const planted = plants => (/** @type {string} */ file) => {
 };
 
 describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
-  it('finds nothing wrong in the tree: the worker commits, four pages move in their slices, and each page write is one the list names', () => {
+  it('finds nothing wrong in the tree: the worker commits, three pages move in their slices, and each page write is one the list names', () => {
     assert.deepEqual(problemsOf(), []);
   });
 
@@ -263,7 +263,7 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
-  it("checks a root the build gains with no edit here: a planted Moment page whose script reaches Popup's root fails (rule 1)", () => {
+  it("checks a root the build gains with no edit here: a planted Moment page whose script reaches Popup's root fails on the reader's open, which the list reads on popup alone (rule 2, #35 slice 4b-2)", () => {
     const problems = problemsOf({
       pages: { ...PAGES, moment: 'moment.html' },
       readFile: planted({
@@ -271,9 +271,11 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
         'js/moment-planted.js': () => "import './kernel/composition/popup.js';\n",
       }),
     });
-    assert.ok(
-      problems.some(problem => problem.startsWith('moment reaches js/kernel/adapters/indexeddb/adapter.js')),
-      problems.join('\n'),
+    assert.deepEqual(
+      problems.filter(problem => problem.startsWith('moment ')),
+      [
+        "moment writes in js/kernel/adapters/indexeddb/connection.js (indexedDB.open(…)), which the list doesn't name (rule 2)",
+      ],
     );
   });
 
