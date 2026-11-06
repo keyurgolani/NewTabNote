@@ -755,6 +755,62 @@ describe("the block core's chunk (#115's review: scripts/build/vite-config.js)",
   });
 });
 
+describe("the block core in the pages pass (#27, #225's review)", () => {
+  const ROOT = path.join(__dirname, '..');
+  // What blockCoreChunk groups in recovery.html's pass. The pages pass has no group for them, so
+  // they stay in the new tab's workspace chunk only while nothing else there imports them: a
+  // second importer in another chunk would split them out, into a chunk named for a module.
+  // THIRD_PARTY_NOTICES' entry 21 catches a split through html-text's path, not one through
+  // conversions, contract or markup alone
+  const CORE = ['builtins', 'catalog', 'contract', 'conversions', 'entities', 'html-text', 'index', 'markup', 'models'].map(
+    (name) => `js/kernel/core/blocks/${name}.js`,
+  );
+  const ALLOWED = new Set(['js/kernel/composition/block-projections.js', ...CORE]);
+  const disk = (/** @type {string} */ file) => fs.readFileSync(file, 'utf8');
+
+  /**
+   * Each import of a CORE module, in the pages pass's pages' graphs (the scripts each page's HTML
+   * loads, their static imports and each import() of a literal), by a module other than the
+   * projections or the core itself
+   * @param {(file: string) => string} [readFile]
+   * @returns {Promise<string[]>}
+   */
+  async function outsideImporters(readFile = disk) {
+    const { reachGraph, loadsOf } = await import('./kernel/import-graph.mjs');
+    const pages = Object.keys(config.PAGES).filter((page) => !config.OWN_PASS_PAGES.includes(page));
+    assert.deepEqual(pages, ['newtab', 'popup', 'sidepanel', 'offscreen']);
+    /** @type {Set<string>} */
+    const modules = new Set();
+    for (const page of pages) {
+      const html = readFile(path.join(ROOT, /** @type {Record<string, string>} */ (config.PAGES)[page]));
+      const entries = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map((match) => path.join(ROOT, match[1].replace(/^\.?\//, '')));
+      for (const file of reachGraph(entries, { readFile }).modules) modules.add(file);
+    }
+    const found = [];
+    for (const file of modules) {
+      const from = path.relative(ROOT, file);
+      if (ALLOWED.has(from) || from.startsWith('js/lib/')) continue;
+      const { imports, dynamicLoads } = loadsOf(readFile(file));
+      for (const specifier of [...imports, ...dynamicLoads.flatMap((load) => (load.specifier === null ? [] : [load.specifier]))]) {
+        if (!specifier.startsWith('.')) continue;
+        const target = path.relative(ROOT, path.resolve(path.dirname(file), specifier));
+        if (CORE.includes(target)) found.push(`${from} imports ${target}`);
+      }
+    }
+    return found.sort();
+  }
+
+  it('leaves the block core only the projections and itself as importers in the four pages, so it stays in the new tab\'s workspace chunk', async () => {
+    assert.deepEqual(await outsideImporters(), []);
+  });
+
+  it('fails a second importer of the core in the pages pass: Popup\'s root importing conversions', async () => {
+    const planted = (/** @type {string} */ file) =>
+      path.relative(ROOT, file) === 'js/kernel/composition/popup.js' ? `${disk(file)}\nimport '../core/blocks/conversions.js';\n` : disk(file);
+    assert.deepEqual(await outsideImporters(planted), ['js/kernel/composition/popup.js imports js/kernel/core/blocks/conversions.js']);
+  });
+});
+
 describe("the loader's chunk (#27 slice 3: scripts/build/vite-config.js, scripts/build/bundle.js)", () => {
   const LOADER_ID = `/repo/${config.LOADER}`;
 
