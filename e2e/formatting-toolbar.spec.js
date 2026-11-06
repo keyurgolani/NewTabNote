@@ -28,8 +28,8 @@
  *   which leaves the field focused. A press on the toolbar's own frame, or on ✓ until its release,
  *   keeps focus in the field.
  * - Link on a word with a link opens the field with that link's address all selected, so a typed
- *   address replaces it, and an arrow key or a click in the field edits it. Before, the caret sat
- *   at the end, so a typed address ran on from the old one.
+ *   address replaces it, and an arrow key or a click in the field edits it, as a second click
+ *   does. Before, the caret sat at the end, so a typed address ran on from the old one.
  * - A double-click on ✓ applies the link once. Its second press, which lands where ✓ was, on the
  *   button that comes back there, does nothing, so the word keeps its formatting. Before, that
  *   button ran. A double-click on any format button acts once, so a double-clicked Bold bolds the
@@ -475,6 +475,11 @@ test('Link on a linked word opens the field with its address selected, so a type
   await page.mouse.click(box.x + 2, box.y + box.height / 2);
   await page.keyboard.type('x');
   expect(await inField(), 'after a click in the field, a key typed edits the address').toEqual({ value: 'xhttps://b.example/', selected: '' });
+  // And a second click, near its end. The first lands in the selected address, where the browser
+  // drops the selection on the release itself; this one lands on a caret, where it doesn't
+  await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+  await page.keyboard.type('y');
+  expect(await inField(), 'after a second click, near its end, a key typed edits the address there').toEqual({ value: 'xhttps://b.example/y', selected: '' });
   await page.keyboard.press('Escape');
   await expectNoUncaught(extension, page);
 });
