@@ -1,14 +1,15 @@
 /**
  * #17's registry's names, shapes and plans (#35 slice 4b-0): every store's name and key, each
- * structural version's store shapes, the versions themselves, and the transform plan, which a
+ * structural version's store shapes, the newest version, and the transform plan, which a
  * context that only reads CanvasTabDB may import, since nothing here writes. The steps that make
  * those shapes, and write `meta`, are registry.js's, which only the worker's adapter and its
  * migration runner run. registry.js re-exports what it exported before them, and
- * test/kernel/registry-names.test.mjs holds the versions here to its steps. legacyShape and the
- * STORES_ADDED_AT shapes, which were registry.js's own, are exported for its steps alone.
+ * test/kernel/registry-names.test.mjs holds the newest version here to its steps. legacyShape
+ * and the STORES_ADDED_AT shapes, which were registry.js's own, are exported for its steps
+ * alone.
  */
 
-import { STORE_SCHEMAS } from './schema.js';
+import { DB_VERSION, STORE_SCHEMAS } from './schema.js';
 
 /**
  * An index as IndexedDB reports it
@@ -106,9 +107,6 @@ export const STORES_ADDED_AT_11 = Object.freeze({
   [DAILY_INDEX_STORE]: { keyPath: 'dailyKey', autoIncrement: false, indexes: [] },
 });
 
-/** The structural version each of the registry's steps leaves, in order (registry.js's STEPS) */
-export const STRUCTURAL_VERSIONS = Object.freeze([9, 10, 11]);
-
 /**
  * A transform step (#17 PR 3a): a logical version that fills fields in place, in resumable
  * batches, outside any upgrade, which the worker runs once its run is in (transforms.js)
@@ -145,8 +143,11 @@ export function pendingTransforms(from) {
   return TRANSFORM_STEPS.filter(step => step.to > from);
 }
 
-/** The newest structural version this registry reaches, which this build opens CanvasTabDB at */
-export const LATEST_STRUCTURAL = STRUCTURAL_VERSIONS.reduce((latest, version) => Math.max(latest, version), 8);
+/**
+ * The newest structural version this registry reaches, which this build opens CanvasTabDB at:
+ * schema.js's DB_VERSION, which test/kernel/registry-names.test.mjs holds to the newest step's
+ */
+export const LATEST_STRUCTURAL = DB_VERSION;
 
 /** The logical version step 9 writes when nothing set one before it */
 export const BASE_LOGICAL_VERSION = 1;
