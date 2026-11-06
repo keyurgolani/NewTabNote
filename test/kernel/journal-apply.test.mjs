@@ -642,7 +642,7 @@ for (const fixture of FIXTURES) {
       await w.close();
     });
 
-    it("leaves an entry a close-time draft names when its page wrote that draft while the apply waited for DRAFTS_LOCK, and only then let its owner lock go: the drafts are read inside the lock, after the owners and the journal (#35 slice 4b-1, the dm4e pin)", async () => {
+    it('leaves an entry a close-time draft names when its page wrote that draft while the apply waited for DRAFTS_LOCK, and only then let its owner lock go: the drafts are read inside the lock, after the owners and the journal (#35 slice 4b-1, the dm4e pin)', async () => {
       const w = await world(fixture);
       await noteA(w);
       const save = await saveOf(w, 'c-save', 'alpha, as the page closed');

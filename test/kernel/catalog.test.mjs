@@ -636,7 +636,7 @@ describe('schema modules (#13, AC1)', () => {
     }
   });
 
-  it("system.coordinatorHealth may say the last stop its last drain made at an entry, by code, with how many drains in a row stopped there, and an answer without it still parses (#35 slice 4b-1, Q6)", () => {
+  it('system.coordinatorHealth may say the last stop its last drain made at an entry, by code, with how many drains in a row stopped there, and an answer without it still parses (#35 slice 4b-1, Q6)', () => {
     const health = {
       status: 'ready',
       coordinatorId: 'c1',

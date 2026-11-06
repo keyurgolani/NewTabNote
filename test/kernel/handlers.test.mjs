@@ -459,7 +459,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     assert.throws(() => sentWith(catalog, { edit: text => text.replace("type: 'setPreferences'", "type: 'renamedPreferences'") }), pinFails);
   });
 
-  it("reads the names in command-names.js for no send, since it imports nothing and so sends nothing, and the same names in any other file as unread, as before (#35 slice 4b-1)", () => {
+  it('reads the names in command-names.js for no send, since it imports nothing and so sends nothing, and the same names in any other file as unread, as before (#35 slice 4b-1)', () => {
     const names = "export const COMMAND_NAMES = Object.freeze(['createNote', 'captureToDailyNote']);";
     // Another module of the worker's graph, planted with the same strings
     const elsewhere = path.join(ROOT, 'js', 'kernel', 'composition', 'coordinator.js');
@@ -469,7 +469,9 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     // A send in it is read as anywhere else: the type it names, and one the scan can't read
     const sending = sendsIn([COMMAND_NAMES_MODULE], {
       readFile: () =>
-        ["kernel.execute({ type: 'trashNote', commandId: 'c1' });", 'kernel.execute({ ...fields, commandId });'].join('\n'),
+        ["kernel.execute({ type: 'trashNote', commandId: 'c1' });", 'kernel.execute({ ...fields, commandId });'].join(
+          '\n',
+        ),
     });
     assert.deepEqual([...sending.types], ['trashNote']);
     assert.deepEqual(sending.unread, ['js/kernel/core/contracts/command-names.js:2']);

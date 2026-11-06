@@ -132,8 +132,9 @@ function heldTransport(transport) {
             else link.send(text);
           },
           onMessage: (/** @type {(text: string) => void} */ listener) => link.onMessage(listener),
-          onClose: (/** @type {(reason: import('../../js/kernel/core/messaging/link.js').CloseReason) => void} */ listener) =>
-            link.onClose(listener),
+          onClose: (
+            /** @type {(reason: import('../../js/kernel/core/messaging/link.js').CloseReason) => void} */ listener,
+          ) => link.onClose(listener),
           close: () => link.close(),
         };
       },
@@ -277,7 +278,7 @@ export function describeConformance(name, connect) {
       assert.deepEqual(answers[1], unknown('deadline-exceeded', 'c1'));
     });
 
-    it("refuses a query and a command whose frames reach it after their deadline: neither handler runs, and the client answers each as the router refused it (#35 slice 4b-1, T6)", async () => {
+    it('refuses a query and a command whose frames reach it after their deadline: neither handler runs, and the client answers each as the router refused it (#35 slice 4b-1, T6)', async () => {
       /** @type {string[]} */
       const ran = [];
       const { client, scheduler, harness } = await start({

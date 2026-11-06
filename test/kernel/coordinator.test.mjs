@@ -790,7 +790,7 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
     assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
   });
 
-  it("says the last stop its last drain made at an entry, with how many drains in a row stopped there, and nothing while it made none (#35 slice 4b-1, Q6)", async () => {
+  it('says the last stop its last drain made at an entry, with how many drains in a row stopped there, and nothing while it made none (#35 slice 4b-1, Q6)', async () => {
     /** @type {unknown} */
     let stuck = { code: 'timed-out', count: 2 };
     const journal = { drain: async () => null, oldestOrphanedEntryAt: () => null, stuck: () => stuck };
@@ -1130,7 +1130,11 @@ describe("the coordinator's bound on a turn (#35 slice 4b-1, F4)", () => {
     kernel.release('c-2');
     assert.equal((await second).kind, 'committed');
     await turns();
-    assert.equal(coordinator.health().cutTurns, 1, "it counts for the worker's life, and stays while the queue is idle");
+    assert.equal(
+      coordinator.health().cutTurns,
+      1,
+      "it counts for the worker's life, and stays while the queue is idle",
+    );
   });
 
   it("leaves the queue idle when it cuts a turn with nothing behind it, so the health names no running turn (#224's review, T2)", async () => {
@@ -1142,7 +1146,11 @@ describe("the coordinator's bound on a turn (#35 slice 4b-1, F4)", () => {
     await turns();
     time.advance(TURN_LIMIT_MS);
     await turns();
-    assert.equal(Object.hasOwn(coordinator.health(), 'running'), false, 'no turn holds the queue once its only turn is cut');
+    assert.equal(
+      Object.hasOwn(coordinator.health(), 'running'),
+      false,
+      'no turn holds the queue once its only turn is cut',
+    );
     // Released after that check, so a queue that cuts nothing fails there and doesn't wait on the kernel
     kernel.release('c-1');
     assert.deepEqual(await cut, TURN_EXCEEDED);
