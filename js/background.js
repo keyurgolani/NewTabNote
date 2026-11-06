@@ -90,12 +90,14 @@ let failureEvents = { event() {} };
  * worker. A page's hello starts the coordinator, and while it's starting the welcome waits for
  * the start, WELCOME_WAIT_MS at most. Each welcome says what the coordinator can do then, and
  * system.coordinatorHealth asks it. The commands a page sends over the port wait their turn on the
- * coordinator's queue, Popup's from #35 slice 4b-2. It never throws.
+ * coordinator's queue, Popup's from #35 slice 4b-2, and a session whose port closes is drained once
+ * its page is gone. It never throws.
  */
 installWorkerRouter({
   coordinatorId: instanceId,
   status: () => coordinator.status(),
   settled: () => coordinator.start(),
+  sessions: { closed: session => coordinator.closed(session) },
   handlers: { ...coordinatorHandlers(() => coordinator), ...pageCommandHandlers(() => coordinator) },
 });
 

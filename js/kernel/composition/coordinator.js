@@ -93,6 +93,7 @@ import { hostTimers, randomIds } from './messaging.js';
  *   oldestOrphanedEntryAt(): number | null,
  *   held?: () => Array<{noteId: string, code: string}>,
  *   stuck?: () => {code: string, count?: number} | null,
+ *   ownerGone?: (sessionId: string) => Promise<unknown>,
  * }} CoordinatorJournal
  */
 
@@ -134,6 +135,10 @@ import { hostTimers, randomIds } from './messaging.js';
  * @property {() => Promise<unknown>} drain
  *   Starts it, and once it's ready drains the journal, answering what the drain did; null when
  *   it isn't ready, since it drains once it is. It never rejects.
+ * @property {(session: import('../core/messaging/router.js').Session) => Promise<unknown>} closed
+ *   What the router tells it of a connection that closed: once the page that owns the session's
+ *   entries is gone, it drains, so what that page journaled and sent just before it went lands then,
+ *   not at the next start (#35 slice 4b-2, rule 7). It never rejects.
  */
 
 /** The reason a welcome gives, and the code every command answers, when the kernel can't be built */
@@ -393,6 +398,7 @@ export function unavailableCoordinator(instanceId) {
     enqueue: command => client.execute(command),
     installed: start,
     drain: () => Promise.resolve(null),
+    closed: () => Promise.resolve(null),
   });
 }
 
@@ -701,6 +707,13 @@ export function createCoordinator({
     return { status: 'degraded', reason: state === 'idle' || state === 'starting' ? 'starting' : reason };
   };
 
+  /** @returns {Promise<unknown>} what a drain once it's ready did, and null while it isn't ready */
+  const drain = async () => {
+    await start();
+    if (state !== 'ready' || !queued) return null;
+    return drainOn(queued);
+  };
+
   return Object.freeze({
     instanceId,
     start,
@@ -736,10 +749,13 @@ export function createCoordinator({
       // While the upgrade is blocked, the check runs once the run's end lets the kernel open
       if (state === 'degraded' && reason === MIGRATING) checkWhenReady = true;
     },
-    async drain() {
-      await start();
-      if (state !== 'ready' || !queued) return null;
-      return drainOn(queued);
+    drain,
+    closed(session) {
+      if (!entries || typeof entries.ownerGone !== 'function') return Promise.resolve(null);
+      const owner = entries.ownerGone;
+      return Promise.resolve()
+        .then(() => owner(session.sessionId))
+        .then(drain, () => null);
     },
   });
 }
