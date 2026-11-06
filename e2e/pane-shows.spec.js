@@ -193,3 +193,186 @@ test("AI chat's confirmed title shows in each editor that holds the note", async
   expect.soft([shown.main, shown.right], 'and in both panes').toEqual(['Errands', 'Errands']);
   await expectNoUncaught(extension, page);
 });
+
+// Insights: each pane draws its own section, "Extracting..." goes to each pane that holds the note, and
+// Refresh marks the button it was clicked on
+
+const TRIP = 'Trip planning: book the train, pack the warm coat, and water the plants before leaving';
+
+/** Hold the provider's next call, and wait until it's waiting */
+async function held(page) {
+  await expect.poll(() => page.evaluate(() => window.__waiting.length)).toBe(1);
+}
+
+/** Answer the held call */
+function release(page) {
+  return page.evaluate(() => {
+    window.__hold = false;
+    window.__waiting.shift()();
+  });
+}
+
+/**
+ * Each pane's insights and the pop-out's: the text of the sections drawn, and how many
+ * "Extracting..." placeholders it shows
+ */
+function insights(page) {
+  return page.evaluate(() => {
+    const of = root => ({
+      text: [...root.querySelectorAll('.note-insights:not(.insights-loading)')].map(section => section.textContent).join(' | '),
+      extracting: root.querySelectorAll('.insights-loading').length,
+    });
+    const pip = app.tabController.pipEditor;
+    return { main: of(document.getElementById('editor-container')), right: of(document.getElementById('secondary-editor-container')), popOut: pip ? of(pip.root) : null };
+  });
+}
+
+test('insights from Extract insights or the insights job show in each editor that holds the note, with no "Extracting..." left', async ({ extension }) => {
+  test.setTimeout(90_000);
+  const page = await open(extension, [{ name: 'Main note', blocks: [{ type: 'text', content: LIST }] }, { name: 'Other note', blocks: [{ type: 'text', content: REVIEW }] }]);
+  const noteId = await page.evaluate(() => app.editor.noteId);
+  const shows = (got, todo) => [got.main, got.right, got.popOut].filter(Boolean).every(pane => pane.text.includes(todo) && pane.extracting === 0);
+
+  // With one pane, on the other note, so the insights job finds this note's insights still to do
+  await driver.openNote(page, 'Other note');
+  const otherId = await page.evaluate(() => app.editor.noteId);
+  await page.evaluate(() => { window.__todo = 'Buy milk'; });
+  await page.evaluate(id => app.notesManager.extractInsightsForNote(id), otherId);
+  let shown = await settled(page, insights, got => got.main.text.includes('Buy milk') && got.main.extracting === 0);
+  expect.soft(shown.main.text, 'with one pane, Extract insights shows in the main pane').toContain('Buy milk');
+  expect.soft(shown.main.extracting, 'with no "Extracting..." left').toBe(0);
+  await driver.openNote(page, 'Main note');
+
+  // Both panes on the note. The insights job, switched on, which starts a run over every note
+  await bothPanesOn(page, 'Main note', 'Other note');
+  await page.evaluate(() => { window.__todo = 'Call the bakery'; });
+  await page.evaluate(() => chrome.storage.local.set({ setting_insightsEnabled: true }));
+  await expect.poll(async () => ((await storedNote(page, noteId)).insights || {}).todos).toEqual(['Call the bakery']);
+  await expect.poll(() => page.evaluate(() => app.notesManager.insightsRunning), 'the run the switch started ends').toBe(false);
+  shown = await settled(page, insights, got => shows(got, 'Call the bakery'));
+  expect.soft(shown.right.text, "the insights job's insights show in the right pane, the active one").toContain('Call the bakery');
+  expect.soft(shown.main.text, "the insights job's insights show in the main pane too").toContain('Call the bakery');
+
+  // Extract insights, with the right pane active
+  await page.evaluate(() => { window.__todo = 'Plan the week'; });
+  await page.evaluate(id => app.notesManager.extractInsightsForNote(id), noteId);
+  shown = await settled(page, insights, got => shows(got, 'Plan the week'));
+  expect.soft(shown.right.text, 'Extract insights shows in the right pane').toContain('Plan the week');
+  expect.soft(shown.main.text, 'Extract insights shows in the main pane too').toContain('Plan the week');
+  expect.soft([shown.main.extracting, shown.right.extracting], 'with no "Extracting..." left in either pane').toEqual([0, 0]);
+
+  // The pop-out on the note too
+  await openPopOut(extension, page);
+  await page.evaluate(() => { window.__todo = 'Book the offsite'; });
+  await page.evaluate(id => app.notesManager.extractInsightsForNote(id), noteId);
+  shown = await settled(page, insights, got => shows(got, 'Book the offsite'));
+  expect.soft(shown.popOut.text, 'with the note in the pop-out too, Extract insights shows there as well').toContain('Book the offsite');
+  expect.soft([shown.main.text.includes('Book the offsite'), shown.right.text.includes('Book the offsite')], 'and in both panes').toEqual([true, true]);
+  expect.soft([shown.main.extracting, shown.right.extracting, shown.popOut.extracting], 'with no "Extracting..." left in any of them').toEqual([0, 0, 0]);
+  await expectNoUncaught(extension, page);
+});
+
+test("AI chat's Extract insights shows in each editor that holds the note", async ({ extension }) => {
+  test.setTimeout(90_000);
+  const page = await open(extension, [{ name: 'Main note', blocks: [{ type: 'text', content: LIST }] }, { name: 'Other note', blocks: [{ type: 'text', content: REVIEW }] }]);
+  const shows = (got, todo) => [got.main, got.right, got.popOut].filter(Boolean).every(pane => pane.text.includes(todo));
+
+  await page.evaluate(() => { window.__todo = 'Buy milk'; });
+  await page.evaluate(() => app.aiChatController.extractInsightsFromChat());
+  let shown = await settled(page, insights, got => got.main.text.includes('Buy milk'));
+  expect.soft(shown.main.text, "with one pane, AI chat's Extract insights shows in the main pane").toContain('Buy milk');
+
+  await bothPanesOn(page, 'Main note', 'Other note');
+  await page.evaluate(() => { window.__todo = 'Call the bakery'; });
+  await page.evaluate(() => app.aiChatController.extractInsightsFromChat());
+  shown = await settled(page, insights, got => shows(got, 'Call the bakery'));
+  expect.soft(shown.right.text, "AI chat's Extract insights shows in the right pane, the active one").toContain('Call the bakery');
+  expect.soft(shown.main.text, "AI chat's Extract insights shows in the main pane too").toContain('Call the bakery');
+
+  await openPopOut(extension, page);
+  await page.evaluate(() => { window.__todo = 'Plan the week'; });
+  await page.evaluate(() => app.aiChatController.extractInsightsFromChat());
+  shown = await settled(page, insights, got => shows(got, 'Plan the week'));
+  expect.soft(shown.popOut.text, "with the note in the pop-out too, AI chat's Extract insights shows there as well").toContain('Plan the week');
+  expect.soft([shown.main.text.includes('Plan the week'), shown.right.text.includes('Plan the week')], 'and in both panes').toEqual([true, true]);
+  await expectNoUncaught(extension, page);
+});
+
+test('"Extracting..." shows in each pane that holds the note and nowhere else, each pane keeps its own insights, and Refresh marks its own pane\'s button', async ({ extension }) => {
+  test.setTimeout(90_000);
+  const page = await open(extension, [
+    { name: 'Main note', blocks: [{ type: 'text', content: LIST }] },
+    { name: 'Insights note', blocks: [{ type: 'text', content: REVIEW }] },
+    { name: 'Other note', blocks: [{ type: 'text', content: TRIP }] },
+  ]);
+  const noteId = await page.evaluate(() => app.editor.noteId);
+  const insightsId = await page.locator('#sidebar-notes-list .sidebar-note-item').filter({ has: page.getByText('Insights note', { exact: true }) }).getAttribute('data-id');
+  // The other note's own insights, as stored, which a pane draws when it loads that note
+  const attached = await page.evaluate(id => app.kernel.execute({
+    type: 'attachInsights', commandId: 'pane-shows-insights', noteId: id,
+    insights: { todos: ['Book the offsite'], reminders: [], deadlines: [], highlights: [], tags: [] },
+  }), insightsId);
+  expect(attached.kind).toBe('committed');
+  /** Start Extract insights for the note with its provider call held, and wait until it waits */
+  const extractHeld = async todo => {
+    await page.evaluate(t => { window.__todo = t; window.__hold = true; }, todo);
+    await page.evaluate(id => { window.__extracting = app.notesManager.extractInsightsForNote(id); }, noteId);
+    await held(page);
+  };
+  const answered = async () => {
+    await release(page);
+    await page.evaluate(() => window.__extracting);
+  };
+
+  // With one pane
+  await extractHeld('Buy milk');
+  let shown = await insights(page);
+  expect.soft(shown.main.extracting, 'with one pane, "Extracting..." shows in the main pane').toBe(1);
+  await answered();
+
+  // Both panes on the note
+  await bothPanesOn(page, 'Main note', 'Other note');
+  await extractHeld('Call the bakery');
+  shown = await insights(page);
+  expect.soft(shown.right.extracting, 'with both panes on the note, "Extracting..." shows in the right pane, the active one').toBe(1);
+  expect.soft(shown.main.extracting, 'and once in the main pane, which holds the note too').toBe(1);
+  await answered();
+
+  // The main pane on the note with insights of its own, the right pane active on another
+  await page.locator(`${PANE.main} .page-title`).click();
+  await driver.openNote(page, 'Insights note');
+  await page.locator(`${PANE.right} .page-title`).click();
+  await driver.openNote(page, 'Other note');
+  shown = await settled(page, insights, got => got.main.text.includes('Book the offsite'));
+  expect.soft(shown.main.text, "a load in the right pane leaves the main pane's insights").toContain('Book the offsite');
+  await driver.openNote(page, 'Main note');
+  shown = await settled(page, insights, got => got.right.text.includes('Call the bakery') && got.main.text.includes('Book the offsite'));
+  expect.soft(shown.right.text, "the right pane draws its note's insights").toContain('Call the bakery');
+  expect.soft(shown.main.text, 'and the main pane keeps its own').toContain('Book the offsite');
+
+  // Extract insights for the right pane's note
+  await extractHeld('Plan the week');
+  shown = await insights(page);
+  expect.soft(shown.right.extracting, '"Extracting..." shows in the right pane, which holds the note').toBe(1);
+  expect.soft(shown.main.extracting, 'and not in the main pane, which holds another').toBe(0);
+  expect.soft(shown.main.text, "the main pane keeps its own note's insights meanwhile").toContain('Book the offsite');
+  await answered();
+  shown = await settled(page, insights, got => got.right.text.includes('Plan the week') && got.right.extracting === 0);
+  expect.soft(shown.right.text, 'the right pane shows the new insights').toContain('Plan the week');
+  expect.soft([shown.main.text.includes('Book the offsite'), shown.main.extracting, shown.right.extracting], 'the main pane keeps its own, and no "Extracting..." is left in either pane').toEqual([true, 0, 0]);
+
+  // Refresh in the right pane, with its provider call held
+  await page.evaluate(() => { window.__todo = 'Water the plants'; window.__hold = true; });
+  await page.locator(`${PANE.right} .note-insights-refresh`).click();
+  await held(page);
+  const buttons = () => page.evaluate(() => ['#editor-container', '#secondary-editor-container'].map(pane => {
+    const button = document.querySelector(`${pane} .note-insights-refresh`);
+    return button ? button.textContent : null;
+  }));
+  const marked = await buttons();
+  expect.soft(marked[1], "Refresh marks the right pane's button, the one clicked").toBe('Extracting...');
+  expect.soft(marked[0], "and leaves the main pane's").toBe('Refresh');
+  await release(page);
+  await expect.poll(buttons, 'once Refresh has its answer, both buttons read Refresh').toEqual(['Refresh', 'Refresh']);
+  await expectNoUncaught(extension, page);
+});
