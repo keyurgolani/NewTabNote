@@ -27,6 +27,7 @@
 
 import { blocksByNote, folderOps, noteOps } from '../../core/domain/changes.js';
 import { UnavailableError } from '../../core/contracts/outcomes.js';
+import { count, idOf, versionsOf } from './reads.js';
 import { result } from './requests.js';
 
 /** @typedef {import('../../core/ports/repository.js').Versions} Versions */
@@ -37,26 +38,6 @@ import { result } from './requests.js';
 
 /** The fields a note's versions take on its record */
 export const VERSION_FIELDS = Object.freeze(['revision', 'placementVersion', 'sourceRevision']);
-
-/**
- * @param {unknown} value
- * @returns {number}
- */
-const count = value =>
-  Number.isSafeInteger(value) && /** @type {number} */ (value) >= 0 ? /** @type {number} */ (value) : 0;
-
-/**
- * The versions a stored note has, each 0 when it has none
- * @param {Record<string, unknown>} record
- * @returns {Versions}
- */
-export function versionsOf(record) {
-  return {
-    revision: count(record.revision),
-    placementVersion: count(record.placementVersion),
-    sourceRevision: count(record.sourceRevision),
-  };
-}
 
 /**
  * @param {Versions} a
@@ -70,14 +51,6 @@ const same = (a, b) =>
 
 /** @type {Versions} */
 const NONE = Object.freeze({ revision: 0, placementVersion: 0, sourceRevision: 0 });
-
-/**
- * A key as one string, so two copies of one array key, as #20's storage probe writes under,
- * are one record, and a string key never reads as another key's form
- * @param {IDBValidKey} key
- * @returns {string}
- */
-const idOf = key => (typeof key === 'string' ? `s${key}` : `k${JSON.stringify(key)}`);
 
 /**
  * What a commit changed, once `settle` has moved its versions

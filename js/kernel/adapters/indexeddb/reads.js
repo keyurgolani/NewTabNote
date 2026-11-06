@@ -1,8 +1,9 @@
 /**
  * #17's read half (#35 slice 4b-0b): the view a transaction is read through, which #17's adapter
- * puts its writes on top of (adapter.js, view). Nothing here writes, so a context that only reads
- * CanvasTabDB can read through it and reach no module the architecture list gives the role
- * `writer` (docs/architecture/committers.json).
+ * puts its writes on top of (adapter.js, view), what a note's versions read as, and a tracker for
+ * a read alone (createReadTracker). Nothing here writes, so a context that only reads CanvasTabDB
+ * can read through it and reach no module the architecture list gives the role `writer`
+ * (docs/architecture/committers.json).
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
@@ -29,6 +30,63 @@ import { IDB_STORES } from './schema.js';
  * @property {(key: IDBValidKey, record: Record<string, unknown> | undefined) => void} sawFolder
  *   Notes what a read found for the folder `key`, the first time the transaction reads it
  */
+
+/**
+ * @param {unknown} value
+ * @returns {number}
+ */
+export const count = value =>
+  Number.isSafeInteger(value) && /** @type {number} */ (value) >= 0 ? /** @type {number} */ (value) : 0;
+
+/**
+ * The versions a stored note has, each 0 when it has none
+ * @param {Record<string, unknown>} record
+ * @returns {Versions}
+ */
+export function versionsOf(record) {
+  return {
+    revision: count(record.revision),
+    placementVersion: count(record.placementVersion),
+    sourceRevision: count(record.sourceRevision),
+  };
+}
+
+/**
+ * A key as one string, so two copies of one array key, as #20's storage probe writes under,
+ * are one record, and a string key never reads as another key's form
+ * @param {IDBValidKey} key
+ * @returns {string}
+ */
+export const idOf = key => (typeof key === 'string' ? `s${key}` : `k${JSON.stringify(key)}`);
+
+/**
+ * A tracker for a read alone, as a context that only reads CanvasTabDB hands each view: it keeps
+ * each note's versions as the transaction's first read of it found them, and answers them, as
+ * versions.js's tracker does. It keeps nothing of blocks or folders, which only a commit's ops
+ * read.
+ * @returns {ReadTracker}
+ */
+export function createReadTracker() {
+  /**
+   * Each note's versions as committed, or null for one the transaction found none of, by idOf
+   * @type {Map<string, Versions | null>}
+   */
+  const known = new Map();
+  return {
+    saw: (key, record) => {
+      const id = idOf(key);
+      if (!known.has(id)) known.set(id, record ? versionsOf(record) : null);
+    },
+    versions: key => {
+      const id = idOf(key);
+      if (!known.has(id)) throw new UnavailableError('adapter', 'revision-before-get', false);
+      return known.get(id) ?? undefined;
+    },
+    sawBlock: () => {},
+    sawFolder: () => {},
+    coverBlocks: () => {},
+  };
+}
 
 /**
  * The IndexedDB stores among `stores` the database has, once each
