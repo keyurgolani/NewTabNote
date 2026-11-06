@@ -710,6 +710,39 @@ describe('a committed title or insights show in every open editor that holds the
     assert.match(sections(main)[0], /Call the bakery/);
     assert.match(sections(right)[0], /Plan the week/);
   });
+
+  /**
+   * `count` editors, each with a pane of its own in the page's document, as the case above
+   * builds them, and each drawing insights with BlockEditor's own renderInsights
+   */
+  function panedEditors(env, count) {
+    const BlockEditor = env.get('BlockEditor');
+    return Array.from({ length: count }, () => {
+      const pane = env.document.body.appendChild(env.document.createElement('div'));
+      pane.className = 'editor-pane';
+      const editor = makeEditor(env, env.document, { root: pane });
+      editor.ai = heldAI().port;
+      editor.renderInsights = BlockEditor.prototype.renderInsights;
+      return editor;
+    });
+  }
+  /** How many "Extracting..." placeholders the editor's pane shows */
+  const placeholders = (editor) => editor.root.querySelectorAll('.insights-loading').length;
+  /** Whether each insights section in the editor's pane is B's */
+  const sectionsOfB = (editor) => editor.root.querySelectorAll('.note-insights').map((section) => /Plan the week/.test(section.textContent));
+  const NOTES_A_B = [note('A'), note('B', { insights: { todos: ['Plan the week'] } })];
+
+  it('"Extracting..." shows in its own pane, and leaves the other pane\'s section alone', async () => {
+    const { env } = await setup({ notes: NOTES_A_B });
+    // The main pane on B with B's section, first in the document; the right pane on A with none
+    const [main, right] = panedEditors(env, 2);
+    await drive(env, main.loadNote('B'));
+    await drive(env, right.loadNote('A'));
+    await drive(env, main.renderInsights());
+    right.showInsightsLoadingInEditor();
+    // [the main pane's sections, B's or not; its placeholders; the right pane's placeholders]
+    assert.deepEqual([sectionsOfB(main), placeholders(main), placeholders(right)], [[true], 0, 1]);
+  });
 });
 
 describe("the sidebar lists a committed title (review F1, as 4b1's save showed it)", () => {
