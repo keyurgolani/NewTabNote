@@ -169,6 +169,32 @@ const upgradeElsewhere = (factory, version) =>
     request.onerror = () => reject(request.error);
   });
 
+/**
+ * Puts `record` into `store` of CanvasTabDB on `factory`, as another context's write does: the
+ * transforms', for `meta`'s record of logical 3's answer
+ * @param {IDBFactory} factory
+ * @param {string} store
+ * @param {object} record
+ */
+const putElsewhere = (factory, store, record) =>
+  new Promise((resolve, reject) => {
+    const request = factory.open('CanvasTabDB');
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction(store, 'readwrite');
+      tx.objectStore(store).put(record);
+      tx.oncomplete = () => {
+        db.close();
+        resolve(undefined);
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+    };
+    request.onerror = () => reject(request.error);
+  });
+
 /** The read half's functions in #17's adapter, each with its copy in the reader */
 const TWINS = ['startFailure', 'going', 'fromIndexedDb', 'failureIn', 'readIdbSettings', 'read', 'readSettings'];
 
@@ -604,6 +630,27 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
       [...fixtures.keys()].filter(id => !read.includes(id)),
       ['none.basic', 'v9.newer'],
     );
+  });
+
+  it("reads logical 3's kept answer with the daily index while its batches run, as #17's adapter does", async () => {
+    // A Daily Note lookup reads `meta`'s record of the answer in the same transaction (F10)
+    const of = await current();
+    await putElsewhere(of.real, 'meta', {
+      key: 'transform-daily',
+      zone: 'UTC',
+      assignments: [['n1', '2025-10-28', null, false]],
+    });
+    const adapter = adapterOn(of, { mode: 'existing' });
+    const reader = readerOn(of);
+    await adapter.open();
+    await reader.open();
+    const daily = (/** @type {any} */ on) =>
+      settled(() => on.read(['dailyIndex'], (/** @type {any} */ tx) => tx.dailyAnswer()));
+    const answer = await daily(adapter);
+    assert.deepEqual(answer, {
+      value: new Map([['n1', { dailyKey: '2025-10-28', duplicateOf: null, rekeyed: false }]]),
+    });
+    assert.deepEqual(await daily(reader), answer);
   });
 
   it("fails as #17's adapter in existing mode does, in every way the read half can fail, each on a profile of its own", async () => {
