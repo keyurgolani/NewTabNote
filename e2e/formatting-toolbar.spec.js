@@ -87,10 +87,14 @@ async function selectStart(page, index, length) {
 /** Press Link on the toolbar on top, the one a click reaches, as a user's does */
 const pressLink = page => page.locator('.formatting-toolbar.visible').last().locator('.formatting-toolbar-btn[data-id="link"]').click();
 
-/** Where the toolbar on top sits over the selection: the gap below it, and how far its centre is off the selection's */
+/**
+ * Where the toolbar on top sits over the selection: the gap below it, and how far its centre is off
+ * the selection's. Null while no toolbar shows yet, so a poll waits for it
+ */
 const placed = page => page.evaluate(() => {
-  const word = getSelection().getRangeAt(0).getBoundingClientRect();
   const bars = document.querySelectorAll('.formatting-toolbar.visible');
+  if (!bars.length || !getSelection().rangeCount) return null;
+  const word = getSelection().getRangeAt(0).getBoundingClientRect();
   const box = bars[bars.length - 1].getBoundingClientRect();
   return { gap: Math.round(word.top - box.bottom), offCentre: Math.round(Math.abs((box.left + box.right) / 2 - (word.left + word.right) / 2)) };
 });
