@@ -4,7 +4,9 @@
  * extension, browser, and schema versions, migration receipts, and the latest receipts,
  * incidents, run outcomes, and journal events, and nothing else. Every record in it went
  * through its schema when it was stored, and the whole report goes through the report schema
- * here, a strict one, so a field nobody listed can't reach the file.
+ * here, a strict one, so a field nobody listed can't reach the file. A journal event this build
+ * can't parse, such as one a later build wrote before a rollback, is left out and counted in
+ * `journalLeftOut`, beside the journal, rather than refusing the whole report (#214).
  *
  * Its preview lists every field the file holds, by path, with its value, so what the user
  * reads before saving is exactly what's saved, and notices for the view to say beside it:
@@ -65,6 +67,8 @@ export const reportSchema = v.strictObject({
   incidents: v.array(incidentSchema),
   runs: v.array(runSchema),
   journal: v.array(journalEventSchema),
+  // How many journal events were left out because this build can't parse them, only when any were
+  journalLeftOut: v.optional(count),
   rejected: v.strictObject(
     /** @type {Record<import('./journal.js').RejectionReason, typeof count>} */ (
       Object.fromEntries(REJECTION_REASONS.map(reason => [reason, count]))
@@ -110,6 +114,10 @@ export async function buildDiagnostics({ records, journal, clock, versions, migr
     records.events(),
     migrations(),
   ]);
+  // The journal is read raw, so it holds what a later build wrote too: an event this build can't
+  // parse is left out and counted (#214), and every other section is parsed whole
+  const journaled = events.filter(event => v.is(journalEventSchema, event));
+  const leftOut = events.length - journaled.length;
   const report = parseRecord(reportSchema, {
     format: 'newtabnote-diagnostics',
     formatVersion: 1,
@@ -122,7 +130,8 @@ export async function buildDiagnostics({ records, journal, clock, versions, migr
     receipts,
     incidents: held.incidents,
     runs,
-    journal: events,
+    journal: journaled,
+    ...(leftOut > 0 ? { journalLeftOut: leftOut } : {}),
     rejected: journal.rejected(),
   }, 'diagnostic report');
   const serialized = JSON.stringify(report, null, 2);
