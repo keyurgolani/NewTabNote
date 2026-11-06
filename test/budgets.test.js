@@ -402,6 +402,38 @@ describe('the budget gate', () => {
   });
 });
 
+describe("the build's line for each entry's start (scripts/build/main.js, #27)", () => {
+  const { startLine } = require('../scripts/build/main.js');
+
+  it('prints its start JS in KB as before, then the exact raw / gzip bytes of its JS, CSS and HTML', () => {
+    const entry = /** @type {any} */ ({
+      kind: 'page',
+      at: 'newtab.html',
+      start: {
+        files: [],
+        bytes: { js: { raw: 715048, gzip: 204145, files: 11 }, css: { raw: 106049, gzip: 17206, files: 1 }, html: { raw: 69805, gzip: 11147, files: 1 } },
+        modules: ['js/main.js', 'js/app.js'],
+        packages: [],
+      },
+      boots: [{ as: 'start', chunk: 'workspace', file: 'assets/workspace-a1.js' }],
+    });
+    assert.equal(
+      startLine('newtab', entry),
+      '  ✓ newtab: start JS 698.3 KB (199.4 KB gzip), 2 modules, with workspace loaded at boot. Start bytes, raw / gzip: JS 715048 / 204145, CSS 106049 / 17206, HTML 69805 / 11147',
+    );
+  });
+
+  it('says none for a type its start has none of, and names no boot chunk when it loads none', () => {
+    const entry = /** @type {any} */ ({
+      kind: 'page',
+      at: 'js/background.js',
+      start: { files: [], bytes: { js: { raw: 256451, gzip: 78637, files: 1 } }, modules: ['js/background.js'], packages: [] },
+      boots: [],
+    });
+    assert.equal(startLine('background', entry), '  ✓ background: start JS 250.4 KB (76.8 KB gzip), 1 module. Start bytes, raw / gzip: JS 256451 / 78637, CSS none, HTML none');
+  });
+});
+
 describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
   it('reads as a budget file', () => {
     assert.deepEqual(readBudgets(ROOT).problems, []);
