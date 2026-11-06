@@ -1261,9 +1261,21 @@ class TabController {
       `;
       this.pipWindow.document.body.appendChild(wrapper);
 
-      // Copy theme properties from main document
-      this.pipWindow.document.documentElement.style.cssText = document.documentElement.style.cssText;
-      this.pipWindow.document.documentElement.className = document.documentElement.className;
+      // The pop-out's <html> takes every attribute of the page's, as it opens and whenever one
+      // changes while it's open: the theme's variables and class, data-theme, data-width and
+      // data-font, which the stylesheet reads, and lang (#198). Nothing sets the pop-out's own, so
+      // the mirror takes them all off and puts the page's on, and one the page drops goes too. State
+      // for the page alone must never go on its <html>, since the pop-out takes it as well
+      const pageRoot = document.documentElement;
+      const popRoot = this.pipWindow.document.documentElement;
+      const mirror = () => {
+        for (const name of popRoot.getAttributeNames()) popRoot.removeAttribute(name);
+        for (const name of pageRoot.getAttributeNames()) popRoot.setAttribute(name, pageRoot.getAttribute(name));
+      };
+      mirror();
+      const watch = new MutationObserver(mirror);
+      watch.observe(pageRoot, { attributes: true });
+      this.pipWindow.addEventListener('pagehide', () => watch.disconnect());
 
       // Initialize editor in PiP window
       this.pipEditor = new BlockEditor({
