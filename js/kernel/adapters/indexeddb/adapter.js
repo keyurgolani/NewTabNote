@@ -449,6 +449,7 @@ export function createIndexedDbAdapter({
   });
   const database = () => connection.database();
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * What a failure to start a transaction means: the connection closed under it (another
    * context's upgrade, or Chrome), or its own failure. On a connection this adapter adopted, an
@@ -464,6 +465,7 @@ export function createIndexedDbAdapter({
     return failureOf(error);
   };
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * Whether the connection is gone, or going. Chrome's forced close (the database deleted, or
    * its storage failing) reaches the page only after Chrome has aborted each transaction open on
@@ -490,6 +492,7 @@ export function createIndexedDbAdapter({
     return false;
   };
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * Whether IndexedDB failed it: its failures are DOMExceptions, and chrome.storage's, and this
    * adapter's own, aren't
@@ -497,6 +500,7 @@ export function createIndexedDbAdapter({
    */
   const fromIndexedDb = error => typeof DOMException === 'function' && error instanceof DOMException;
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * What a call that failed in flight answers: for an IndexedDB failure on a connection that's
    * gone or going, reload-required, as every call after it answers (connection.js), and
@@ -518,6 +522,7 @@ export function createIndexedDbAdapter({
   const failedRun = (cause, write) =>
     fromIndexedDb(cause) && going() ? answered(unavailable('storage', 'reload-required', false)) : failed(cause, write);
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * The values IndexedDB's `settings` store holds for `keys`, records of `{key, value}`, as
    * Popup has read them since 1.4.x (#12 slice 4a; #4 moves Popup to the setting the new tab
@@ -952,6 +957,7 @@ export function createIndexedDbAdapter({
       );
     },
 
+    // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
     async read(stores, body) {
       for (const store of stores) {
         if (!Object.hasOwn(IDB_STORES, store)) throw new UnavailableError('adapter', 'unknown-store', false);
@@ -987,6 +993,7 @@ export function createIndexedDbAdapter({
       return /** @type {import('../../core/ports/repository.js').ExportData} */ (data);
     },
 
+    // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
     async readSettings(area, keys) {
       if (area === 'idbSettings') return readIdbSettings(keys);
       const storageKeys = keys.map(key => settingKey(area, key));
