@@ -6,8 +6,10 @@
  * inside that part. Focus stays in the block, so a polite live region says the pick's label and
  * place, such as "Heading 1, 2 of 18", and it's cleared when the menu closes. In focus mode, Escape
  * closes either menu and focus mode stays on (#200). Before, the app's own Escape ran after the
- * menu's and turned focus mode off too. Each test also fails on an uncaught exception that
- * test/known-defects.json doesn't list.
+ * menu's and turned focus mode off too. With focus mode off, the Escape the slash menu takes runs
+ * no close-all, where before the app's own Escape ran it after the menu's, and an Escape nothing
+ * takes still runs it. Each test also fails on an uncaught exception that test/known-defects.json
+ * doesn't list.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
@@ -202,5 +204,34 @@ test('in focus mode, Escape closes the slash menu and the link menu, and focus m
   await page.keyboard.press('Escape');
   await expect(page.locator('#wiki-menu'), 'Escape closes the link menu').toBeHidden();
   expect(await focusMode(), 'focus mode stays on after Escape closes the link menu').toEqual([true, true]);
+  await expectNoUncaught(extension, page);
+});
+
+test('with focus mode off, Escape closes the slash menu and runs no close-all', async ({ extension }) => {
+  const page = await atBlockEnd(extension);
+  // The calls that reach the app's close-all, recorded as block-keyboard.spec.js records the keys
+  // that reach the window
+  await page.evaluate(() => {
+    window.__closeAllsRun = 0;
+    const closeAll = app.closeAllModals;
+    app.closeAllModals = (...args) => {
+      window.__closeAllsRun += 1;
+      return closeAll.apply(app, args);
+    };
+  });
+  const closeAllsRun = () => page.evaluate(() => window.__closeAllsRun);
+  expect(await page.evaluate(() => [document.body.classList.contains('focus-mode'), app.shortcutsManager.focusMode]), 'focus mode is off')
+    .toEqual([false, false]);
+
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('/');
+  await expect(page.locator('#slash-menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#slash-menu'), 'Escape closes the slash menu').toBeHidden();
+  expect(await closeAllsRun(), 'the Escape the slash menu takes runs no close-all').toBe(0);
+
+  // With nothing open, the app's Escape runs it, once
+  await page.keyboard.press('Escape');
+  await expect.poll(closeAllsRun, 'an Escape nothing takes runs the close-all once').toBe(1);
   await expectNoUncaught(extension, page);
 });
