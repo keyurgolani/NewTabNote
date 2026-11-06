@@ -307,7 +307,7 @@ export function createKernel({
    */
   const commitResult = (result, live) => {
     if (!isWork(result)) return Promise.resolve({ outcome: result, replayed: false });
-    if (live && live() !== true) {
+    if (live !== null && live() !== true) {
       return Promise.resolve({ outcome: unavailable('coordinator', TURN_EXCEEDED, true), replayed: false });
     }
     return Promise.resolve(adapter.commit(result)).then(commitResultOf);
@@ -431,9 +431,9 @@ export function createKernel({
     } catch {
       return Promise.resolve(rejected('validation', 'not-cloneable'));
     }
-    // A live() that isn't a function throws where the commit calls it, so the command answers
-    // unavailable and commits nothing
-    const live = options?.live || null;
+    // A live that's left out or null is no turn. Any other that isn't a function, a falsy one too,
+    // throws where the commit calls it, so the command answers unavailable and commits nothing
+    const live = options?.live ?? null;
     return whenOpen(() => dispatch(copy, live));
   }
 
