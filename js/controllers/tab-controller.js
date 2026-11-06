@@ -30,15 +30,16 @@ class TabController {
     /**
      * What AI chat, NotesManager, and the palette see of the tabs, in place of App's copy of
      * them: the notes they show, in tab order, the editors open on this page, and a committed
-     * title naming its note's tab. None of them holds the tab array, which TabController
-     * replaces when it restores tabs.
+     * title or insights shown in each editor that holds the note, the title naming its tab too.
+     * None of them holds the tab array, which TabController replaces when it restores tabs.
      */
     this.noteTabs = Object.freeze({
       openNoteIds: () => this.openTabs.map((tab) => tab.noteId),
       // Both panes' editors and the pop-out's, as getOpenEditors: the AI title's spinner turns on
       // each that holds its note (#197)
       openEditors: () => this.getOpenEditors(),
-      showNoteName: (noteId, name) => this.showNoteName(noteId, name),
+      showCommittedTitle: (noteId, name) => this.showCommittedTitle(noteId, name),
+      showCommittedInsights: (noteId, fields) => this.showCommittedInsights(noteId, fields),
     });
 
     // Split-view state
@@ -1026,8 +1027,8 @@ class TabController {
   }
 
   /**
-   * A title the kernel committed for `noteId`, from AI chat or NotesManager (noteTabs), names
-   * its note's tab, if it has one, and the tabs are saved
+   * A title the kernel committed for `noteId` (showCommittedTitle) names its note's tab, if it
+   * has one, and the tabs are saved
    * @param {string} noteId
    * @param {string} name
    * @returns {Promise<void>}
@@ -1038,6 +1039,30 @@ class TabController {
     tab.name = name;
     this.renderTabs();
     await this.saveTabs();
+  }
+
+  /**
+   * Show a title the kernel committed for `noteId`, from AI chat or NotesManager (noteTabs), in
+   * each open editor that holds the note, and name its tab (#201). A title the user typed in one
+   * of them that no save has stored yet stays there, and names the tab when it lands.
+   * @param {string} noteId
+   * @param {string} name
+   * @returns {Promise<void>}
+   */
+  async showCommittedTitle(noteId, name) {
+    const shown = this.getOpenEditors().map((editor) => editor.showCommittedTitle(noteId, name));
+    if (!shown.includes('typed-title-pending')) await this.showNoteName(noteId, name);
+  }
+
+  /**
+   * Show insights the kernel committed for `noteId`, from AI chat or NotesManager (noteTabs), in
+   * each open editor that holds the note, with nothing saved (#201)
+   * @param {string} noteId
+   * @param {Object} fields - The note's insight fields
+   * @returns {void}
+   */
+  showCommittedInsights(noteId, fields) {
+    for (const editor of this.getOpenEditors()) editor.showCommittedInsights(noteId, fields);
   }
 
   // ─── Split view ───

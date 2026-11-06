@@ -83,8 +83,9 @@ class NotesManager {
     this.onCreateFirstNote = null;
     this.getEditor = null;
     /**
-     * @type {any} TabController's noteTabs, set by App: a committed title names its note's tab,
-     * and the AI title's spinner turns on each open editor that holds its note (#197)
+     * @type {any} TabController's noteTabs, set by App: a committed title or insights show in
+     * each open editor that holds the note, the title naming its tab too, and the AI title's
+     * spinner turns on each of them (#197, #201)
      */
     this.noteTabs = null;
 
@@ -623,34 +624,28 @@ class NotesManager {
   }
 
   /**
-   * Show a title the kernel committed for `noteId`, as 1.4.x showed it: in the editor if it
-   * holds that note (display only, no save) and in the note's tab. The list shows it from the
-   * commit feed. A title the user typed there that no save has stored yet stays, and names
-   * the tab when it lands.
+   * Show a title the kernel committed for `noteId`, as 1.4.x showed it, display only with no
+   * save, in each open editor that holds that note and in the note's tab, through
+   * TabController's noteTabs (#201). The list shows it from the commit feed. A title the user
+   * typed in one of those editors that no save has stored yet stays there, and names the tab
+   * when it lands.
    * @param {string} noteId
    * @param {string} name
    * @returns {Promise<void>}
    */
   async showCommittedTitle(noteId, name) {
-    const editor = this.getEditor ? this.getEditor() : null;
-    const shown = editor && typeof editor.showCommittedTitle === 'function'
-      ? editor.showCommittedTitle(noteId, name)
-      : 'not-open';
-    if (shown !== 'typed-title-pending' && this.noteTabs) await this.noteTabs.showNoteName(noteId, name);
+    await this.noteTabs?.showCommittedTitle(noteId, name);
   }
 
   /**
-   * Show insights the kernel committed for `noteId` in the editor, if it holds that note
-   * (display only, no save)
+   * Show insights the kernel committed for `noteId` in each open editor that holds that note
+   * (display only, no save), through TabController's noteTabs (#201)
    * @param {string} noteId
    * @param {Object} insights
    * @returns {void}
    */
   showCommittedInsights(noteId, insights) {
-    const editor = this.getEditor ? this.getEditor() : null;
-    if (editor && typeof editor.showCommittedInsights === 'function') {
-      editor.showCommittedInsights(noteId, { insights, lastInsightsExtractedAt: Date.now() });
-    }
+    this.noteTabs?.showCommittedInsights(noteId, { insights, lastInsightsExtractedAt: Date.now() });
   }
 
   /**
