@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { createConnection } from '../../js/kernel/adapters/indexeddb/connection.js';
 import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
@@ -233,6 +234,28 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
     await bare.open();
     const none = await kernelOn(bare, undefined, CALLERS.popup).query({ type: 'getPopupInsightsEnabled' });
     assert.deepEqual(none.kind === 'ready' && none.data, { insightsEnabled: false });
+  });
+
+  it('a versioned open handed no registry steps makes no database and upgrades none: it aborts the versionchange, and leaves the database as it was (#35 slice 4b-0)', async () => {
+    // Only #17's adapter hands connection.js the registry's steps, so no other connection.js
+    // open can make CanvasTabDB. The migration runner keeps its own versioned open with them
+    // (migrate.js), as before. A profile without one: a versioned open with no steps makes
+    // none, and answers as an existing open does there
+    const empty = await made();
+    const bare = createConnection({ indexedDB: empty.faults.factory, mode: 'versioned' });
+    await assert.rejects(bare.open(), error => {
+      const { unavailableCause, code } = /** @type {any} */ (error);
+      return unavailableCause === 'storage' && code === 'no-database';
+    });
+    bare.close();
+    assert.deepEqual(await empty.real.databases(), []);
+    // A database below this build's version stays at its version, for the migration runner
+    const older = await made(AT_9);
+    const before = await legacyEnv.dumpDatabase(older.real);
+    const stepless = createConnection({ indexedDB: older.faults.factory, mode: 'versioned' });
+    await assert.rejects(stepless.open(), { code: 'migration-required' });
+    stepless.close();
+    assert.deepEqual(await legacyEnv.dumpDatabase(older.real), before);
   });
 
   it('refuses a database a newer build upgraded, in both modes, closes it, and leaves it as it was', async () => {
