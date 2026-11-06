@@ -1133,6 +1133,21 @@ describe("the coordinator's bound on a turn (#35 slice 4b-1, F4)", () => {
     assert.equal(coordinator.health().cutTurns, 1, "it counts for the worker's life, and stays while the queue is idle");
   });
 
+  it("leaves the queue idle when it cuts a turn with nothing behind it, so the health names no running turn (#224's review, T2)", async () => {
+    const kernel = heldKernel();
+    const time = steppedTime(1000);
+    const { coordinator } = coordinatorOn(kernel, { clock: time.clock, timers: time.timers });
+    await coordinator.start();
+    const cut = coordinator.client().execute(captureOf('c-1'));
+    await turns();
+    time.advance(TURN_LIMIT_MS);
+    await turns();
+    assert.deepEqual(await cut, TURN_EXCEEDED);
+    assert.equal(Object.hasOwn(coordinator.health(), 'running'), false, 'no turn holds the queue once its only turn is cut');
+    kernel.release('c-1');
+    await turns();
+  });
+
   it("gives a turn that starts late its whole TURN_LIMIT_MS from its own start, not its request's", async () => {
     const kernel = heldKernel();
     const time = steppedTime(1000);
