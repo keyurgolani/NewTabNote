@@ -10,8 +10,10 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 import { createIndexedDbReader } from '../../js/kernel/adapters/indexeddb/reader.js';
+import { OPERATIONS_STORE } from '../../js/kernel/adapters/indexeddb/registry-names.js';
 import { DB_VERSION, IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { IDB_SETTINGS_KEYS } from '../../js/kernel/core/ports/repository.js';
 import { reachGraph } from './import-graph.mjs';
@@ -167,6 +169,69 @@ const upgradeElsewhere = (factory, version) =>
     request.onerror = () => reject(request.error);
   });
 
+/** The read half's functions in #17's adapter, each with its copy in the reader */
+const TWINS = ['startFailure', 'going', 'fromIndexedDb', 'failureIn', 'readIdbSettings', 'read', 'readSettings'];
+
+/**
+ * The strings `node` is, as a code: itself, or what either branch of it is
+ * @param {ts.Node} node
+ * @returns {string[]}
+ */
+const literals = node =>
+  ts.isStringLiteral(node)
+    ? [node.text]
+    : ts.isConditionalExpression(node)
+      ? [...literals(node.whenTrue), ...literals(node.whenFalse)]
+      : [];
+
+/**
+ * Every failure the read half's mapping knows, read from the source: each code an
+ * UnavailableError is made with in the reader, in its twins in #17's adapter, and in failures.js
+ * and connection.js, which both call, and each DOMException name failures.js maps, with its code
+ */
+function knownFailures() {
+  /** @type {Set<string>} */
+  const codes = new Set();
+  /** @type {Map<string, string>} */
+  const names = new Map();
+  /**
+   * @param {string} file
+   * @param {string[]} [only] - the functions it reads, when not the whole file
+   */
+  const scan = (file, only) => {
+    const text = fs.readFileSync(path.join(ROOT, INDEXEDDB, file), 'utf8');
+    /**
+     * @param {ts.Node} node
+     * @param {boolean} inside - in a function `only` names
+     * @param {boolean} mapped - in failures.js's BY_NAME
+     */
+    const walk = (node, inside, mapped) => {
+      const declared = ts.isVariableDeclaration(node) || ts.isMethodDeclaration(node) ? node.name : null;
+      const name = declared && ts.isIdentifier(declared) ? declared.text : '';
+      const here = inside || !only || only.includes(name);
+      const made =
+        ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'UnavailableError';
+      const code = made ? node.arguments?.[1] : undefined;
+      if (here && code) literals(code).forEach(text => codes.add(text));
+      if (mapped && ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)) {
+        let value = node.initializer;
+        while (ts.isParenthesizedExpression(value)) value = value.expression;
+        const mappedTo = ts.isArrayLiteralExpression(value) ? value.elements[1] : undefined;
+        if (mappedTo && ts.isStringLiteral(mappedTo)) names.set(node.name.text, mappedTo.text);
+      }
+      ts.forEachChild(node, child => walk(child, here, mapped || name === 'BY_NAME'));
+    };
+    walk(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS), false, false);
+  };
+  scan('reader.js');
+  scan('adapter.js', TWINS);
+  scan('failures.js');
+  scan('connection.js');
+  return { codes, names };
+}
+
+const KNOWN = knownFailures();
+
 /**
  * A way the read half fails, with the code each of its reads answers: what makes each context's
  * profile, the options both get, what runs before the reads (the open, by default), and the
@@ -174,6 +239,7 @@ const upgradeElsewhere = (factory, version) =>
  * @typedef {object} Failure
  * @property {string} code
  * @property {string} why
+ * @property {string} [name] - the DOMException each read fails with, for IndexedDB's own
  * @property {() => Promise<Profile>} make
  * @property {Partial<IndexedDbReaderOptions>} [options]
  * @property {(context: any, of: Profile) => Promise<unknown>} [ready]
@@ -201,6 +267,25 @@ const failingGet = (/** @type {string} */ message) => ({
 const preferences = async (/** @type {any} */ context) => [
   await settled(() => context.readSettings('preferences', ['theme'])),
 ];
+
+/**
+ * The three reads, each from a store whose next read fails with a DOMException called `name`
+ * @param {string} name
+ */
+const faulted = name => async (/** @type {any} */ context, /** @type {Profile} */ of) => {
+  /** @type {Array<[string, () => Promise<unknown>]>} */
+  const reads = [
+    [IDB_STORES.notes, () => context.read(['notes'], (/** @type {any} */ tx) => tx.getAll('notes'))],
+    ['settings', () => context.readSettings('idbSettings', IDB_SETTINGS_KEYS)],
+    [OPERATIONS_STORE, () => context.ledger.status('c-any')],
+  ];
+  const answers = [];
+  for (const [store, run] of reads) {
+    of.faults.failNextRead(store, name);
+    answers.push(await settled(run));
+  }
+  return answers;
+};
 
 /** @type {Failure[]} */
 const FAILURES = [
@@ -335,7 +420,22 @@ const FAILURES = [
     options: { settings: failingGet('QUOTA_BYTES quota exceeded') },
     ask: preferences,
   },
+  // IndexedDB's own, from each read's store: each name failures.js maps, and one it doesn't
+  ...[...KNOWN.names, ['SyntaxError', 'transaction-failed']].map(([name, code]) => ({
+    code,
+    name,
+    why: `reads that fail with ${name}`,
+    make: current,
+    ask: faulted(name),
+  })),
 ];
+
+/** The codes the mapping makes that no failure case answers, and why the reader never does */
+const UNCASED = Object.freeze({
+  'settings-write-failed': 'only a settings write fails with it (failures.js), and the reader writes none',
+  'migration-required': 'only a versioned open answers it (connection.js), and the reader opens CanvasTabDB as it is',
+  'blocked-upgrade': "only a versioned open waits on another context's connection (connection.js)",
+});
 
 /**
  * How `failure`'s reads settle on #17's adapter in existing mode and on the reader, each on a
@@ -516,6 +616,29 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
         `${failure.why}: what each read fails with`,
       );
     }
+  });
+
+  it("has a failure case for every code the read half's mapping makes, and for every DOMException name it maps", () => {
+    // The mapping as it reads from the source, which each copy and its twin share
+    assert.ok(KNOWN.names.size >= 10, `${KNOWN.names.size} names`);
+    assert.ok(KNOWN.codes.has('unknown-store') && KNOWN.codes.has('no-database'), [...KNOWN.codes].join(' '));
+    const cased = new Set(FAILURES.map(failure => failure.code));
+    assert.deepEqual(
+      [...KNOWN.codes].filter(code => !cased.has(code) && !Object.hasOwn(UNCASED, code)),
+      [],
+      'a code no failure case answers',
+    );
+    assert.deepEqual(
+      Object.keys(UNCASED).filter(code => !KNOWN.codes.has(code) || cased.has(code)),
+      [],
+      'a code kept out that the mapping no longer makes, or that a case answers',
+    );
+    // Each name failures.js maps has its case from the mapping itself, so one added there has one
+    const named = new Set(FAILURES.map(failure => failure.name));
+    assert.deepEqual(
+      [...KNOWN.names.keys()].filter(name => !named.has(name)),
+      [],
+    );
   });
 
   it('reaches no module the architecture list gives the role writer', () => {
