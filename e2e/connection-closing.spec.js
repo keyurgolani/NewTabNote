@@ -73,6 +73,7 @@ async function refusals() {
  */
 async function startReads() {
   const { createIndexedDbAdapter } = await import('/js/kernel/adapters/indexeddb/adapter.js');
+  const { pendingStructural } = await import('/js/kernel/adapters/indexeddb/registry.js');
   const { createKernel } = await import('/js/kernel/core/application/kernel.js');
   const { NEWTAB_HANDLERS } = await import('/js/kernel/core/application/handlers-all.js');
   const { createBaselinePolicy } = await import('/js/kernel/core/ports/policy.js');
@@ -141,7 +142,14 @@ async function startReads() {
     next();
   });
 
-  const adapter = createIndexedDbAdapter({ indexedDB, settings: chrome.storage.local, mode: 'versioned' });
+  // It stands in for the worker's adapter: since #35 slice 4b-0b only the worker's root hands #17's
+  // adapter the registry's steps, so only it makes CanvasTabDB where there's none, as after a clear
+  const adapter = createIndexedDbAdapter({
+    indexedDB,
+    settings: chrome.storage.local,
+    mode: 'versioned',
+    steps: pendingStructural,
+  });
   await adapter.open();
   let count = 0;
   const kernel = createKernel({
