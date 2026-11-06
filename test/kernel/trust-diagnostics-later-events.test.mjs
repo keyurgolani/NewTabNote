@@ -9,8 +9,9 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildDiagnostics, leaves, reportSchema } from '../../js/trust/core/diagnostics.js';
+import { buildDiagnostics, leaves, migrationSchema, reportSchema } from '../../js/trust/core/diagnostics.js';
 import { createDiagnosticJournal } from '../../js/trust/core/journal.js';
+import { incidentSchema, receiptSchema, runSchema } from '../../js/trust/core/records.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import * as v from '../../js/lib/valibot/index.mjs';
 import { databaseOn, hexIds, manualClock, trustProfile } from './trust-support.mjs';
@@ -39,14 +40,16 @@ async function exportOn() {
   return { profile, clock, records, journal };
 }
 
+/** @typedef {'journal' | 'receipts' | 'incidents' | 'runs'} StoreName */
+
 /**
- * Puts `rows` straight into one of NewTabNoteTrust's stores, as a later build would have written
- * them, past this build's checks
+ * Runs `body` on a connection of its own to NewTabNoteTrust, as another build's would be
+ * @template T
  * @param {TrustProfile} profile
- * @param {'journal' | 'runs'} name
- * @param {Record<string, unknown>[]} rows
+ * @param {(db: IDBDatabase) => Promise<T>} body
+ * @returns {Promise<T>}
  */
-async function laterBuildWrote(profile, name, rows) {
+async function onTrustDatabase(profile, body) {
   const db = /** @type {IDBDatabase} */ (
     await new Promise((resolve, reject) => {
       const request = profile.real.open('NewTabNoteTrust');
@@ -55,15 +58,48 @@ async function laterBuildWrote(profile, name, rows) {
     })
   );
   try {
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(name, 'readwrite');
-      for (const row of rows) tx.objectStore(name).add(row);
-      tx.oncomplete = () => resolve(undefined);
-      tx.onerror = () => reject(tx.error);
-    });
+    return await body(db);
   } finally {
     db.close();
   }
+}
+
+/**
+ * Puts `rows` straight into one of NewTabNoteTrust's stores, as a later build would have written
+ * them, past this build's checks: a new row, or one in place of the row with its key
+ * @param {TrustProfile} profile
+ * @param {StoreName} name
+ * @param {Record<string, unknown>[]} rows
+ */
+async function laterBuildWrote(profile, name, rows) {
+  await onTrustDatabase(
+    profile,
+    db =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(name, 'readwrite');
+        for (const row of rows) tx.objectStore(name).put(row);
+        tx.oncomplete = () => resolve(undefined);
+        tx.onerror = () => reject(tx.error);
+      }),
+  );
+}
+
+/**
+ * Every row of one of NewTabNoteTrust's stores, as stored
+ * @param {TrustProfile} profile
+ * @param {StoreName} name
+ * @returns {Promise<Record<string, unknown>[]>}
+ */
+function rowsOf(profile, name) {
+  return onTrustDatabase(
+    profile,
+    db =>
+      new Promise((resolve, reject) => {
+        const request = db.transaction(name).objectStore(name).getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      }),
+  );
 }
 
 /**
@@ -75,6 +111,78 @@ function reportOf(exported) {
   const report = JSON.parse(exported.serialized);
   return { report, journal: report.journal.map(event => [event.code, event.fields]) };
 }
+
+/** A storage check's receipt, as this build's records write it */
+const RECEIPT = Object.freeze({
+  providerId: 'storage',
+  status: 'verified',
+  durationMs: 3,
+  freshnessMs: 1000,
+  operation: 'storage.probe-readwrite',
+  evidence: { durationMs: 3, seq: 9 },
+  consequenceKey: null,
+  preserved: [],
+  nextAction: null,
+});
+
+/** @typedef {Awaited<ReturnType<typeof exportOn>>} Setup */
+/** @typedef {{record: unknown, migrations?: () => Promise<any[]>}} Written */
+
+/**
+ * A record of each section of the report outside the journal, one this build's schema takes but
+ * for one field a later build added (`laterField`), and how it reaches the export: in its store,
+ * or as #17's migration receipts
+ * @type {{section: string, schema: v.GenericSchema, write: (setup: Setup) => Promise<Written>}[]}
+ */
+const LATER_RECORDS = [
+  {
+    section: 'receipts',
+    schema: receiptSchema,
+    async write({ profile, clock, records }) {
+      await records.record({ ...RECEIPT, verifiedAt: clock.now() });
+      const [record] = await rowsOf(profile, 'receipts');
+      await laterBuildWrote(profile, 'receipts', [{ ...record, laterField: 1 }]);
+      return { record };
+    },
+  },
+  {
+    section: 'incidents',
+    schema: incidentSchema,
+    async write({ profile, journal }) {
+      // A capture failure raises its incident
+      journal.event('capture.failed', { ...KNOWN });
+      await journal.flush();
+      const [record] = await rowsOf(profile, 'incidents');
+      await laterBuildWrote(profile, 'incidents', [{ ...record, laterField: 1 }]);
+      return { record };
+    },
+  },
+  {
+    section: 'runs',
+    schema: runSchema,
+    async write({ profile, clock }) {
+      const record = {
+        id: crypto.randomUUID(),
+        commandId: 'rebuild-index',
+        incidentId: null,
+        state: 'succeeded',
+        outcome: null,
+        startedAt: clock.now(),
+        updatedAt: clock.now(),
+      };
+      await laterBuildWrote(profile, 'runs', [{ ...record, laterField: 1 }]);
+      return { record };
+    },
+  },
+  {
+    section: 'migrations',
+    schema: migrationSchema,
+    async write({ clock }) {
+      const record = { id: 'structural-9', fromVersion: 8, toVersion: 9, at: clock.now(), outcome: 'adapter-failed' };
+      return { record, migrations: async () => [{ ...record, laterField: 1 }] };
+    },
+  },
+];
 
 describe('the diagnostics export with events a later build journaled (#214)', () => {
   it('leaves out an event with a code this build has no entry for and one with a field its evidence lacks, keeps the rest, and says how many it left out (#214, case 1)', async () => {
@@ -145,9 +253,16 @@ describe('the diagnostics export with events a later build journaled (#214)', ()
     assert.equal(Object.hasOwn(report, 'journalLeftOut'), false);
   });
 
-  it("still refuses the whole report for a run a later build wrote that fails this build's schema: only the journal's events are left out (#214's guard)", async () => {
-    const { profile, clock, records, journal } = await exportOn();
-    await laterBuildWrote(profile, 'runs', [{ id: 'a1b2-later-run', startedAt: clock.now(), laterField: 1 }]);
-    await assert.rejects(buildDiagnostics({ records, journal, clock, versions: VERSIONS }), /diagnostic report refused/);
-  });
+  for (const { section, schema, write } of LATER_RECORDS) {
+    it(`still refuses the whole report for one of its ${section} a later build wrote with a field this build lacks, so only the journal's events are left out (#214's guard, ${section})`, async () => {
+      const setup = await exportOn();
+      const { record, migrations } = await write(setup);
+      assert.ok(v.is(schema, record), `the ${section} record is one this build takes, but for its later field`);
+      const { records, journal, clock } = setup;
+      await assert.rejects(
+        buildDiagnostics({ records, journal, clock, versions: VERSIONS, ...(migrations ? { migrations } : {}) }),
+        /diagnostic report refused/,
+      );
+    });
+  }
 });
