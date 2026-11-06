@@ -739,8 +739,9 @@ class BlockEditor {
    * Render the insights section for the current note
    */
   async renderInsights() {
-    // Remove existing insights section
-    const existingInsights = this.root.querySelector('.note-insights') || this.doc.getElementById('note-insights');
+    // Remove existing insights section: its own pane's, since split view's two panes share one
+    // document. An editor made with no root has the document as its root, as before (#201)
+    const existingInsights = this.root.querySelector('.note-insights');
     if (existingInsights) {
       existingInsights.remove();
     }
@@ -766,8 +767,8 @@ class BlockEditor {
       if (outcome.kind !== 'committed') console.warn('Insights: the stale mark stays', outcome.kind, outcome.code);
       if (noteId !== this.noteId || !this.noteData) return;
     }
-    // A render that started earlier may have drawn one meanwhile
-    const drawn = this.root.querySelector('.note-insights') || this.doc.getElementById('note-insights');
+    // A render that started earlier may have drawn one meanwhile, in this pane
+    const drawn = this.root.querySelector('.note-insights');
     if (drawn) drawn.remove();
 
     // Check if note has insights
@@ -861,8 +862,8 @@ class BlockEditor {
 
     insightsEl.appendChild(content);
 
-    // Insert after timestamp
-    const timestamp = this.root.querySelector('.page-timestamp') || this.doc.getElementById('page-timestamp');
+    // Insert after its own pane's timestamp, or after its title (#201)
+    const timestamp = this.root.querySelector('.page-timestamp');
     if (timestamp) {
       timestamp.after(insightsEl);
     } else {
@@ -994,11 +995,12 @@ class BlockEditor {
   }
 
   /**
-   * Show loading indicator in insights section (called from editor)
+   * Show loading indicator in this editor's insights section: from its own render, and from
+   * NotesManager's Extract insights in each editor that holds the note (#201)
    */
   showInsightsLoadingInEditor() {
-    // Remove existing insights section
-    const existingInsights = this.root.querySelector('.note-insights') || this.doc.getElementById('note-insights');
+    // Remove existing insights section, its own pane's (#201)
+    const existingInsights = this.root.querySelector('.note-insights');
     if (existingInsights) {
       existingInsights.remove();
     }
@@ -1022,11 +1024,20 @@ class BlockEditor {
       </div>
     `;
 
-    // Insert after timestamp
-    const timestamp = this.doc.getElementById('page-timestamp');
+    // Insert after its own pane's timestamp, or after its title, as renderInsights does (#201)
+    const timestamp = this.root.querySelector('.page-timestamp');
     if (timestamp) {
       timestamp.after(loadingEl);
+    } else {
+      this.titleEl.after(loadingEl);
     }
+  }
+
+  /**
+   * Hide that loading indicator, if this editor's pane shows it (#201)
+   */
+  hideInsightsLoadingInEditor() {
+    this.root.querySelector('.insights-loading')?.remove();
   }
 
   /**
@@ -1082,7 +1093,8 @@ class BlockEditor {
       return;
     }
 
-    const refreshBtn = this.doc.querySelector('.note-insights-refresh');
+    // Its own pane's button, which was clicked: split view's two panes share one document (#201)
+    const refreshBtn = this.root.querySelector('.note-insights-refresh');
     if (refreshBtn) {
       refreshBtn.classList.add('loading');
       refreshBtn.textContent = 'Extracting...';

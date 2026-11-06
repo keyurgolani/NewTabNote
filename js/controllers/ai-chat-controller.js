@@ -93,7 +93,10 @@ class AIChatController {
     this.onOpenNewTab = null;        // () => Promise<void>
     this.onOpenSettingsModal = null;  // () => Promise<void>
     this.onCloseAllModals = null;    // () => void
-    /** @type {any} TabController's noteTabs, set by App: a committed title names its note's tab */
+    /**
+     * @type {any} TabController's noteTabs, set by App: a committed title or insights show in
+     * each open editor that holds the note, the title naming its tab too (#201)
+     */
     this.noteTabs = null;
     /** @type {any} The tab's note list (js/kernel/core/application/note-list.js), set by App */
     this.noteList = null;
@@ -1496,10 +1499,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       if (outcome.kind !== 'committed') {
         throw new Error(`Not stored: insights (${outcome.kind}: ${outcome.code})`);
       }
-      const shownIn = this.getEditor ? this.getEditor() : null;
-      if (shownIn && typeof shownIn.showCommittedInsights === 'function') {
-        shownIn.showCommittedInsights(noteId, { insights, lastInsightsExtractedAt: Date.now() });
-      }
+      // In each open editor that holds the note, whichever pane is active now (#201)
+      this.noteTabs?.showCommittedInsights(noteId, { insights, lastInsightsExtractedAt: Date.now() });
 
       let response = '✅ **Insights extracted and saved to note!**\n\n';
 
@@ -1991,20 +1992,17 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   }
 
   /**
-   * Show a title the kernel committed for `noteId`, as 1.4.x showed it: in the editor if it
-   * holds that note (display only, no save) and in the note's tab. The list shows it from the
-   * commit feed. A title the user typed there that no save has stored yet stays, and names
-   * the tab when it lands.
+   * Show a title the kernel committed for `noteId`, as 1.4.x showed it, display only with no
+   * save, in each open editor that holds that note and in the note's tab, through
+   * TabController's noteTabs (#201). The list shows it from the commit feed. A title the user
+   * typed in one of those editors that no save has stored yet stays there, and names the tab
+   * when it lands.
    * @param {string} noteId
    * @param {string} name
    * @returns {Promise<void>}
    */
   async showCommittedTitle(noteId, name) {
-    const editor = this.getEditor ? this.getEditor() : null;
-    const shown = editor && typeof editor.showCommittedTitle === 'function'
-      ? editor.showCommittedTitle(noteId, name)
-      : 'not-open';
-    if (shown !== 'typed-title-pending' && this.noteTabs) await this.noteTabs.showNoteName(noteId, name);
+    await this.noteTabs?.showCommittedTitle(noteId, name);
   }
 
   clearAIChatHistory() {
