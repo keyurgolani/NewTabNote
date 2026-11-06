@@ -7,6 +7,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,10 +21,14 @@ import { CALLERS } from './support.mjs';
 
 /** @typedef {import('./storage-fixture.mjs').Profile} Profile */
 /** @typedef {import('../../js/kernel/core/ports/repository.js').StoreName} StoreName */
+/** @typedef {import('../../js/kernel/adapters/indexeddb/reader.js').IndexedDbReaderOptions} IndexedDbReaderOptions */
 /** @typedef {{value?: unknown, failed?: unknown[]}} Settled */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const INDEXEDDB = 'js/kernel/adapters/indexeddb';
+
+/** @type {{forceCloseDatabase: (db: IDBDatabase) => void}} */
+const fake = createRequire(import.meta.url)('fake-indexeddb');
 
 /** Every store #17's adapter reads */
 const STORE_NAMES = /** @type {StoreName[]} */ (Object.keys(IDB_STORES));
@@ -53,6 +58,21 @@ async function made(spec) {
   const of = profile();
   profiles.push(of);
   if (spec) await legacyEnv.createDatabase(of.real, spec);
+  return of;
+}
+
+/** A profile whose database a legacy build made, with one note */
+const legacy = () => made({ records: { canvases: [legacyEnv.note('n1')] } });
+
+/**
+ * A profile whose database the worker's adapter made at this build's version, the ledger's store
+ * included, on the profile's own factory, so no fault or close a case makes reaches it
+ */
+async function current() {
+  const of = await made();
+  const worker = adapterOn(of, { indexedDB: of.real });
+  await worker.open();
+  worker.close();
   return of;
 }
 
@@ -120,6 +140,221 @@ const everyRead = (on, store, noteId) =>
       };
     }),
   );
+
+/**
+ * A read, a settings read and a ledger read through `on`, each one's answer or failure
+ * @param {any} on - the reader or #17's adapter
+ */
+const threeReads = async on => [
+  await settled(() => on.read(['notes'], (/** @type {any} */ tx) => tx.getAll('notes'))),
+  await settled(() => on.readSettings('idbSettings', IDB_SETTINGS_KEYS)),
+  await settled(() => on.ledger.status('c-any')),
+];
+
+/**
+ * Opens CanvasTabDB at `version` on `factory`, as another context's upgrade does, once every
+ * other connection has closed for it
+ * @param {IDBFactory} factory
+ * @param {number} version
+ */
+const upgradeElsewhere = (factory, version) =>
+  new Promise((resolve, reject) => {
+    const request = factory.open('CanvasTabDB', version);
+    request.onsuccess = () => {
+      request.result.close();
+      resolve(undefined);
+    };
+    request.onerror = () => reject(request.error);
+  });
+
+/**
+ * A way the read half fails, with the code each of its reads answers: what makes each context's
+ * profile, the options both get, what runs before the reads (the open, by default), and the
+ * reads (threeReads, by default)
+ * @typedef {object} Failure
+ * @property {string} code
+ * @property {string} why
+ * @property {() => Promise<Profile>} make
+ * @property {Partial<IndexedDbReaderOptions>} [options]
+ * @property {(context: any, of: Profile) => Promise<unknown>} [ready]
+ * @property {(context: any, of: Profile) => Promise<Settled[]>} [ask]
+ */
+
+/** Opens `context`, whatever the open answers, which its reads answer after it */
+const opened = (/** @type {any} */ context) => context.open().catch(() => {});
+
+/**
+ * Closes each connection `of`'s factory opened, as `close` does
+ * @param {Profile} of
+ * @param {(connection: IDBDatabase) => void} close
+ */
+const closeEach = (of, close) => of.faults.connections.forEach(connection => close(connection));
+
+/** chrome.storage.local, with a get that fails with `message` */
+const failingGet = (/** @type {string} */ message) => ({
+  get: async () => {
+    throw new Error(message);
+  },
+});
+
+/** A settings read from chrome.storage.local */
+const preferences = async (/** @type {any} */ context) => [
+  await settled(() => context.readSettings('preferences', ['theme'])),
+];
+
+/** @type {Failure[]} */
+const FAILURES = [
+  { code: 'no-database', why: 'no database', make: () => made() },
+  {
+    code: 'version-too-new',
+    why: 'one a newer build upgraded',
+    make: () =>
+      made({
+        records: { canvases: [legacyEnv.note('n1')] },
+        version: DB_VERSION + 1,
+        extraStores: { meta: { keyPath: 'key' } },
+      }),
+  },
+  {
+    code: 'missing-core-stores',
+    why: 'none of its core stores',
+    make: () => made({ omit: ['canvases'] }),
+    options: { requireCore: true },
+  },
+  {
+    code: 'open-pending',
+    why: "an open that waits on the worker's run, which never ends here",
+    make: legacy,
+    options: { awaitUpgrade: () => new Promise(() => {}) },
+    ready: async context => void context.open().catch(() => {}),
+  },
+  { code: 'not-open', why: 'no open', make: legacy, ready: async () => {} },
+  {
+    code: 'open-failed',
+    why: 'an open IndexedDB fails',
+    make: legacy,
+    ready: (context, of) => {
+      of.faults.failNextOpen('CanvasTabDB', 'UnknownError');
+      return opened(context);
+    },
+  },
+  {
+    code: 'reload-required',
+    why: "a connection another context's upgrade closed",
+    make: legacy,
+    ready: async (context, of) => {
+      await opened(context);
+      await upgradeElsewhere(of.real, 9);
+    },
+  },
+  {
+    code: 'reload-required',
+    why: 'a connection the browser closed',
+    make: legacy,
+    ready: async (context, of) => {
+      await opened(context);
+      closeEach(of, fake.forceCloseDatabase);
+    },
+  },
+  {
+    code: 'reload-required',
+    why: 'a connection closing, on which no transaction starts',
+    make: current,
+    ready: async (context, of) => {
+      await opened(context);
+      closeEach(of, connection => connection.close());
+    },
+  },
+  {
+    code: 'reload-required',
+    why: 'a read that fails as its connection closes',
+    make: current,
+    ask: async (context, of) => [
+      await settled(() =>
+        context.read(['notes'], async (/** @type {any} */ tx) => {
+          closeEach(of, connection => connection.close());
+          of.faults.failNextRead(IDB_STORES.notes, 'UnknownError');
+          return tx.getAll('notes');
+        }),
+      ),
+    ],
+  },
+  {
+    code: 'reload-required',
+    why: 'a read once the browser closed its connection',
+    make: current,
+    ask: async (context, of) => [
+      await settled(() =>
+        context.read(['notes'], async (/** @type {any} */ tx) => {
+          const closes = of.faults.connections.map(
+            connection => new Promise(resolve => connection.addEventListener('close', resolve)),
+          );
+          closeEach(of, fake.forceCloseDatabase);
+          // The browser closes it once its transactions end, this one's included
+          await Promise.all(closes);
+          return tx.getAll('notes');
+        }),
+      ),
+    ],
+  },
+  {
+    code: 'unknown-store',
+    why: 'a store it has no name for',
+    make: legacy,
+    ask: async context => [await settled(() => context.read(['nope'], async () => 'read'))],
+  },
+  {
+    code: 'setting-not-served',
+    why: "a setting IndexedDB's store holds that no kernel code reads",
+    make: legacy,
+    ask: async context => [await settled(() => context.readSettings('idbSettings', ['llmApiKey']))],
+  },
+  {
+    code: 'adapter-failed',
+    why: 'a read whose body fails as no IndexedDB call does',
+    make: legacy,
+    ask: async context => [
+      await settled(() =>
+        context.read(['notes'], async () => {
+          throw new TypeError('a body that failed');
+        }),
+      ),
+    ],
+  },
+  {
+    code: 'settings-read-failed',
+    why: "chrome.storage.local's get failing",
+    make: legacy,
+    options: { settings: failingGet('a get that failed') },
+    ask: preferences,
+  },
+  {
+    code: 'quota',
+    why: "chrome.storage.local's get failing for its quota",
+    make: legacy,
+    options: { settings: failingGet('QUOTA_BYTES quota exceeded') },
+    ask: preferences,
+  },
+];
+
+/**
+ * How `failure`'s reads settle on #17's adapter in existing mode and on the reader, each on a
+ * profile of its own, with each one's open state after them
+ * @param {Failure} failure
+ */
+async function bothFail(failure) {
+  const answers = [];
+  /** @type {Array<(of: Profile, options?: Partial<IndexedDbReaderOptions>) => any>} */
+  const contexts = [(of, options) => adapterOn(of, /** @type {any} */ ({ mode: 'existing', ...options })), readerOn];
+  for (const contextOn of contexts) {
+    const of = await failure.make();
+    const context = contextOn(of, failure.options);
+    await (failure.ready ?? opened)(context, of);
+    const asked = await (failure.ask ?? threeReads)(context, of);
+    answers.push({ asked, state: context.openState() });
+  }
+  return answers;
+}
 
 describe("#17's read-only reader (#35 slice 4b-0b)", () => {
   it("opens a database as it is, and answers Popup's queries and setting reads as #17's adapter does in existing mode", async () => {
@@ -269,6 +504,18 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
       [...fixtures.keys()].filter(id => !read.includes(id)),
       ['none.basic', 'v9.newer'],
     );
+  });
+
+  it("fails as #17's adapter in existing mode does, in every way the read half can fail, each on a profile of its own", async () => {
+    for (const failure of FAILURES) {
+      const [adapter, reader] = await bothFail(failure);
+      assert.deepEqual(reader, adapter, failure.why);
+      assert.deepEqual(
+        adapter.asked.map(answer => answer.failed?.[1]),
+        adapter.asked.map(() => failure.code),
+        `${failure.why}: what each read fails with`,
+      );
+    }
   });
 
   it('reaches no module the architecture list gives the role writer', () => {
