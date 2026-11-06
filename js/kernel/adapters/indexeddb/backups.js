@@ -36,7 +36,7 @@ import { withoutPlacement } from '../../core/domain/placement.js';
 import { blobOf, dataUrlOf } from './data-urls.js';
 import { settingsFailureOf } from './failures.js';
 import { writeRecoveryCopy } from './recovery-copies.js';
-import { CONFLICTS_STORE } from './registry.js';
+import { CONFLICTS_STORE } from './registry-names.js';
 import { result } from './requests.js';
 
 /** @typedef {import('../../core/contracts/outcomes.js').Outcome} Outcome */

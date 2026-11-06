@@ -327,6 +327,33 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     assert.deepEqual(reached, Object.fromEntries(files.map(file => [file, []])));
   });
 
+  it("reaches the registry's steps from no page: registry.js is in the worker's graph alone, every page's adapter takes none (#35 slice 4b-0b)", () => {
+    const registry = `${INDEXEDDB}/registry.js`;
+    const pages = rootsOf({ pages: PAGES, readFile: defaultRead }).filter(root => !root.worker);
+    for (const name of ['newtab', 'popup', 'sidepanel', 'offscreen', 'recovery']) {
+      assert.ok(
+        pages.some(root => root.name === name),
+        name,
+      );
+    }
+    const reaching = pages
+      .filter(root => {
+        const { modules } = reachGraph(
+          root.entries.map(entry => path.join(ROOT, entry)),
+          { readFile: defaultRead },
+        );
+        return [...modules].map(relative).includes(registry);
+      })
+      .map(root => root.name);
+    assert.deepEqual(reaching, []);
+    const worker = rootsOf({ pages: PAGES, readFile: defaultRead }).find(root => root.worker);
+    const { modules } = reachGraph(
+      (worker?.entries || []).map(entry => path.join(ROOT, entry)),
+      { readFile: defaultRead },
+    );
+    assert.ok([...modules].map(relative).includes(registry), "the worker's graph holds the steps");
+  });
+
   it("fails a page's write the list doesn't name (rule 2)", () => {
     const problems = problemsOf({
       readFile: planted({

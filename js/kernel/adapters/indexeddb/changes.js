@@ -16,7 +16,7 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { failureOf } from './failures.js';
-import { CHANGES_KEY, CHANGES_STORE, META_STORE } from './registry.js';
+import { CHANGES_KEY, CHANGES_STORE, META_STORE } from './registry-names.js';
 import { committed, result } from './requests.js';
 
 /** @typedef {import('../../core/ports/commit-log.js').Change} Change */

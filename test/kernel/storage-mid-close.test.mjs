@@ -25,6 +25,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { WORKER_TASKS } from '../../js/kernel/adapters/indexeddb/worker-tasks.js';
 import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
@@ -68,6 +69,7 @@ async function worker() {
   const of = await profileWith(/** @type {any} */ (synthesized().get('v8.basic')));
   assert.equal((await run(of)).status, 'migrated');
   const adapter = createIndexedDbAdapter({
+    steps: pendingStructural,
     indexedDB: of.real,
     settings: of.chrome.api.storage.local,
     mode: 'versioned',
@@ -478,6 +480,7 @@ describe("#17's adapter while the worker's open makes the database (#17 PR 4a)",
   it('a call during the upgrade answers open-pending, never reload-required, though IndexedDB refuses a transaction there as on a closing connection', async () => {
     const of = newProfile();
     const adapter = createIndexedDbAdapter({
+      steps: pendingStructural,
       indexedDB: of.real,
       settings: of.chrome.api.storage.local,
       mode: 'versioned',

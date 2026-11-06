@@ -29,7 +29,7 @@ import { failureOf } from '../adapters/indexeddb/failures.js';
 import { UPGRADE_BLOCKED_KEY } from '../adapters/indexeddb/health.js';
 import { MIGRATE_LOCK, startMigrations } from '../adapters/indexeddb/migrate.js';
 import { purgeRecoveryPoints } from '../adapters/indexeddb/purge.js';
-import { LATEST_STRUCTURAL } from '../adapters/indexeddb/registry.js';
+import { LATEST_STRUCTURAL, pendingStructural } from '../adapters/indexeddb/registry.js';
 import { runTransforms } from '../adapters/indexeddb/transforms.js';
 import { WORKER_TASKS } from '../adapters/indexeddb/worker-tasks.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
@@ -766,6 +766,8 @@ export function createWorkerClient(host = workerHost()) {
         indexedDB: host.indexedDB,
         settings: host.settings,
         mode: upgraded ? 'versioned' : 'existing',
+        // The registry's steps, which only the worker's adapter is handed (#35 slice 4b-0b)
+        steps: pendingStructural,
         requireCore: true,
         // Its ledger keys the worker's own commands too (contracts/worker-catalog.js)
         commands: WORKER_COMMANDS,

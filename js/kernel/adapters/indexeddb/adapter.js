@@ -107,8 +107,7 @@ import {
   META_STORE,
   OPERATIONS_STORE,
   TOMBSTONES_STORE,
-  pendingStructural,
-} from './registry.js';
+} from './registry-names.js';
 import { abort, endOf, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
@@ -159,6 +158,11 @@ import { createVersionTracker } from './versions.js';
  *   read-only integrity check and the ledger's retention. Without them, as on every page, a
  *   check answers `integrity-check-needs-worker` and a sweep rejects with
  *   `ledger-sweep-needs-worker`, and no page's start holds either one's code.
+ * @property {import('./connection.js').Steps | null} [steps]
+ *   The registry's structural steps (registry.js pendingStructural), which make a new database
+ *   in a versioned open, and which only the worker's root passes, as it passes `workerTasks`.
+ *   Without them, as on every page, a versioned open makes no database and upgrades none
+ *   (connection.js), and no page's start holds the steps' code.
  * @property {boolean} [maintains]
  *   An `existing` open runs startup maintenance too: the new tab's (#17 PR 4a), which opens the
  *   database as it is and still writes a new profile's first-run settings. Popup and Side Panel
@@ -431,6 +435,7 @@ export function createIndexedDbAdapter({
   clock = systemClock,
   keyRange,
   commands = COMMANDS,
+  steps = null,
 }) {
   const connection = createConnection({
     indexedDB,
@@ -439,9 +444,8 @@ export function createIndexedDbAdapter({
     requireCore,
     awaitUpgrade,
     beforeOpen: copiesMissingStores ? () => copyMissingStores({ indexedDB, settings, clock, locks }) : null,
-    // The registry's steps, which make a new database in a versioned open: only this adapter
-    // hands them in (#35 slice 4b-0)
-    steps: pendingStructural,
+    // The registry's steps, which only the worker's adapter is handed (#35 slice 4b-0b)
+    steps,
   });
   const database = () => connection.database();
 

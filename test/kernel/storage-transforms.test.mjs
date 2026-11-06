@@ -12,6 +12,7 @@ import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
 import {
@@ -256,6 +257,7 @@ async function pointsIn(of) {
  */
 async function withCommands(of, body, clock = later, caller = CALLERS.newtab) {
   const adapter = createIndexedDbAdapter({
+    steps: pendingStructural,
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
