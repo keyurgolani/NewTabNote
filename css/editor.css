@@ -696,8 +696,13 @@ body.focus-mode .block:focus-within {
 
 /* The note's column, title and blocks in each of the three editors: the new tab's main pane, split
    view's right pane and the pop-out (js/controllers/tab-controller.js) all carry these classes. Each
-   pane's padding is .editor-pane's, under Workspace & Split View. */
+   pane's padding is .editor-pane's, under Workspace & Split View. Once the column fills its pane,
+   its width keeps --handle-overhang clear on each side, so a block's handle stays inside the pane;
+   while it's narrower, its max-width sets it as before (#207). The overhang is 4 px, since the
+   handle sits 28 px left of its block (.block-handle) and the pane's padding is 24 px, or 24 px on a
+   touch device (.touch-device, below). */
 .editor {
+  width: calc(100% - 2 * var(--handle-overhang, 4px));
   max-width: var(--editor-width);
   margin: 0 auto;
 }
@@ -813,7 +818,12 @@ body.focus-mode .block:focus-within {
   height: 14px;
 }
 
-/* Touch device block handle (Req 10.1) */
+/* Touch device block handle (Req 10.1). It's 48 px left of its block, 24 px past the pane's padding,
+   so the column keeps that much clear (#207) */
+.touch-device {
+  --handle-overhang: 24px;
+}
+
 .touch-device .block-handle {
   opacity: 0.5;
   width: 44px;
