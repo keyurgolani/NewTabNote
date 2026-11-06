@@ -13,6 +13,8 @@
 //    or is #17's adapter's on an `untilMoved` page. js/ outside js/kernel is write-paths.md's,
 //    which test/write-paths.test.js holds. A write through a handed-in handle is a `handles` row.
 // 3. `untilMoved` only shrinks: each row's page still reaches the adapter, and no page joins it.
+//    recovery.html joined once, with #20 slice 4b, by the lead's ruling of 2026-11-05, so its
+//    row is on a list of its own, and no other page can join.
 // Every module under js/kernel/adapters/indexeddb/ is classified, and an import() whose specifier
 // is computed is one `computedImports` names. The planted cases break each rule on purpose.
 
@@ -36,6 +38,13 @@ const LIST = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'architecture', 
 
 /** The pages 4a's `untilMoved` starts with, which no page may join: only a row's removal changes it */
 const UNTIL_MOVED_4A = Object.freeze(['popup', 'sidepanel', 'newtab']);
+
+/**
+ * The page that joined `untilMoved` after 4a, once: recovery.html, with #20 slice 4b, by the lead's
+ * ruling of 2026-11-05, as #35's slice 4 plan foresaw. Its remediations commit in-process, as the
+ * three pages' writes do, until #35 moves them onto #13's port. Only a row's removal changes it
+ */
+const UNTIL_MOVED_JOINED = Object.freeze(['recovery']);
 
 /** The folder every module of which `indexeddb` classifies */
 const INDEXEDDB = 'js/kernel/adapters/indexeddb';
@@ -194,7 +203,9 @@ function problemsOf({
     if (!reachedByPages.has(row.file)) problems.push(`the list names ${row.file}, which no page reaches`);
   }
   for (const row of list.untilMoved) {
-    if (!UNTIL_MOVED_4A.includes(row.root)) problems.push(`${row.root} joined untilMoved, which only shrinks (rule 3)`);
+    if (!UNTIL_MOVED_4A.includes(row.root) && !UNTIL_MOVED_JOINED.includes(row.root)) {
+      problems.push(`${row.root} joined untilMoved, which only shrinks (rule 3)`);
+    }
     const graph = graphs.get(row.root);
     if (!graph) {
       problems.push(`untilMoved names ${row.root}, which isn't a page the build has`);
@@ -218,7 +229,7 @@ const planted = plants => (/** @type {string} */ file) => {
 };
 
 describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
-  it('finds nothing wrong in the tree: the worker commits, three pages move in their slices, and each page write is one the list names', () => {
+  it('finds nothing wrong in the tree: the worker commits, four pages move in their slices, and each page write is one the list names', () => {
     assert.deepEqual(problemsOf(), []);
   });
 
@@ -311,6 +322,20 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
+  it('fails recovery.html without its untilMoved row, which reaches the write adapter (rule 1, #115)', () => {
+    const list = {
+      ...LIST,
+      untilMoved: LIST.untilMoved.filter(/** @param {{root: string}} row */ row => row.root !== 'recovery'),
+    };
+    const problems = problemsOf({ list });
+    assert.ok(
+      problems.includes(
+        'recovery reaches js/kernel/adapters/indexeddb/adapter.js, which writes CanvasTabDB: only the worker may (rule 1)',
+      ),
+      problems.join('\n'),
+    );
+  });
+
   it('fails an untilMoved row whose page no longer reaches the adapter, and a page that joins the list (rule 3)', () => {
     const list = {
       ...LIST,
@@ -321,6 +346,8 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     };
     const problems = problemsOf({ list });
     assert.ok(problems.includes('offscreen joined untilMoved, which only shrinks (rule 3)'), problems.join('\n'));
+    // recovery.html's one join opens the list to no other page
+    assert.ok(!problems.some(problem => problem.startsWith('recovery joined')), problems.join('\n'));
     assert.ok(
       problems.includes(
         'offscreen no longer reaches js/kernel/adapters/indexeddb/adapter.js, so its untilMoved row goes (rule 3)',
