@@ -31,7 +31,10 @@
  * still lands well inside the check's timeout.
  *
  * A retryable failure (a blocked upgrade, an open still pending, a transient abort) verified
- * nothing either way, so it's `unverified` with its code. A record already under the probe's
+ * nothing either way, so it's `unverified` with its code, and so is `reload-required`: #17's
+ * adapter never opens again once its connection is gone, after another context's upgrade or
+ * Chrome's close, so the page that holds it reloads to open the database again, and nothing it
+ * probed says the database fails. A record already under the probe's
  * key is never touched: the probe stops, writes nothing, and reports `unverified`, and so does a
  * read-back that differs (`probe-readback-mismatch`).
  */
@@ -97,17 +100,35 @@ function migrationFaultOf(state) {
 }
 
 /**
+ * Why a migration waits or failed, as a registered code its evidence can carry, or null: a run
+ * short of space for its copy (`space-short`), an upgrade waiting on another connection
+ * (`blocked-upgrade`), or a failed run's own code. The views tell a wait for free space from any
+ * other wait by it (#20 slice 4b).
+ * @param {unknown} state - an answer migrationFaultOf has read
+ * @param {'migration-pending' | 'migration-failed' | 'migration-blocked'} faultCode
+ * @returns {string | null}
+ */
+function migrationCodeOf(state, faultCode) {
+  const { status, code, blocked } = /** @type {Record<string, unknown>} */ (state);
+  if (faultCode === 'migration-blocked') return status === 'space-blocked' ? 'space-short' : blocked === true ? 'blocked-upgrade' : null;
+  if (faultCode === 'migration-failed') return typeof code === 'string' ? code : null;
+  return null;
+}
+
+/**
  * Storage's answer while CanvasTabDB waits below the latest version: `degraded`, with the
- * migration fault, and capture safe only when the probe committed on capture's path
+ * migration fault and why, when the state says so, and capture safe only when the probe
+ * committed on capture's path
  * @param {'migration-pending' | 'migration-failed' | 'migration-blocked'} faultCode
  * @param {boolean} committed
+ * @param {string | null} [why] - its registered code, migrationCodeOf's
  * @returns {CheckResult}
  */
-function migrationResult(faultCode, committed) {
+function migrationResult(faultCode, committed, why = null) {
   /** @type {CheckResult} */
   const result = {
     status: 'degraded',
-    evidence: { subjectId: 'CanvasTabDB' },
+    evidence: { subjectId: 'CanvasTabDB', ...failureEvidence({ code: why }) },
     consequenceKey: `storage.${faultCode}`,
     preserved: ['capture', 'editing', 'reading'],
     faults: [{ faultCode, subjectId: 'CanvasTabDB', severity: 'degraded', preserved: ['capture', 'editing', 'reading'] }],
@@ -189,6 +210,9 @@ function failureOf(outcome) {
     // nothing, so it's never a failed probe (the connection answers it unretryable once the
     // open was refused)
     if (outcome.code === 'migration-required') return { kind: 'unverified', evidence, code: outcome.code };
+    // A connection that needs a reload, though no resend fixes it: the page reloads, and the
+    // database it probed may be fine (#20 slice 4b; the lead, 2026-10-31 11:55)
+    if (outcome.code === 'reload-required') return { kind: 'unverified', evidence, code: outcome.code };
     return { kind: outcome.retryable ? 'unverified' : 'failed', evidence, code: outcome.code };
   }
   // Rejected (a record under the probe's key), a conflict, or unknown: nothing was verified
@@ -286,9 +310,13 @@ export const storage = Object.freeze({
     // no migration fault
     /** @type {ReturnType<typeof migrationFaultOf>} */
     let migration = null;
+    /** @type {string | null} */
+    let why = null;
     let known = true;
     try {
-      migration = migrationFaultOf(await reader.current());
+      const state = await reader.current();
+      migration = migrationFaultOf(state);
+      if (migration) why = migrationCodeOf(state, migration);
     } catch {
       known = false;
     }
@@ -303,10 +331,10 @@ export const storage = Object.freeze({
     // A versioned open below the latest version: the adapter isn't capture's path, so it
     // probed nothing capture uses
     if (outcome.kind === 'unavailable' && outcome.code === 'migration-required') {
-      return migrationResult(migration || 'migration-pending', false);
+      return migrationResult(migration || 'migration-pending', false, why);
     }
     const failure = failureOf(outcome);
-    if (!failure && migration) return migrationResult(migration, true);
+    if (!failure && migration) return migrationResult(migration, true, why);
     if (!failure) {
       // NewTabNoteTrust is storage too: while it won't take writes, the records layer holds
       // its `storage/open-failed/NewTabNoteTrust` incident, and this check says so rather than

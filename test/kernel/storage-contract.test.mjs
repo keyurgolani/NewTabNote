@@ -1,7 +1,8 @@
 // #12's contract suite on #17's IndexedDB adapter (#17 slice 1: "This issue's IndexedDB
 // adapter passes #12's contract suite alongside the in-memory adapter"), over fake-indexeddb
 // behind the fault-injecting wrapper. And which composition roots load it: the service worker,
-// Popup, and Side Panel since #17 PR 1b, and the new tab since #17 PR 4a.
+// Popup, and Side Panel since #17 PR 1b, the new tab since #17 PR 4a, and recovery.html since
+// #20 slice 4b.
 
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -42,7 +43,7 @@ const WORKER_TASK_MODULES = Object.freeze({
 });
 /** Deleted with #17 PR 4a, once every root opened #17's adapter */
 const LEGACY_ADAPTER = 'js/kernel/adapters/legacy/adapter.js';
-const PAGES = Object.freeze(['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html']);
+const PAGES = Object.freeze(['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'recovery.html']);
 /**
  * The import() calls whose specifier no reading can follow, by file: the loader's, of a library
  * by the build's manifest (#27 slice 3)
@@ -123,15 +124,45 @@ it('every root loads the IndexedDB adapter, and the legacy one is gone; only the
   }
 });
 
-it("no page reaches the worker's own storage tasks, the integrity check and the ledger's retention, at its start or later, and the worker loads them (#35 slice 3c)", () => {
-  const { all, pages } = pageGraphs();
+/**
+ * Which of the worker's own storage tasks each page reaches, at its start or later
+ * @param {(file: string) => string} [readFile]
+ */
+function taskProblems(readFile) {
+  const { all, pages } = pageGraphs(readFile);
   /** @type {string[]} */
   const reached = [];
   for (const [page, { modules }] of pages) {
     for (const [file, what] of Object.entries(WORKER_TASK_MODULES)) if (modules.has(file)) reached.push(`${page} reaches ${what}`);
   }
+  return { all, reached };
+}
+
+it("no page reaches the worker's own storage tasks, the integrity check and the ledger's retention, at its start or later, and the worker loads them (#35 slice 3c)", () => {
+  const { all, reached } = taskProblems();
   assert.deepEqual(reached, []);
   for (const [file, what] of Object.entries(WORKER_TASK_MODULES)) assert.ok(all.workerFiles.has(file), `the worker loads ${what}`);
+});
+
+it("holds recovery.html to the same rules: #17's adapter, NewTabNoteTrust and the readers its checks run through, and none of the worker's own modules, a planted integrity check included (#20 slice 4b)", () => {
+  const recovery = /** @type {{modules: Set<string>}} */ (pageGraphs().pages.get('recovery.html')).modules;
+  for (const file of [
+    ADAPTER,
+    'js/kernel/composition/recovery.js',
+    'js/kernel/adapters/indexeddb/trust.js',
+    'js/kernel/adapters/indexeddb/health.js',
+    'js/kernel/adapters/indexeddb/legacy-secrets.js',
+  ]) {
+    assert.ok(recovery.has(file), file);
+  }
+  // Its Verify asks the worker for the scan, so the scan's module never joins the page
+  const root = path.join(ROOT, 'js', 'kernel', 'composition', 'recovery.js');
+  /** @param {string} file */
+  const planted = file => {
+    const text = fs.readFileSync(file, 'utf8');
+    return file === root ? `import '../adapters/indexeddb/integrity.js';\n${text}` : text;
+  };
+  assert.deepEqual(taskProblems(planted).reached, ["recovery.html reaches the worker's integrity check"]);
 });
 
 it("fails a page that reaches the runner through a chunk it loads with import(), as one planted through the trust chunk would (R88's read of #79)", () => {

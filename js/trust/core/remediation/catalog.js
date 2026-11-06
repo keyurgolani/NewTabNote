@@ -653,7 +653,7 @@ const contribution = (id, group, rank, label, remediationClass, appliesTo, imple
     apiVersion: 1,
     group,
     rank,
-    hosts: Object.freeze(['workspace']),
+    hosts: Object.freeze(['workspace', 'recovery']),
     label,
     owner: 20,
     class: remediationClass,

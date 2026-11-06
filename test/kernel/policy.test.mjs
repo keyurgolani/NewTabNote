@@ -71,7 +71,9 @@ const TODAY = {
     ],
     queries: ['findTombstones'],
   },
-  recovery: { commands: [], queries: [] },
+  // recovery.html reads only its theme through the kernel (#20 slice 4b); its trust rows are
+  // its root's (test/kernel/recovery-surface.test.mjs)
+  recovery: { commands: [], queries: ['getPreferences'] },
 };
 
 /** The page surfaces, whose roots build their policy on the shared catalog */

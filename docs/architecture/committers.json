@@ -1,5 +1,5 @@
 {
-  "about": "#35's one committer (scope AC1, slice 4a): every repository write commits through the background coordinator, in the service worker, apart from the in-context writes listed here. test/kernel/one-committer.test.mjs reads this file against every root the build has: each page in scripts/build/vite-config.js's PAGES, by the scripts its HTML loads, and the worker from manifest.json, each through its static imports and every import() of a literal. Each module worker a root starts with new Worker(new URL(literal, import.meta.url)), as the new tab starts js/workers/indexer.js, is a root of its own, and so is each one that worker starts in turn; no module worker is on `untilMoved`. A root #2 or #3 adds is checked with no edit to the test. `untilMoved` lists the pages that still commit in-process, each until the slice that moves its writes onto #13's port, and only shrinks. `inContext` lists what a page writes itself, or typing would wait on the worker. `reads` lists a module that writes, which a page loads only to read. `handles` lists a write through a handed-in handle, which no scan sees. `indexeddb` classifies every module under js/kernel/adapters/indexeddb/, so a new one can't land without a decision. #6's ntn.continuity, #16's appearance mirror, #1's product session (js/product/topology.js, which no root loads yet) and recovery.html's remediations under storage.restore (#20) join when they land.",
+  "about": "#35's one committer (scope AC1, slice 4a): every repository write commits through the background coordinator, in the service worker, apart from the in-context writes listed here. test/kernel/one-committer.test.mjs reads this file against every root the build has: each page in scripts/build/vite-config.js's PAGES, by the scripts its HTML loads, and the worker from manifest.json, each through its static imports and every import() of a literal. Each module worker a root starts with new Worker(new URL(literal, import.meta.url)), as the new tab starts js/workers/indexer.js, is a root of its own, and so is each one that worker starts in turn; no module worker is on `untilMoved`. A root #2 or #3 adds is checked with no edit to the test. `untilMoved` lists the pages that still commit in-process, each until the slice that moves its writes onto #13's port, and only shrinks: recovery.html joined it once, with #20 slice 4b, by the lead's ruling of 2026-11-05. `inContext` lists what a page writes itself, or typing would wait on the worker. `reads` lists a module that writes, which a page loads only to read. `handles` lists a write through a handed-in handle, which no scan sees. `indexeddb` classifies every module under js/kernel/adapters/indexeddb/, so a new one can't land without a decision. #6's ntn.continuity, #16's appearance mirror and #1's product session (js/product/topology.js, which no root loads yet) join when they land. recovery.html's remediations (#20 slice 4b) commit in-process on its `untilMoved` row, rebuild-index's inline write included, until #35 moves them onto #13's port, when their fallback for when the coordinator is unavailable joins `inContext` under storage.restore.",
   "worker": "js/background.js",
   "writeAdapter": "js/kernel/adapters/indexeddb/adapter.js",
   "untilMoved": [
@@ -23,6 +23,13 @@
       "writes": "CanvasTabDB and its settings, through #17's adapter, for the new tab and the PiP editor in its realm",
       "owner": 35,
       "removeWhen": "#35 slice 4d moves the new tab's and PiP's writes onto #13's port"
+    },
+    {
+      "root": "recovery",
+      "builds": "js/kernel/composition/recovery.js",
+      "writes": "CanvasTabDB and its settings, through #17's adapter, for #20's Trust Center and Recovery Center, rebuild-index's inline write included",
+      "owner": 35,
+      "removeWhen": "#35 moves recovery.html's remediations onto #13's port, and their fallback for when the coordinator is unavailable joins inContext under storage.restore"
     }
   ],
   "inContext": [
@@ -50,9 +57,15 @@
   "reads": [
     {
       "file": "js/kernel/adapters/indexeddb/recovery-points.js",
-      "roots": ["newtab"],
-      "why": "the new tab reads the pre-update copy for its export (legacy-export.js); its writes are the worker's migration run's (migrate.js)",
+      "roots": ["newtab", "recovery"],
+      "why": "the new tab reads the pre-update copy for its export (legacy-export.js), and recovery.html lists the points and reads one back to verify it for recovery readiness (health.js's reader, under the points lock, never creating the database); its writes are the worker's migration run's (migrate.js)",
       "owner": 17
+    },
+    {
+      "file": "js/kernel/adapters/indexeddb/legacy-secrets.js",
+      "roots": ["recovery"],
+      "why": "recovery.html reads whether 1.4.x's legacy secrets are still stored, for the Saved keys row (createLegacySecretReader); the delete is createLegacySecretRemover's, which the page never builds",
+      "owner": 20
     }
   ],
   "handles": [

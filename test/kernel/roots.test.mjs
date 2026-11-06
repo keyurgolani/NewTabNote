@@ -5,13 +5,15 @@
 // So does the new tab's since #17 PR 4a, once the worker's run has had its 5 seconds, its one
 // connection since #17 PR 4b, which connects production js/storage.js's shell to its kernel,
 // in test/helpers/legacy-env.js. The worker's maintenance leaves out the integrity check, which
-// it runs when asked (#35 slice 1).
+// it runs when asked (#35 slice 1). recovery.html's opens #17's adapter as it is too, with no
+// wait on the worker's run (#20 slice 4b).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
 
+import { POINTS_LOCK } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composition/background.js';
 import { PURGE_MESSAGE, waitForWorkerUpgrade, wakeWorkerToPurge } from '../../js/kernel/composition/host.js';
@@ -24,9 +26,12 @@ import {
   withPurgeWake,
 } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
+import { createRecoveryRoot, recoveryReadersOf } from '../../js/kernel/composition/recovery.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
+import { realTimers } from './trust-support.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
@@ -97,6 +102,34 @@ const policyRefusal = outcome => outcome.kind === 'rejected' && [outcome.reason,
 /** @param {IDBFactory} factory */
 const databases = async factory =>
   (await factory.databases()).map((/** @type {IDBDatabaseInfo} */ db) => [db.name, db.version]).sort();
+
+/**
+ * What recovery.html's root reads from its page's globals: IndexedDB, chrome.storage.local,
+ * chrome.permissions, and the manifest
+ * @param {LegacyContext} context
+ */
+const recoveryHostOf = context => {
+  const local = context.env.chrome.api.storage.local;
+  return {
+    indexedDB: context.env.indexedDB,
+    keyRange: /** @type {any} */ (KeyRange),
+    settings: {
+      /** @param {string[]} keys */
+      get: keys => local.get(keys),
+      /** @param {Record<string, unknown>} items */
+      set: items => local.set(items),
+      getKeys: async () => Object.keys(context.env.chrome.local),
+    },
+    secretSettings: local,
+    locks: null,
+    crypto: /** @type {any} */ (webcrypto),
+    permissions: grantedAsDeclared(),
+    manifest: MANIFEST,
+    // The page's chrome.runtime, which a root that woke the worker's run would wake it through
+    runtime: context.env.chrome.api.runtime,
+    timers: realTimers,
+  };
+};
 
 describe('each composition root', () => {
   it('builds a kernel whose caller is its surface', async () => {
@@ -322,6 +355,64 @@ describe('each composition root', () => {
     // Through its one connection: the Storage global's shell opens none (#17 PR 4b)
     assert.equal('db' in next.storage, false);
     closeAll([fresh, next]);
+  });
+
+  it("recovery.html's opens #17's adapter as the database is, and reads its theme and nothing else (#20 slice 4b)", async () => {
+    const tab = legacyContext();
+    const { adapter, client: newtab } = newTabOf(tab);
+    assert.equal(await newtab.whenReady(), null);
+    await tab.env.chrome.api.storage.local.set({ setting_theme: 'dark' });
+    const page = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: recoveryHostOf(page) });
+    assert.equal(await root.kernel.whenReady(), null);
+    assert.equal(await root.theme(), 'dark');
+    const created = await root.kernel.execute({ type: 'createNote', commandId: root.kernel.ids.next(), noteId: root.kernel.ids.next() });
+    assert.deepEqual(policyRefusal(created), ['policy', 'not-on-surface']);
+    assert.deepEqual(await root.kernel.query({ type: 'listNotes', view: 'active' }), {
+      kind: 'failed',
+      cause: 'policy',
+      code: 'not-on-surface',
+    });
+    // It opened the database at the version it found, and upgraded nothing
+    assert.deepEqual((await databases(page.env.indexedDB)).filter(([name]) => name === 'CanvasTabDB'), [['CanvasTabDB', DB_VERSION]]);
+    root.close();
+    adapter.close();
+    closeAll([tab, page]);
+  });
+
+  it("recovery.html's makes no database on a profile with none, and never wakes the worker's run, which would make one, and its theme falls back to the system's (#20 slice 4b)", async () => {
+    // legacy-env's worker answers a page's wake by making the database (workerRun), as the
+    // service worker's run does on a profile with none
+    const page = legacyContext();
+    await page.env.chrome.api.storage.local.set({ setting_theme: 'dark' });
+    const root = createRecoveryRoot({ host: recoveryHostOf(page) });
+    const failure = await root.kernel.whenReady();
+    assert.deepEqual(failure && [failure.cause, failure.code], ['storage', 'no-database']);
+    // The open failed, so the theme is the system's rather than a partial read
+    assert.equal(await root.theme(), 'system');
+    assert.deepEqual(await page.env.indexedDB.databases(), []);
+    root.close();
+    closeAll([page]);
+  });
+
+  it("recovery.html's hands the recovery reader its Web Locks, so a verification holds the points lock shared and the worker's purge never changes a point under it (#115's high review)", async () => {
+    const page = legacyContext();
+    /** @type {Array<[string, string]>} */
+    const held = [];
+    const locks = {
+      /**
+       * @param {string} name
+       * @param {{mode: string}} options
+       * @param {() => Promise<unknown>} body
+       */
+      request: (name, options, body) => (held.push([name, options.mode]), body()),
+    };
+    const { recovery } = recoveryReadersOf(/** @type {any} */ ({ ...recoveryHostOf(page), locks }));
+    // With no recovery database the point reads as discarded, under the lock all the same
+    assert.deepEqual(await recovery.verify('00000000-0000-4000-8000-000000000001'), { ok: false, code: 'point-discarded' });
+    assert.deepEqual(held, [[POINTS_LOCK, 'shared']]);
+    assert.deepEqual(await page.env.indexedDB.databases(), []);
+    closeAll([page]);
   });
 
   it("watches the new tab's connection, and the worker's opens again once a newer build's upgrade closes it", async () => {

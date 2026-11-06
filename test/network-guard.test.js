@@ -479,7 +479,7 @@ describe("each context's guard (js/kernel/composition/network-guard-install.js)"
 
   it('is the first script of every page, ahead of the boot guard and every library, and the first module of the worker and the indexer', () => {
     const { htmlTags } = require('../scripts/build/markup.js');
-    for (const page of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html']) {
+    for (const page of ['newtab.html', 'popup.html', 'sidepanel.html', 'offscreen.html', 'recovery.html']) {
       const tags = htmlTags(read(page)).filter((tag) => tag.name === 'script');
       assert.equal(tags[0].attributes.get('src'), 'js/network-guard.js', page);
       assert.equal(tags[0].attributes.has('vite-ignore'), true, page);
@@ -500,6 +500,7 @@ describe("each context's guard (js/kernel/composition/network-guard-install.js)"
     assert.equal(install.surfaceOf({ location: new URL(`${OWN}/offscreen.html`) }), 'offscreen');
     assert.equal(install.surfaceOf({ location: new URL(`${OWN}/newtab.html`) }), 'newtab');
     assert.equal(install.surfaceOf({ location: new URL(`${OWN}/sidepanel.html`) }), 'sidepanel');
+    assert.equal(install.surfaceOf({ location: new URL(`${OWN}/recovery.html`) }), 'recovery');
     assert.equal(install.surfaceOf({ location: new URL(`${OWN}/js/background.js`) }), 'worker-internal');
     assert.equal(install.surfaceOf({}), 'worker-internal');
     let stored = {};
@@ -535,6 +536,15 @@ describe("each context's guard (js/kernel/composition/network-guard-install.js)"
     assert.deepEqual(sent.map(({ input }) => input.url), ['http://localhost:8080/api/tags']);
   });
 
+  it("reports the recovery page's refusals like every other page's", async () => {
+    const messages = [];
+    const { scope } = context({ location: `${OWN}/recovery.html`, chrome: { runtime: { id: 'test-extension', sendMessage: async (message) => { messages.push(message); } } } });
+    install.installContextGuard(scope);
+    await scope.fetch('https://example.test/x').catch(() => {});
+    assert.deepEqual(messages, [{ type: refusals.REFUSAL_MESSAGE, report: { surface: 'recovery', errorCode: 'destination-refused', count: 1 } }]);
+    assert.deepEqual(refusals.refusalFields(messages[0].report, `${OWN}/recovery.html`), { surface: 'recovery', errorCode: 'destination-refused', count: 1 });
+  });
+
   it("sends a page's refusals to the service worker itself, so no later code can take them", async () => {
     const messages = [];
     const { scope } = context({ chrome: { runtime: { id: 'test-extension', sendMessage: async (message) => { messages.push(message); } } } });
@@ -546,6 +556,7 @@ describe("each context's guard (js/kernel/composition/network-guard-install.js)"
     const popup = `${OWN}/popup.html`;
     assert.deepEqual(refusals.refusalFields({ surface: 'newtab', errorCode: 'headers-refused', count: 2 }, popup), { surface: 'popup', errorCode: 'headers-refused', count: 2 });
     assert.deepEqual(refusals.refusalFields({ errorCode: 'headers-refused', count: 2 }, `${OWN}/offscreen.html#x`), { surface: 'offscreen', errorCode: 'headers-refused', count: 2 });
+    assert.deepEqual(refusals.refusalFields({ errorCode: 'headers-refused', count: 2 }, `${OWN}/recovery.html#trust`), { surface: 'recovery', errorCode: 'headers-refused', count: 2 });
     for (const [report, sender] of [
       [null, popup], [{}, popup], [{ errorCode: 'other', count: 1 }, popup], [{ errorCode: 'destination-refused', count: -1 }, popup], [{ errorCode: 'destination-refused', count: 1.5 }, popup],
       [{ errorCode: 'destination-refused', count: 1 }, `${OWN}/js/background.js`], [{ errorCode: 'destination-refused', count: 1 }, 'https://example.test/popup.html'], [{ errorCode: 'destination-refused', count: 1 }, undefined],

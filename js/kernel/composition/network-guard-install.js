@@ -34,7 +34,7 @@ import { REFUSAL_MESSAGE } from './network-refusals.js';
 export function surfaceOf(scope) {
   try {
     // The pages, by file, as the journal names them (surfaces.js)
-    const page = /\/(newtab|popup|sidepanel|offscreen)\.html$/.exec(scope.location.pathname);
+    const page = /\/(newtab|popup|sidepanel|offscreen|recovery)\.html$/.exec(scope.location.pathname);
     return page ? page[1] : 'worker-internal';
   } catch {
     return 'worker-internal';

@@ -2,11 +2,13 @@
 
 /**
  * The bundler's configuration (#27 slice 2: "Toolchain" and "Entries"). Vite runs in build
- * mode only, never as a dev server, in three passes into the same staging directory:
- *   pages       the four pages, each an HTML entry. Their module scripts and stylesheets become
- *               content-hashed chunks and CSS under assets/, and a module worker one of them
- *               starts with `new Worker(new URL('…', import.meta.url), {type: 'module'})` becomes
- *               an entry of its own.
+ * mode only, never as a dev server, in four passes into the same staging directory:
+ *   pages       the new tab, Popup, Side Panel and offscreen pages, each an HTML entry. Their
+ *               module scripts and stylesheets become content-hashed chunks and CSS under assets/,
+ *               and a module worker one of them starts with `new Worker(new URL('…',
+ *               import.meta.url), {type: 'module'})` becomes an entry of its own.
+ *   recovery    recovery.html, with the pages pass's settings, in a pass of its own
+ *               (OWN_PASS_PAGES), so it splits no chunk the other pages share.
  *   background  js/background.js, the manifest's module service worker, as one self-contained ES
  *               module at that path: nothing splits off, so nothing loads after the worker starts.
  *   guard       js/network-guard.js, the network guard each page loads as its first script (#21
@@ -51,7 +53,17 @@ const PAGES = Object.freeze({
   popup: 'popup.html',
   sidepanel: 'sidepanel.html',
   offscreen: 'offscreen.html',
+  recovery: 'recovery.html',
 });
+
+/**
+ * The pages built in a pass of their own (#115's D, ruling 5): recovery.html's start shares much
+ * of the kernel with the new tab's, Popup's and Side Panel's, and in one pass the bundler splits
+ * each chunk they share by which pages load each module, which cost those pages files and the
+ * compression they shared. In its own pass it carries its own copy of what it imports, and the
+ * pages pass builds the others as it did before it
+ */
+const OWN_PASS_PAGES = Object.freeze(['recovery']);
 
 /** The service worker's entry, which ships at the same path */
 const BACKGROUND_ENTRY = 'js/background.js';
@@ -88,6 +100,16 @@ const ROWS_MODULE = 'js/kernel/composition/destination-rows.js';
  * closure check knows the one file it lets build a path at run time (scripts/build/closure.js)
  */
 const LOADER = 'js/runtime/lazy.js';
+
+/**
+ * #14's block core, which the pages pass writes as a chunk of its own, `blocks` (#115's review):
+ * what only the block registry (js/kernel/composition/blocks.js) and the projections the new
+ * tab's legacy scripts read (js/kernel/composition/block-projections.js) import, html-text.js's
+ * tokenizer and its named character references among them. THIRD_PARTY_NOTICES' In: line names
+ * the chunk, so its name has to hold whichever pages share it.
+ */
+const BLOCK_CORE = 'js/kernel/core/blocks';
+const BLOCK_ROOTS = Object.freeze(['js/kernel/composition/blocks.js', 'js/kernel/composition/block-projections.js']);
 
 /**
  * Files the build copies byte for byte because no page or script imports them: the manifest,
@@ -249,7 +271,7 @@ function workerTerserPlugin() {
 /**
  * @typedef {object} PassOptions
  * @property {string} root - the sources
- * @property {string} outDir - the staging directory both passes write into
+ * @property {string} outDir - the staging directory every pass writes into
  * @property {Mode} mode
  * @property {string} buildId - the build's, which the loader carries (build-info.js's buildId)
  * @property {BundleReport} report - what the passes wrote, filled in as they run
@@ -260,7 +282,7 @@ function workerTerserPlugin() {
  */
 
 /**
- * What both passes share
+ * What every pass shares
  * @param {PassOptions} options
  * @returns {InlineConfig}
  */
@@ -292,14 +314,14 @@ function common({ root, mode, buildId, logger }) {
 }
 
 /**
- * The build options both passes share
+ * The build options every pass shares
  * @param {PassOptions} options
  * @returns {NonNullable<InlineConfig['build']>}
  */
 function buildOptions({ outDir, mode }) {
   return {
     outDir,
-    // The staging directory starts empty, and the second pass writes beside the first
+    // The staging directory starts empty, and each pass writes beside the ones before it
     emptyOutDir: false,
     assetsDir: ASSETS_DIR,
     target: TARGET,
@@ -343,6 +365,46 @@ function loaderIds(root) {
 }
 
 /**
+ * The name of the block core's chunk for a module in it, or null for one that isn't: a module of
+ * the block core whose every importer is one of the block roots or a module of the core's chunk
+ * itself. A block module anything else imports, as the note domain does its previews and wiki
+ * links, stays in the chunks that hold what imports it, and so does each block module only it
+ * imports, so the Popup and the Side Panel never load the core. The group takes only these
+ * modules, not their dependencies (`includeDependenciesRecursively: false`), or it would pull
+ * those back in.
+ * @param {string} root
+ * @returns {(id: string, ctx: {getModuleInfo(id: string): {importers: readonly string[]} | null}) => string | null}
+ */
+function blockCoreChunk(root) {
+  const roots = [root];
+  try {
+    roots.push(fs.realpathSync(root));
+  } catch {
+    // Sources that aren't there, as a test's, have no real path
+  }
+  const dirs = roots.map((at) => path.join(at, BLOCK_CORE) + path.sep);
+  const entries = new Set(roots.flatMap((at) => BLOCK_ROOTS.map((file) => path.join(at, file))));
+  /**
+   * @param {string} id
+   * @param {{getModuleInfo(id: string): {importers: readonly string[]} | null}} ctx
+   * @param {Set<string>} visiting - the modules above this one in the walk, where a cycle
+   *   inside the core counts as the core's, so only an importer outside it decides
+   * @returns {boolean}
+   */
+  const inCore = (id, ctx, visiting) => {
+    if (visiting.has(id)) return true;
+    if (!dirs.some((dir) => id.startsWith(dir))) return false;
+    const info = ctx.getModuleInfo(id);
+    if (!info || info.importers.length === 0) return false;
+    visiting.add(id);
+    const only = info.importers.every((importer) => entries.has(importer) || inCore(importer, ctx, visiting));
+    visiting.delete(id);
+    return only;
+  };
+  return (id, ctx) => (inCore(id, ctx, new Set()) ? 'blocks' : null);
+}
+
+/**
  * Where the pages pass writes a chunk that's no entry: the loader's at the loader's own path,
  * any other under assets/, content-hashed
  * @param {string} root
@@ -376,11 +438,37 @@ function preloadsFor(filename, deps) {
 }
 
 /**
- * The pages pass
+ * The pages pass: every page but OWN_PASS_PAGES'
  * @param {PassOptions} options
  * @returns {InlineConfig}
  */
 function pagesConfig(options) {
+  return pagePassConfig(options, Object.keys(PAGES).filter((page) => !OWN_PASS_PAGES.includes(page)));
+}
+
+/**
+ * recovery.html's pass (OWN_PASS_PAGES): the pages pass's settings, for that page alone
+ * @param {PassOptions} options
+ * @returns {InlineConfig}
+ */
+function recoveryConfig(options) {
+  // One page: the block core's dependencies would stay in the page's own entry chunk, which the
+  // core's chunk would import as the entry imports it, a cycle a page's preloads walk back into
+  // its own entry. So here the core's chunk takes them too.
+  return pagePassConfig(options, ['recovery'], { blockDependencies: true });
+}
+
+/**
+ * A pass over `pages`, each an HTML entry, with what every page pass shares: the names, the
+ * preloads, the loader's and the block core's chunks, the workers' build, and the report, which
+ * records its chunks as the pages'
+ * @param {PassOptions} options
+ * @param {readonly string[]} pages - PAGES' names
+ * @param {{blockDependencies?: boolean}} [chunks] - `blockDependencies`: whether the block core's
+ *   chunk takes its modules' dependencies too
+ * @returns {InlineConfig}
+ */
+function pagePassConfig(options, pages, { blockDependencies = false } = {}) {
   const { root, mode, report, onLog } = options;
   const names = {
     entryFileNames: `${ASSETS_DIR}/[name]-[hash].js`,
@@ -396,12 +484,18 @@ function pagesConfig(options) {
       // close-drafts-chunk and journal-chunk preload nothing beside them (preloadsFor).
       modulePreload: { polyfill: false, resolveDependencies: preloadsFor },
       rolldownOptions: {
-        input: Object.fromEntries(Object.entries(PAGES).map(([name, file]) => [name, path.join(root, file)])),
+        input: Object.fromEntries(pages.map((name) => [name, path.join(root, /** @type {Record<string, string>} */ (PAGES)[name])])),
         output: {
           ...names,
           chunkFileNames: chunkFileName(root),
-          // The loader alone in a chunk, whichever chunks import it (#27 slice 3)
-          codeSplitting: { groups: [{ name: 'loader', test: (id) => loader.has(id) }] },
+          // The loader alone in a chunk, whichever chunks import it (#27 slice 3), and the block
+          // core in one of its own, named for what it is (#115's review)
+          codeSplitting: {
+            groups: [
+              { name: 'loader', test: (id) => loader.has(id) },
+              { name: blockCoreChunk(root), debugName: 'blocks', includeDependenciesRecursively: blockDependencies },
+            ],
+          },
         },
         checks: { ...CHECKS },
         onLog,
@@ -501,6 +595,8 @@ function guardConfig(options) {
 
 module.exports = {
   MINIMUM_CHROME_VERSION,
+  OWN_PASS_PAGES,
+  recoveryConfig,
   TARGET,
   PAGES,
   BACKGROUND_ENTRY,

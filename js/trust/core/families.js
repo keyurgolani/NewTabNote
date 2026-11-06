@@ -17,7 +17,7 @@
  *   pipeline its class sets.
  *
  * Providers run in the page that asks until #35 schedules them, so both families run on the
- * `workspace` host; slice 4 adds #15's `recovery` host for recovery.html. Neither may ask for a
+ * `workspace` host and on #15's `recovery` host, recovery.html (slice 4b). Neither may ask for a
  * Chrome permission, an AI scope beyond metadata, or a destination: a provider reads what its
  * root injects, and a check never sends anything anywhere.
  */
@@ -65,7 +65,7 @@ export const health = defineFamily({
   id: 'health',
   apiVersion: 1,
   groups: HEALTH_GROUPS,
-  hosts: ['workspace'],
+  hosts: ['workspace', 'recovery'],
   loader: 'required',
   fixtures: ['truthful-receipt'],
   fields: {
@@ -92,7 +92,7 @@ export const remediation = defineFamily({
   id: 'remediation',
   apiVersion: 1,
   groups: REMEDIATION_GROUPS,
-  hosts: ['workspace'],
+  hosts: ['workspace', 'recovery'],
   loader: 'required',
   fixtures: ['remediation-steps'],
   fields: {

@@ -77,6 +77,46 @@ export function lockManager() {
 }
 
 /**
+ * Web Locks as a profile shares them: request(name, callback) waits its turn, and
+ * request(name, {ifAvailable: true}, callback) gets null while another holds the name
+ */
+export function webLocks() {
+  /** @type {Set<string>} */
+  const held = new Set();
+  /** @type {Map<string, Promise<unknown>>} */
+  const queues = new Map();
+  return {
+    /**
+     * @param {string} name
+     * @param {...any} rest - the options, then the callback, or the callback alone
+     */
+    request(name, ...rest) {
+      const [options, callback] = rest.length === 1 ? [{}, rest[0]] : rest;
+      if (options && options.ifAvailable) {
+        if (held.has(name)) return Promise.resolve(callback(null));
+        held.add(name);
+        return Promise.resolve()
+          .then(() => callback({ name }))
+          .finally(() => held.delete(name));
+      }
+      const turn = (queues.get(name) || Promise.resolve()).then(async () => {
+        held.add(name);
+        try {
+          return await callback({ name });
+        } finally {
+          held.delete(name);
+        }
+      });
+      queues.set(
+        name,
+        turn.catch(() => {}),
+      );
+      return turn;
+    },
+  };
+}
+
+/**
  * A clock tests move by hand
  * @param {number} [start]
  */
