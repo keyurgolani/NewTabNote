@@ -3,7 +3,8 @@
 // #35 slice 4b-2: the pages pass's two named chunks (scripts/build/page-chunks.js), held to the
 // pages' import graphs as the sources have them, without a build. A page's start is what its
 // scripts reach through static imports, and the new tab's adds the workspace chunk its root loads
-// at once, as test/kernel/handlers.test.mjs reads them.
+// at once, as test/kernel/handlers.test.mjs reads them. budget/layout holds where the built chunks
+// load (test/budgets.test.js).
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');

@@ -25,7 +25,8 @@
  *   - close-draft-format.js. Popup and Side Panel import it only through import(), so in host
  *     their starts would carry it.
  * Each group takes its modules' static imports with it, as the bundler's groups do by default.
- * Host's group comes first, so a module both would take is host's.
+ * Host's group comes first, so a module both would take is host's. budget/layout holds where
+ * the built chunks load (scripts/build/budgets.js).
  */
 
 const fs = require('node:fs');

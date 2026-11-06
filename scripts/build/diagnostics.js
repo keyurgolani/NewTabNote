@@ -72,6 +72,7 @@ const CODES = Object.freeze({
   'budget/worker-only': 'a module only the service worker runs (scripts/build/budgets.js, WORKER_ONLY_MODULES) is on a page\'s start',
   'budget/lazy-only': 'a module that loads only at its first use (scripts/build/budgets.js, LAZY_ONLY_MODULES) is on a page\'s start',
   'budget/dependency': 'an entry\'s graph holds a third-party package its row doesn\'t allow, its row allows one the graph no longer holds, or its start holds one its row allows lazy only (lazyDependencies)',
+  'budget/layout': 'the pages pass\'s host and adapter chunks (scripts/build/page-chunks.js) are out of place: a page\'s start loads Vite\'s preload helper from another chunk than host, the new tab\'s or Side Panel\'s start doesn\'t load the adapter chunk, or recovery.html\'s start loads a chunk named for either',
   'budget/file': 'build/budgets.json is missing, doesn\'t parse, or doesn\'t read as a budget file',
   'vendor/mismatch': 'a vendored file differs from its js/lib/vendor.json record',
   'vendor/unlisted': 'a vendored file has no js/lib/vendor.json record',

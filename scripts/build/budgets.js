@@ -31,6 +31,11 @@
  *   budget/dependency  a third-party package in the entry's graph (start, lazy, workers) that
  *                      its row doesn't allow, an allowed one it no longer has, or one its row
  *                      allows lazy only (lazyDependencies) on its start
+ *   budget/layout      the pages pass's host and adapter chunks out of place
+ *                      (scripts/build/page-chunks.js): a pages-pass page's start that loads Vite's
+ *                      preload helper from another chunk than host, the new tab's or Side Panel's
+ *                      start without the adapter chunk once a pages-pass start holds a module of
+ *                      the adapter's list, or recovery.html's start with a chunk named for either
  *   budget/file        build/budgets.json doesn't read as a budget file
  * Timing and heap aren't the build's: npm run perf:probe measures them against the frozen
  * 1.4.0 package with the rows here (docs/performance/budgets.md). Budgets hold for production
@@ -43,7 +48,8 @@ const zlib = require('node:zlib');
 const { problem } = require('./diagnostics.js');
 const { htmlTags, cssUrls } = require('./markup.js');
 const { sourcePath } = require('./bundle.js');
-const { PAGES, BACKGROUND_ENTRY, CLASSIC_SCRIPTS } = require('./vite-config.js');
+const { PAGES, OWN_PASS_PAGES, BACKGROUND_ENTRY, CLASSIC_SCRIPTS } = require('./vite-config.js');
+const { ADAPTER_MODULES, ADAPTER_PAGES, PAGE_CHUNKS, PRELOAD_HELPER } = require('./page-chunks.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./package-files.js').PackageFiles} PackageFiles */
@@ -242,6 +248,9 @@ function analyze({ chunks, files, loaderChunks, budgets, root = ROOT }) {
           const source = sourcePath(id, root);
           if (source !== null) modules.add(source);
           else if (/(?:^|\/)node_modules\//.test(id)) modules.add(id.slice(id.lastIndexOf('node_modules/')));
+          // Vite's own modules by name, so the graph shows which start holds its preload helper
+          // (#35 slice 4b-2's layout)
+          else if (id.startsWith('\0vite/')) modules.add(id.slice(1));
         }
       } else {
         // A classic script, a stylesheet, or a font: it ships at its own path
@@ -444,13 +453,49 @@ function kib(bytes) {
 }
 
 /**
+ * Where the pages pass's host and adapter chunks load (budget/layout, scripts/build/page-chunks.js):
+ * each pages-pass start that holds Vite's preload helper loads it from host (P1), the new tab's and
+ * Side Panel's load the adapter chunk once a pages-pass start holds a module of the adapter's list
+ * (P4), and recovery.html's start loads no chunk named for either, which only the pages pass's
+ * groups write (P5)
+ * @param {Record<string, EntryGraph>} graphs
+ * @param {ChunkReport[]} chunks
+ * @returns {Problem[]}
+ */
+function layoutProblems(graphs, chunks) {
+  /** @type {Problem[]} */
+  const problems = [];
+  const byFile = new Map(chunks.filter((chunk) => chunk.pass !== 'background').map((chunk) => [chunk.fileName, chunk]));
+  const pages = Object.entries(graphs).filter(([, graph]) => graph.kind === 'page');
+  /** The chunks a page's start loads */
+  const started = (/** @type {EntryGraph} */ graph) => graph.start.files.flatMap(({ file }) => byFile.get(file) || []);
+  const adapterHeld = pages.some(([name, graph]) => !OWN_PASS_PAGES.includes(name) && graph.start.modules.some((file) => ADAPTER_MODULES.includes(file)));
+  for (const [name, graph] of pages) {
+    if (OWN_PASS_PAGES.includes(name)) {
+      for (const chunk of started(graph)) {
+        if (PAGE_CHUNKS.includes(chunk.name)) problems.push(problem('budget/layout', name, `its start loads ${chunk.name} (${chunk.fileName}), a chunk only the first page pass's groups name, so ${name}'s own pass took them`));
+      }
+      continue;
+    }
+    for (const chunk of started(graph)) {
+      if (chunk.moduleIds.includes(PRELOAD_HELPER) && chunk.name !== 'host') problems.push(problem('budget/layout', name, `its start loads Vite's preload helper from ${chunk.fileName}, not from the host chunk every page's start shares`));
+    }
+    if (adapterHeld && ADAPTER_PAGES.includes(name) && !started(graph).some((chunk) => chunk.name === 'adapter')) {
+      problems.push(problem('budget/layout', name, `its start doesn't load the adapter chunk, which the starts of ${ADAPTER_PAGES.join(' and ')} load`));
+    }
+  }
+  return problems;
+}
+
+/**
  * The gate: every problem the analyzed entries have against the budgets
  * @param {Record<string, EntryGraph>} graphs
  * @param {BudgetFile} budgets
- * @param {{loaderChunks: Record<string, string>, files: PackageFiles}} built
+ * @param {{loaderChunks: Record<string, string>, files: PackageFiles, chunks: ChunkReport[]}} built -
+ *   `chunks`: every chunk the passes wrote (the bundler's report), for where the pages' chunks load
  * @returns {Problem[]}
  */
-function checkBudgets(graphs, budgets, { loaderChunks, files }) {
+function checkBudgets(graphs, budgets, { loaderChunks, files, chunks }) {
   const problems = fileProblems(budgets);
   if (problems.length > 0) return problems;
   // What the build has: its pages and service worker, and any chunk a row names
@@ -519,6 +564,7 @@ function checkBudgets(graphs, budgets, { loaderChunks, files }) {
       if (!held.has(name2)) problems.push(problem('budget/dependency', name, `its row allows ${name2}${lazyOnly.has(name2) ? ' lazy only' : ''}, which its graph no longer holds: take it out`));
     }
   }
+  problems.push(...layoutProblems(graphs, chunks));
   return problems;
 }
 

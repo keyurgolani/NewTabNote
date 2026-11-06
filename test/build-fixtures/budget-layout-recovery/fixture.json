@@ -1,0 +1,16 @@
+{
+  "rule": "recovery.html's own pass takes the pages pass's host and adapter groups, so its start loads chunks named for them (#35 slice 4b-2, P5)",
+  "expect": [
+    "budget/layout"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "scripts/build/vite-config.js",
+      "replace": "return pagePassConfig(options, ['recovery'], { blockChunk: true });",
+      "with": "return pagePassConfig(options, ['recovery'], { blockChunk: true, pageChunks: true });"
+    }
+  ]
+}
