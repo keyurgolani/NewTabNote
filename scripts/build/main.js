@@ -274,6 +274,25 @@ function formatBytes(bytes) {
 }
 
 /**
+ * An entry's line in the budgets block: its start JS in KB, its modules, and the chunks it loads at
+ * boot, as before, then its start's exact raw / gzip bytes for JS, CSS and HTML, `none` for a type
+ * it has none of. A KB to one decimal is about 102 bytes, too coarse for a gzip rule of 5 bytes, and
+ * CI's log is where a PR's bytes are read (#27)
+ * @param {string} name
+ * @param {import('./budgets.js').EntryGraph} entry
+ * @returns {string}
+ */
+function startLine(name, entry) {
+  const { bytes } = entry.start;
+  const js = bytes.js || { raw: 0, gzip: 0 };
+  const booted = startChunksOf(entry);
+  const exact = /** @type {const} */ ([['JS', 'js'], ['CSS', 'css'], ['HTML', 'html']])
+    .map(([label, type]) => `${label} ${bytes[type] ? `${bytes[type].raw} / ${bytes[type].gzip}` : 'none'}`)
+    .join(', ');
+  return `  ✓ ${name}: start JS ${formatBytes(js.raw)} (${formatBytes(js.gzip)} gzip), ${plural(entry.start.modules.length, 'module')}${booted.length > 0 ? `, with ${booted.join(', ')} loaded at boot` : ''}. Start bytes, raw / gzip: ${exact}`;
+}
+
+/**
  * Build the extension
  * @param {string[]} [argv]
  * @returns {Promise<void>}
@@ -356,9 +375,7 @@ async function build(argv = process.argv.slice(2)) {
         return;
       }
       for (const [name, entry] of Object.entries(/** @type {Record<string, import('./budgets.js').EntryGraph>} */ (graph))) {
-        const js = entry.start.bytes.js || { raw: 0, gzip: 0 };
-        const booted = startChunksOf(entry);
-        console.log(`  ✓ ${name}: start JS ${formatBytes(js.raw)} (${formatBytes(js.gzip)} gzip), ${plural(entry.start.modules.length, 'module')}${booted.length > 0 ? `, with ${booted.join(', ')} loaded at boot` : ''}`);
+        console.log(startLine(name, entry));
       }
     }
 
@@ -397,4 +414,4 @@ async function build(argv = process.argv.slice(2)) {
   }
 }
 
-module.exports = { build, manifestProblems, inputProblems, copyUnbundled, ARGUMENTS, DIST_DIR, MODULE_MAP, CHUNK_GRAPH };
+module.exports = { build, manifestProblems, inputProblems, copyUnbundled, startLine, ARGUMENTS, DIST_DIR, MODULE_MAP, CHUNK_GRAPH };
