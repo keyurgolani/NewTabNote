@@ -38,6 +38,9 @@
  *   before it, or whose press comes while composing, applies nothing, even after a press whose
  *   release was lost. A release after the row closed applies nothing to the next selection. Escape on
  *   ✓ closes the field and gives back the selection, as Escape in it does.
+ * - In focus mode, Escape in the link field or on ✓ closes the field and gives back the selection,
+ *   and focus mode stays on. Before, the app's own Escape ran after the field's and turned focus
+ *   mode off too. An Escape nothing else takes still turns it off.
  * - A selected word still opens it 8 px above the word, centred on it. Bold by the mouse bolds
  *   the word. From the keyboard, the editor's shortcut does.
  */
@@ -496,6 +499,41 @@ test('Enter held in the link field, and on ✓, applies the link once and the no
   await expect(page.locator('.formatting-toolbar-url:visible'), 'Escape on ✓ closes the field').toHaveCount(0);
   expect(await page.evaluate(() => getSelection().toString()), 'Escape on ✓ gives back the selection').toBe('A second');
   await expect(blockContent(page, 1), "Escape on ✓ puts focus back in the selection's block").toBeFocused();
+  await expectNoUncaught(extension, page);
+});
+
+test('in focus mode, Escape in the link field or on ✓ closes the field and gives back the selection, and focus mode stays on until an Escape nothing else takes', async ({ extension }) => {
+  const page = await shortNote(extension);
+  const field = page.locator('.formatting-toolbar-url:visible');
+  const ok = page.locator('.formatting-toolbar-link-ok:visible');
+  /** Whether focus mode is on: the body's class, and ShortcutsManager's state */
+  const focusMode = () => page.evaluate(() => [document.body.classList.contains('focus-mode'), app.shortcutsManager.focusMode]);
+  await page.locator('#focus-mode-btn').click();
+  await expect.poll(focusMode, 'focus mode is on').toEqual([true, true]);
+
+  // Escape in the field
+  await selectStart(page, 0, 'Before'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.formatting-toolbar-url:visible'), 'Escape in the field closes it').toHaveCount(0);
+  expect(await page.evaluate(() => getSelection().toString()), 'Escape in the field gives back the selection').toBe('Before');
+  expect(await focusMode(), 'focus mode stays on after Escape in the field').toEqual([true, true]);
+
+  // Escape on ✓, reached with Tab
+  await selectStart(page, 1, 'A second'.length);
+  await pressLink(page);
+  await expect(field).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(ok).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.formatting-toolbar-url:visible'), 'Escape on ✓ closes the field').toHaveCount(0);
+  expect(await page.evaluate(() => getSelection().toString()), 'Escape on ✓ gives back the selection').toBe('A second');
+  expect(await focusMode(), 'focus mode stays on after Escape on ✓').toEqual([true, true]);
+
+  // With the field closed, nothing else takes the next Escape
+  await page.keyboard.press('Escape');
+  await expect.poll(focusMode, 'an Escape nothing else takes turns focus mode off').toEqual([false, false]);
   await expectNoUncaught(extension, page);
 });
 
