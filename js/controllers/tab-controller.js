@@ -1181,7 +1181,7 @@ class TabController {
       const customStyle = document.createElement('style');
       customStyle.textContent = `
         body { margin: 0; padding: 0; background: var(--bg-primary); color: var(--text-primary); }
-        .pip-editor-wrapper { height: 100vh; overflow-y: auto; padding: 20px; }
+        .pip-editor-wrapper { height: 100vh; overflow-y: auto; }
         /* Hide UI elements that don't make sense in PiP */
         .slash-menu { z-index: 2000; }
       `;

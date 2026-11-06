@@ -163,14 +163,12 @@ body.focus-mode #ai-sidebar {
   display: none !important;
 }
 
-body.focus-mode #editor-container,
-body.focus-mode #secondary-editor-container {
+body.focus-mode .editor-pane {
   padding-top: 72px;
   padding-bottom: 140px;
 }
 
-body.focus-mode #editor,
-body.focus-mode #secondary-editor {
+body.focus-mode .editor {
   max-width: min(760px, 100%);
 }
 
@@ -696,21 +694,17 @@ body.focus-mode .block:focus-within {
   50% { opacity: 0.4; }
 }
 
-/* Editor Container */
-#editor-container {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: auto;
-  padding: var(--spacing-3xl) var(--spacing-xl) 100px;
-}
-
-#editor {
+/* The note's column, title and blocks in each of the three editors: the new tab's main pane, split
+   view's right pane and the pop-out (js/controllers/tab-controller.js) all carry these classes. Each
+   pane's padding is .editor-pane's, under Workspace & Split View. */
+.editor {
   max-width: var(--editor-width);
   margin: 0 auto;
 }
 
-/* Page Title */
-#page-title {
+/* Page Title. The page's focus ring (:focus-visible, near the top) has this rule's weight, so this
+   rule's outline: none wins by coming later in the file */
+.page-title {
   font-size: 40px;
   font-weight: 700;
   line-height: 1.2;
@@ -720,7 +714,7 @@ body.focus-mode .block:focus-within {
   color: var(--text-primary);
 }
 
-#page-title:empty::before {
+.page-title:empty::before {
   content: attr(data-placeholder);
   color: var(--text-placeholder);
 }
@@ -772,7 +766,7 @@ body.focus-mode .block:focus-within {
 }
 
 /* Blocks Container */
-#blocks-container {
+.blocks-container {
   min-height: 200px;
 }
 
@@ -5110,9 +5104,18 @@ body.focus-mode .block:focus-within {
   flex: 1;
   height: 100%;
   overflow-y: auto;
+  padding: var(--spacing-3xl) var(--spacing-xl) 100px;
   position: relative;
   transition: all 0.3s ease;
   border-right: 1px solid transparent;
+}
+
+/* The pop-out's pane (js/controllers/tab-controller.js) is in its window before the window's copy
+   of this stylesheet applies, so with .editor-pane's transition its padding, background, border
+   and type would ease in as the window opens. The pop-out has one pane and no active-pane switch,
+   so its pane has nothing to ease */
+.pip-editor-wrapper {
+  transition: none;
 }
 
 .editor-pane.secondary {

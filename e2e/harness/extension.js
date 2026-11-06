@@ -12,8 +12,11 @@
  *
  * A session aborts every request outside chrome-extension:// and records, in order, the
  * console output and uncaught exceptions of every page and the service worker, plus the
- * requests it blocked or that failed. With `network: 'offline'` (the performance probe's,
- * scripts/perf/timing.js) Chromium itself has no network instead, a dead proxy and no host
+ * requests it blocked or that failed. A pop-out window gets the route set up again as it
+ * opens (_routePopOut), since none of its requests would be answered otherwise, unless a
+ * spec has routes of its own on, which the log then says. With
+ * `network: 'offline'` (the performance probe's, scripts/perf/timing.js) Chromium itself
+ * has no network instead, a dead proxy and no host
  * resolution, so no request waits on a route in this process; the log then has no blocked
  * requests. The `extension` fixture (index.js) attaches that log
  * to a failed test. Every page it opens has the new tab's App as window.app, and its start
@@ -176,6 +179,14 @@ class ExtensionSession {
     this._blocked = new WeakSet();
     this._workers = new WeakSet();
     this._worker = null;
+    // Whether a spec turned the network off. Playwright's client doesn't keep it, and the pop-out's
+    // setup puts back what it found, so the session keeps it as setOffline is called
+    this._offline = false;
+    const setOffline = context.setOffline.bind(context);
+    context.setOffline = async offline => {
+      await setOffline(offline);
+      this._offline = Boolean(offline);
+    };
     OPEN_SESSIONS.add(this);
     // The about:blank page a persistent context opens with, reused for the first surface
     this._blankPage = context.pages().find(page => page.url() === 'about:blank') || null;
@@ -260,6 +271,9 @@ class ExtensionSession {
   async close() {
     OPEN_SESSIONS.delete(this);
     try {
+      // A pop-out window whose setup was skipped still has its requests hanging, and taking the
+      // routes off lets them go, so the network goes off first
+      await this.context.setOffline(true).catch(() => {});
       await this.context.unrouteAll({ behavior: 'ignoreErrors' });
       await this.context.close();
     } finally {
@@ -423,17 +437,88 @@ class ExtensionSession {
   async _blockNetwork() {
     // Specs may add routes; Playwright runs the last one added first, so this one only
     // sees what theirs pass on
-    await this.context.route('**/*', route => {
+    this._route = route => {
       const request = route.request();
       if (request.url().startsWith('chrome-extension://')) return route.fallback();
       this._blocked.add(request);
       this._record(`blocked ${request.method()} ${request.url()} from ${requestSource(request)}`);
       return route.abort('blockedbyclient');
-    });
+    };
+    await this.context.route('**/*', this._route);
     await this.context.routeWebSocket(/.*/, webSocket => {
       this._record(`blocked WebSocket ${webSocket.url()}`);
       return webSocket.close({ code: 1008, reason: 'Blocked by the e2e harness' });
     });
+    // One pop-out window at a time, each in the order it opened
+    this._popOuts = Promise.resolve();
+    this.context.on('page', page => {
+      this._popOuts = this._popOuts.then(() => this._routePopOut(page)).catch(error => this._record(`couldn't set up the route for a pop-out window: ${error.message}`));
+    });
+  }
+
+  /**
+   * The pop-out, a Document Picture-in-Picture window, opens at about:blank and its opener's script
+   * fills it, so it starts with its opener's loaders. Under the route, each request it makes then
+   * pauses on the opener's interception, while Playwright waits to see it on the window's own target,
+   * so none is ever answered: its stylesheet <link>, its images and its fetches all hang, with neither
+   * load nor error (#189). Turning the route off releases them, and turning it back on lets the
+   * window's requests to the extension through from then on. The network is off in between, so a
+   * request the window made before the setup, or makes during it, to anywhere else fails
+   * (ERR_INTERNET_DISCONNECTED) rather than leaving the machine. From the setup on, the window's own
+   * renderer blocks its requests outside the extension, each logged as the route logs its own. A
+   * spec's own routes, on the context or on the page that opened the window, keep the interception
+   * on whatever the harness's route does, so then the setup is skipped and the log says the pop-out's
+   * requests hang.
+   * @param {import('@playwright/test').Page} page
+   */
+  async _routePopOut(page) {
+    if (page.url() !== 'about:blank' || !this.extensionId) return;
+    const opener = await page.opener();
+    if (!opener || !opener.url().startsWith(this.url(''))) return;
+    // Playwright keeps a context's routes and a page's on its client, newest first, in a private
+    // field (pinned at 1.64.1). An upgrade that changes it leaves the pop-out's requests unanswered,
+    // as before, and harness.spec.js's pop-out self-test fails on it
+    const routes = this.context._routes;
+    if (!Array.isArray(routes) || !Array.isArray(opener._routes)) {
+      this._record(`a pop-out window opened from ${pageLabel(opener)}, and Playwright's context or page has no _routes to read, so its requests go unanswered`);
+      return;
+    }
+    if (routes.length !== 1 || routes[0].handler !== this._route) {
+      this._record(`a pop-out window opened from ${pageLabel(opener)} with the spec's own routes on, so its requests go unanswered`);
+      return;
+    }
+    if (opener._routes.length > 0) {
+      this._record(`a pop-out window opened from ${pageLabel(opener)} while that page has routes of its own, so its requests go unanswered`);
+      return;
+    }
+    const session = await this.context.newCDPSession(page);
+    const requests = new Map();
+    session.on('Network.requestWillBeSent', event => requests.set(event.requestId, `${event.request.method} ${event.request.url}`));
+    session.on('Network.loadingFailed', event => {
+      if (event.blockedReason) this._record(`blocked ${requests.get(event.requestId) || 'a request'} from the pop-out window`);
+    });
+    await session.send('Network.enable');
+    await session.send('Network.setBlockedURLs', { urls: ['http://*', 'https://*', 'ws://*', 'wss://*'] });
+    const offline = this._offline;
+    await this.context.setOffline(true);
+    try {
+      await this.context.unroute('**/*', this._route);
+      await this.context.route('**/*', this._route);
+    } finally {
+      // The route goes back on before the network does, even if the toggle failed halfway
+      if (!this.context._routes.some(routeHandler => routeHandler.handler === this._route)) await this.context.route('**/*', this._route);
+      await this.context.setOffline(offline);
+    }
+    // A route a spec added during the setup is now older than the harness's, and Playwright runs the
+    // newest first, so the harness's goes back behind it. There it sees only what the spec's routes
+    // pass on, and the spec's mocks keep working
+    const after = this.context._routes;
+    const ours = after.findIndex(routeHandler => routeHandler.handler === this._route);
+    if (ours !== -1 && ours !== after.length - 1) {
+      after.push(...after.splice(ours, 1));
+      this._record(`a spec added a route while a pop-out window's was set up, so the harness's goes back behind it`);
+    }
+    this._record(`set up the route again for a pop-out window from ${pageLabel(opener)}`);
   }
 
   _adoptWorker(worker) {

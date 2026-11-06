@@ -4,9 +4,11 @@
  */
 
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const { test, expect, launchExtension, resolveDist, builtFiles } = require('./harness');
+const driver = require('./characterization/driver');
 
 /**
  * Copy the build to a temp dir and edit it: `edits` maps each file of the sources to a function
@@ -44,6 +46,38 @@ async function withEditedBuild({ playwright, headless }, edits, body) {
 }
 
 const describe = ({ source, where, message }) => `${source} | ${where} | ${message}`;
+
+/**
+ * A server on the loopback address only, on a port of its own, that answers every request with a
+ * 404 and keeps what it was asked. Something the harness should block points at it, so a request
+ * that gets past the harness shows up in `asked` instead of leaving the machine.
+ */
+async function loopbackServer() {
+  const asked = [];
+  const server = http.createServer((request, response) => {
+    asked.push(`${request.method} ${request.url}`);
+    response.writeHead(404).end();
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  return {
+    asked,
+    url: file => `http://127.0.0.1:${server.address().port}/${file}`,
+    close: () => new Promise(resolve => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    }),
+  };
+}
+
+/** Open the pop-out from `page`, the new tab, and wait until it holds the note's blocks */
+async function openPopOut(extension, page, blocks) {
+  const [pip] = await Promise.all([extension.context.waitForEvent('page'), page.locator('#pip-toggle').click()]);
+  await expect.poll(() => page.evaluate(() => (app.tabController.pipEditor ? app.tabController.pipEditor.blocks.length : 0))).toBe(blocks);
+  return pip;
+}
 
 // A listener the edited workers below register; a message from a page makes it throw
 const THROWING_LISTENER = `
@@ -194,4 +228,72 @@ test('update() loads a new version in place, keeping the profile and the ID, and
   const page = await extension.openSurface('popup');
   await page.evaluate(() => { setTimeout(() => { throw new Error('self-test: page throws after an update'); }, 0); });
   await expect.poll(async () => (await extension.uncaught()).map(describe)).toContain('popup.html |  | self-test: page throws after an update');
+});
+
+test("a pop-out window loads the extension's own files, and what it asks of anywhere else is blocked and logged", async ({ extension }) => {
+  test.setTimeout(60_000);
+  // The note's image comes from a server on the loopback address (the CSP's img-src allows http:),
+  // so if the harness let it out, that server would see it, with a network or without one
+  const server = await loopbackServer();
+  try {
+    const early = server.url('harness-pop-out-early.png');
+    // An origin the extension's connect-src allows, so the fetch gets as far as the network
+    const late = 'https://api.openai.com/harness-pop-out-late';
+    await extension.seedOnboarded();
+    await driver.seedNotes(extension, [{ name: 'Pop-out', blocks: [{ type: 'text', content: 'A line' }, { type: 'image', imageUrl: early }] }]);
+    const page = await driver.openNewTab(extension);
+    const pip = await openPopOut(extension, page, 2);
+
+    // The new tab copies its stylesheet in as a <link> as the window opens
+    await expect.poll(() => pip.evaluate(() => Boolean(document.querySelector('link[rel="stylesheet"]').sheet)), "the pop-out's copy of the new tab's stylesheet loads").toBe(true);
+    expect(await pip.evaluate(async () => (await fetch(document.querySelector('link[rel="stylesheet"]').href)).status), "a later fetch of the extension's own file").toBe(200);
+
+    // The note's image outside the extension, asked for as the window opens, and a later fetch
+    await expect.poll(() => pip.evaluate(src => {
+      const img = document.querySelector(`img[src="${src}"]`);
+      return Boolean(img && img.complete && img.naturalWidth === 0);
+    }, early), "the note's image outside the extension doesn't load").toBe(true);
+    expect(await pip.evaluate(url => fetch(url).then(() => 'answered', () => 'failed'), late), 'a later fetch outside the extension').toBe('failed');
+    expect(extension.log(), 'the later fetch is logged as blocked').toContain(`blocked GET ${late} from the pop-out window`);
+    expect(server.asked, "the note's image never reached its server").toEqual([]);
+    await pip.close().catch(() => {});
+  } finally {
+    await server.close();
+  }
+});
+
+// What the pop-out's setup does when a spec has changed what it works with
+test("a pop-out window opened with a spec's own route on the context, or on the new tab, is left alone and logged", async ({ extension }) => {
+  test.setTimeout(60_000);
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Pop-out', blocks: [{ type: 'text', content: 'A line' }] }]);
+  // A route on the new tab itself isn't on the context, but it keeps the interception on as well
+  const page = await driver.openNewTab(extension);
+  await page.route('**/harness-page-route', route => route.abort());
+  let pip = await openPopOut(extension, page, 1);
+  await expect.poll(() => extension.log(), 'the setup skipped for a page with routes of its own').toContain('a pop-out window opened from newtab.html while that page has routes of its own');
+  await pip.close().catch(() => {});
+  await page.unroute('**/harness-page-route');
+
+  await expect.poll(() => page.evaluate(() => app.tabController.pipWindow === null)).toBe(true);
+  await extension.context.route('**/harness-context-route', route => route.abort());
+  pip = await openPopOut(extension, page, 1);
+  await expect.poll(() => extension.log(), "the setup skipped for the spec's own route").toContain("a pop-out window opened from newtab.html with the spec's own routes on");
+  expect(extension.log(), 'and no setup is logged as done').not.toContain('set up the route again for a pop-out window');
+  await pip.close().catch(() => {});
+  await extension.context.unroute('**/harness-context-route');
+});
+
+test('a pop-out window opened while a spec has the network off leaves it off', async ({ extension }) => {
+  test.setTimeout(60_000);
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Pop-out', blocks: [{ type: 'text', content: 'A line' }] }]);
+  const page = await driver.openNewTab(extension);
+  await extension.context.setOffline(true);
+  const pip = await openPopOut(extension, page, 1);
+  await expect.poll(() => extension.log(), 'the setup ran').toContain('set up the route again for a pop-out window from newtab.html');
+  expect(await page.evaluate(() => navigator.onLine), 'the new tab is still offline after it').toBe(false);
+  await expect.poll(() => pip.evaluate(() => Boolean(document.querySelector('link[rel="stylesheet"]').sheet)), "the pop-out's stylesheet still loads, from the extension").toBe(true);
+  await pip.close().catch(() => {});
+  await extension.context.setOffline(false);
 });
