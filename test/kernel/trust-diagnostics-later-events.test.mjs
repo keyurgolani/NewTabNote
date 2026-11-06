@@ -111,17 +111,27 @@ describe('the diagnostics export with events a later build journaled (#214)', ()
     assert.ok(v.is(reportSchema, report), "the report is one this build's schema takes");
   });
 
-  it('leaves out, and counts, an event this build knows whose field holds a value its evidence refuses, so no bad record reaches the report (#214, case 2)', async () => {
+  it('leaves out, and counts, an event this build knows whose field holds a value its evidence refuses, or that has a key its events lack, so no bad record reaches the report (#214, case 2)', async () => {
     const { profile, clock, records, journal } = await exportOn();
     journal.event('capture.failed', { ...KNOWN });
     await journal.flush();
     await laterBuildWrote(profile, 'journal', [
-      { at: clock.now(), code: 'capture.failed', fields: { surface: 'worker-internal', errorCode: 'later-build-code' } },
+      {
+        at: clock.now(),
+        code: 'capture.failed',
+        fields: { surface: 'worker-internal', errorCode: 'later-build-code' },
+      },
+      // A known code and fields, in an event with a key this build's events don't have
+      { at: clock.now(), code: 'capture.failed', fields: { surface: 'worker-internal' }, laterKey: 1 },
     ]);
     const exported = await buildDiagnostics({ records, journal, clock, versions: VERSIONS });
     const { report, journal: kept } = reportOf(exported);
     assert.deepEqual(kept, [['capture.failed', { ...KNOWN }]], 'only the event that passes is kept');
-    assert.equal(report.journalLeftOut, 1, 'the event with the refused value is left out, and counted');
+    assert.equal(
+      report.journalLeftOut,
+      2,
+      'the event with the refused value and the one with the later key are left out',
+    );
   });
 
   it('says nothing of a count when no event was left out, so such a report is as it was (#214)', async () => {
