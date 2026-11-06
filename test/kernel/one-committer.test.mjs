@@ -309,6 +309,24 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
+  it("reaches no writer from the modules #17's read-only reader opens and reads with: connection.js, shapes.js and ledger.js (#35 slice 4b-0)", () => {
+    const writers = new Set(
+      Object.entries(LIST.indexeddb)
+        .filter(([, role]) => role === 'writer')
+        .map(([file]) => `${INDEXEDDB}/${file}`),
+    );
+    const files = ['connection.js', 'shapes.js', 'ledger.js'];
+    const reached = Object.fromEntries(
+      files.map(file => [
+        file,
+        [...reachGraph([path.join(ROOT, INDEXEDDB, file)], { readFile: defaultRead }).modules]
+          .map(relative)
+          .filter(module => writers.has(module)),
+      ]),
+    );
+    assert.deepEqual(reached, Object.fromEntries(files.map(file => [file, []])));
+  });
+
   it("fails a page's write the list doesn't name (rule 2)", () => {
     const problems = problemsOf({
       readFile: planted({

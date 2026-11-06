@@ -1,10 +1,12 @@
 /**
  * One context's connection to CanvasTabDB (#17, "Transactions" and "Hosting"), opened one of
  * two ways:
- * - `versioned` (the service worker only, since #17 PR 1b): at this build's version, 10. The
+ * - `versioned` (the service worker only, since #17 PR 1b): at this build's version, 11. The
  *   worker opens it so only once the migration runner (migrate.js) has brought the database
  *   there after its verified recovery point, so this open finds nothing to upgrade. With no
- *   database it makes one through the registry's structural steps, which have nothing to keep.
+ *   database it makes one through the registry's structural steps it's handed (only #17's
+ *   adapter hands them in), which have nothing to keep, and with none it makes none and answers
+ *   `no-database`.
  *   An older database is never upgraded here, since every structural step needs a verified
  *   point first: the open is refused, `migration-required`, retryable, and the worker runs the
  *   runner again (review R79). A database without `canvases` or `elements` is refused,
@@ -44,7 +46,6 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { openFailureOf } from './failures.js';
-import { pendingStructural } from './registry.js';
 import { CORE_STORES, DB_NAME, DB_VERSION, LEGACY_VERSION, STORE_SCHEMAS } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 
@@ -111,6 +112,17 @@ const LEGACY_STORES = Object.freeze(Object.keys(STORE_SCHEMAS));
  *   What an `existing` open runs next, before it opens the database: the new tab's #33 copy of
  *   a database at 8 that lacks stores (recovery-copies.js). Whatever it answers, and if it
  *   rejects, the open goes on.
+ * @property {Steps | null} [steps]
+ *   The registry's pending structural steps (registry.js pendingStructural), which a
+ *   `versioned` open makes a new database through. Only the full adapter hands them in (#35
+ *   slice 4b-0), so a context that only reads holds nothing that writes. A `versioned` open
+ *   without them makes no database: it aborts the versionchange, as an `existing` open does.
+ */
+
+/**
+ * The structural steps a database at `from` still needs up to `to`, each applied in the
+ * upgrade's `versionchange` (registry.js)
+ * @typedef {(from: number, to: number) => ReadonlyArray<{apply: (db: IDBDatabase, tx: IDBTransaction, context: {logicalVersion: number | null}) => void}>} Steps
  */
 
 /** How long open() waits before it answers for an open that hasn't finished (#17: "within 5 seconds") */
@@ -122,12 +134,13 @@ export const OPEN_WITHIN_MS = 5000;
  * missing. Anything a step throws aborts the upgrade.
  * @param {IDBOpenDBRequest} request
  * @param {number} oldVersion
+ * @param {Steps} steps
  */
-function upgradeThroughRegistry(request, oldVersion) {
+function upgradeThroughRegistry(request, oldVersion, steps) {
   const db = request.result;
   const tx = /** @type {IDBTransaction} */ (request.transaction);
   try {
-    for (const step of pendingStructural(Math.max(LEGACY_VERSION, oldVersion), DB_VERSION)) {
+    for (const step of steps(Math.max(LEGACY_VERSION, oldVersion), DB_VERSION)) {
       step.apply(db, tx, { logicalVersion: null });
     }
   } catch (error) {
@@ -151,6 +164,7 @@ export function createConnection({
   requireCore = false,
   awaitUpgrade = null,
   beforeOpen = null,
+  steps = null,
 }) {
   /** @type {ConnectionState} */
   let state = 'closed';
@@ -237,6 +251,8 @@ export function createConnection({
       let coreMissing = false;
       // A database below this build's version, which only the migration runner upgrades
       let needsRunner = false;
+      // No database, and no steps to make one with: only the full adapter hands them in
+      let noSteps = false;
       request.onupgradeneeded = event => {
         // An existing open makes no database, and changes none
         if (mode === 'existing') {
@@ -256,7 +272,12 @@ export function createConnection({
           if (request.transaction) request.transaction.abort();
           return;
         }
-        upgradeThroughRegistry(request, event.oldVersion);
+        if (!steps) {
+          noSteps = true;
+          if (request.transaction) request.transaction.abort();
+          return;
+        }
+        upgradeThroughRegistry(request, event.oldVersion, steps);
       };
       request.onblocked = () => {
         if (state === 'opening') state = 'blocked';
@@ -309,8 +330,9 @@ export function createConnection({
           fail(new UnavailableError('storage', 'migration-required', true));
           return;
         }
-        // The upgrade an existing open aborted: there was no database
-        if (mode === 'existing' && request.error && request.error.name === 'AbortError') {
+        // The upgrade an existing open aborted, or a versioned one with no steps: there was no
+        // database, and there's none now
+        if ((mode === 'existing' || noSteps) && request.error && request.error.name === 'AbortError') {
           fail(new UnavailableError('storage', 'no-database', true));
           return;
         }

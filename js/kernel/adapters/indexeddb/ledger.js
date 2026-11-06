@@ -25,7 +25,7 @@ import { clone } from '../../core/contracts/clone.js';
 import { UnavailableError, rejected } from '../../core/contracts/outcomes.js';
 import { digestOf } from '../../core/memory/fingerprint.js';
 import { failureOf } from './failures.js';
-import { OPERATIONS_STORE } from './registry.js';
+import { OPERATIONS_STORE } from './registry-names.js';
 import { result } from './requests.js';
 
 /** @typedef {import('../../core/contracts/outcomes.js').Committed} Committed */

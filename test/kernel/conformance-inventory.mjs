@@ -252,6 +252,12 @@ export const UNSHARED = Object.freeze({
     implements: "#17's sequential migration registry and step 9",
     tests: 'test/kernel/storage-migrate.test.mjs',
   },
+  // #35 slice 4b-0: the registry's names, shapes and plans, which registry.js re-exports and a
+  // context that only reads CanvasTabDB imports without the registry's steps
+  'js/kernel/adapters/indexeddb/registry-names.js': {
+    implements: "#17's registry's store names, shapes, versions and transform plan",
+    tests: 'test/kernel/registry-names.test.mjs',
+  },
   'js/kernel/adapters/indexeddb/shapes.js': {
     implements: "#17's shape detection for CanvasTabDB",
     tests: 'test/kernel/storage-migrate.test.mjs',

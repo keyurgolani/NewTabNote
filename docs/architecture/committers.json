@@ -114,6 +114,7 @@
     "records.js": "shared",
     "recovery-copies.js": "writer",
     "recovery-points.js": "writer",
+    "registry-names.js": "shared",
     "registry.js": "writer",
     "repair-points.js": "writer",
     "requests.js": "shared",
