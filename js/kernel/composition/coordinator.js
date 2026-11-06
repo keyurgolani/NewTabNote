@@ -39,7 +39,9 @@
  * check: after the start, never inside it, so a hello held while it starts never waits for a
  * drain, and one that comes during a drain is welcomed `ready` at once. drain() runs one more
  * when a page wakes the worker for it. system.coordinatorHealth says when the oldest entry the
- * last drain left with no live owner was written, and names the notes it held back (slice 3b).
+ * last drain left with no live owner was written, names the notes it held back (slice 3b), and
+ * says the last stop it made at an entry, with how many drains in a row stopped there (`stuck`,
+ * #35 slice 4b-1), so a drain stuck at one entry shows before its incident is raised.
  *
  * One queue runs the kernel's commands one at a time, in the order they came (#35 slice 4a, "One
  * committer"): what a surface sends through a router's handler (enqueue()), the worker's own
@@ -47,12 +49,23 @@
  * its turn never runs. The read-only integrity check, the start's own maintenance and the
  * coordinator's health aren't on it, since none is a surface's command, and IndexedDB orders the
  * maintenance's transactions against the queue's.
+ *
+ * A turn has a bound of its own, TURN_LIMIT_MS from its start (#35 slice 4b-1): past it the queue
+ * cuts the turn and starts the next, so one command that never settles can't hold every later one
+ * for the worker's life. The cut command answers `unavailable`, retryable, `turn-exceeded`, and
+ * commits nothing from the cut on (the kernel's fence, core/application/kernel.js), so no later
+ * command is overtaken by an older one landing late. Its caller had its answer from its own client
+ * long before, and a journaled one replays at the next drain. Each cut is `coordinator.turn-stuck`,
+ * by the command's type and how long it ran. system.coordinatorHealth says which command holds the
+ * queue (`running`), and how many turns it cut in this worker's life (`cutTurns`).
  */
 
+import { TURN_EXCEEDED } from '../core/application/kernel.js';
+import { TURN_LIMIT_MS } from '../core/contracts/limits.js';
 import { HELD_NOTES_NAMED } from '../core/contracts/operations/system-coordinator-health.js';
 import { failed, ready, unavailable } from '../core/contracts/outcomes.js';
 import { systemClock } from '../core/ports/runtime.js';
-import { randomIds } from './messaging.js';
+import { hostTimers, randomIds } from './messaging.js';
 
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('../core/contracts/commands.js').Command} Command */
@@ -62,6 +75,8 @@ import { randomIds } from './messaging.js';
 /** @typedef {import('../core/contracts/operations/system-coordinator-health.js').CoordinatorHealth} CoordinatorHealth */
 /** @typedef {import('../core/messaging/router.js').CoordinatorStatus} CoordinatorStatus */
 /** @typedef {import('../core/messaging/router.js').Handler} Handler */
+/** @typedef {import('../core/ports/runtime.js').Timers} Timers */
+/** @typedef {NonNullable<CoordinatorHealth['running']>} RunningTurn */
 
 /**
  * What the coordinator journals through: the worker's failure events (./trust.js's
@@ -71,11 +86,12 @@ import { randomIds } from './messaging.js';
 
 /**
  * The worker's journal, as the coordinator drains it (./journal.js): `held` is what its last drain
- * held back, which an older journal can't say
+ * held back, and `stuck` the last stop it made at an entry, which an older journal can't say
  * @typedef {{
  *   drain(client: Client): Promise<unknown>,
  *   oldestOrphanedEntryAt(): number | null,
  *   held?: () => Array<{noteId: string, code: string}>,
+ *   stuck?: () => {code: string, count?: number} | null,
  * }} CoordinatorJournal
  */
 
@@ -213,31 +229,113 @@ function blockedRun(built, failure) {
 const reportUnbuilt = error => console.error("NewTabNote: the background coordinator couldn't build its kernel", error);
 
 /**
+ * The queue's turn task: what it runs, given its turn's `live`, which answers false once the
+ * queue has cut the turn
+ * @template T
+ * @typedef {(live: () => boolean) => Promise<T>} Task
+ */
+
+/**
  * One FIFO queue (#35 slice 4a, "One committer"): each task runs once the one before it has
  * settled, in the order they came, and one that throws or rejects answers with that and lets the
  * next one run. A task given `begin` runs only if `begin()` answers true at its turn, as #13's
  * router's does while it still waits for the request (core/messaging/router.js, Dispatch), and
  * answers null when it doesn't.
- * @returns {{run: <T>(task: () => Promise<T>, begin?: () => boolean) => Promise<T | null>}}
+ *
+ * A turn that hasn't settled `limitMs` after it began, by `timers`, is cut (#35 slice 4b-1): the
+ * next one starts, the task's `live()` answers false from then on, the turn answers `unavailable`,
+ * retryable, `turn-exceeded`, and `onCut` hears the turn's type and how long it ran. What the task
+ * settles with after its cut changes nothing. `running()` is the turn that holds the queue: its
+ * type, when it began, and how many wait behind it, or null while the queue is idle.
+ * @param {{timers?: Timers, clock?: {now(): number}, limitMs?: number, onCut?: (type: string, ageMs: number) => void}} [options]
+ * @returns {{
+ *   run: <T>(task: Task<T>, begin?: () => boolean, type?: string) => Promise<T | Unavailable | null>,
+ *   running: () => RunningTurn | null,
+ * }}
  */
-export function commandQueue() {
+export function commandQueue({
+  timers = hostTimers,
+  clock = systemClock,
+  limitMs = TURN_LIMIT_MS,
+  onCut = () => {},
+} = {}) {
   /** @type {Promise<unknown>} */
   let tail = Promise.resolve();
+  /** @type {{type: string, since: number} | null} the turn that holds the queue */
+  let current = null;
+  /** How many turns wait behind the one that holds the queue */
+  let waiting = 0;
+
+  /**
+   * One turn of `task`, from now: its answer, or the cut's once `limitMs` passes first
+   * @template T
+   * @param {Task<T>} task
+   * @param {string} type
+   * @returns {Promise<T | Unavailable>}
+   */
+  const turnOf = (task, type) =>
+    new Promise((resolve, reject) => {
+      const since = clock.now();
+      const turn = { type, since };
+      current = turn;
+      let cut = false;
+      let settled = false;
+      const end = () => {
+        settled = true;
+        if (current === turn) current = null;
+      };
+      const bound = timers.set(() => {
+        if (settled) return;
+        cut = true;
+        end();
+        onCut(type, Math.max(0, clock.now() - since));
+        resolve(unavailable('coordinator', TURN_EXCEEDED, true));
+      }, limitMs);
+      /** @type {Promise<T>} */
+      let ran;
+      try {
+        ran = Promise.resolve(task(() => !cut));
+      } catch (error) {
+        ran = Promise.reject(error);
+      }
+      ran.then(
+        value => {
+          if (cut) return;
+          end();
+          timers.clear(bound);
+          resolve(value);
+        },
+        error => {
+          if (cut) return;
+          end();
+          timers.clear(bound);
+          reject(error);
+        },
+      );
+    });
+
   return Object.freeze({
     /**
      * @template T
-     * @param {() => Promise<T>} task
+     * @param {Task<T>} task
      * @param {() => boolean} [begin]
-     * @returns {Promise<T | null>}
+     * @param {string} [type] - the command's type, which running() names the turn by
+     * @returns {Promise<T | Unavailable | null>}
      */
-    run(task, begin = () => true) {
-      const turn = tail.then(() => (begin() ? task() : null));
+    run(task, begin = () => true, type = '') {
+      waiting++;
+      const turn = tail.then(() => {
+        waiting--;
+        return begin() ? turnOf(task, type) : null;
+      });
       tail = turn.then(
         () => {},
         () => {},
       );
       return turn;
     },
+    running: () =>
+      current ? { type: /** @type {RunningTurn['type']} */ (current.type), since: current.since, waiting } : null,
   });
 }
 
@@ -286,12 +384,14 @@ export function unavailableCoordinator(instanceId) {
  * as it's built, so it's called on the first start, never before, and synchronously: start()
  * awaits nothing before it. A throw from it leaves the coordinator unavailable for this
  * instance, is `coordinator.start-failed`, and goes to `report`.
- * `journal` is the worker's journal, which it drains once it's ready (#35 slice 3).
+ * `journal` is the worker's journal, which it drains once it's ready (#35 slice 3). `timers` time
+ * each turn on its queue against TURN_LIMIT_MS (#35 slice 4b-1).
  * @param {{
  *   instanceId: string,
  *   makeKernel: () => Client,
  *   events?: Events | null,
  *   clock?: {now(): number},
+ *   timers?: Timers,
  *   report?: (error: unknown) => void,
  *   journal?: CoordinatorJournal | null,
  * }} options
@@ -302,6 +402,7 @@ export function createCoordinator({
   makeKernel,
   events = null,
   clock = systemClock,
+  timers = hostTimers,
   report = reportUnbuilt,
   journal: entries = null,
 }) {
@@ -311,8 +412,21 @@ export function createCoordinator({
   let reason = '';
   /** @type {Client | null} */
   let kernel = null;
-  /** The one queue the kernel's commands wait their turn on (#35 slice 4a) */
-  const queue = commandQueue();
+  /** How many turns the queue cut in this worker's life (#35 slice 4b-1) */
+  let cutTurns = 0;
+  /**
+   * The one queue the kernel's commands wait their turn on (#35 slice 4a). A turn it cuts is
+   * journaled by the command's type and how long it ran, and nothing more: no incident, since a
+   * journaled command replays at the next drain, and the health shows the cut (the lead's ruling)
+   */
+  const queue = commandQueue({
+    timers,
+    clock,
+    onCut: (type, ageMs) => {
+      cutTurns++;
+      journal(events, 'coordinator.turn-stuck', { commandType: type, ageMs });
+    },
+  });
   /** @type {Client | null} the kernel with each command on the queue: what client() hands out and the drain runs on */
   let queued = null;
   /** What the worker's handlers run on until the kernel is built, and for good if it can't be */
@@ -345,9 +459,12 @@ export function createCoordinator({
    * @returns {Client}
    */
   const counted = built => {
-    /** @param {import('../core/contracts/commands.js').Command} command */
-    const execute = async command => {
-      const outcome = await built.execute(command);
+    /**
+     * @param {import('../core/contracts/commands.js').Command} command
+     * @param {import('../core/application/kernel.js').ExecuteOptions} [options]
+     */
+    const execute = async (command, options) => {
+      const outcome = await built.execute(command, options);
       outcomes.set(outcome.kind, (outcomes.get(outcome.kind) ?? 0) + 1);
       return outcome;
     };
@@ -356,13 +473,23 @@ export function createCoordinator({
   };
 
   /**
+   * `command` run on `built` in its turn on the queue, `begin` deciding at its turn whether it
+   * still runs, and its turn's `live` going with it to the kernel's commit
+   * @param {Client} built
+   * @param {Command} command
+   * @param {() => boolean} [begin]
+   */
+  const inTurn = (built, command, begin) =>
+    queue.run(live => built.execute(command, { live }), begin, /** @type {string} */ (command?.type));
+
+  /**
    * `built`, with each command it runs waiting its turn on the queue
    * @param {Client} built
    * @returns {Client}
    */
   const onQueue = built => {
     /** @param {Command} command */
-    const execute = command => queue.run(() => built.execute(command));
+    const execute = command => inTurn(built, command);
     // The same overloads as the kernel's own execute, which this calls in its turn
     return Object.freeze({ ...built, execute: /** @type {Client['execute']} */ (/** @type {unknown} */ (execute)) });
   };
@@ -521,6 +648,33 @@ export function createCoordinator({
     }
   };
 
+  /**
+   * The last stop the last drain made at an entry, with how many drains in a row stopped there
+   * where that's counted (#35 slice 4b-1, Q6), or nothing while it made none, so the answer is as
+   * before then. A journal that can't say says none.
+   * @returns {{stuck?: NonNullable<CoordinatorHealth['stuck']>}}
+   */
+  const stuckNow = () => {
+    try {
+      const stuck = entries && typeof entries.stuck === 'function' ? entries.stuck() : null;
+      if (!stuck || typeof stuck.code !== 'string') return {};
+      const { code, count } = stuck;
+      return { stuck: Number.isSafeInteger(count) ? { code, count } : { code } };
+    } catch {
+      return {};
+    }
+  };
+
+  /**
+   * The turn that holds the queue, while one does, and the turns it cut, from the first (#35 slice
+   * 4b-1), so the answer is as before while neither is there
+   * @returns {{running?: RunningTurn, cutTurns?: number}}
+   */
+  const turnNow = () => {
+    const running = queue.running();
+    return { ...(running ? { running } : {}), ...(cutTurns > 0 ? { cutTurns } : {}) };
+  };
+
   /** @returns {CoordinatorStatus} */
   const status = () => {
     if (state === 'ready') return { status: 'ready' };
@@ -543,13 +697,15 @@ export function createCoordinator({
       oldestOrphanedEntryAt: oldestOrphaned(),
       migration: migrationNow(),
       ...heldNotes(),
+      ...stuckNow(),
+      ...turnNow(),
     }),
     client: () => queued || unbuilt,
     enqueue(command, { begin } = {}) {
       start();
       const built = kernel;
       if (!built) return unbuilt.execute(command);
-      return queue.run(() => built.execute(command), begin);
+      return inTurn(built, command, begin);
     },
     async installed(installReason) {
       await start();

@@ -272,6 +272,40 @@ describe('the router: checks before dispatch (#13, AC4)', () => {
     }
   });
 
+  it("refuses by the one mapping the journal drain's replays use too, so a replay is refused with the code its surface's own request gets (#35 slice 4b-1)", async () => {
+    // Imported here, so the cases before this one run on a build without the module
+    const { denialOf } = await import('../../js/kernel/core/messaging/denials.js');
+    const caller = /** @type {const} */ ({ surface: 'newtab', contextId: 'newtab-session' });
+    for (const [answer, code] of /** @type {Array<[() => unknown, string | null]>} */ ([
+      [() => ({ allowed: true }), null],
+      [() => ({ allowed: false, code: 'unknown-caller' }), 'unauthorized-sender'],
+      [() => ({ allowed: false, code: 'unknown-operation' }), 'unknown-operation'],
+      [() => ({ allowed: false, code: 'not-on-surface' }), 'forbidden-for-surface'],
+      [() => ({ allowed: false, code: 'scope-denied' }), 'forbidden-for-surface'],
+      [() => ({ allowed: 'yes' }), 'forbidden-for-surface'],
+      [() => undefined, 'forbidden-for-surface'],
+      [
+        () => {
+          throw new Error('broken policy');
+        },
+        'forbidden-for-surface',
+      ],
+    ])) {
+      assert.equal(
+        denialOf(/** @type {PolicyPort} */ ({ authorize: answer }), { type: 'getNote' }, caller),
+        code,
+        String(code),
+      );
+    }
+    // On the shared catalog, as the port router judges a page: a command only the worker has is
+    // one it has no entry for, and a shared one the page isn't granted is a surface it isn't for
+    const baseline = createBaselinePolicy();
+    const popup = /** @type {const} */ ({ surface: 'popup', contextId: 'popup-session' });
+    assert.equal(denialOf(baseline, { type: 'captureToDailyNote' }, popup), 'unknown-operation');
+    assert.equal(denialOf(baseline, { type: 'insertBlocks' }, popup), 'forbidden-for-surface');
+    assert.equal(denialOf(baseline, { type: 'createNote' }, popup), null);
+  });
+
   it("refuses an id of a type the operation's entry doesn't declare, and a destination it doesn't list", async () => {
     const entry = Object.freeze({
       kind: /** @type {const} */ ('query'),

@@ -5,7 +5,8 @@
 // did in 3a's drain. Here: those rules, the entries it leaves (a live page's, its own, a newer
 // build's, one the worker holds, and every one that isn't an editor save with a draft), what it
 // keeps for the next start, a note gone for the worker's sweep, a pane's covered entries (R182's
-// S2), a draft it can't apply, and two pages starting together.
+// S2), a draft it can't apply, two pages starting together, and a draft a closing page writes while
+// the apply waits for DRAFTS_LOCK (#35 slice 4b-1, the dm4e pin).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +17,7 @@ import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worke
 import { rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { WORKER_CATALOG } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
+import { DRAFTS_LOCK } from '../../js/kernel/core/domain/close-draft-keys.js';
 import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
@@ -162,6 +164,8 @@ async function world(fixture) {
       liveOwners: async () => holders,
       own: { sessionId: 'coordinator-1', inFlight: () => new Set() },
       clock: ctx.clock,
+      // Each entry here is the new tab's own, which it could send (#35 slice 4b-1, F5)
+      permits: () => null,
     });
   /**
    * @param {string} store
@@ -635,6 +639,53 @@ for (const fixture of FIXTURES) {
       );
       assert.deepEqual(w.told, [{ id: 'c-save-recovered', of: 'A' }]);
       assert.deepEqual(w.journal.entries(), []);
+      await w.close();
+    });
+
+    it('leaves an entry a close-time draft names when its page wrote that draft while the apply waited for DRAFTS_LOCK, and only then let its owner lock go: the drafts are read inside the lock, after the owners and the journal (#35 slice 4b-1, the dm4e pin)', async () => {
+      const w = await world(fixture);
+      await noteA(w);
+      const save = await saveOf(w, 'c-save', 'alpha, as the page closed');
+      // The entry of a page still open as the apply starts, from its main pane
+      await w.journal.put(entryOf(save.command, { draft: save.draft, pane: 'main', owner: LIVE }));
+      // Another context holds DRAFTS_LOCK, as a delete for good does
+      const locks = serialLocks();
+      /** @type {() => void} */
+      let letGo = () => {};
+      const holding = locks.request(
+        DRAFTS_LOCK,
+        { mode: 'exclusive' },
+        () =>
+          new Promise(resolve => {
+            letGo = () => resolve(undefined);
+          }),
+      );
+      /** @type {Array<{key: string, draft: CloseDraft}>} the close-time drafts still to apply */
+      const drafts = [];
+      const applied = w.apply({
+        locks,
+        store: {
+          // What's stored when it's read, as the page's store parses its drafts afresh each time
+          list: () => [...drafts],
+          tell: (/** @type {{id: string, of: string}} */ entry) => w.told.push(entry),
+          tellSaved: (/** @type {string} */ id) => w.toldSaved.push(id),
+        },
+      });
+      // The lock's holder has it, and the apply waits behind it
+      await new Promise(resolve => setImmediate(resolve));
+      // While the apply waits, the page closes: its draft at pagehide, naming its page and pane,
+      // and then its owner lock goes
+      drafts.push({ key: 'draft-c-save', draft: { ...save.draft, pane: 'main' } });
+      w.holders.delete(LIVE);
+      letGo();
+      await holding;
+      await applied;
+      assert.deepEqual(w.sent, [], "the entry waits for the draft's apply, which takes it");
+      assert.deepEqual(
+        w.journal.entries().map(entry => entry.opId),
+        ['c-save'],
+        'and stays until then',
+      );
       await w.close();
     });
   });

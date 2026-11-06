@@ -127,7 +127,7 @@ function countOpens(env, opens) {
   };
 }
 
-/** The codes of the events in the worker's NewTabNoteTrust, and its incidents */
+/** The codes of the events in the worker's NewTabNoteTrust, its incidents, and each event as [code, fields] */
 async function trustOf(factory) {
   const store = core.createTrustDatabase({ indexedDB: factory, keyRange: IDBKeyRange });
   const records = core.createTrustRecords({
@@ -137,10 +137,11 @@ async function trustOf(factory) {
     ids: { next: () => crypto.randomUUID() },
   });
   await records.open();
-  const events = (await records.events()).filter((event) => !event.code.startsWith('diagnostics.')).map((event) => event.code);
+  const journaled = (await records.events()).filter((event) => !event.code.startsWith('diagnostics.'));
+  const events = journaled.map((event) => event.code);
   const incidents = (await records.incidents()).map((incident) => [incident.providerId, incident.faultCode]);
   store.close();
-  return { events, incidents };
+  return { events, incidents, fields: journaled.map((event) => [event.code, event.fields]) };
 }
 
 /** A CanvasTabDB IndexedDB can't open at all, so neither the run nor the worker's kernel can */
@@ -925,6 +926,86 @@ describe("captures through the worker's own client and the coordinator's queue (
       [worker.tab.url],
     );
     assert.deepEqual(await journalOf(worker.indexedDB), []);
+  });
+});
+
+/**
+ * The worker's kernel answers the first capture it's sent `reload-required`, as one whose connection
+ * went before its transaction began, and keeps the type of each capture's `live` in `liveSeen` on the
+ * worker's global: a `rewrite` for loadBackground
+ */
+const FIRST_CAPTURE_RELOADS = Object.freeze({
+  'js/kernel/core/application/kernel.js': (source) => source.replace(
+    '  function execute(input, options) {\n',
+    [
+      '  function execute(input, options) {',
+      "    if (isRecord(input) && input.type === 'captureToDailyNote') {",
+      '      const seen = (globalThis.liveSeen ||= []);',
+      '      seen.push(typeof options?.live);',
+      "      if (seen.length === 1) return Promise.resolve(unavailable('storage', 'reload-required', false));",
+      '    }',
+      '',
+    ].join('\n'),
+  ),
+});
+
+describe("a turn the coordinator's queue cuts, through the worker (#35 slice 4b-1)", () => {
+  it("commits nothing of a capture whose turn was cut when it resumes after the cut, and journals the cut with its type (#224's review, T1)", async () => {
+    // The kernel's capture waits 130 s before its work, so the queue cuts its turn at 120 s while it
+    // still waits. The worker's client gave it the turn's live, so when it resumes at 130 s the
+    // kernel commits nothing. Its entry stays for the drain, whose replay starts at the cut.
+    const worker = await loadBackground({ rewrite: slowCapture(130_000) });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    for (const step of [31_000, 90_000, 10_000]) {
+      worker.env.clock.tick(step);
+      await worker.drain();
+    }
+    assert.deepEqual(await dailyUrls(worker), [], 'the cut capture committed nothing when it resumed at 130 s');
+    const { fields } = await trustOf(worker.indexedDB);
+    assert.deepEqual(
+      fields.filter(([code]) => code === 'coordinator.turn-stuck').map(([, journaled]) => journaled.commandType),
+      ['captureToDailyNote'],
+      'the cut is journaled once, with its command type',
+    );
+  });
+
+  it("gives the turn's live to both of a capture's attempts when the first answers reload-required (#224's review, T1)", async () => {
+    const worker = await loadBackground({ rewrite: FIRST_CAPTURE_RELOADS });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    assert.deepEqual(plain(worker.env.global.liveSeen), ['function', 'function'], "the turn's live went with each attempt");
+    assert.deepEqual(await dailyUrls(worker), [worker.tab.url], 'the second attempt saved it');
+  });
+
+  it("says Not captured at 240 s for a capture with no entry whose rerun is cut, and its capture.failed evidence names turn-exceeded (#224's review, F1)", async () => {
+    // The journal can't open, so the capture has no entry, and the kernel's capture waits 130 s
+    // before its work. The worker's client gives up on it at 31 s, so it runs again on the queue
+    // with no client deadline, behind its own first turn. The queue cuts that turn at 120 s, the
+    // rerun's turn starts then, and the queue cuts it at 240 s, so the capture answers the cut.
+    // The fake clock runs what a timer starts once its tick ends, so a tick ends at the first cut.
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env), rewrite: slowCapture(130_000) });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    const titles = () => plain(worker.env.chrome.notifications).map((shown) => shown.title);
+    for (const step of [31_000, 89_000, 119_000]) {
+      worker.env.clock.tick(step);
+      await worker.drain();
+    }
+    assert.deepEqual(titles(), [], 'nothing is said while the rerun waits and runs');
+    worker.env.clock.tick(1_000);
+    await worker.drain();
+    assert.deepEqual(titles(), ['Not captured'], "the rerun's cut says Not captured");
+    const { fields } = await trustOf(worker.indexedDB);
+    const failed = fields.filter(([code]) => code === 'capture.failed').map(([, journaled]) => journaled);
+    assert.equal(failed.length, 1, JSON.stringify(failed));
+    const { commandId, ...evidence } = failed[0];
+    assert.equal(typeof commandId, 'string');
+    assert.deepEqual(
+      evidence,
+      { cause: 'coordinator', errorCode: 'turn-exceeded', retryable: true, surface: 'worker-internal' },
+      'its evidence says the turn limit was why',
+    );
   });
 });
 

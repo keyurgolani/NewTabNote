@@ -6,7 +6,9 @@
 // opens is `coordinator.started`. system.coordinatorHealth says the same, with when it started
 // and its commands by outcome. Nothing it journals or reports changes what it answers. Once it's
 // ready it drains #35's journal (slice 3), never inside its start, so a hello held while it
-// starts never waits for a drain. test/background-coordinator.test.js runs it in js/background.js.
+// starts never waits for a drain. Its one queue runs a command at a time (slice 4a), and cuts a
+// turn that runs TURN_LIMIT_MS from its start (slice 4b-1). test/background-coordinator.test.js
+// runs it in js/background.js.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,6 +22,13 @@ import {
 
 /** When a journal entry was written, for the health's oldest orphaned entry */
 const NOW_AT = Date.UTC(2026, 9, 20, 12, 0, 0);
+
+/**
+ * A turn's bound on the queue, as the lead ruled it: 120 s from the turn's start (#35 slice 4b-1,
+ * TURN_LIMIT_MS in js/kernel/core/contracts/limits.js). The cases hold the queue to it a
+ * millisecond either side, so they pin the module's value too.
+ */
+const TURN_LIMIT_MS = 120_000;
 
 /** What a command and a query answer from a coordinator whose kernel couldn't be built */
 const UNAVAILABLE = Object.freeze({
@@ -781,6 +790,27 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
     assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
   });
 
+  it('says the last stop its last drain made at an entry, with how many drains in a row stopped there, and nothing while it made none (#35 slice 4b-1, Q6)', async () => {
+    /** @type {unknown} */
+    let stuck = { code: 'timed-out', count: 2 };
+    const journal = { drain: async () => null, oldestOrphanedEntryAt: () => null, stuck: () => stuck };
+    const kernel = fakeKernel();
+    const { coordinator } = coordinatorOn(kernel, { journal });
+    const started = coordinator.start();
+    kernel.open();
+    await started;
+    await turns();
+    assert.deepEqual(coordinator.health().stuck, { code: 'timed-out', count: 2 });
+    // A stop it doesn't count: one for good, one storage-wide, or one raised already
+    stuck = { code: 'quota' };
+    assert.deepEqual(coordinator.health().stuck, { code: 'quota' });
+    // Codes and counts only, never what an entry holds
+    stuck = { code: 'timed-out', count: 1, noteId: 'n1', text: 'Call the plumber' };
+    assert.deepEqual(coordinator.health().stuck, { code: 'timed-out', count: 1 });
+    stuck = null;
+    assert.equal(Object.hasOwn(coordinator.health(), 'stuck'), false);
+  });
+
   it('answers the same when its journal throws or rejects', async () => {
     for (const journal of [
       {
@@ -791,6 +821,9 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
           throw new Error('the journal is broken');
         },
         held: () => {
+          throw new Error('the journal is broken');
+        },
+        stuck: () => {
           throw new Error('the journal is broken');
         },
       },
@@ -806,6 +839,7 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
       assert.equal(coordinator.health().oldestOrphanedEntryAt, null);
       // A journal that can't say what it held, or an older one that has no say, names none
       assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
+      assert.equal(Object.hasOwn(coordinator.health(), 'stuck'), false);
       assert.equal(await coordinator.drain(), null);
     }
   });
@@ -813,7 +847,8 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
 
 /**
  * A kernel that opens at once and holds each command until the test lets it answer, keeping
- * when each one started and ended, in order. `fail` makes one command's call reject.
+ * when each one started and ended, in order, and the `live` its turn gave it (#35 slice 4b-1).
+ * `fail` makes one command's call reject.
  */
 function heldKernel() {
   /** @type {string[]} */
@@ -822,11 +857,14 @@ function heldKernel() {
   const held = new Map();
   /** @type {Map<string, (error: unknown) => void>} */
   const failing = new Map();
+  /** @type {Map<string, unknown>} */
+  const lives = new Map();
   let next = 0;
   const client = {
-    execute: (/** @type {Record<string, unknown>} */ command) =>
+    execute: (/** @type {Record<string, unknown>} */ command, /** @type {{live?: unknown} | undefined} */ options) =>
       new Promise((resolve, reject) => {
         const commandId = String(command.commandId);
+        lives.set(commandId, options?.live);
         log.push(`start ${commandId}`);
         held.set(commandId, () => {
           log.push(`end ${commandId}`);
@@ -849,6 +887,11 @@ function heldKernel() {
     release: commandId => /** @type {() => void} */ (held.get(commandId))(),
     /** @param {string} commandId */
     fail: commandId => /** @type {(error: unknown) => void} */ (failing.get(commandId))(new Error('the kernel threw')),
+    /**
+     * The `live` that `commandId`'s turn gave it, which answers false once the queue has cut that turn
+     * @param {string} commandId
+     */
+    live: commandId => /** @type {() => boolean} */ (lives.get(commandId)),
   };
 }
 
@@ -976,6 +1019,170 @@ describe("the coordinator's one queue (#35 slice 4a, one committer)", () => {
     await installed;
     kernel.release('c-1');
     assert.equal((await capture).kind, 'committed');
+  });
+});
+
+/**
+ * A clock and timers a test moves by hand, as one: a timer is due `ms` after it was set, by the
+ * clock, and `advance` moves the clock on, then fires each timer due by then, soonest first
+ * @param {number} [start]
+ */
+function steppedTime(start = NOW_AT) {
+  let now = start;
+  let next = 1;
+  /** @type {Map<number, {due: number, callback: () => void}>} */
+  const pending = new Map();
+  return {
+    clock: { now: () => now },
+    timers: {
+      /** @param {() => void} callback @param {number} ms */
+      set: (callback, ms) => {
+        const handle = next++;
+        pending.set(handle, { due: now + ms, callback });
+        return handle;
+      },
+      /** @param {unknown} handle */
+      clear: handle => {
+        pending.delete(/** @type {number} */ (handle));
+      },
+    },
+    /** @param {number} ms */
+    advance(ms) {
+      now += ms;
+      const due = [...pending].filter(([, timer]) => timer.due <= now).sort(([, a], [, b]) => a.due - b.due);
+      for (const [handle, { callback }] of due) {
+        pending.delete(handle);
+        callback();
+      }
+    },
+  };
+}
+
+/**
+ * A note's creation, as the drain replays a page's
+ * @param {string} commandId
+ */
+const noteOf = commandId =>
+  /** @type {any} */ ({ type: 'createNote', commandId, noteId: `${commandId}-note`, name: 'Plan', blocks: [] });
+
+/** What a command whose turn the queue cut answers */
+const TURN_EXCEEDED = Object.freeze({
+  kind: 'unavailable',
+  cause: 'coordinator',
+  code: 'turn-exceeded',
+  retryable: true,
+  messageKey: 'unavailable.turn-exceeded',
+  severity: 'error',
+});
+
+describe("the coordinator's bound on a turn (#35 slice 4b-1, F4)", () => {
+  it('says which command holds the queue: its type, when its turn began and how many wait behind it, and nothing while the queue is idle', async () => {
+    const kernel = heldKernel();
+    const time = steppedTime(1000);
+    const { coordinator } = coordinatorOn(kernel, { clock: time.clock, timers: time.timers });
+    await coordinator.start();
+    assert.equal(Object.hasOwn(coordinator.health(), 'running'), false, 'nothing while the queue is idle');
+    const first = coordinator.client().execute(captureOf('c-1'));
+    await turns();
+    time.advance(500);
+    const second = coordinator.enqueue(noteOf('c-2'), { begin: () => true });
+    const third = coordinator.client().execute(captureOf('c-3'));
+    await turns();
+    assert.deepEqual(coordinator.health().running, { type: 'captureToDailyNote', since: 1000, waiting: 2 });
+    kernel.release('c-1');
+    await turns();
+    assert.deepEqual(coordinator.health().running, { type: 'createNote', since: 1500, waiting: 1 });
+    kernel.release('c-2');
+    await turns();
+    kernel.release('c-3');
+    await Promise.all([first, second, third]);
+    await turns();
+    assert.equal(Object.hasOwn(coordinator.health(), 'running'), false, 'nothing once the queue is idle again');
+  });
+
+  it("cuts a turn TURN_LIMIT_MS after it began: the next command runs, the cut one answers unavailable, retryable, turn-exceeded, its turn's live() answers false, and coordinator.turn-stuck is journaled once with its type and age", async () => {
+    const kernel = heldKernel();
+    const time = steppedTime(1000);
+    const { seen, events } = recordedEvents();
+    const { coordinator } = coordinatorOn(kernel, { clock: time.clock, timers: time.timers, events });
+    await coordinator.start();
+    const first = coordinator.client().execute(captureOf('c-1'));
+    const second = coordinator.client().execute(captureOf('c-2'));
+    await turns();
+    time.advance(TURN_LIMIT_MS - 1);
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1'], 'not cut before its bound');
+    time.advance(1);
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1', 'start c-2'], 'cut at its bound, so the next command runs');
+    assert.deepEqual(await first, TURN_EXCEEDED);
+    assert.equal(kernel.live('c-1')(), false, 'the cut turn is no longer live, so the kernel commits nothing of it');
+    assert.equal(kernel.live('c-2')(), true);
+    const stuck = () => seen.filter(([code]) => code === 'coordinator.turn-stuck');
+    assert.deepEqual(stuck(), [
+      ['coordinator.turn-stuck', { commandType: 'captureToDailyNote', ageMs: TURN_LIMIT_MS }, undefined],
+    ]);
+    assert.equal(coordinator.health().cutTurns, 1);
+    // What the cut command settles with later changes nothing
+    kernel.release('c-1');
+    await turns();
+    assert.equal(stuck().length, 1, 'once per cut');
+    kernel.release('c-2');
+    assert.equal((await second).kind, 'committed');
+    await turns();
+    assert.equal(
+      coordinator.health().cutTurns,
+      1,
+      "it counts for the worker's life, and stays while the queue is idle",
+    );
+  });
+
+  it("leaves the queue idle when it cuts a turn with nothing behind it, so the health names no running turn (#224's review, T2)", async () => {
+    const kernel = heldKernel();
+    const time = steppedTime(1000);
+    const { coordinator } = coordinatorOn(kernel, { clock: time.clock, timers: time.timers });
+    await coordinator.start();
+    const cut = coordinator.client().execute(captureOf('c-1'));
+    await turns();
+    time.advance(TURN_LIMIT_MS);
+    await turns();
+    assert.equal(
+      Object.hasOwn(coordinator.health(), 'running'),
+      false,
+      'no turn holds the queue once its only turn is cut',
+    );
+    // Released after that check, so a queue that cuts nothing fails there and doesn't wait on the kernel
+    kernel.release('c-1');
+    assert.deepEqual(await cut, TURN_EXCEEDED);
+  });
+
+  it("gives a turn that starts late its whole TURN_LIMIT_MS from its own start, not its request's", async () => {
+    const kernel = heldKernel();
+    const time = steppedTime(1000);
+    const { coordinator } = coordinatorOn(kernel, { clock: time.clock, timers: time.timers });
+    await coordinator.start();
+    const first = coordinator.client().execute(captureOf('c-1'));
+    const second = coordinator.client().execute(captureOf('c-2'));
+    const third = coordinator.client().execute(captureOf('c-3'));
+    await turns();
+    // The second waits 100 s behind the first, then starts
+    time.advance(100_000);
+    kernel.release('c-1');
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1', 'end c-1', 'start c-2']);
+    // 130 s after its request, and to the last millisecond of its own bound, it holds the queue
+    time.advance(30_000);
+    await turns();
+    time.advance(TURN_LIMIT_MS - 30_000 - 1);
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1', 'end c-1', 'start c-2'], 'its bound runs from its own start');
+    kernel.release('c-2');
+    await turns();
+    kernel.release('c-3');
+    assert.deepEqual(
+      (await Promise.all([first, second, third])).map(outcome => outcome?.kind),
+      ['committed', 'committed', 'committed'],
+    );
   });
 });
 

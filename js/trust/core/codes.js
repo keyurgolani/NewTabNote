@@ -129,9 +129,11 @@ export const ERROR_CODES = Object.freeze([
   // #17 PR 3a's data transforms: a meta.schema with no logical version, which they stop at
   // (transforms.js)
   'meta-unreadable',
-  // #13's answers that didn't come (contracts/transport-codes.js)
+  // #13's answers that didn't come (contracts/transport-codes.js), and a command whose turn the
+  // coordinator's queue cut (#35 slice 4b-1, application/kernel.js)
   'unavailable',
   'deadline-exceeded',
+  'turn-exceeded',
   'unauthorized-sender',
   'forbidden-for-surface',
   // A check that couldn't verify (checks.js), and the storage probe finding a record under its

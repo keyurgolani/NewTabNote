@@ -14,8 +14,8 @@
  *   (DRAIN_MESSAGE), under Web Lock `journal.replay`. One asked for while one runs runs once
  *   more after it, as the recovery-point purge does, so an entry written meanwhile is read too.
  *   A profile with no journal database opens nothing and makes none. What its last drain left,
- *   the oldest orphaned entry and the notes it held back (held(), slice 3b), it keeps for
- *   system.coordinatorHealth.
+ *   the oldest orphaned entry, the notes it held back (held(), slice 3b), and the last stop it made
+ *   at an entry with its count (stuck(), #35 slice 4b-1), it keeps for system.coordinatorHealth.
  * - What the drain can't replay is `journal.entry-unreplayable` (#20, the lead's answer to the
  *   plan's Q8), on the coordinator's provider, and a capture among them is told to `notify`, with
  *   why. A stop for good at a capture raises the incident and tells it nothing, since it's still
@@ -24,6 +24,11 @@
  *   third drain in a row that stops at an entry raises it all the same (slice 3b). A capture it
  *   adds is `capture.committed`, as one the worker adds at once is, so it resolves the capture
  *   incident its failure raised.
+ * - Each replay is judged as the surface that wrote its entry, and its session (#35 slice 4b-1,
+ *   the lead's ruling): a page's by the shared catalog's policy, the one #13's port router judges
+ *   that page's own request by, and the worker's own by its catalog's, the one its kernel applies,
+ *   each refusal as the router codes it (core/messaging/denials.js). So a replay never runs with
+ *   rights its surface hasn't, and what it can't run stays, its incident raised.
  *
  * Building it opens nothing, and nothing here throws into the worker: a journal that can't be
  * written leaves the capture to run as it did before slice 3, and says so on the console each time,
@@ -34,9 +39,11 @@
 import { inContextStores } from '../adapters/in-context.js';
 import { drainJournal } from '../core/application/journal-drain.js';
 import { SURFACES } from '../core/contracts/surfaces.js';
-import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
+import { WORKER_CATALOG, WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
 import { DRAIN_MESSAGE, OWNER_LOCK_PREFIX, REPLAY_LOCK, journalEntry, ownerLock } from '../core/domain/journal.js';
+import { denialOf } from '../core/messaging/denials.js';
 import { journaledLookup } from '../core/messaging/journaled-operations.js';
+import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
 
 /** @typedef {import('../adapters/in-context.js').InContextStores} InContextStores */
@@ -44,6 +51,8 @@ import { systemClock } from '../core/ports/runtime.js';
 /** @typedef {import('../core/application/journal-drain.js').DrainResult} DrainResult */
 /** @typedef {import('../core/domain/journal.js').JournalRecord} JournalRecord */
 /** @typedef {import('../core/contracts/commands.js').CommandType} CommandType */
+/** @typedef {import('../core/contracts/commands.js').Command} Command */
+/** @typedef {import('../core/ports/policy.js').Caller} Caller */
 
 export { DRAIN_MESSAGE };
 
@@ -64,6 +73,7 @@ export { DRAIN_MESSAGE };
  * @property {(client: DrainClient) => Promise<DrainResult | null>} drain - never rejects; null with no journal to read
  * @property {() => number | null} oldestOrphanedEntryAt - what the last drain left, for system.coordinatorHealth
  * @property {() => DrainResult['held']} held - the notes the last drain held back, for system.coordinatorHealth (slice 3b)
+ * @property {() => DrainResult['stuck']} stuck - the last stop the last drain made at an entry, for system.coordinatorHealth (#35 slice 4b-1)
  */
 
 /**
@@ -72,6 +82,24 @@ export { DRAIN_MESSAGE };
  * @type {Readonly<Record<string, true>>}
  */
 const CAPTURES = Object.freeze({ captureToDailyNote: true });
+
+/** The shared catalog's policy, the one #13's port router judges a page's request by */
+const PAGES_POLICY = createBaselinePolicy();
+
+/** The worker catalog's, the one its kernel judges the worker's own commands by */
+const WORKER_POLICY = createBaselinePolicy(WORKER_CATALOG);
+
+/**
+ * The code that refuses a replay of `command` from `caller`, the surface and session that wrote
+ * its entry, as #13's router would refuse that surface's own request, or null when that surface
+ * could have sent it (#35 slice 4b-1): a page's entry on the shared catalog's policy, and the
+ * worker's own on its catalog's
+ * @param {Command} command
+ * @param {Caller} caller
+ * @returns {string | null}
+ */
+const replayPermits = (command, caller) =>
+  denialOf(caller.surface === 'worker-internal' ? WORKER_POLICY : PAGES_POLICY, command, caller);
 
 /**
  * Whether `entry` holds a capture
@@ -145,6 +173,8 @@ export function createWorkerJournal({
   let oldest = null;
   /** @type {DrainResult['held']} what the last drain held back */
   let lastHeld = [];
+  /** @type {DrainResult['stuck']} the last stop the last drain made at an entry */
+  let lastStuck = null;
   /** What this worker's drains raised, by entry and code, for its life (journal-drain.js) */
   /** @type {Set<string>} */
   const raised = new Set();
@@ -244,6 +274,7 @@ export function createWorkerJournal({
     if (!(await stores.journalExists())) {
       oldest = null;
       lastHeld = [];
+      lastStuck = null;
       return null;
     }
     const run = async () => {
@@ -255,6 +286,7 @@ export function createWorkerJournal({
         liveOwners,
         own: { sessionId: instanceId, inFlight: () => new Set(inFlight) },
         clock,
+        permits: replayPermits,
         unreplayable,
         raised,
         stops,
@@ -265,6 +297,7 @@ export function createWorkerJournal({
     const result = manager ? await manager.request(REPLAY_LOCK, { mode: 'exclusive' }, run) : await run();
     oldest = result.oldestOrphanedEntryAt;
     lastHeld = result.held;
+    lastStuck = result.stuck;
     return result;
   };
 
@@ -351,5 +384,6 @@ export function createWorkerJournal({
     },
     oldestOrphanedEntryAt: () => oldest,
     held: () => lastHeld.map(note => ({ ...note })),
+    stuck: () => (lastStuck ? { ...lastStuck } : null),
   });
 }

@@ -857,13 +857,15 @@ export function createWorkerClient(host = workerHost()) {
     });
   };
 
+  // A turn's `live` on the coordinator's queue goes with the command to each kernel it runs on, so
+  // a cut turn commits on neither (#35 slice 4b-1)
   /** @type {WorkerClient['execute']} */
   const execute = /** @type {any} */ (
-    async (/** @type {any} */ command) => {
+    async (/** @type {any} */ command, /** @type {any} */ options) => {
       const ready = await unlessBlocked(client);
       if (ready === null) return blockedUpgrade();
       if (ready === undefined) return notOpened();
-      const outcome = await ready.execute(command);
+      const outcome = await ready.execute(command, options);
       if (outcome.kind !== 'unavailable' || !RETRIED_CODES.includes(outcome.code)) return outcome;
       // The connection went before this command's transaction began, or the open found an older
       // database than the run left, so nothing of it committed. The database may have been
@@ -873,7 +875,7 @@ export function createWorkerClient(host = workerHost()) {
       const next = await unlessBlocked(client);
       if (next === null) return blockedUpgrade();
       if (next === undefined) return notOpened();
-      return next.execute(command);
+      return next.execute(command, options);
     }
   );
 

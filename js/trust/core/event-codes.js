@@ -117,6 +117,11 @@ export const EVENT_CODES = Object.freeze({
   // unjournaled. No incident in 4a: #20's next incident work takes it up with
   // journal.entry-unreplayable.
   'journal.append-failed': Object.freeze({ fields: Object.freeze(['errorCode', 'subjectId']) }),
+  // #35 slice 4b-1: a turn on the coordinator's queue that ran TURN_LIMIT_MS from its start, cut so
+  // the next one runs, by its command's type and how long it ran, once per cut. No incident (the
+  // lead's ruling): the cut heals itself, since a journaled command replays at the next drain, and
+  // system.coordinatorHealth's `running` and `cutTurns` show it, so nothing asks the user to act.
+  'coordinator.turn-stuck': Object.freeze({ fields: Object.freeze(['commandType', 'ageMs']) }),
   // The successes at those sites, each resolving its site's incident
   'capture.committed': Object.freeze({ fields: Object.freeze(['surface', 'commandId']), resolves: 'capture.failed' }),
   'backup.auto-succeeded': Object.freeze({ fields: Object.freeze([]), resolves: 'backup.auto-failed' }),

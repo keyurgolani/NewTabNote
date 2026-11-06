@@ -126,6 +126,7 @@ const CANARY_FIELDS = [
   { faultCode: 'canary-divorce-plans' },
   { surface: URL_CANARY },
   { count: TITLE },
+  { commandType: TITLE },
 ];
 
 describe('the event registry and the evidence allowlist (#20, "Diagnostic journal")', () => {
@@ -157,6 +158,17 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
     assert.deepEqual(EVENT_CODES['journal.append-failed'], { fields: ['errorCode', 'subjectId'] });
   });
 
+  it("lists coordinator.turn-stuck with the cut command's type and its age alone, and no incident (#35 slice 4b-1, the lead's ruling)", () => {
+    assert.deepEqual(EVENT_CODES['coordinator.turn-stuck'], { fields: ['commandType', 'ageMs'] });
+    // Any command the worker's queue runs, its own among them, by its type's name and nothing else
+    for (const commandType of ['captureToDailyNote', 'keepJournalEntry', 'createNote', 'insertBlocks']) {
+      assert.equal(checkEvidence({ commandType, ageMs: 120_000 }).ok, true, commandType);
+    }
+    for (const commandType of ['notACommand', 'Call the plumber', '', 7]) {
+      assert.equal(checkEvidence({ commandType, ageMs: 120_000 }).ok, false, String(commandType));
+    }
+  });
+
   it('holds only ids, codes, counts, enums, durations, versions, times, revisions, seq, and hashes', () => {
     assert.deepEqual(EVIDENCE_FIELD_NAMES, [
       'ageMs',
@@ -167,6 +179,7 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
       'capture',
       'cause',
       'commandId',
+      'commandType',
       'costClass',
       'count',
       'durationMs',

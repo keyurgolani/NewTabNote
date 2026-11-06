@@ -141,6 +141,15 @@ const isSchemaName = node => {
 };
 
 /**
+ * The list of every command name the worker's catalog holds (contracts/command-names.js, #35 slice
+ * 4b-1), whose strings name commands and send none: it imports nothing, so nothing in it can reach a
+ * kernel, and test/kernel/catalog.test.mjs pins that it imports nothing. So its strings are read for
+ * no unread send, by this path alone. A `type` it names, or an `.execute({...})` or a
+ * `.query({...})` in it, is read as anywhere else.
+ */
+const COMMAND_NAMES_MODULE = path.join(ROOT, 'js', 'kernel', 'core', 'contracts', 'command-names.js');
+
+/**
  * @param {ts.PropertyName | undefined} name
  * @returns {boolean} whether a property so named is an object's `type`
  */
@@ -212,8 +221,9 @@ function sendsIn(files, { readFile = file => fs.readFileSync(file, 'utf8') } = {
     const walk = node => {
       if (ts.isStringLiteralLike(node) && CATALOG_TYPES.has(node.text) && !isSchemaName(node)) {
         const { parent } = node;
-        if (!ts.isPropertyAssignment(parent)) unread.push(at(node));
-        else if (parent.initializer === node && isTypeName(parent.name)) {
+        if (!ts.isPropertyAssignment(parent)) {
+          if (file !== COMMAND_NAMES_MODULE) unread.push(at(node));
+        } else if (parent.initializer === node && isTypeName(parent.name)) {
           if (file === KERNEL) own.add(node.text);
           else {
             types.add(node.text);
@@ -447,6 +457,24 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     );
     // A pin whose call is gone fails too, so it can't outlive what it pins
     assert.throws(() => sentWith(catalog, { edit: text => text.replace("type: 'setPreferences'", "type: 'renamedPreferences'") }), pinFails);
+  });
+
+  it('reads the names in command-names.js for no send, since it imports nothing and so sends nothing, and the same names in any other file as unread, as before (#35 slice 4b-1)', () => {
+    const names = "export const COMMAND_NAMES = Object.freeze(['createNote', 'captureToDailyNote']);";
+    // Another module of the worker's graph, planted with the same strings
+    const elsewhere = path.join(ROOT, 'js', 'kernel', 'composition', 'coordinator.js');
+    const read = sendsIn([COMMAND_NAMES_MODULE, elsewhere], { readFile: () => names });
+    assert.deepEqual(read.unread, ['js/kernel/composition/coordinator.js:1', 'js/kernel/composition/coordinator.js:1']);
+    assert.deepEqual([...read.types], []);
+    // A send in it is read as anywhere else: the type it names, and one the scan can't read
+    const sending = sendsIn([COMMAND_NAMES_MODULE], {
+      readFile: () =>
+        ["kernel.execute({ type: 'trashNote', commandId: 'c1' });", 'kernel.execute({ ...fields, commandId });'].join(
+          '\n',
+        ),
+    });
+    assert.deepEqual([...sending.types], ['trashNote']);
+    assert.deepEqual(sending.unread, ['js/kernel/core/contracts/command-names.js:2']);
   });
 
   it("ALL_HANDLERS, the tests' table, holds every command and query the catalog has", () => {
