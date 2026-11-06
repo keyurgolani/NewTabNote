@@ -95,22 +95,21 @@ import { createAutoBackup, exportFile, exportObject, prepareImport, readExport }
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
-import { TRANSFORM_DAILY_KEY, answerOf } from './daily-answer.js';
 import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { createIndexedDbLedger, ledgerRow, replayFrom } from './ledger.js';
+import { present, readView, storeHandle, withAnswer } from './reads.js';
 import { copyMissingStores } from './recovery-copies.js';
 import {
   CHANGES_KEY,
   CHANGES_STORE,
   CONFLICTS_STORE,
-  DAILY_INDEX_STORE,
   META_STORE,
   OPERATIONS_STORE,
   TOMBSTONES_STORE,
   pendingStructural,
 } from './registry.js';
-import { abort, endOf, indexValue, result } from './requests.js';
+import { abort, endOf, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 import { createVersionTracker } from './versions.js';
@@ -209,29 +208,6 @@ const STRICT = Object.freeze({ durability: 'strict' });
 /** @typedef {import('./requests.js').Ending} Ending */
 
 /**
- * The IndexedDB stores among `stores` the database has, once each
- * @param {IDBDatabase} db
- * @param {readonly StoreName[]} stores
- * @returns {string[]}
- */
-function present(db, stores) {
-  const names = new Set(stores.filter(store => Object.hasOwn(IDB_STORES, store)).map(store => IDB_STORES[store]));
-  return [...names].filter(name => db.objectStoreNames.contains(name));
-}
-
-/**
- * `names` with `meta` when they hold the daily index and the database has `meta`, so a Daily
- * Note lookup reads logical 3's kept answer in its own transaction (daily-answer.js, F10)
- * @param {IDBDatabase} db
- * @param {string[]} names
- * @returns {string[]}
- */
-function withAnswer(db, names) {
-  if (!names.includes(DAILY_INDEX_STORE) || names.includes(META_STORE)) return names;
-  return db.objectStoreNames.contains(META_STORE) ? [...names, META_STORE] : names;
-}
-
-/**
  * The bookkeeping stores a database has: all of step 10's on a database at version 10, and
  * none below it, where commands commit as they did before step 10
  * @typedef {object} Books
@@ -304,16 +280,7 @@ async function keptRow(db, work, commands) {
  * @returns {Tx}
  */
 function view(db, tx, scope, writable, tracker) {
-  /**
-   * @param {StoreName} store
-   * @returns {IDBObjectStore | null}
-   */
-  const handle = store => {
-    if (!Object.hasOwn(IDB_STORES, store)) throw new UnavailableError('adapter', 'unknown-store', false);
-    if (!scope.includes(store)) throw new UnavailableError('adapter', 'store-outside-transaction', false);
-    const name = IDB_STORES[store];
-    return tx && db.objectStoreNames.contains(name) ? tx.objectStore(name) : null;
-  };
+  const handle = storeHandle(db, tx, scope);
   /**
    * @param {StoreName} store
    * @returns {IDBObjectStore | null}
@@ -322,80 +289,8 @@ function view(db, tx, scope, writable, tracker) {
     if (!writable) throw new UnavailableError('adapter', 'write-in-readonly-transaction', false);
     return handle(store);
   };
-  /**
-   * Tells the tracker what a read found of a note, a block, or a folder, for its versions and
-   * the change log's ops (versions.js)
-   * @param {StoreName} store
-   * @param {IDBValidKey} key
-   * @param {Record<string, unknown> | undefined} record
-   */
-  const saw = (store, key, record) => {
-    if (store === 'notes') tracker.saw(key, record);
-    else if (store === 'blocks') tracker.sawBlock(key, record);
-    else if (store === 'folders') tracker.sawFolder(key, record);
-  };
-  /**
-   * @param {StoreName} store
-   * @param {Array<Record<string, unknown>>} records
-   */
-  const sawAll = (store, records) => {
-    for (const record of records) saw(store, /** @type {string} */ (record.id), record);
-    return records;
-  };
   return /** @type {Tx} */ ({
-    get: async (store, key) => {
-      const objectStore = handle(store);
-      const record = objectStore ? await result(objectStore.get(key)) : undefined;
-      saw(store, key, record);
-      return record;
-    },
-    getAll: async store => {
-      const objectStore = handle(store);
-      return sawAll(store, objectStore ? await result(objectStore.getAll()) : []);
-    },
-    getAllKeys: async store => {
-      const objectStore = handle(store);
-      return objectStore ? /** @type {string[]} */ (await result(objectStore.getAllKeys())) : [];
-    },
-    getKey: async (store, key) => {
-      const objectStore = handle(store);
-      const stored = objectStore
-        ? /** @type {string | undefined} */ (await result(objectStore.getKey(key)))
-        : undefined;
-      // A key with no record tells the tracker what a read that finds none does, so a write of
-      // it looks nothing up (R131). A write of it earlier in the transaction looked it up first,
-      // and IndexedDB answers in order, so that answer is the one kept.
-      if (stored === undefined) saw(store, key, undefined);
-      return stored;
-    },
-    getAllByIndex: async (store, index, value) => {
-      const objectStore = handle(store);
-      const key = indexValue(value);
-      if (!objectStore) return [];
-      const read = result(objectStore.index(index).getAll(key));
-      // Every block of the note, as it was before any write after this read
-      if (store === 'blocks' && index === 'canvasId') tracker.coverBlocks(key, read);
-      return sawAll(store, await read);
-    },
-    getKeysByIndex: async (store, index, value) => {
-      const objectStore = handle(store);
-      const key = indexValue(value);
-      return objectStore ? result(objectStore.index(index).getAllKeys(key)) : [];
-    },
-    revision: (store, key) => {
-      handle(store);
-      return store === 'notes' ? tracker.versions(key)?.revision : undefined;
-    },
-    versions: (store, key) => {
-      handle(store);
-      return store === 'notes' ? tracker.versions(key) : undefined;
-    },
-    has: store => handle(store) !== null,
-    // Logical 3's kept answer, from `meta`, which a transaction over the daily index spans
-    dailyAnswer: async () =>
-      tx && tx.objectStoreNames.contains(META_STORE)
-        ? answerOf(await result(tx.objectStore(META_STORE).get(TRANSFORM_DAILY_KEY)))
-        : null,
+    ...readView(db, tx, scope, tracker),
     put: (store, record) => {
       const objectStore = writing(store);
       if (!objectStore) {

@@ -180,6 +180,8 @@ export const HELPERS = Object.freeze({
     'js/kernel/adapters/indexeddb/changes.js',
     'js/kernel/adapters/indexeddb/ledger.js',
   ],
+  // #35 slice 4b-0b: the read half of #17's adapter's view of a transaction
+  'js/kernel/adapters/indexeddb/reads.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/recovery-copies.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
     'js/kernel/adapters/indexeddb/adapter.js',

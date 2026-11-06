@@ -111,6 +111,7 @@
     "migrate.js": "writer",
     "purge.js": "writer",
     "raw-export.js": "shared",
+    "reads.js": "shared",
     "records.js": "shared",
     "recovery-copies.js": "writer",
     "recovery-points.js": "writer",
