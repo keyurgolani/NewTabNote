@@ -260,6 +260,10 @@ export const UNSHARED = Object.freeze({
     implements: "#17's registry's store names, shapes, versions and transform plan",
     tests: 'test/kernel/registry-names.test.mjs',
   },
+  'js/kernel/adapters/indexeddb/reader.js': {
+    implements: "#17's read-only reader (IndexedDbReader): the read half of #17's adapter, over CanvasTabDB",
+    tests: 'test/kernel/storage-reader.test.mjs',
+  },
   'js/kernel/adapters/indexeddb/shapes.js': {
     implements: "#17's shape detection for CanvasTabDB",
     tests: 'test/kernel/storage-migrate.test.mjs',

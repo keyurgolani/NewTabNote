@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { createIndexedDbReader } from '../../js/kernel/adapters/indexeddb/reader.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { reachGraph } from './import-graph.mjs';
-import { KeyRange, adapterOn, closeAll, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
+import { adapterOn, closeAll, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
 import { CALLERS } from './support.mjs';
 
 /** @typedef {import('./storage-fixture.mjs').Profile} Profile */
@@ -39,13 +39,12 @@ async function made(spec) {
 /**
  * The reader over `of`, as a page's root would make it
  * @param {Profile} of
- * @param {Record<string, unknown>} [options]
+ * @param {Partial<import('../../js/kernel/adapters/indexeddb/reader.js').IndexedDbReaderOptions>} [options]
  */
 function readerOn(of, options = {}) {
   const reader = createIndexedDbReader({
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
-    keyRange: KeyRange,
     ...options,
   });
   of.adapters.push(/** @type {any} */ (reader));
@@ -91,7 +90,9 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
     const reader = readerOn(of);
     await reader.open();
     const list = await asPopup(reader, { type: 'listNotes', view: 'popup' });
-    assert.deepEqual(list.kind === 'ready' && list.data.map((/** @type {{id: string}} */ note) => note.id), ['n1']);
+    assert.deepEqual(list.kind === 'ready' && /** @type {Array<{id: string}>} */ (list.data).map(note => note.id), [
+      'n1',
+    ]);
     reader.close();
     assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before);
 
@@ -118,24 +119,34 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
   });
 
   it("holds nothing that writes: no commit, recall or export, and its ledger answers a command's status as the adapter's does", async () => {
-    const of = await made({ records: { canvases: [legacyEnv.note('n1')] } });
+    // The worker's adapter makes the database at this build's version, with its ledger
+    const of = await made();
     const reader = readerOn(of);
     for (const name of ['commit', 'recall', 'exportBackup', 'exportData']) {
       assert.equal(Object.hasOwn(reader, name), false, name);
     }
     const adapter = adapterOn(of);
     await adapter.open();
-    const made1 = await kernelOn(adapter).execute({
-      type: 'createNote',
-      commandId: 'c-made',
-      noteId: 'n2',
-      name: 'Made',
-    });
-    assert.equal(made1.kind, 'committed');
+    const kernel = kernelOn(adapter);
+    const block = (/** @type {string} */ content) => ({ id: 'b1', type: 'text', content, order: 0 });
+    /** @type {any} */
+    const create = { type: 'createNote', commandId: 'c-made', noteId: 'n2', name: 'Made', blocks: [block('One')] };
+    assert.equal((await kernel.execute(create)).kind, 'committed');
+    const save = { type: 'saveNoteContent', commandId: 'c-newer', noteId: 'n2', blocks: [block('Two')] };
+    assert.equal((await kernel.execute(/** @type {any} */ (save))).kind, 'committed');
+    /** @type {any} */
+    const stale = { ...save, commandId: 'c-stale', blocks: [block('Stale')], expectedRevision: 1 };
+    assert.equal((await kernel.execute(stale)).kind, 'conflict');
     await reader.open();
-    for (const commandId of ['c-made', 'c-never-sent']) {
+    for (const commandId of ['c-made', 'c-newer', 'c-stale', 'c-never-sent']) {
       assert.deepEqual(await reader.ledger.status(commandId), await adapter.ledger.status(commandId), commandId);
     }
+    // Its read compares the command too: another under a kept commandId is key reuse
+    for (const command of [create, stale, { ...create, name: 'Another' }]) {
+      const label = `${command.commandId} ${command.name ?? ''}`;
+      assert.deepEqual(await reader.ledger.read(command), await adapter.ledger.read(command), label);
+    }
+    assert.deepEqual(await reader.ledger.read({ ...create, name: 'Another' }), { status: 'key-reuse' });
   });
 
   it('reaches no module the architecture list gives the role writer', () => {
