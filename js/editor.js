@@ -862,8 +862,8 @@ class BlockEditor {
 
     insightsEl.appendChild(content);
 
-    // Insert after timestamp
-    const timestamp = this.root.querySelector('.page-timestamp') || this.doc.getElementById('page-timestamp');
+    // Insert after its own pane's timestamp, or after its title (#201)
+    const timestamp = this.root.querySelector('.page-timestamp');
     if (timestamp) {
       timestamp.after(insightsEl);
     } else {
@@ -1025,7 +1025,7 @@ class BlockEditor {
     `;
 
     // Insert after its own pane's timestamp, or after its title, as renderInsights does (#201)
-    const timestamp = this.root.querySelector('.page-timestamp') || this.doc.getElementById('page-timestamp');
+    const timestamp = this.root.querySelector('.page-timestamp');
     if (timestamp) {
       timestamp.after(loadingEl);
     } else {
