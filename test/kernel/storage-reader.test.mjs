@@ -213,19 +213,25 @@ const literals = node =>
 /**
  * Every failure the read half's mapping knows, read from the source: each code an
  * UnavailableError is made with in the reader, in its twins in #17's adapter, and in failures.js
- * and connection.js, which both call, and each DOMException name failures.js maps, with its code
+ * and connection.js, which both call, and each DOMException name failures.js maps, with its code,
+ * and the names each file declares
  */
 function knownFailures() {
   /** @type {Set<string>} */
   const codes = new Set();
   /** @type {Map<string, string>} */
   const names = new Map();
+  /** @type {Map<string, string[]>} */
+  const declarations = new Map();
   /**
    * @param {string} file
    * @param {string[]} [only] - the functions it reads, when not the whole file
    */
   const scan = (file, only) => {
     const text = fs.readFileSync(path.join(ROOT, INDEXEDDB, file), 'utf8');
+    /** @type {string[]} */
+    const named = [];
+    declarations.set(file, named);
     /**
      * @param {ts.Node} node
      * @param {boolean} inside - in a function `only` names
@@ -234,6 +240,7 @@ function knownFailures() {
     const walk = (node, inside, mapped) => {
       const declared = ts.isVariableDeclaration(node) || ts.isMethodDeclaration(node) ? node.name : null;
       const name = declared && ts.isIdentifier(declared) ? declared.text : '';
+      if (name) named.push(name);
       const here = inside || !only || only.includes(name);
       const made =
         ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'UnavailableError';
@@ -253,7 +260,7 @@ function knownFailures() {
   scan('adapter.js', TWINS);
   scan('failures.js');
   scan('connection.js');
-  return { codes, names };
+  return { codes, names, declarations };
 }
 
 const KNOWN = knownFailures();
@@ -686,6 +693,19 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
       [...KNOWN.names.keys()].filter(name => !named.has(name)),
       [],
     );
+  });
+
+  it("declares each twin once in #17's adapter and once in the reader, so the structural pin reads every one", () => {
+    // The pin reads adapter.js only inside the declarations TWINS names: a twin renamed there
+    // would take its codes out of the pin unseen
+    for (const file of ['adapter.js', 'reader.js']) {
+      const declared = KNOWN.declarations.get(file) || [];
+      assert.deepEqual(
+        TWINS.map(name => `${name} ${declared.filter(found => found === name).length}`),
+        TWINS.map(name => `${name} 1`),
+        file,
+      );
+    }
   });
 
   it('reaches no module the architecture list gives the role writer', () => {
