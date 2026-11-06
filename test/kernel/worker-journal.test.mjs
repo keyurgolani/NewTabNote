@@ -419,6 +419,35 @@ describe("the worker's journal (#35 slice 3)", () => {
     assert.deepEqual(w.journal.held(), []);
   });
 
+  it('says the last stop its last drain made at an entry, with how many drains in a row stopped there, for system.coordinatorHealth, and none once a drain gets through (#35 slice 4b-1, Q6)', async () => {
+    const w = worker();
+    await w.journal.keep(capture('c1'), { noteId: 'daily-c1' });
+    w.journal.release('c1');
+    assert.equal(w.journal.stuck(), null, 'before any drain');
+    let busy = true;
+    const timedOut = {
+      kind: 'unavailable',
+      cause: 'storage',
+      code: 'timed-out',
+      retryable: true,
+      messageKey: 'unavailable.timed-out',
+      severity: 'error',
+    };
+    const client = {
+      /** @param {any} command */
+      execute: async command => (busy ? timedOut : w.client.execute(command)),
+      /** @param {any} query */
+      query: (/** @type {any} */ query) => w.client.query(query),
+    };
+    await w.journal.drain(/** @type {any} */ (client));
+    assert.deepEqual(w.journal.stuck(), { code: 'timed-out', count: 1 });
+    await w.journal.drain(/** @type {any} */ (client));
+    assert.deepEqual(w.journal.stuck(), { code: 'timed-out', count: 2 });
+    busy = false;
+    await w.journal.drain(/** @type {any} */ (client));
+    assert.equal(w.journal.stuck(), null);
+  });
+
   it("tells the diagnostic journal of an entry it can't replay, by why and the surface that wrote it, and notifies for a capture", async () => {
     const w = worker();
     // A newer build's capture, and a page's note it can't read, each orphaned

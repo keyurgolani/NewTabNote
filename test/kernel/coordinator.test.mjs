@@ -790,6 +790,27 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
     assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
   });
 
+  it("says the last stop its last drain made at an entry, with how many drains in a row stopped there, and nothing while it made none (#35 slice 4b-1, Q6)", async () => {
+    /** @type {unknown} */
+    let stuck = { code: 'timed-out', count: 2 };
+    const journal = { drain: async () => null, oldestOrphanedEntryAt: () => null, stuck: () => stuck };
+    const kernel = fakeKernel();
+    const { coordinator } = coordinatorOn(kernel, { journal });
+    const started = coordinator.start();
+    kernel.open();
+    await started;
+    await turns();
+    assert.deepEqual(coordinator.health().stuck, { code: 'timed-out', count: 2 });
+    // A stop it doesn't count: one for good, one storage-wide, or one raised already
+    stuck = { code: 'quota' };
+    assert.deepEqual(coordinator.health().stuck, { code: 'quota' });
+    // Codes and counts only, never what an entry holds
+    stuck = { code: 'timed-out', count: 1, noteId: 'n1', text: 'Call the plumber' };
+    assert.deepEqual(coordinator.health().stuck, { code: 'timed-out', count: 1 });
+    stuck = null;
+    assert.equal(Object.hasOwn(coordinator.health(), 'stuck'), false);
+  });
+
   it('answers the same when its journal throws or rejects', async () => {
     for (const journal of [
       {
@@ -800,6 +821,9 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
           throw new Error('the journal is broken');
         },
         held: () => {
+          throw new Error('the journal is broken');
+        },
+        stuck: () => {
           throw new Error('the journal is broken');
         },
       },
@@ -815,6 +839,7 @@ describe("the coordinator's journal drain (#35 slice 3)", () => {
       assert.equal(coordinator.health().oldestOrphanedEntryAt, null);
       // A journal that can't say what it held, or an older one that has no say, names none
       assert.equal(Object.hasOwn(coordinator.health(), 'held'), false);
+      assert.equal(Object.hasOwn(coordinator.health(), 'stuck'), false);
       assert.equal(await coordinator.drain(), null);
     }
   });

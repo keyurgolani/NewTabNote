@@ -3,14 +3,16 @@
 // whose entries it leaves alone, an editor save among them, which the pages replay (slice 3b,
 // the lead's call on #182), the sweep of notes deleted for good, what it keeps and raises for an
 // entry it can't replay (Q6), and that storage it can't reach stops it with every entry left,
-// while any other stop at an entry holds back only that entry's note (slice 3b).
+// while any other stop at an entry holds back only that entry's note (slice 3b). The stops in a row
+// at an entry that isn't a journal record are counted too, and each drain says where it stopped
+// (`stuck`, #35 slice 4b-1, Q6).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { drainJournal } from '../../js/kernel/core/application/journal-drain.js';
 import { WORKER_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
-import { UnavailableError, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
+import { UnavailableError, rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
 import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
@@ -1023,6 +1025,110 @@ describe('the journal drain (#35 slice 3)', () => {
       ['c-no-owner', 'not-cloneable'],
       ['c-no-owner', 'not-cloneable'],
     ]);
+  });
+
+  it("counts the drains in a row that stop at an entry that isn't a journal record on a code it can retry, and raises it on the third, once, as a stop, saying the count on the way (#35 slice 4b-1, Q6)", async () => {
+    const w = world();
+    // No owner, so no record to mark: a damaged entry whose conflict record the disk can't take now
+    /** @type {Record<string, unknown>} */
+    const damaged = { ...entryOf(quickNote('c-no-owner', 'n-no-owner')) };
+    delete damaged.ownerSessionId;
+    await w.journal.put(/** @type {any} */ (damaged));
+    const client = {
+      /** @param {any} command */
+      execute: async command => (command.type === 'keepJournalEntry' ? TIMED_OUT : w.worker.execute(command)),
+      /** @param {any} query */
+      query: query => w.worker.query(query),
+    };
+    // What the worker remembers it raised and counted, for its life
+    const raised = new Set();
+    const counts = new Map();
+    const drains = [];
+    for (let run = 0; run < 3; run++) drains.push(await w.drain({ client, raised, stops: counts }));
+    // The third raises it, as a stop, since the entry is still there
+    assert.deepEqual(w.told, [['c-no-owner', 'timed-out']]);
+    assert.deepEqual(w.stops, ['c-no-owner']);
+    // Each drain says where it stopped, and how many in a row stopped there
+    assert.deepEqual(
+      drains.map(result => [result.status, result.stuck]),
+      [
+        ['stopped', { code: 'timed-out', count: 1 }],
+        ['stopped', { code: 'timed-out', count: 2 }],
+        ['stopped', { code: 'timed-out', count: 3 }],
+      ],
+    );
+    // Once: a fourth drain raises nothing more, and counts no further
+    const fourth = await w.drain({ client, raised, stops: counts });
+    assert.deepEqual(w.told, [['c-no-owner', 'timed-out']]);
+    assert.deepEqual(fourth.stuck, { code: 'timed-out' });
+    // Nothing is marked on an entry that isn't a record
+    assert.deepEqual(
+      w.journal.entries().map(entry => [entry.opId, entry.unreplayable]),
+      [['c-no-owner', undefined]],
+    );
+    // A later worker, with nothing remembered, counts from 1 again
+    const later = await w.drain({ client, raised: new Set(), stops: new Map() });
+    assert.deepEqual(later.stuck, { code: 'timed-out', count: 1 });
+    assert.equal(w.told.length, 1);
+  });
+
+  it("raises nothing for a stop it can retry at an entry that isn't a journal record when the next drain gets through (#35 slice 4b-1, Q6)", async () => {
+    const w = world();
+    /** @type {Record<string, unknown>} */
+    const damaged = { ...entryOf(quickNote('c-no-owner', 'n-no-owner')) };
+    delete damaged.ownerSessionId;
+    await w.journal.put(/** @type {any} */ (damaged));
+    let keeps = 0;
+    const client = {
+      /** @param {any} command */
+      execute: async command =>
+        command.type === 'keepJournalEntry' && ++keeps === 1 ? TIMED_OUT : w.worker.execute(command),
+      /** @param {any} query */
+      query: query => w.worker.query(query),
+    };
+    const raised = new Set();
+    const counts = new Map();
+    const first = await w.drain({ client, raised, stops: counts });
+    assert.deepEqual([first.status, first.left], ['stopped', 1]);
+    // The next drain keeps it as a conflict record, and it goes: told so once, and never as a stop
+    const second = await w.drain({ client, raised, stops: counts });
+    assert.deepEqual([second.status, second.kept, second.left, second.stuck], ['drained', 1, 0, null]);
+    assert.deepEqual(w.told, [['c-no-owner', 'invalid-payload']]);
+    assert.deepEqual(w.stops, []);
+  });
+
+  it("starts the count again once a drain gets past an entry that isn't a journal record, so only stops in a row raise it (#35 slice 4b-1, Q6)", async () => {
+    const w = world();
+    /** @type {Record<string, unknown>} */
+    const damaged = { ...entryOf(quickNote('c-no-owner', 'n-no-owner')) };
+    delete damaged.ownerSessionId;
+    await w.journal.put(/** @type {any} */ (damaged));
+    // The keep's answers, drain by drain: two stops, one the drain gets past with the entry left,
+    // as nowhere will take it, then two stops more
+    const answers = [TIMED_OUT, TIMED_OUT, rejected('validation', 'invalid-command'), TIMED_OUT, TIMED_OUT];
+    const client = {
+      /** @param {any} command */
+      execute: async command =>
+        command.type === 'keepJournalEntry' ? /** @type {any} */ (answers.shift()) : w.worker.execute(command),
+      /** @param {any} query */
+      query: query => w.worker.query(query),
+    };
+    const raised = new Set();
+    const counts = new Map();
+    const drains = [];
+    for (let run = 0; run < 5; run++) drains.push(await w.drain({ client, raised, stops: counts }));
+    assert.deepEqual(w.told, [], 'no three in a row');
+    assert.deepEqual(
+      drains.map(result => [result.status, result.left]),
+      [
+        ['stopped', 1],
+        ['stopped', 1],
+        ['drained', 1],
+        ['stopped', 1],
+        ['stopped', 1],
+      ],
+    );
+    assert.deepEqual(drains[3].stuck, { code: 'timed-out', count: 1 });
   });
 
   it('answers empty for an empty journal, and sends nothing', async () => {

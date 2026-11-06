@@ -636,6 +636,32 @@ describe('schema modules (#13, AC1)', () => {
     }
   });
 
+  it("system.coordinatorHealth may say the last stop its last drain made at an entry, by code, with how many drains in a row stopped there, and an answer without it still parses (#35 slice 4b-1, Q6)", () => {
+    const health = {
+      status: 'ready',
+      coordinatorId: 'c1',
+      startedAt: NOW,
+      commands: [],
+      oldestOrphanedEntryAt: null,
+      migration: null,
+    };
+    const { result } = moduleOf('system.coordinatorHealth');
+    /** @param {unknown} data */
+    const parses = data => v.safeParse(result, { kind: 'ready', asOf: NOW, data }).success;
+    assert.equal(parses({ ...health, stuck: { code: 'timed-out', count: 2 } }), true);
+    assert.equal(parses({ ...health, stuck: { code: 'quota' } }), true);
+    for (const stuck of [
+      { count: 2 },
+      { code: 'Disk full', count: 1 },
+      { code: 'timed-out', count: -1 },
+      // Never what an entry holds
+      { code: 'timed-out', count: 1, noteId: 'n1' },
+      { code: 'timed-out', text: 'Call the plumber' },
+    ]) {
+      assert.equal(parses({ ...health, stuck }), false, JSON.stringify(stuck));
+    }
+  });
+
   it('accept every answer the kernel gives the samples, both ways (#13, AC1)', async () => {
     const adapter = createMemoryAdapter();
     const runtime = { ids: testIds(), clock: testClock() };
