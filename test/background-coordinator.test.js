@@ -1184,3 +1184,36 @@ describe("an older build's page that keeps the upgrade blocked (#17 PR 1b)", () 
     }
   });
 });
+
+/** Popup's quick note, as its client sends it over the port */
+const QUICK_NOTE = Object.freeze({
+  type: 'createNote',
+  commandId: 'c-quick',
+  noteId: 'n-quick',
+  name: 'Quick',
+  blocks: [{ id: 'b-quick', type: 'text', content: 'A quick note' }],
+});
+
+/** A request frame for `payload` on `page`'s port, by its type */
+function requestOn(page, requestId, payload) {
+  page.send({ frame: 'request', requestId, operation: payload.type, version: 1, deadline: Date.now() + 10_000, payload });
+}
+
+/** Whether `worker`'s CanvasTabDB holds the note `id` */
+async function holdsNote(worker, id) {
+  return Object.values(recordsOf(await dumpDatabase(worker.indexedDB), 'canvases')).some((record) => record.id === id);
+}
+
+describe("Popup's commands over the port, in the worker (#35 slice 4b-2)", () => {
+  it("commits Popup's quick note in the worker: its createNote over the port answers committed, and the note is in CanvasTabDB (#35 slice 4b-2, rule 5)", async () => {
+    const worker = await loadBackground();
+    const page = pagePort('popup');
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('popup-quick');
+    requestOn(page, 'q1', QUICK_NOTE);
+    await worker.drain();
+    const answer = page.received.find((frame) => frame.requestId === 'q1');
+    assert.deepEqual(answer && [answer.frame, answer.result && answer.result.kind], ['response', 'committed'], JSON.stringify(answer));
+    assert.equal(await holdsNote(worker, 'n-quick'), true);
+  });
+});

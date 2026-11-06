@@ -1185,3 +1185,91 @@ describe("the worker journals the data transforms' stops, once per code, and the
     }
   });
 });
+
+/**
+ * A close-time draft of a note this profile doesn't hold, which the apply answers close-draft-gone:
+ * a commit that writes nothing, so it shows the command ran on a kernel that may run it
+ * @param {string} id
+ */
+const goneDraft = id => ({
+  v: 1,
+  id,
+  noteId: 'n-gone',
+  base: { revision: null, updatedAt: Date.now() - 1000, issued: [] },
+  at: Date.now(),
+  blocks: [legacyEnv.block('b-gone', 'n-gone', 0, 'Edited as the page closed', { updatedAt: Date.now() - 500 })],
+  deletedBlockIds: [],
+  preview: 'Edited as the page closed',
+  todoProgress: null,
+  linkedNames: [],
+});
+
+/**
+ * A note's quick-note command, as Popup sends it
+ * @param {string} id
+ */
+const quickNote = id => ({
+  type: 'createNote',
+  commandId: `c-${id}`,
+  noteId: id,
+  name: 'Quick',
+  blocks: [{ id: `b-${id}`, type: 'text', content: 'A quick note' }],
+});
+
+describe("a page's command on the worker, on a kernel of its surface (#35 slice 4b-2)", () => {
+  it("runs Popup's commands on a Popup kernel on the worker's adapter, refuses what the shared catalog doesn't grant Popup, and gives Side Panel a kernel of its own (#35 slice 4b-2, rule 5)", async () => {
+    const of = newProfile();
+    const worker = /** @type {any} */ (createWorkerClient(hostOf(of)));
+    const popup = { surface: 'popup' };
+    // Popup's apply commits, which the worker's own kernel isn't granted
+    const applied = await worker.execute(
+      { type: 'applyCloseDraft', commandId: 'c-apply', draft: goneDraft('1762444800000-popup') },
+      popup,
+    );
+    assert.deepEqual(
+      [applied.kind, applied.code],
+      ['committed', 'close-draft-gone'],
+      `Popup's apply runs on a Popup kernel: ${JSON.stringify(applied)}`,
+    );
+    // Its quick note commits, and an append the worker's own kernel runs is refused, with nothing written
+    assert.equal((await worker.execute(quickNote('n-popup'), popup)).kind, 'committed');
+    const appended = await worker.execute(
+      {
+        type: 'insertBlocks',
+        commandId: 'c-append',
+        noteId: 'n-popup',
+        blocks: [{ id: 'b-append', type: 'text', content: "Not Popup's to add" }],
+      },
+      popup,
+    );
+    assert.deepEqual(
+      [appended.kind, appended.reason, appended.code],
+      ['rejected', 'policy', 'not-on-surface'],
+      `Popup's append is refused on Popup's kernel: ${JSON.stringify(appended)}`,
+    );
+    assert.deepEqual(
+      (await recordsOf(of, 'elements')).filter(block => block.id === 'b-append'),
+      [],
+    );
+    // Side Panel's commands run on a kernel of its own: its apply commits, and its createNote, which
+    // Popup's kernel would take, is refused
+    const side = { surface: 'sidepanel' };
+    const sideApplied = await worker.execute(
+      { type: 'applyCloseDraft', commandId: 'c-side-apply', draft: goneDraft('1762444800000-side') },
+      side,
+    );
+    assert.equal(sideApplied.kind, 'committed', JSON.stringify(sideApplied));
+    const sideMade = await worker.execute(quickNote('n-side'), side);
+    assert.deepEqual(
+      [sideMade.kind, sideMade.reason, sideMade.code],
+      ['rejected', 'policy', 'not-on-surface'],
+      `Side Panel's createNote runs on Side Panel's kernel, not Popup's: ${JSON.stringify(sideMade)}`,
+    );
+    assert.deepEqual(
+      (await recordsOf(of, 'canvases')).filter(note => note.id === 'n-side'),
+      [],
+    );
+    // And with no surface, the worker's own capture runs on its own kernel, as before
+    assert.equal((await capture(worker, 'own')).kind, 'committed');
+  });
+});

@@ -25,7 +25,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { reachGraph } from './import-graph.mjs';
+import { dynamicImportsIn, importGraph, reachGraph } from './import-graph.mjs';
 
 // Not named `require`, so the kernel's typecheck doesn't follow it into the build's scripts
 const requireCommonJs = createRequire(import.meta.url);
@@ -447,5 +447,17 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
       ),
       computed.join('\n'),
     );
+  });
+});
+
+describe("the worker's applier (#35 slice 4b-2, rule 6)", () => {
+  it("holds the close-time drafts' applier in the worker's graph by static imports alone, with no import() anywhere in that graph, since a service worker can't import() (#35 slice 4b-2, rule 6)", () => {
+    const manifest = JSON.parse(defaultRead(path.join(ROOT, 'manifest.json')));
+    const graph = importGraph(path.join(ROOT, manifest.background.service_worker));
+    assert.ok(
+      [...graph].map(relative).includes('js/kernel/core/application/close-drafts.js'),
+      "the worker's graph holds the applier Popup's applyCloseDraft runs on",
+    );
+    assert.deepEqual(dynamicImportsIn(graph).map(relative), []);
   });
 });

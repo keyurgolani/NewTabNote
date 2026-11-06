@@ -15,7 +15,9 @@ import ts from 'typescript';
 import { PORT_NAME } from '../../js/kernel/adapters/messaging/runtime-port.js';
 import { installWorkerRouter } from '../../js/kernel/composition/background.js';
 import { coordinatorHandlers } from '../../js/kernel/composition/coordinator.js';
+import * as coordination from '../../js/kernel/composition/coordinator.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
+import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
 import { WORKER_ONLY_COMMANDS, WORKER_ONLY_QUERIES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { PAGE_FILES, createChromeFake } from './chrome-fake.mjs';
@@ -212,6 +214,73 @@ describe('the worker\'s router (#13, "Topology")', () => {
       'ready',
       health,
     ]);
+  });
+
+  it("hands Popup's createNote and applyCloseDraft to the coordinator's queue as Popup, each with its request's own begin, and refuses at the router a page's command the shared catalog doesn't grant that page (#35 slice 4b-2, rule 5)", async () => {
+    /** @type {Array<[unknown, unknown, unknown]>} each command the queue got: its type, its surface, and what its begin() said then */
+    const queued = [];
+    /** @type {Array<() => boolean>} */
+    const begins = [];
+    const coordinator = {
+      /** @param {any} command @param {any} [dispatch] */
+      enqueue: async (command, dispatch = {}) => {
+        begins.push(dispatch.begin);
+        queued.push([command.type, dispatch.surface, typeof dispatch.begin === 'function' && dispatch.begin()]);
+        return committed(command.type === 'createNote' ? 'note-created' : 'close-draft-gone', []);
+      },
+    };
+    const handlers = /** @type {any} */ (coordination).pageCommandHandlers?.(() => coordinator) ?? {};
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, handlers });
+    });
+    const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    const draft = { v: 1, id: 'draft-1', noteId: 'n1', at: 1, base: {}, blocks: [{ id: 'b1' }], deletedBlockIds: [] };
+    port.postMessage(encode(hello('popup', 's1')));
+    port.postMessage(
+      encode(request('r1', { type: 'createNote', commandId: 'c1', noteId: 'n1', name: 'Quick', blocks: [] }, soon())),
+    );
+    port.postMessage(encode(request('r2', { type: 'applyCloseDraft', commandId: 'c2', draft }, soon())));
+    // Side Panel's createNote, which the shared catalog doesn't grant it, is refused at the router
+    const side = fake.page('sidepanel').chrome.runtime.connect({ name: PORT_NAME });
+    side.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    side.postMessage(encode(hello('sidepanel', 's2')));
+    side.postMessage(
+      encode(request('r3', { type: 'createNote', commandId: 'c3', noteId: 'n2', name: 'Side', blocks: [] }, soon())),
+    );
+    await settle();
+    await settle();
+    assert.deepEqual(
+      frames
+        .filter(frame => frame.frame === 'response' || frame.frame === 'error')
+        .map(frame => [frame.requestId, frame.frame === 'response' ? frame.result.kind : frame.code])
+        .sort(([a], [b]) => String(a).localeCompare(String(b))),
+      [
+        ['r1', 'committed'],
+        ['r2', 'committed'],
+        ['r3', 'forbidden-for-surface'],
+      ],
+    );
+    assert.deepEqual(
+      queued,
+      [
+        ['createNote', 'popup', true],
+        ['applyCloseDraft', 'popup', true],
+      ],
+      `each reaches the queue as Popup, with its request's begin: ${JSON.stringify(queued)}`,
+    );
+    // Each begin is its request's own: once the router has answered the request, it answers false
+    assert.deepEqual(
+      begins.map(begin => begin()),
+      [false, false],
+    );
   });
 
   it("serves no page what only the worker runs, even with a handler for each (the catalog split's sixth rule)", async () => {
