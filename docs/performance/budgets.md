@@ -76,7 +76,7 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 | `budget/forbidden` | a module or file a gated category names is on an entry's start path |
 | `budget/worker-only` | a module only the service worker runs (`WORKER_ONLY_MODULES` in `scripts/build/budgets.js`) is on a page's start. The list is the code #35 slice 3c moved off the pages' start, where a run-time filter had kept it in the bundle |
 | `budget/lazy-only` | a module that loads only at its first use (`LAZY_ONLY_MODULES` in `scripts/build/budgets.js`) is on a page's start. The list is the block menus' roles and keys, which #14 slice 4 loads at a menu's first open |
-| `budget/dependency` | an entry's graph holds a package its row doesn't allow, or its row allows one the graph no longer holds |
+| `budget/dependency` | an entry's graph holds a package its row doesn't allow, its row allows one the graph no longer holds, or its start holds one its row allows only in its lazy chunks and workers (`lazyDependencies`, as Popup's `valibot` is, in its send chunk alone) |
 | `budget/entry` | a page or the service worker the build has with no row, a row for an entry it doesn't have that isn't `planned`, a `planned` row for one it has, a `startChunks` or `lazyChunks` name the build has no loader chunk for or the page's start doesn't `import()`, or a chunk the page's start `import()`s that its row names in neither |
 | `budget/file` | `build/budgets.json` is missing, doesn't parse, or doesn't read as a budget file: an entry or forbidden category of the wrong shape, a `start` row that isn't `html`, `js`, `css` or `fonts`, or a limit that isn't whole bytes |
 

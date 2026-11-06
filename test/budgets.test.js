@@ -504,15 +504,21 @@ describe('the budget gate', () => {
 
   it('refuses a budget file it can\'t read as one', () => {
     assert.deepEqual(fileProblems({}).map(({ message }) => message), ['has no entries']);
-    const bad = budgetsFor({ popup: { page: 'popup.html', reason: '', start: { js: { raw: 1.5, gzip: 2 }, jss: { raw: 1, gzip: 1 } }, forbidden: ['nothing'], startChunks: 'workspace' } });
+    const bad = budgetsFor({ popup: { page: 'popup.html', reason: '', start: { js: { raw: 1.5, gzip: 2 }, jss: { raw: 1, gzip: 1 } }, forbidden: ['nothing'], startChunks: 'workspace', lazyDependencies: 'valibot' } });
     bad.forbidden.trust = { about: 'the trust code', paths: 'js/trust/**' };
     assert.deepEqual(fileProblems(bad).map(({ message }) => message), [
       "forbidden category trust's paths isn't a list of paths",
       "entry popup's startChunks isn't a list of names",
+      "entry popup's lazyDependencies isn't a list of names",
       'entry popup has no reason',
       "entry popup forbids nothing, which isn't a category",
       "entry popup's js row isn't whole numbers of bytes, raw and gzip",
       "entry popup's start has a jss row, which isn't one of html, js, css, fonts",
+    ]);
+    // A package allowed lazy only is allowed nowhere else
+    const popup = budgetsFor().entries.popup;
+    assert.deepEqual(fileProblems(budgetsFor({ popup: { ...popup, dependencies: ['valibot'], lazyDependencies: ['valibot'] } })).map(({ message }) => message), [
+      'entry popup allows valibot both anywhere and lazy only',
     ]);
   });
 });

@@ -29,7 +29,8 @@
  *   budget/lazy-only   a module that loads only at its first use (LAZY_ONLY_MODULES) on a
  *                      page's or a loader chunk's start, by the module and the entry
  *   budget/dependency  a third-party package in the entry's graph (start, lazy, workers) that
- *                      its row doesn't allow, or an allowed one it no longer has
+ *                      its row doesn't allow, an allowed one it no longer has, or one its row
+ *                      allows lazy only (lazyDependencies) on its start
  *   budget/file        build/budgets.json doesn't read as a budget file
  * Timing and heap aren't the build's: npm run perf:probe measures them against the frozen
  * 1.4.0 package with the rows here (docs/performance/budgets.md). Budgets hold for production
@@ -83,6 +84,8 @@ const LAZY_ONLY_MODULES = Object.freeze([
  * @property {Partial<Record<StartType, Limit | null>>} [start] - null: no approved number yet
  * @property {string[]} [forbidden] - categories gated on the start path
  * @property {string[]} [dependencies] - third-party packages its graph may hold
+ * @property {string[]} [lazyDependencies] - third-party packages its lazy chunks and workers may
+ *   hold, and its start may not: Popup's valibot, in its send chunk alone (#35 slice 4b-2, Q8)
  * @property {string} reason
  */
 
@@ -410,12 +413,15 @@ function fileProblems(budgets) {
     if (!category || !Array.isArray(category.paths) || !category.paths.every((/** @type {unknown} */ glob) => typeof glob === 'string')) fail(`forbidden category ${name}'s paths isn't a list of paths`);
   }
   for (const [name, entry] of Object.entries(/** @type {Record<string, any>} */ (budgets.entries))) {
-    for (const key of ['startChunks', 'lazyChunks', 'forbidden', 'dependencies']) {
+    for (const key of ['startChunks', 'lazyChunks', 'forbidden', 'dependencies', 'lazyDependencies']) {
       if (entry[key] !== undefined && (!Array.isArray(entry[key]) || !entry[key].every((/** @type {unknown} */ item) => typeof item === 'string'))) fail(`entry ${name}'s ${key} isn't a list of names`);
     }
     if (Boolean(entry.page) === Boolean(entry.chunk) && name !== 'background') fail(`entry ${name} names neither a page nor a chunk, or both`);
     if (typeof entry.reason !== 'string' || entry.reason === '') fail(`entry ${name} has no reason`);
     for (const category of Array.isArray(entry.forbidden) ? entry.forbidden : []) if (!categories[category]) fail(`entry ${name} forbids ${category}, which isn't a category`);
+    for (const name2 of Array.isArray(entry.lazyDependencies) ? entry.lazyDependencies : []) {
+      if (Array.isArray(entry.dependencies) && entry.dependencies.includes(name2)) fail(`entry ${name} allows ${name2} both anywhere and lazy only`);
+    }
     for (const [type, limit] of Object.entries(entry.start || {})) {
       if (!START_TYPES.includes(type)) {
         fail(`entry ${name}'s start has a ${type} row, which isn't one of ${START_TYPES.join(', ')}`);
@@ -502,12 +508,15 @@ function checkBudgets(graphs, budgets, { loaderChunks, files }) {
       }
     }
     const allowed = new Set(entry.dependencies || []);
+    // Allowed in its lazy chunks and workers alone: on its start, it fails
+    const lazyOnly = new Set(entry.lazyDependencies || []);
     const held = new Set([...graph.start.packages, ...graph.lazy.packages, ...graph.workers.packages]);
     for (const name2 of [...held].sort()) {
-      if (!allowed.has(name2)) problems.push(problem('budget/dependency', name, `its graph holds ${name2}, which its row doesn't allow`));
+      if (lazyOnly.has(name2) && graph.start.packages.includes(name2)) problems.push(problem('budget/dependency', name, `its start holds ${name2}, which its row allows lazy only`));
+      else if (!allowed.has(name2) && !lazyOnly.has(name2)) problems.push(problem('budget/dependency', name, `its graph holds ${name2}, which its row doesn't allow`));
     }
-    for (const name2 of [...allowed].sort()) {
-      if (!held.has(name2)) problems.push(problem('budget/dependency', name, `its row allows ${name2}, which its graph no longer holds: take it out`));
+    for (const name2 of [...allowed, ...lazyOnly].sort()) {
+      if (!held.has(name2)) problems.push(problem('budget/dependency', name, `its row allows ${name2}${lazyOnly.has(name2) ? ' lazy only' : ''}, which its graph no longer holds: take it out`));
     }
   }
   return problems;
