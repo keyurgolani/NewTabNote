@@ -588,25 +588,31 @@ class BlockEditor {
     // with nothing typed into it writes no draft (#33)
     this._rememberLoaded(blocksData, openedRevision, openedSeq);
 
-    // Scroll to top of editor
-    // Set editor width
-    const editorContainer = this.root.querySelector('.editor-container') || this.doc.getElementById('editor-container');
+    // Scroll to top of editor: its own pane, which is its root and scrolls (#197). An editor made
+    // with no root uses the main pane, as before
+    const editorContainer = this.root === this.doc ? this.doc.getElementById('editor-container') : this.root;
 
     // Focus first block, then ensure scroll is at top. Not while focus is in an
     // open modal, menu, or dialog: it stays there, as on the onboarding
     // walkthrough's button over the welcome note, so keys typed there don't
-    // edit the note
-    setTimeout(() => {
-      const firstContent = this.container.querySelector('.block-content');
-      if (firstContent && !this._focusInOverlay()) {
-        firstContent.focus();
-        this.placeCaretAtEnd(firstContent);
+    // edit the note. Kept as a promise, so the tab bar's + can focus the title once
+    // this has run (#197)
+    this.loadFocus = new Promise(resolve => setTimeout(() => {
+      // It settles even if the focus throws, so the tab bar's + never waits on it forever
+      try {
+        const firstContent = this.container.querySelector('.block-content');
+        if (firstContent && !this._focusInOverlay()) {
+          firstContent.focus();
+          this.placeCaretAtEnd(firstContent);
+        }
+        // Reset scroll after focus (focus can cause scroll)
+        if (editorContainer) {
+          editorContainer.scrollTop = 0;
+        }
+      } finally {
+        resolve();
       }
-      // Reset scroll after focus (focus can cause scroll)
-      if (editorContainer) {
-        editorContainer.scrollTop = 0;
-      }
-    }, 50);
+    }, 50));
 
     this._startSnapshotInterval();
 

@@ -518,7 +518,7 @@ class AIChatController {
       contextResult = this.buildContextWindow(blocks, cursorIndex);
       noteContent = contextResult.content;
     } else {
-      noteContent = this.getNoteContent();
+      noteContent = this.getNoteContent(editor?.container);
       contextResult = null;
     }
 
@@ -1477,7 +1477,7 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (sendBtn) sendBtn.disabled = true;
 
     try {
-      const noteContent = this.getNoteContent();
+      const noteContent = this.getNoteContent(editor.container);
 
       if (!noteContent || noteContent.trim().length < 20) {
         this.addChatMessage('Not enough content in this note to extract insights. Please add more content first.', 'assistant');
@@ -3425,8 +3425,14 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
 
   // ─── Utility methods ───
 
-  getNoteContent() {
-    const blocks = document.querySelectorAll('#blocks-container .block');
+  /**
+   * The text of the blocks in `root`, the asking editor's blocks container, so it's that
+   * editor's own note, the right pane's when that pane is active (#197). None with no container
+   * @param {Element|null|undefined} root
+   * @returns {string}
+   */
+  getNoteContent(root) {
+    const blocks = root ? root.querySelectorAll('.block') : [];
     const contentParts = [];
 
     blocks.forEach((block) => {
