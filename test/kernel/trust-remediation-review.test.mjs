@@ -19,6 +19,7 @@ import { webcrypto } from 'node:crypto';
 
 import * as v from '../../js/lib/valibot/index.mjs';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { createSalvageReader } from '../../js/kernel/adapters/indexeddb/salvage-reader.js';
 import { result as runResult } from '../../js/trust/core/operations/recovery-run.js';
 import { REMEDIATIONS } from '../../js/trust/core/remediation/catalog.js';
@@ -565,7 +566,11 @@ describe('#82 review 11: rebuild-index indexes what the app indexes, and verifie
     // #17 PR 1b: only the migration runner upgrades a database, after its point, so it's at this
     // build's version before #17's adapter opens it versioned
     assert.equal((await run(of)).status, 'migrated');
-    const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local });
+    const adapter = createIndexedDbAdapter({
+      indexedDB: of.real,
+      settings: of.chrome.api.storage.local,
+      steps: pendingStructural,
+    });
     await adapter.open();
     const before = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(of.real), 'search_index');
     const { pipeline } = await remediationCenter({

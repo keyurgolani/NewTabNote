@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { createRecoveryReader } from '../../js/kernel/adapters/indexeddb/health.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { MIGRATE_LOCK } from '../../js/kernel/adapters/indexeddb/migrate.js';
@@ -111,6 +112,7 @@ async function deletedProfile({ blocks = 3, deleteIt = true } = {}) {
  */
 async function deleteNote(of, noteId) {
   const adapter = createIndexedDbAdapter({
+    steps: pendingStructural,
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
@@ -589,6 +591,7 @@ describe('which points a sweep reads, and a stop it backs off on (#17 PR 2b, rev
    */
   async function sendAt(of, at, commands) {
     const adapter = createIndexedDbAdapter({
+      steps: pendingStructural,
       indexedDB: of.faults.factory,
       settings: of.chrome.api.storage.local,
       keyRange: KeyRange,

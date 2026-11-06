@@ -30,7 +30,7 @@ import {
   listPoints,
   openRecovery,
 } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { LEGACY_STORE_NAMES } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { LEGACY_STORE_NAMES, pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { DB_NAME, DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { TRANSFORM_RETRY_AFTER_MS, TRANSFORM_STOP_KEY } from '../../js/kernel/adapters/indexeddb/transforms.js';
@@ -721,6 +721,7 @@ describe('the worker purges what was deleted for good from the recovery points (
   const deleteForGood = async (of, index = 0) => {
     const noteId = (await recordsOf(of, 'canvases')).map(note => note.id).sort()[index];
     const adapter = createIndexedDbAdapter({
+      steps: pendingStructural,
       indexedDB: of.real,
       settings: of.chrome.api.storage.local,
       keyRange: KeyRange,

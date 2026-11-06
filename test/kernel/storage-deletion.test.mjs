@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
 import { purgeRecoveryPoints } from '../../js/kernel/adapters/indexeddb/purge.js';
 import {
@@ -143,6 +144,7 @@ async function doomedProfile() {
  */
 async function onIndexedDb(of) {
   const adapter = createIndexedDbAdapter({
+    steps: pendingStructural,
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,

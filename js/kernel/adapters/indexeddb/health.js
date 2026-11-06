@@ -22,7 +22,7 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { DEFAULT_LIMITS, POINTS_LOCK, listPoints, openRecovery, verifyPoint } from './recovery-points.js';
-import { LATEST_STRUCTURAL } from './registry.js';
+import { LATEST_STRUCTURAL } from './registry-names.js';
 import { DB_NAME } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 

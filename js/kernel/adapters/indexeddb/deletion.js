@@ -12,7 +12,7 @@
  */
 
 import { PURGE_PENDING } from '../../core/domain/tombstone.js';
-import { TOMBSTONES_STORE } from './registry.js';
+import { TOMBSTONES_STORE } from './registry-names.js';
 import { committed, result } from './requests.js';
 
 /** @typedef {import('../../core/domain/tombstone.js').TombstoneRecord} TombstoneRecord */

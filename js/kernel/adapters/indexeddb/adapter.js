@@ -95,22 +95,20 @@ import { createAutoBackup, exportFile, exportObject, prepareImport, readExport }
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
-import { TRANSFORM_DAILY_KEY, answerOf } from './daily-answer.js';
 import { finishTombstones } from './deletion.js';
 import { failureOf, isTransient, nameOf, settingsFailureOf } from './failures.js';
 import { createIndexedDbLedger, ledgerRow, replayFrom } from './ledger.js';
+import { present, readView, storeHandle, withAnswer } from './reads.js';
 import { copyMissingStores } from './recovery-copies.js';
 import {
   CHANGES_KEY,
   CHANGES_STORE,
   CONFLICTS_STORE,
-  DAILY_INDEX_STORE,
   META_STORE,
   OPERATIONS_STORE,
   TOMBSTONES_STORE,
-  pendingStructural,
-} from './registry.js';
-import { abort, endOf, indexValue, result } from './requests.js';
+} from './registry-names.js';
+import { abort, endOf, result } from './requests.js';
 import { DERIVED_STORES, IDB_STORES } from './schema.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY, settingKey } from './settings.js';
 import { createVersionTracker } from './versions.js';
@@ -160,6 +158,11 @@ import { createVersionTracker } from './versions.js';
  *   read-only integrity check and the ledger's retention. Without them, as on every page, a
  *   check answers `integrity-check-needs-worker` and a sweep rejects with
  *   `ledger-sweep-needs-worker`, and no page's start holds either one's code.
+ * @property {import('./connection.js').Steps | null} [steps]
+ *   The registry's structural steps (registry.js pendingStructural), which make a new database
+ *   in a versioned open, and which only the worker's root passes, as it passes `workerTasks`.
+ *   Without them, as on every page, a versioned open makes no database and upgrades none
+ *   (connection.js), and no page's start holds the steps' code.
  * @property {boolean} [maintains]
  *   An `existing` open runs startup maintenance too: the new tab's (#17 PR 4a), which opens the
  *   database as it is and still writes a new profile's first-run settings. Popup and Side Panel
@@ -207,29 +210,6 @@ import { createVersionTracker } from './versions.js';
 const STRICT = Object.freeze({ durability: 'strict' });
 
 /** @typedef {import('./requests.js').Ending} Ending */
-
-/**
- * The IndexedDB stores among `stores` the database has, once each
- * @param {IDBDatabase} db
- * @param {readonly StoreName[]} stores
- * @returns {string[]}
- */
-function present(db, stores) {
-  const names = new Set(stores.filter(store => Object.hasOwn(IDB_STORES, store)).map(store => IDB_STORES[store]));
-  return [...names].filter(name => db.objectStoreNames.contains(name));
-}
-
-/**
- * `names` with `meta` when they hold the daily index and the database has `meta`, so a Daily
- * Note lookup reads logical 3's kept answer in its own transaction (daily-answer.js, F10)
- * @param {IDBDatabase} db
- * @param {string[]} names
- * @returns {string[]}
- */
-function withAnswer(db, names) {
-  if (!names.includes(DAILY_INDEX_STORE) || names.includes(META_STORE)) return names;
-  return db.objectStoreNames.contains(META_STORE) ? [...names, META_STORE] : names;
-}
 
 /**
  * The bookkeeping stores a database has: all of step 10's on a database at version 10, and
@@ -304,16 +284,7 @@ async function keptRow(db, work, commands) {
  * @returns {Tx}
  */
 function view(db, tx, scope, writable, tracker) {
-  /**
-   * @param {StoreName} store
-   * @returns {IDBObjectStore | null}
-   */
-  const handle = store => {
-    if (!Object.hasOwn(IDB_STORES, store)) throw new UnavailableError('adapter', 'unknown-store', false);
-    if (!scope.includes(store)) throw new UnavailableError('adapter', 'store-outside-transaction', false);
-    const name = IDB_STORES[store];
-    return tx && db.objectStoreNames.contains(name) ? tx.objectStore(name) : null;
-  };
+  const handle = storeHandle(db, tx, scope);
   /**
    * @param {StoreName} store
    * @returns {IDBObjectStore | null}
@@ -322,80 +293,8 @@ function view(db, tx, scope, writable, tracker) {
     if (!writable) throw new UnavailableError('adapter', 'write-in-readonly-transaction', false);
     return handle(store);
   };
-  /**
-   * Tells the tracker what a read found of a note, a block, or a folder, for its versions and
-   * the change log's ops (versions.js)
-   * @param {StoreName} store
-   * @param {IDBValidKey} key
-   * @param {Record<string, unknown> | undefined} record
-   */
-  const saw = (store, key, record) => {
-    if (store === 'notes') tracker.saw(key, record);
-    else if (store === 'blocks') tracker.sawBlock(key, record);
-    else if (store === 'folders') tracker.sawFolder(key, record);
-  };
-  /**
-   * @param {StoreName} store
-   * @param {Array<Record<string, unknown>>} records
-   */
-  const sawAll = (store, records) => {
-    for (const record of records) saw(store, /** @type {string} */ (record.id), record);
-    return records;
-  };
   return /** @type {Tx} */ ({
-    get: async (store, key) => {
-      const objectStore = handle(store);
-      const record = objectStore ? await result(objectStore.get(key)) : undefined;
-      saw(store, key, record);
-      return record;
-    },
-    getAll: async store => {
-      const objectStore = handle(store);
-      return sawAll(store, objectStore ? await result(objectStore.getAll()) : []);
-    },
-    getAllKeys: async store => {
-      const objectStore = handle(store);
-      return objectStore ? /** @type {string[]} */ (await result(objectStore.getAllKeys())) : [];
-    },
-    getKey: async (store, key) => {
-      const objectStore = handle(store);
-      const stored = objectStore
-        ? /** @type {string | undefined} */ (await result(objectStore.getKey(key)))
-        : undefined;
-      // A key with no record tells the tracker what a read that finds none does, so a write of
-      // it looks nothing up (R131). A write of it earlier in the transaction looked it up first,
-      // and IndexedDB answers in order, so that answer is the one kept.
-      if (stored === undefined) saw(store, key, undefined);
-      return stored;
-    },
-    getAllByIndex: async (store, index, value) => {
-      const objectStore = handle(store);
-      const key = indexValue(value);
-      if (!objectStore) return [];
-      const read = result(objectStore.index(index).getAll(key));
-      // Every block of the note, as it was before any write after this read
-      if (store === 'blocks' && index === 'canvasId') tracker.coverBlocks(key, read);
-      return sawAll(store, await read);
-    },
-    getKeysByIndex: async (store, index, value) => {
-      const objectStore = handle(store);
-      const key = indexValue(value);
-      return objectStore ? result(objectStore.index(index).getAllKeys(key)) : [];
-    },
-    revision: (store, key) => {
-      handle(store);
-      return store === 'notes' ? tracker.versions(key)?.revision : undefined;
-    },
-    versions: (store, key) => {
-      handle(store);
-      return store === 'notes' ? tracker.versions(key) : undefined;
-    },
-    has: store => handle(store) !== null,
-    // Logical 3's kept answer, from `meta`, which a transaction over the daily index spans
-    dailyAnswer: async () =>
-      tx && tx.objectStoreNames.contains(META_STORE)
-        ? answerOf(await result(tx.objectStore(META_STORE).get(TRANSFORM_DAILY_KEY)))
-        : null,
+    ...readView(db, tx, scope, tracker),
     put: (store, record) => {
       const objectStore = writing(store);
       if (!objectStore) {
@@ -536,6 +435,7 @@ export function createIndexedDbAdapter({
   clock = systemClock,
   keyRange,
   commands = COMMANDS,
+  steps = null,
 }) {
   const connection = createConnection({
     indexedDB,
@@ -544,12 +444,12 @@ export function createIndexedDbAdapter({
     requireCore,
     awaitUpgrade,
     beforeOpen: copiesMissingStores ? () => copyMissingStores({ indexedDB, settings, clock, locks }) : null,
-    // The registry's steps, which make a new database in a versioned open: only this adapter
-    // hands them in (#35 slice 4b-0)
-    steps: pendingStructural,
+    // The registry's steps, which only the worker's adapter is handed (#35 slice 4b-0b)
+    steps,
   });
   const database = () => connection.database();
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * What a failure to start a transaction means: the connection closed under it (another
    * context's upgrade, or Chrome), or its own failure. On a connection this adapter adopted, an
@@ -565,6 +465,7 @@ export function createIndexedDbAdapter({
     return failureOf(error);
   };
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * Whether the connection is gone, or going. Chrome's forced close (the database deleted, or
    * its storage failing) reaches the page only after Chrome has aborted each transaction open on
@@ -591,6 +492,7 @@ export function createIndexedDbAdapter({
     return false;
   };
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * Whether IndexedDB failed it: its failures are DOMExceptions, and chrome.storage's, and this
    * adapter's own, aren't
@@ -598,6 +500,7 @@ export function createIndexedDbAdapter({
    */
   const fromIndexedDb = error => typeof DOMException === 'function' && error instanceof DOMException;
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * What a call that failed in flight answers: for an IndexedDB failure on a connection that's
    * gone or going, reload-required, as every call after it answers (connection.js), and
@@ -619,6 +522,7 @@ export function createIndexedDbAdapter({
   const failedRun = (cause, write) =>
     fromIndexedDb(cause) && going() ? answered(unavailable('storage', 'reload-required', false)) : failed(cause, write);
 
+  // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
   /**
    * The values IndexedDB's `settings` store holds for `keys`, records of `{key, value}`, as
    * Popup has read them since 1.4.x (#12 slice 4a; #4 moves Popup to the setting the new tab
@@ -1053,6 +957,7 @@ export function createIndexedDbAdapter({
       );
     },
 
+    // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
     async read(stores, body) {
       for (const store of stores) {
         if (!Object.hasOwn(IDB_STORES, store)) throw new UnavailableError('adapter', 'unknown-store', false);
@@ -1088,6 +993,7 @@ export function createIndexedDbAdapter({
       return /** @type {import('../../core/ports/repository.js').ExportData} */ (data);
     },
 
+    // reader.js keeps a copy of this, its twin, which storage-reader.test.mjs holds to one answer.
     async readSettings(area, keys) {
       if (area === 'idbSettings') return readIdbSettings(keys);
       const storageKeys = keys.map(key => settingKey(area, key));

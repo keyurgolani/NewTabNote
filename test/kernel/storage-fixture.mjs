@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 
 import { IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { WORKER_TASKS } from '../../js/kernel/adapters/indexeddb/worker-tasks.js';
 import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -55,9 +56,10 @@ export function adapterOn(of, options = {}) {
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
     // Its ledger keys every command a test sends, the service worker's own too, and it runs the
-    // worker's own storage tasks, as the worker's root passes them
+    // worker's own storage tasks and takes the registry's steps, as the worker's root passes them
     commands: WORKER_COMMANDS,
     workerTasks: WORKER_TASKS,
+    steps: pendingStructural,
     ...options,
   });
   of.adapters.push(adapter);

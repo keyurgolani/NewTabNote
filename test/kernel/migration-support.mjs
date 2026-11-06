@@ -11,7 +11,7 @@ import { webcrypto } from 'node:crypto';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { startMigrations } from '../../js/kernel/adapters/indexeddb/migrate.js';
 import { purgeRecoveryPoints } from '../../js/kernel/adapters/indexeddb/purge.js';
-import { LATEST_STRUCTURAL } from '../../js/kernel/adapters/indexeddb/registry.js';
+import { LATEST_STRUCTURAL, pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { runTransforms } from '../../js/kernel/adapters/indexeddb/transforms.js';
 import { catalogFor, createKernel } from './test-kernel.mjs';
 import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
@@ -147,6 +147,7 @@ export function transform(of, options = {}) {
  */
 export async function writeHistory(of) {
   const adapter = createIndexedDbAdapter({
+    steps: pendingStructural,
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,
@@ -219,6 +220,7 @@ export const DELETED_AT = NOW + 60_000;
  */
 export async function deleteAndPurge(of) {
   const adapter = createIndexedDbAdapter({
+    steps: pendingStructural,
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     keyRange: KeyRange,

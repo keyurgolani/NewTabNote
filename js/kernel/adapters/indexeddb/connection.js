@@ -114,9 +114,10 @@ const LEGACY_STORES = Object.freeze(Object.keys(STORE_SCHEMAS));
  *   rejects, the open goes on.
  * @property {Steps | null} [steps]
  *   The registry's pending structural steps (registry.js pendingStructural), which a
- *   `versioned` open makes a new database through. Only the full adapter hands them in (#35
- *   slice 4b-0), so a context that only reads holds nothing that writes. A `versioned` open
- *   without them makes no database: it aborts the versionchange, as an `existing` open does.
+ *   `versioned` open makes a new database through. Only the worker's adapter has them, from its
+ *   root (#35 slices 4b-0 and 4b-0b), so a context that only reads holds nothing that writes. A
+ *   `versioned` open without them makes no database: it aborts the versionchange, as an
+ *   `existing` open does.
  */
 
 /**
@@ -251,7 +252,7 @@ export function createConnection({
       let coreMissing = false;
       // A database below this build's version, which only the migration runner upgrades
       let needsRunner = false;
-      // No database, and no steps to make one with: only the full adapter hands them in
+      // No database, and no steps to make one with: only the worker's adapter has them
       let noSteps = false;
       request.onupgradeneeded = event => {
         // An existing open makes no database, and changes none

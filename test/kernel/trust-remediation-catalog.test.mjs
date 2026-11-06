@@ -11,6 +11,7 @@ import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { createRepairPoints } from '../../js/kernel/adapters/indexeddb/repair-points.js';
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import {
@@ -67,7 +68,11 @@ async function profileCenter(id, { prepare, hooks } = {}) {
   assert.equal((await run(of)).status, 'migrated');
   const clock = manualClock();
   const locks = runLocks();
-  const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local });
+  const adapter = createIndexedDbAdapter({
+    indexedDB: of.real,
+    settings: of.chrome.api.storage.local,
+    steps: pendingStructural,
+  });
   await adapter.open();
   const recoveryPoints = createRepairPoints({
     indexedDB: of.real,
@@ -270,7 +275,11 @@ describe('recover-orphans: "Recover N blocks into a new Inbox note" (#20, refine
     // build's version before #17's adapter opens it versioned
     assert.equal((await run(of)).status, 'migrated');
     const before = await legacyEnv.dumpDatabase(of.real);
-    const adapter = createIndexedDbAdapter({ indexedDB: of.real, settings: of.chrome.api.storage.local });
+    const adapter = createIndexedDbAdapter({
+      indexedDB: of.real,
+      settings: of.chrome.api.storage.local,
+      steps: pendingStructural,
+    });
     await adapter.open();
     const tight = await remediationCenter({
       contributions: /** @type {any} */ (REMEDIATIONS),

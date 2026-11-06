@@ -180,6 +180,8 @@ export const HELPERS = Object.freeze({
     'js/kernel/adapters/indexeddb/changes.js',
     'js/kernel/adapters/indexeddb/ledger.js',
   ],
+  // #35 slice 4b-0b: the read half of #17's adapter's view of a transaction
+  'js/kernel/adapters/indexeddb/reads.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/recovery-copies.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/requests.js': [
     'js/kernel/adapters/indexeddb/adapter.js',
@@ -257,6 +259,10 @@ export const UNSHARED = Object.freeze({
   'js/kernel/adapters/indexeddb/registry-names.js': {
     implements: "#17's registry's store names, shapes, versions and transform plan",
     tests: 'test/kernel/registry-names.test.mjs',
+  },
+  'js/kernel/adapters/indexeddb/reader.js': {
+    implements: "#17's read-only reader (IndexedDbReader): the read half of #17's adapter, over CanvasTabDB",
+    tests: 'test/kernel/storage-reader.test.mjs',
   },
   'js/kernel/adapters/indexeddb/shapes.js': {
     implements: "#17's shape detection for CanvasTabDB",

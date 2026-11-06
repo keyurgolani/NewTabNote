@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { faultyFactory } from './storage-faults.mjs';
 import { KeyRange, closeAll, kernelOn, profile } from './storage-fixture.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';
@@ -38,6 +39,7 @@ async function twoTabs() {
   /** @param {Faults} faults */
   const adapterOver = faults => {
     const adapter = createIndexedDbAdapter({
+      steps: pendingStructural,
       indexedDB: faults.factory,
       settings: of.chrome.api.storage.local,
       keyRange: KeyRange,
