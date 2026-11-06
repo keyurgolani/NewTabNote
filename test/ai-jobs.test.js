@@ -743,6 +743,33 @@ describe('a committed title or insights show in every open editor that holds the
     // [the main pane's sections, B's or not; its placeholders; the right pane's placeholders]
     assert.deepEqual([sectionsOfB(main), placeholders(main), placeholders(right)], [[true], 0, 1]);
   });
+
+  it('when the provider fails, "Extracting..." leaves each editor that holds the note, and the other note\'s section stays', async () => {
+    const { env, toasts } = await setup({ notes: NOTES_A_B });
+    // The main pane on B with B's section, first in the document; the right pane and the pop-out on A
+    const [main, right, popOut] = panedEditors(env, 3);
+    await drive(env, main.loadNote('B'));
+    await drive(env, right.loadNote('A'));
+    await drive(env, popOut.loadNote('A'));
+    await drive(env, main.renderInsights());
+    const tabs = [{ noteId: 'B', name: 'Note B' }, { noteId: 'A', name: 'Note A' }];
+    const bar = tabBar(env, tabs, [main, right]);
+    bar.pipEditor = popOut;
+    // The provider fails, as on a 401 or a network error, once it has the request
+    let meanwhile = null;
+    const ai = {
+      ...heldAI().port,
+      extractInsights: async () => {
+        meanwhile = [placeholders(right), placeholders(popOut)];
+        throw new Error('HTTP 401');
+      },
+    };
+    const manager = notesManager(env, { ai, editor: right, tabs, bar });
+    await drive(env, manager.extractInsightsForNote('A'));
+    // [the A editors' placeholders during the request, and after it; the main pane's sections, B's or not]
+    assert.deepEqual([meanwhile, [placeholders(right), placeholders(popOut)], sectionsOfB(main)], [[1, 1], [0, 0], [true]]);
+    assert.ok(toasts.some((toast) => toast.kind === 'error' && /HTTP 401/.test(toast.message)), 'the error shows in a toast');
+  });
 });
 
 describe("the sidebar lists a committed title (review F1, as 4b1's save showed it)", () => {
