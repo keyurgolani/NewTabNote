@@ -86,6 +86,8 @@ describe('the diagnostics export with events a later build journaled (#214)', ()
       { at: clock.now(), code: 'capture.failed', fields: { surface: 'worker-internal', laterField: 1 } },
     ]);
     journal.event('capture.failed', { ...KNOWN, retryable: true });
+    // A third, so the kept count and the left-out count differ
+    journal.event('capture.failed', { ...KNOWN, retryable: false });
     await journal.flush();
     const exported = await buildDiagnostics({ records, journal, clock, versions: VERSIONS });
     const { report, journal: kept } = reportOf(exported);
@@ -94,6 +96,7 @@ describe('the diagnostics export with events a later build journaled (#214)', ()
       [
         ['capture.failed', { ...KNOWN }],
         ['capture.failed', { ...KNOWN, retryable: true }],
+        ['capture.failed', { ...KNOWN, retryable: false }],
       ],
       'the events this build knows are kept, in their order',
     );
