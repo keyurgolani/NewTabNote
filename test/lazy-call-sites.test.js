@@ -100,6 +100,53 @@ async function typeAndSave(env, editor, text) {
   return plain(stored.map((element) => element.content));
 }
 
+/**
+ * A pop-out for `env`'s page to open, as documentPictureInPicture gives one, and the page's
+ * MutationObservers, each with what it watches and whether it's disconnected. close() fires the
+ * pop-out's pagehide, as closing it does (#198). Its editor is a stand-in, since a real one needs
+ * the pop-out's markup as elements, which this DOM doesn't parse. It loads a note as `load` does
+ * and lists the notes it was asked for in `loads`
+ */
+function popOut(env, { load = async () => {} } = {}) {
+  const document = new FakeDocument();
+  const listeners = {};
+  const observers = [];
+  const loads = [];
+  env.document.styleSheets = [];
+  env.global.PopOutEditor = class {
+    loadNote(noteId) {
+      loads.push(noteId);
+      return load(noteId);
+    }
+  };
+  env.get('BlockEditor = PopOutEditor');
+  env.global.MutationObserver = class {
+    constructor() {
+      this.watched = [];
+      this.disconnected = false;
+      observers.push(this);
+    }
+    observe(target, options) { this.watched.push({ target, options: plain(options) }); }
+    disconnect() { this.disconnected = true; }
+  };
+  env.global.documentPictureInPicture = {
+    requestWindow: async () => ({
+      document,
+      addEventListener: (type, fn) => (listeners[type] = listeners[type] || []).push(fn),
+      close() {},
+    }),
+  };
+  const close = () => (listeners.pagehide || []).forEach((fn) => fn({ type: 'pagehide' }));
+  return { document, observers, loads, close };
+}
+
+/** The errors openNoteInPiP caught and logged, by message */
+function popOutFailures(env) {
+  return env.logs
+    .filter((log) => log.level === 'error' && log.args[0] === 'Failed to open PiP window:')
+    .map((log) => String(log.args[1] && log.args[1].message));
+}
+
 /** The four chart cards newtab.html has, each a heading over its canvas */
 const CHART_CARDS = [
   ['activity-chart', 'Activity (Last 30 Days)'], ['content-chart', 'Content Breakdown'],
@@ -479,21 +526,42 @@ describe("App's reload guard and the PiP window's stylesheets", () => {
       registered.push(target);
       return () => registered.splice(registered.indexOf(target), 1);
     };
-    const pipDocument = new FakeDocument();
-    const pipListeners = {};
-    env.document.styleSheets = [];
-    env.global.documentPictureInPicture = {
-      requestWindow: async () => ({
-        document: pipDocument,
-        addEventListener: (type, fn) => (pipListeners[type] = pipListeners[type] || []).push(fn),
-        close() {},
-      }),
-    };
+    const pip = popOut(env);
     await tabs.openNoteInPiP('A');
-    assert.ok(registered.length === 1 && registered[0] === pipDocument, "the PiP window's document is registered");
-    pipListeners.pagehide.forEach((fn) => fn({ type: 'pagehide' }));
+    assert.ok(registered.length === 1 && registered[0] === pip.document, "the PiP window's document is registered");
+    pip.close();
     assert.ok(registered.length === 0, "the PiP window's document is let go when it closes");
     assert.match(read('js/app.js'), /registerExtraDocument: this\.loader \? \(target\) => this\.loader\.registerExtraDocument\(target\) : null,/);
+  });
+});
+
+describe("the pop-out's <html>: the page's, while the pop-out is open (#198)", () => {
+  it("takes the page's attributes as it opens, and stops watching the page's when it closes", async () => {
+    const { env, tabs } = await page();
+    const pip = popOut(env);
+    const pageRoot = env.document.documentElement;
+    pageRoot.setAttribute('data-theme', 'dark');
+    await tabs.openNoteInPiP('A');
+    assert.deepEqual(popOutFailures(env), [], 'it opens with no error');
+    assert.deepEqual(pip.loads, ['A'], 'its editor loads the note');
+    assert.equal(pip.document.documentElement.getAttribute('data-theme'), 'dark', "its <html> has the page's data-theme");
+    assert.equal(pip.observers.length, 1, 'one observer');
+    const [watch] = pip.observers;
+    assert.ok(watch.watched.length === 1 && watch.watched[0].target === pageRoot, "it watches the page's <html>");
+    assert.deepEqual(watch.watched[0].options, { attributes: true });
+    assert.ok(!watch.disconnected, 'it watches while the pop-out is open');
+    pip.close();
+    assert.ok(watch.disconnected, 'the observer stops when the pop-out closes');
+  });
+
+  it('stops watching when it closes, with its note failing to load', async () => {
+    const { env, tabs } = await page();
+    const pip = popOut(env, { load: async () => { throw new Error('the note is gone'); } });
+    await tabs.openNoteInPiP('A');
+    assert.deepEqual(popOutFailures(env), ['the note is gone'], 'the load fails, and openNoteInPiP logs it');
+    assert.equal(pip.observers.length, 1, 'one observer');
+    pip.close();
+    assert.ok(pip.observers[0].disconnected, 'with its note failing to load, the observer still stops when the pop-out closes');
   });
 });
 
