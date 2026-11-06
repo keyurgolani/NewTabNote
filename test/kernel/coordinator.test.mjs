@@ -1142,10 +1142,10 @@ describe("the coordinator's bound on a turn (#35 slice 4b-1, F4)", () => {
     await turns();
     time.advance(TURN_LIMIT_MS);
     await turns();
-    assert.deepEqual(await cut, TURN_EXCEEDED);
     assert.equal(Object.hasOwn(coordinator.health(), 'running'), false, 'no turn holds the queue once its only turn is cut');
+    // Released after that check, so a queue that cuts nothing fails there and doesn't wait on the kernel
     kernel.release('c-1');
-    await turns();
+    assert.deepEqual(await cut, TURN_EXCEEDED);
   });
 
   it("gives a turn that starts late its whole TURN_LIMIT_MS from its own start, not its request's", async () => {
