@@ -4251,7 +4251,9 @@ body.focus-mode .block:focus-within {
   gap: 10px;
 }
 
-.ai-action-item {
+/* The insights' action items are cards. The block menu's AI items carry the same two classes
+   (js/editor.js), so these rules name the list, and the menu's items read as its others do (#203) */
+.ai-action-list > .ai-action-item {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -4262,7 +4264,7 @@ body.focus-mode .block:focus-within {
   line-height: 1.4;
 }
 
-.ai-action-icon {
+.ai-action-list .ai-action-icon {
   margin-top: 2px;
   color: var(--accent-color);
 }
