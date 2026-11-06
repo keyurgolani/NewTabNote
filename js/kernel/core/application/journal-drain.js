@@ -56,12 +56,16 @@
  * the count again. Where that mark can't be written, as on a full disk, the context remembers
  * what it raised and counted for its life (`raised`, `stops`), so its next drain doesn't raise it
  * again, and still counts. An entry that isn't a journal record has no mark, so a stop for good
- * at its keep is raised once in the context's life, by `raised` alone (probe E4, #35 slice 4a).
- * The mark never keeps an entry from replaying: a build that can read it replays it.
+ * at its keep is raised once in the context's life, by `raised` alone (probe E4, #35 slice 4a), and
+ * the stops in a row at its keep that it can retry are counted in `stops` alone, the third raising
+ * it as a stop, once in the context's life (#35 slice 4b-1, Q6): a later worker counts from 1 again,
+ * and a drain that gets past it starts the count again. The mark never keeps an entry from
+ * replaying: a build that can read it replays it.
  *
  * What it answers holds counts, codes and note ids. `oldestOrphanedEntryAt` is when the oldest
  * entry it left whose owner is gone was written, an editor save's the pages haven't taken yet
- * included, which system.coordinatorHealth says.
+ * included, and `stuck` the last stop it made at an entry, with the count of drains in a row that
+ * stopped there where it's counted, which system.coordinatorHealth says (Q6).
  */
 
 import { isId, isRecord } from '../contracts/checks.js';
@@ -131,6 +135,15 @@ import { PAGES_APPLY, SAVE_VERSION, SWEPT_REASONS, isJournalRecord } from '../do
  * @property {HeldNote[]} held
  *   The notes a stop at one of their entries held back, oldest first. A stop of the whole drain
  *   names none: its code says why.
+ * @property {Stuck | null} stuck
+ *   The last stop it made at an entry, and null when it made none (#35 slice 4b-1, Q6)
+ */
+
+/**
+ * A stop at an entry: its code, and how many drains in a row stopped at that entry on a code it can
+ * retry, where they're counted. A stop for good, one storage-wide, or one at an entry whose incident
+ * the count raised already, has no count.
+ * @typedef {{code: string, count?: number}} Stuck
  */
 
 /**
@@ -215,6 +228,7 @@ export async function drainJournal({
     left: 0,
     oldestOrphanedEntryAt: null,
     held: [],
+    stuck: null,
   };
   /** @type {unknown[]} */
   let listed;
@@ -307,15 +321,16 @@ export async function drainJournal({
    * the mark's or this context's, whichever is higher, so it holds where the mark can't be written.
    * @param {JournalRecord} entry
    * @param {string} code
+   * @returns {Promise<number | undefined>} the count, or undefined once its incident is raised
    */
   const counted = async (entry, code) => {
-    if (raisedFor(entry, code)) return;
+    if (raisedFor(entry, code)) return undefined;
     const mark = entry.unreplayable;
     const marked = isRecord(mark) && Number.isSafeInteger(mark.count) ? Number(mark.count) : 0;
     const count = Math.max(marked, (stops && stops.get(entry.opId)) || 0) + 1;
     if (count >= STOPS_TO_RAISE) {
       await raise(entry, code, { stop: true });
-      return;
+      return count;
     }
     if (stops) stops.set(entry.opId, count);
     try {
@@ -323,14 +338,45 @@ export async function drainJournal({
     } catch {
       // This context's count still holds
     }
+    return count;
   };
+
+  /**
+   * Counts a drain that stopped at `entry`, which isn't a journal record, on `code`, which it can
+   * retry, and raises its incident, as a stop, on the third in a row (#35 slice 4b-1, Q6). With no
+   * record to mark, the count is this context's alone, in `stops`, and the raise is once in its life,
+   * as E4's is
+   * @param {Record<string, unknown> & {opId: string}} entry
+   * @param {string} code
+   * @returns {number | undefined} the count, or undefined where it can't be counted or once it's raised
+   */
+  const countedUnmarked = (entry, code) => {
+    if (!stops || (raised !== undefined && raised.has(JSON.stringify([entry.opId, code])))) return undefined;
+    const count = (stops.get(entry.opId) || 0) + 1;
+    if (count >= STOPS_TO_RAISE) {
+      stops.delete(entry.opId);
+      raiseUnmarked(entry, code);
+      return count;
+    }
+    stops.set(entry.opId, count);
+    return count;
+  };
+
+  /**
+   * `stuck` for a stop on `code`, with `count` when it's counted
+   * @param {string} code
+   * @param {number | undefined} count
+   * @returns {Stuck}
+   */
+  const stuckAt = (code, count) => (count === undefined ? { code } : { code, count });
 
   /**
    * A stop at `entry` on `code`: one that says storage itself can't answer stops the drain, and
    * any other holds back the entry's note, which an entry with no note can't be. A stop it can't
    * retry raises the entry's incident, as a stop, and one it can is counted. An entry that isn't
-   * a journal record, whose keep stopped, stops the drain, and a stop it can't retry raises its
-   * incident once in this context's life, since it has no mark (raiseUnmarked). Answers true when
+   * a journal record, whose keep stopped, stops the drain: a stop it can't retry raises its
+   * incident once in this context's life, since it has no mark (raiseUnmarked), and one it can is
+   * counted in this context alone (Q6). Either way, it's the drain's `stuck`. Answers true when
    * the drain has to stop.
    * @param {unknown} entry
    * @param {string} code
@@ -341,14 +387,20 @@ export async function drainJournal({
     result.status = 'stopped';
     result.code = code;
     const wide = STORAGE_WIDE.includes(code);
+    /** @type {number | undefined} */
+    let count;
     if (!isJournalRecord(entry)) {
-      if (!canRetry && isRecord(entry) && isId(entry.opId)) {
-        raiseUnmarked(/** @type {Record<string, unknown> & {opId: string}} */ (entry), code);
+      if (isRecord(entry) && isId(entry.opId)) {
+        const unread = /** @type {Record<string, unknown> & {opId: string}} */ (entry);
+        if (!canRetry) raiseUnmarked(unread, code);
+        else if (!wide) count = countedUnmarked(unread, code);
       }
+      result.stuck = stuckAt(code, count);
       return true;
     }
     if (!canRetry) await raise(entry, code, { stop: true });
-    else if (!wide) await counted(entry, code);
+    else if (!wide) count = await counted(entry, code);
+    result.stuck = stuckAt(code, count);
     if (wide || !isId(entry.noteId)) return true;
     heldNotes.add(entry.noteId);
     result.held.push({ noteId: entry.noteId, code });
@@ -420,7 +472,11 @@ export async function drainJournal({
         if (!isJournalRecord(entry)) {
           // Malformed: kept as a conflict record when it has a key to keep it under
           const opId = isRecord(entry) ? entry.opId : undefined;
-          if (isId(opId) && !(await keep(/** @type {any} */ (entry), 'invalid-payload'))) break;
+          if (isId(opId)) {
+            if (!(await keep(/** @type {any} */ (entry), 'invalid-payload'))) break;
+            // This drain got past it, so the stops in a row at it start again (Q6)
+            if (stops) stops.delete(opId);
+          }
           continue;
         }
         if (gone.has(entry.opId) || entry.state !== 'submitted' || !orphaned(entry)) continue;

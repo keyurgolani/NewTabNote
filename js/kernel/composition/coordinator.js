@@ -39,7 +39,9 @@
  * check: after the start, never inside it, so a hello held while it starts never waits for a
  * drain, and one that comes during a drain is welcomed `ready` at once. drain() runs one more
  * when a page wakes the worker for it. system.coordinatorHealth says when the oldest entry the
- * last drain left with no live owner was written, and names the notes it held back (slice 3b).
+ * last drain left with no live owner was written, names the notes it held back (slice 3b), and
+ * says the last stop it made at an entry, with how many drains in a row stopped there (`stuck`,
+ * #35 slice 4b-1), so a drain stuck at one entry shows before its incident is raised.
  *
  * One queue runs the kernel's commands one at a time, in the order they came (#35 slice 4a, "One
  * committer"): what a surface sends through a router's handler (enqueue()), the worker's own
@@ -84,11 +86,12 @@ import { hostTimers, randomIds } from './messaging.js';
 
 /**
  * The worker's journal, as the coordinator drains it (./journal.js): `held` is what its last drain
- * held back, which an older journal can't say
+ * held back, and `stuck` the last stop it made at an entry, which an older journal can't say
  * @typedef {{
  *   drain(client: Client): Promise<unknown>,
  *   oldestOrphanedEntryAt(): number | null,
  *   held?: () => Array<{noteId: string, code: string}>,
+ *   stuck?: () => {code: string, count?: number} | null,
  * }} CoordinatorJournal
  */
 
@@ -646,6 +649,23 @@ export function createCoordinator({
   };
 
   /**
+   * The last stop the last drain made at an entry, with how many drains in a row stopped there
+   * where that's counted (#35 slice 4b-1, Q6), or nothing while it made none, so the answer is as
+   * before then. A journal that can't say says none.
+   * @returns {{stuck?: NonNullable<CoordinatorHealth['stuck']>}}
+   */
+  const stuckNow = () => {
+    try {
+      const stuck = entries && typeof entries.stuck === 'function' ? entries.stuck() : null;
+      if (!stuck || typeof stuck.code !== 'string') return {};
+      const { code, count } = stuck;
+      return { stuck: Number.isSafeInteger(count) ? { code, count } : { code } };
+    } catch {
+      return {};
+    }
+  };
+
+  /**
    * The turn that holds the queue, while one does, and the turns it cut, from the first (#35 slice
    * 4b-1), so the answer is as before while neither is there
    * @returns {{running?: RunningTurn, cutTurns?: number}}
@@ -677,6 +697,7 @@ export function createCoordinator({
       oldestOrphanedEntryAt: oldestOrphaned(),
       migration: migrationNow(),
       ...heldNotes(),
+      ...stuckNow(),
       ...turnNow(),
     }),
     client: () => queued || unbuilt,

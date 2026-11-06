@@ -9,9 +9,10 @@
  * 3b, optional at version 1 as `orders` was for saveNoteContent, so an older worker's answer
  * still parses). While a command holds its queue, it says which: the command's type, when its turn
  * began, and how many wait behind it (`running`), and from its first cut turn, how many turns the
- * queue cut at TURN_LIMIT_MS in this worker's life (`cutTurns`), both optional at version 1 too
- * (#35 slice 4b-1). Ids, counts, times, codes and command names only: nothing in it holds what the
- * user wrote.
+ * queue cut at TURN_LIMIT_MS in this worker's life (`cutTurns`). While its last drain stopped at an
+ * entry, it says the stop's code, and how many drains in a row stopped there where that's counted
+ * (`stuck`). All three are optional at version 1 too (#35 slice 4b-1). Ids, counts, times, codes and
+ * command names only: nothing in it holds what the user wrote.
  */
 
 import * as v from '../../../../lib/valibot/index.mjs';
@@ -50,6 +51,9 @@ export const coordinatorHealth = v.strictObject({
   running: v.optional(v.strictObject({ type: v.picklist(COMMAND_NAMES), since: timestamp, waiting: count })),
   // How many turns the queue cut in this worker's life, from the first cut on
   cutTurns: v.optional(count),
+  // While its last drain stopped at an entry: the stop's code, and how many drains in a row stopped
+  // there, where they're counted
+  stuck: v.optional(v.strictObject({ code, count: v.optional(count) })),
 });
 
 export const result = queryStateSchema(coordinatorHealth);

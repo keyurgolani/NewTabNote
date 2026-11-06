@@ -14,8 +14,8 @@
  *   (DRAIN_MESSAGE), under Web Lock `journal.replay`. One asked for while one runs runs once
  *   more after it, as the recovery-point purge does, so an entry written meanwhile is read too.
  *   A profile with no journal database opens nothing and makes none. What its last drain left,
- *   the oldest orphaned entry and the notes it held back (held(), slice 3b), it keeps for
- *   system.coordinatorHealth.
+ *   the oldest orphaned entry, the notes it held back (held(), slice 3b), and the last stop it made
+ *   at an entry with its count (stuck(), #35 slice 4b-1), it keeps for system.coordinatorHealth.
  * - What the drain can't replay is `journal.entry-unreplayable` (#20, the lead's answer to the
  *   plan's Q8), on the coordinator's provider, and a capture among them is told to `notify`, with
  *   why. A stop for good at a capture raises the incident and tells it nothing, since it's still
@@ -73,6 +73,7 @@ export { DRAIN_MESSAGE };
  * @property {(client: DrainClient) => Promise<DrainResult | null>} drain - never rejects; null with no journal to read
  * @property {() => number | null} oldestOrphanedEntryAt - what the last drain left, for system.coordinatorHealth
  * @property {() => DrainResult['held']} held - the notes the last drain held back, for system.coordinatorHealth (slice 3b)
+ * @property {() => DrainResult['stuck']} stuck - the last stop the last drain made at an entry, for system.coordinatorHealth (#35 slice 4b-1)
  */
 
 /**
@@ -172,6 +173,8 @@ export function createWorkerJournal({
   let oldest = null;
   /** @type {DrainResult['held']} what the last drain held back */
   let lastHeld = [];
+  /** @type {DrainResult['stuck']} the last stop the last drain made at an entry */
+  let lastStuck = null;
   /** What this worker's drains raised, by entry and code, for its life (journal-drain.js) */
   /** @type {Set<string>} */
   const raised = new Set();
@@ -271,6 +274,7 @@ export function createWorkerJournal({
     if (!(await stores.journalExists())) {
       oldest = null;
       lastHeld = [];
+      lastStuck = null;
       return null;
     }
     const run = async () => {
@@ -293,6 +297,7 @@ export function createWorkerJournal({
     const result = manager ? await manager.request(REPLAY_LOCK, { mode: 'exclusive' }, run) : await run();
     oldest = result.oldestOrphanedEntryAt;
     lastHeld = result.held;
+    lastStuck = result.stuck;
     return result;
   };
 
@@ -379,5 +384,6 @@ export function createWorkerJournal({
     },
     oldestOrphanedEntryAt: () => oldest,
     held: () => lastHeld.map(note => ({ ...note })),
+    stuck: () => (lastStuck ? { ...lastStuck } : null),
   });
 }
