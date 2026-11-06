@@ -144,18 +144,23 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
       [...Object.keys(pages.build.rolldownOptions.input), ...Object.keys(recovery.build.rolldownOptions.input)].sort(),
       Object.keys(config.PAGES).sort(),
     );
-    // The pages pass's settings but its input: the names, the minifiers, the loader's and the block
-    // core's chunks, the preloads, and the workers' build. In a pass of one page the core's chunk
-    // takes its dependencies too, or it would import them from the page's own entry chunk, which
-    // imports it: a cycle the page's preloads walk back into its own entry
-    const [, pagesBlocks] = pages.build.rolldownOptions.output.codeSplitting.groups;
+    // The block core's chunk is recovery.html's pass's alone. In the pages pass only the new tab
+    // reaches the core, through its workspace chunk, which keeps it as it did before #115, so the
+    // new tab's start pays for no split (#27). In a pass of one page the core's chunk takes its
+    // dependencies too, or it would import them from the page's own entry chunk, which imports
+    // it: a cycle the page's preloads walk back into its own entry
+    const groupNames = (/** @type {any} */ pass) =>
+      pass.build.rolldownOptions.output.codeSplitting.groups.map((/** @type {any} */ group) => (typeof group.name === 'function' ? group.debugName : group.name));
+    assert.deepEqual([groupNames(pages), groupNames(recovery)], [['loader'], ['loader', 'blocks']]);
     const [, recoveryBlocks] = recovery.build.rolldownOptions.output.codeSplitting.groups;
-    assert.deepEqual([pagesBlocks.includeDependenciesRecursively, recoveryBlocks.includeDependenciesRecursively], [false, true]);
+    assert.equal(recoveryBlocks.includeDependenciesRecursively, true);
+    // Otherwise the pages pass's settings but its input: the names, the minifiers, the loader's
+    // chunk, the preloads, and the workers' build
     const settings = (/** @type {any} */ pass) => {
       const { output } = pass.build.rolldownOptions;
       return {
         names: [output.entryFileNames, output.chunkFileNames({ moduleIds: ['/repo/js/x.js'] }), output.assetFileNames],
-        groups: output.codeSplitting.groups.map((/** @type {any} */ group) => (typeof group.name === 'function' ? group.debugName : group.name)),
+        loader: output.codeSplitting.groups[0].name,
         build: [pass.build.minify, pass.build.cssMinify, pass.build.target, pass.build.terserOptions, pass.build.modulePreload.polyfill],
         checks: pass.build.rolldownOptions.checks,
         worker: pass.worker.format,
@@ -733,11 +738,11 @@ describe("the block core's chunk (#115's review: scripts/build/vite-config.js)",
   };
   const ctx = { getModuleInfo: (/** @type {string} */ id) => ({ importers: (IMPORTERS[id.slice('/repo/'.length)] || []).map(at) }) };
 
-  it('names `blocks` what only the block registry and the projections import, through the core or not, and nothing else', () => {
-    const { output } = config.pagesConfig(passOptions()).build.rolldownOptions;
+  it("names `blocks` what only the block registry and the projections import, through the core or not, and nothing else, in recovery.html's pass", () => {
+    const { output } = config.recoveryConfig(passOptions()).build.rolldownOptions;
     const group = output.codeSplitting.groups[1];
-    // Its own modules only: their dependencies would pull the note domain's back in
-    assert.equal(group.includeDependenciesRecursively, false);
+    // In a pass of one page it takes its own modules' dependencies too (above)
+    assert.equal(group.includeDependenciesRecursively, true);
     for (const file of ['index', 'builtins', 'catalog', 'models', 'html-text', 'entities', 'one', 'two']) {
       assert.equal(group.name(at(`${BLOCKS}/${file}.js`), ctx), 'blocks', file);
     }
@@ -750,14 +755,70 @@ describe("the block core's chunk (#115's review: scripts/build/vite-config.js)",
   });
 });
 
+describe("the block core in the pages pass (#27, #225's review)", () => {
+  const ROOT = path.join(__dirname, '..');
+  // What blockCoreChunk groups in recovery.html's pass. The pages pass has no group for them, so
+  // they stay in the new tab's workspace chunk only while nothing else there imports them: a
+  // second importer in another chunk would split them out, into a chunk named for a module.
+  // THIRD_PARTY_NOTICES' entry 21 catches a split through html-text's path, not one through
+  // conversions, contract or markup alone
+  const CORE = ['builtins', 'catalog', 'contract', 'conversions', 'entities', 'html-text', 'index', 'markup', 'models'].map(
+    (name) => `js/kernel/core/blocks/${name}.js`,
+  );
+  const ALLOWED = new Set(['js/kernel/composition/block-projections.js', ...CORE]);
+  const disk = (/** @type {string} */ file) => fs.readFileSync(file, 'utf8');
+
+  /**
+   * Each import of a CORE module, in the pages pass's pages' graphs (the scripts each page's HTML
+   * loads, their static imports and each import() of a literal), by a module other than the
+   * projections or the core itself
+   * @param {(file: string) => string} [readFile]
+   * @returns {Promise<string[]>}
+   */
+  async function outsideImporters(readFile = disk) {
+    const { reachGraph, loadsOf } = await import('./kernel/import-graph.mjs');
+    const pages = Object.keys(config.PAGES).filter((page) => !config.OWN_PASS_PAGES.includes(page));
+    assert.deepEqual(pages, ['newtab', 'popup', 'sidepanel', 'offscreen']);
+    /** @type {Set<string>} */
+    const modules = new Set();
+    for (const page of pages) {
+      const html = readFile(path.join(ROOT, /** @type {Record<string, string>} */ (config.PAGES)[page]));
+      const entries = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map((match) => path.join(ROOT, match[1].replace(/^\.?\//, '')));
+      for (const file of reachGraph(entries, { readFile }).modules) modules.add(file);
+    }
+    const found = [];
+    for (const file of modules) {
+      const from = path.relative(ROOT, file);
+      if (ALLOWED.has(from) || from.startsWith('js/lib/')) continue;
+      const { imports, dynamicLoads } = loadsOf(readFile(file));
+      for (const specifier of [...imports, ...dynamicLoads.flatMap((load) => (load.specifier === null ? [] : [load.specifier]))]) {
+        if (!specifier.startsWith('.')) continue;
+        const target = path.relative(ROOT, path.resolve(path.dirname(file), specifier));
+        if (CORE.includes(target)) found.push(`${from} imports ${target}`);
+      }
+    }
+    return found.sort();
+  }
+
+  it('leaves the block core only the projections and itself as importers in the four pages, so it stays in the new tab\'s workspace chunk', async () => {
+    assert.deepEqual(await outsideImporters(), []);
+  });
+
+  it('fails a second importer of the core in the pages pass: Popup\'s root importing conversions', async () => {
+    const planted = (/** @type {string} */ file) =>
+      path.relative(ROOT, file) === 'js/kernel/composition/popup.js' ? `${disk(file)}\nimport '../core/blocks/conversions.js';\n` : disk(file);
+    assert.deepEqual(await outsideImporters(planted), ['js/kernel/composition/popup.js imports js/kernel/core/blocks/conversions.js']);
+  });
+});
+
 describe("the loader's chunk (#27 slice 3: scripts/build/vite-config.js, scripts/build/bundle.js)", () => {
   const LOADER_ID = `/repo/${config.LOADER}`;
 
   it('puts the loader alone in a chunk the pages pass writes at its own path, and every other chunk under assets/, hashed', () => {
     const { output } = config.pagesConfig(passOptions()).build.rolldownOptions;
     const [group] = output.codeSplitting.groups;
-    // The loader's group, then the block core's (below)
-    assert.equal(output.codeSplitting.groups.length, 2);
+    // The loader's group alone: the block core's is recovery.html's pass's (below)
+    assert.equal(output.codeSplitting.groups.length, 1);
     assert.equal(group.test(LOADER_ID), true);
     assert.equal(group.test('/repo/js/main.js'), false);
     const named = (moduleIds) => output.chunkFileNames({ name: 'x', isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds, exports: [] });
