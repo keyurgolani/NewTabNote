@@ -1313,6 +1313,7 @@ body.focus-mode .block:focus-within {
 
 [data-theme="dark"] .block-content mark {
   background: #4a4000;
+  color: inherit;
 }
 
 /* Modal */
