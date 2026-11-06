@@ -1,0 +1,21 @@
+{
+  "rule": "Popup's root reads through #17's full adapter again, in place of its read-only reader, so its start loads the adapter chunk (#35 slice 4b-2, P2). The fixture raises Popup's row in its own build, so its bytes break no other rule",
+  "expect": [
+    "budget/layout"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "js/kernel/composition/popup.js",
+      "replace": "import { createIndexedDbReader } from '../adapters/indexeddb/reader.js';",
+      "with": "import { createIndexedDbAdapter as createIndexedDbReader } from '../adapters/indexeddb/adapter.js';"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 117760, \"gzip\": 40960 }",
+      "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
+    }
+  ]
+}

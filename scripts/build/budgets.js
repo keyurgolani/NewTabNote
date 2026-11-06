@@ -35,7 +35,8 @@
  *                      (scripts/build/page-chunks.js): a pages-pass page's start that loads Vite's
  *                      preload helper from another chunk than host, the new tab's or Side Panel's
  *                      start without the adapter chunk once a pages-pass start holds a module of
- *                      the adapter's list, or recovery.html's start with a chunk named for either
+ *                      the adapter's list, another pages-pass start with it, or recovery.html's
+ *                      start with a chunk named for either
  *   budget/file        build/budgets.json doesn't read as a budget file
  * Timing and heap aren't the build's: npm run perf:probe measures them against the frozen
  * 1.4.0 package with the rows here (docs/performance/budgets.md). Budgets hold for production
@@ -456,8 +457,9 @@ function kib(bytes) {
  * Where the pages pass's host and adapter chunks load (budget/layout, scripts/build/page-chunks.js):
  * each pages-pass start that holds Vite's preload helper loads it from host (P1), the new tab's and
  * Side Panel's load the adapter chunk once a pages-pass start holds a module of the adapter's list
- * (P4), and recovery.html's start loads no chunk named for either, which only the pages pass's
- * groups write (P5)
+ * (P4), and no other pages-pass start loads it, as Popup reads through #17's reader (P2).
+ * recovery.html's start loads no chunk named for either, which only the pages pass's groups write
+ * (P5).
  * @param {Record<string, EntryGraph>} graphs
  * @param {ChunkReport[]} chunks
  * @returns {Problem[]}
@@ -479,6 +481,11 @@ function layoutProblems(graphs, chunks) {
     }
     for (const chunk of started(graph)) {
       if (chunk.moduleIds.includes(PRELOAD_HELPER) && chunk.name !== 'host') problems.push(problem('budget/layout', name, `its start loads Vite's preload helper from ${chunk.fileName}, not from the host chunk every page's start shares`));
+    }
+    if (!ADAPTER_PAGES.includes(name)) {
+      for (const chunk of started(graph)) {
+        if (chunk.name === 'adapter') problems.push(problem('budget/layout', name, `its start loads the adapter chunk (${chunk.fileName}), which only the starts of ${ADAPTER_PAGES.join(' and ')} load`));
+      }
     }
     if (adapterHeld && ADAPTER_PAGES.includes(name) && !started(graph).some((chunk) => chunk.name === 'adapter')) {
       problems.push(problem('budget/layout', name, `its start doesn't load the adapter chunk, which the starts of ${ADAPTER_PAGES.join(' and ')} load`));

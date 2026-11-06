@@ -15,6 +15,16 @@ const { HOST_MODULES, ADAPTER_MODULES, PRELOAD_HELPER, pageChunkGroups } = requi
 
 const ROOT = path.join(__dirname, '..');
 
+/**
+ * What `entries` reach through static imports and each import() of a literal, from the root
+ * @param {string[]} entries
+ */
+async function reachOf(entries) {
+  const { reachGraph } = await import('./kernel/import-graph.mjs');
+  const { modules } = reachGraph(entries.map((entry) => path.join(ROOT, entry)));
+  return new Set([...modules].map((file) => path.relative(ROOT, file).split(path.sep).join('/')));
+}
+
 /** The new tab's, Popup's and Side Panel's starts, each as the modules it holds, from the root */
 async function starts() {
   const { importGraph } = await import('./kernel/import-graph.mjs');
@@ -34,6 +44,17 @@ describe('the pages pass\'s host and adapter chunks (scripts/build/page-chunks.j
     const shared = [...newtab].filter((file) => file.startsWith('js/kernel/') && popup.has(file) && sidepanel.has(file));
     assert.ok(shared.length > 0, 'the three starts share the kernel');
     assert.deepEqual(shared.filter((file) => !HOST_MODULES.includes(file) && !ADAPTER_MODULES.includes(file)).sort(), []);
+  });
+
+  it("keeps Popup's start off the adapter's list, since it reads through #17's reader (#35 slice 4b-2)", async () => {
+    const [, popup] = await starts();
+    assert.deepEqual(ADAPTER_MODULES.filter((file) => popup.has(file)), []);
+  });
+
+  it("lists in host only what the new tab's start and Popup's reach share, its start and what it loads with import()", async () => {
+    const [newtab] = await starts();
+    const popup = await reachOf(['js/popup.js']);
+    assert.deepEqual(HOST_MODULES.filter((file) => !newtab.has(file) || !popup.has(file)), []);
   });
 
   it("knows each list's modules by the sources' path and their real path, as a temporary directory's on macOS, and host knows Vite's preload helper", () => {
