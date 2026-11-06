@@ -13,8 +13,10 @@
  * 2. The replays, oldest first: each `submitted` entry whose owner is gone, its Web Lock
  *    `journal.owner.<ownerSessionId>` free, and each of the coordinator's own that isn't in
  *    flight. A `draft` entry is #2's, and never replayed. Each is upcast to the catalog's version
- *    (contracts/upcast.js), then sent under its persisted opId, so #17's ledger answers one that
- *    committed already with its outcome and nothing runs twice:
+ *    (contracts/upcast.js), then judged as the surface that wrote it (`permits`, #35 slice 4b-1):
+ *    a replay runs only if that surface could have sent it itself, as the port router would judge
+ *    its request, never with the worker's rights. Then it's sent under its persisted opId, so
+ *    #17's ledger answers one that committed already with its outcome and nothing runs twice:
  *    - a note's creation, an append, and a capture as written; a capture lands in the Daily Note
  *      of the day it was made (its `at`), and a block already stored is refused;
  *    - an editor's save is the pages': they apply the close-time draft its entry holds, by #33's
@@ -27,8 +29,10 @@
  * 3. What each answer does with its entry:
  *    - committed, a conflict (whose command the kernel kept), or a refusal that says the work is
  *      in (`note-exists`, `duplicate-block`, `block-of-another-note`): the entry goes;
- *    - the note isn't there (`note-not-found`), or a policy refusal: the entry stays, and its
- *      incident is raised;
+ *    - the note isn't there (`note-not-found`), or a policy refusal, the kernel's or its surface's
+ *      (the router's code: `unknown-operation` for a command the surface's catalog doesn't have,
+ *      `forbidden-for-surface` for one it isn't granted): the entry stays, and its incident is
+ *      raised;
  *    - any other refusal, or an entry this build can't read (`invalid-payload`): the entry is kept
  *      as a #17 conflict record (keepJournalEntry), its incident raised, and then it goes;
  *    - an entry a newer build wrote (`unsupported-version`), or one naming an operation this build
@@ -70,6 +74,7 @@ import { PAGES_APPLY, SAVE_VERSION, SWEPT_REASONS, isJournalRecord } from '../do
 /** @typedef {import('../contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../contracts/outcomes.js').BulkOutcome} BulkOutcome */
 /** @typedef {import('../messaging/operations.js').Lookup} Lookup */
+/** @typedef {import('../ports/policy.js').Caller} Caller */
 
 /**
  * The worker's kernel, as the drain sends through it
@@ -89,6 +94,10 @@ import { PAGES_APPLY, SAVE_VERSION, SWEPT_REASONS, isJournalRecord } from '../do
  * @property {{sessionId: string, inFlight: () => ReadonlySet<string>}} own
  *   The coordinator's own session, whose entries it replays unless their command is in flight
  * @property {{now(): number}} clock
+ * @property {(command: Command, caller: Caller) => string | null} permits
+ *   The code that refuses `command` from `caller`, the surface that wrote its entry and the entry's
+ *   owner session, as #13's router would refuse that surface's own request, or null when that
+ *   surface could have sent it (#35 slice 4b-1)
  * @property {(entry: JournalRecord, code: string, how?: {stop?: boolean}) => void} [unreplayable]
  *   Told once for each entry and code that keeps it from replaying as written, with `stop` when
  *   it's a stop for good at an entry that's still kept. Never in the drain's way: what it throws
@@ -190,6 +199,7 @@ export async function drainJournal({
   liveOwners,
   own,
   clock,
+  permits,
   unreplayable,
   raised,
   stops,
@@ -448,6 +458,13 @@ export async function drainJournal({
         const sent = command.commandId === entry.opId && replay ? replay(command) : null;
         if (!sent) {
           if (!(await keep(entry, 'invalid-payload'))) break;
+          continue;
+        }
+        // Only what the entry's own surface could have sent, judged as it and its session: a
+        // refusal is a policy rejection, so the entry stays, and its incident is raised
+        const refused = permits(sent, { surface: entry.surface, contextId: entry.ownerSessionId });
+        if (refused) {
+          await raise(entry, refused);
           continue;
         }
         const outcome = await client.execute(sent);

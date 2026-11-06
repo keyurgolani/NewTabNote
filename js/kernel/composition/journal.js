@@ -24,6 +24,11 @@
  *   third drain in a row that stops at an entry raises it all the same (slice 3b). A capture it
  *   adds is `capture.committed`, as one the worker adds at once is, so it resolves the capture
  *   incident its failure raised.
+ * - Each replay is judged as the surface that wrote its entry, and its session (#35 slice 4b-1,
+ *   the lead's ruling): a page's by the shared catalog's policy, the one #13's port router judges
+ *   that page's own request by, and the worker's own by its catalog's, the one its kernel applies,
+ *   each refusal as the router codes it (core/messaging/denials.js). So a replay never runs with
+ *   rights its surface hasn't, and what it can't run stays, its incident raised.
  *
  * Building it opens nothing, and nothing here throws into the worker: a journal that can't be
  * written leaves the capture to run as it did before slice 3, and says so on the console each time,
@@ -34,9 +39,11 @@
 import { inContextStores } from '../adapters/in-context.js';
 import { drainJournal } from '../core/application/journal-drain.js';
 import { SURFACES } from '../core/contracts/surfaces.js';
-import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
+import { WORKER_CATALOG, WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
 import { DRAIN_MESSAGE, OWNER_LOCK_PREFIX, REPLAY_LOCK, journalEntry, ownerLock } from '../core/domain/journal.js';
+import { denialOf } from '../core/messaging/denials.js';
 import { journaledLookup } from '../core/messaging/journaled-operations.js';
+import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
 
 /** @typedef {import('../adapters/in-context.js').InContextStores} InContextStores */
@@ -44,6 +51,8 @@ import { systemClock } from '../core/ports/runtime.js';
 /** @typedef {import('../core/application/journal-drain.js').DrainResult} DrainResult */
 /** @typedef {import('../core/domain/journal.js').JournalRecord} JournalRecord */
 /** @typedef {import('../core/contracts/commands.js').CommandType} CommandType */
+/** @typedef {import('../core/contracts/commands.js').Command} Command */
+/** @typedef {import('../core/ports/policy.js').Caller} Caller */
 
 export { DRAIN_MESSAGE };
 
@@ -72,6 +81,24 @@ export { DRAIN_MESSAGE };
  * @type {Readonly<Record<string, true>>}
  */
 const CAPTURES = Object.freeze({ captureToDailyNote: true });
+
+/** The shared catalog's policy, the one #13's port router judges a page's request by */
+const PAGES_POLICY = createBaselinePolicy();
+
+/** The worker catalog's, the one its kernel judges the worker's own commands by */
+const WORKER_POLICY = createBaselinePolicy(WORKER_CATALOG);
+
+/**
+ * The code that refuses a replay of `command` from `caller`, the surface and session that wrote
+ * its entry, as #13's router would refuse that surface's own request, or null when that surface
+ * could have sent it (#35 slice 4b-1): a page's entry on the shared catalog's policy, and the
+ * worker's own on its catalog's
+ * @param {Command} command
+ * @param {Caller} caller
+ * @returns {string | null}
+ */
+const replayPermits = (command, caller) =>
+  denialOf(caller.surface === 'worker-internal' ? WORKER_POLICY : PAGES_POLICY, command, caller);
 
 /**
  * Whether `entry` holds a capture
@@ -255,6 +282,7 @@ export function createWorkerJournal({
         liveOwners,
         own: { sessionId: instanceId, inFlight: () => new Set(inFlight) },
         clock,
+        permits: replayPermits,
         unreplayable,
         raised,
         stops,

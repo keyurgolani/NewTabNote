@@ -49,6 +49,7 @@ import { ready } from '../contracts/outcomes.js';
 import { POLICY_CODES, VALIDATION_CODES } from '../contracts/transport-codes.js';
 import { check, checkRequest, checkResult, readFrame } from '../contracts/validate.js';
 import { silentLogger } from '../ports/runtime.js';
+import { denialOf } from './denials.js';
 import { createLookup } from './operations.js';
 import { SYSTEM_OPERATIONS } from './system-operations.js';
 import { createScopeCheck } from './scope.js';
@@ -178,14 +179,6 @@ import { createScopeCheck } from './scope.js';
  * @property {unknown} held - the cap's timer while its welcome waits, and null otherwise
  * @property {Map<string, Running>} running - by requestId
  */
-
-/**
- * What a policy denial answers as. `unknown-caller` is a sender the router can't name and
- * `unknown-operation` one the policy has no entry for, and every other denial, #21's
- * included, is a surface the operation isn't for.
- * @type {Readonly<Record<string, TransportCode>>}
- */
-const DENIALS = Object.freeze({ 'unknown-caller': 'unauthorized-sender', 'unknown-operation': 'unknown-operation' });
 
 /** The most outcome codes it counts apart. Any after them count as `other`. */
 const MAX_OUTCOME_CODES = 64;
@@ -497,26 +490,6 @@ export function createRouter({
   };
 
   /**
-   * The policy's answer: only `allowed: true` allows, and a policy that throws denies
-   * @param {unknown} payload
-   * @param {Caller} caller
-   * @returns {TransportCode | null} the code that refuses it, or null
-   */
-  const denial = (payload, caller) => {
-    try {
-      const decision = /** @type {unknown} */ (policy.authorize(/** @type {{type?: unknown}} */ (payload), caller));
-      if (decision !== null && typeof decision === 'object') {
-        const { allowed, code: denied } = /** @type {{allowed?: unknown, code?: unknown}} */ (decision);
-        if (allowed === true) return null;
-        if (typeof denied === 'string' && Object.hasOwn(DENIALS, denied)) return DENIALS[denied];
-      }
-    } catch {
-      // Denied, below
-    }
-    return 'forbidden-for-surface';
-  };
-
-  /**
    * @param {Peer} peer
    * @param {RequestFrame} frame
    * @param {number} bytes
@@ -540,7 +513,9 @@ export function createRouter({
     if (frame.deadline <= now) return refuse(peer, requestId, 'deadline-exceeded');
     /** @type {Caller} */
     const caller = { surface: peer.surface, contextId: peer.sessionId };
-    const denied = denial(payload, caller);
+    // The policy's answer, by the mapping the drain's replays share (denials.js): only `allowed: true`
+    // allows, and a policy that throws denies
+    const denied = denialOf(policy, payload, caller);
     if (denied) return refuse(peer, requestId, denied);
     if (!inScope(operation, payload)) return refuse(peer, requestId, 'forbidden-for-surface');
     const handler = handlerOf(frame.operation);
