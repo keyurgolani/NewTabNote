@@ -61,6 +61,9 @@ async function openNote(extension, theme) {
     await expect.poll(() => driver.theme(page)).toBe('dark');
   }
   await expect.poll(() => page.locator('#editor-container .block-content mark').first().evaluate(el => getComputedStyle(el).backgroundColor), `the ${theme} theme's highlight`).toBe(MARK[theme]);
+  // #workspace-container and .editor-pane ease every property for 0.3 s, the text's colour among
+  // them, so a highlight that takes its line's colour reads it only once their transitions end
+  await expect.poll(() => page.locator('#workspace-container').evaluate(el => el.getAnimations({ subtree: true }).filter(a => a instanceof CSSTransition && a.playState === 'running').length), "the panes' transitions have ended").toBe(0);
   return page;
 }
 
