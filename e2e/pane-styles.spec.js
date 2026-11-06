@@ -13,6 +13,10 @@
  *   stylesheet applies, and its pane has no transition to ease that padding in with.
  * - The main pane reads as it did, in single view and in focus mode, and its focused title shows no
  *   outline. The page's focus ring and the title's rule tie now, and the title's wins by coming later.
+ * - #207: wherever the note's column fills its pane, a block's handle still lies inside the pane. That
+ *   covers split view at 1440, both panes stacked at 500 by 600, and the pop-out at its 500 by 600,
+ *   on touch devices too. The handle sits 28 px left of its block (44 px wide, 48 px out, on touch),
+ *   past the pane's 24 px padding, so the column keeps the difference clear on each side.
  * Each test also fails on an uncaught exception that test/known-defects.json doesn't list.
  */
 
@@ -44,6 +48,25 @@ async function openPaneStyles(extension) {
   await expect(page.locator(`${MAIN} .page-title`)).toHaveText(PANE_STYLES.name);
   await expect(page.locator(`${MAIN} .blocks-container > .block`)).toHaveCount(PANE_STYLES.blocks.length);
   return page;
+}
+
+/**
+ * How far the handle of the `index`th block in the pane `selector` finds reaches past the pane's
+ * padding box, at its left, in px: 0 when the handle lies inside the pane. Runs in the page.
+ * @param {[string, number]} args
+ */
+function handleOut([selector, index]) {
+  const pane = document.querySelector(selector);
+  const handle = pane.querySelectorAll('.blocks-container > .block')[index].querySelector('.block-handle').getBoundingClientRect();
+  return Math.max(0, Math.round((pane.getBoundingClientRect().left + pane.clientLeft - handle.left) * 100) / 100);
+}
+
+/** Close the sidebar when it covers the workspace, as it does over the panes under 768 px */
+async function closeSidebarOver(page) {
+  const covered = () => page.evaluate(() => !document.elementFromPoint(innerWidth / 2, innerHeight / 2).closest('#workspace-container'));
+  if (!(await covered())) return;
+  await page.getByRole('button', { name: 'Toggle Sidebar' }).first().click();
+  await expect.poll(covered, 'the sidebar no longer covers the panes').toBe(false);
 }
 
 /**
@@ -184,4 +207,46 @@ test("the main pane's title, column, padding and blocks read as before, in singl
   expect.soft(inFocus.column['max-width'], "the main column's max-width in focus mode").toBe('min(760px, 100%)');
   expect.soft(inFocus.column.width, "the main column's width in focus mode").toBe(760);
   await expectNoUncaught(extension, page);
+});
+
+test("a block's handle lies inside its pane wherever the note's column fills the pane, on touch devices too", async ({ extension }) => {
+  test.setTimeout(90_000);
+  const page = await openPaneStyles(extension);
+  const out = (pane, index = 1) => page.evaluate(handleOut, [pane, index]);
+  const hover = (pane, index = 1) => page.locator(`${pane} .blocks-container > .block`).nth(index).locator('.block-content').hover();
+  // A touch device's handle is 44 px wide, 48 px left of its block (js/editor.js sets the class)
+  const touch = (target, on) => target.evaluate(value => document.body.classList.toggle('touch-device', value), on);
+
+  // Split view at 1440 by 900: each pane is half the workspace, so the column fills it
+  await driver.openSplitView(page);
+  await expect(page.locator(`${RIGHT} .blocks-container > .block`)).toHaveCount(RIGHT_PANE.blocks.length);
+  await hover(MAIN);
+  expect.soft(await out(MAIN), "the main pane's handle in split view at 1440").toBe(0);
+  await hover(RIGHT);
+  expect.soft(await out(RIGHT), "the right pane's handle in split view at 1440").toBe(0);
+
+  // At 500 by 600 split view stacks its panes, each the window's width
+  await page.setViewportSize({ width: 500, height: 600 });
+  await closeSidebarOver(page);
+  await hover(MAIN);
+  expect.soft(await out(MAIN), "the main pane's handle at 500 by 600").toBe(0);
+  await hover(RIGHT);
+  expect.soft(await out(RIGHT), "the right pane's handle at 500 by 600").toBe(0);
+  await touch(page, true);
+  expect.soft(await out(MAIN), "the main pane's touch handle at 500 by 600").toBe(0);
+  expect.soft(await out(RIGHT), "the right pane's touch handle at 500 by 600").toBe(0);
+  await touch(page, false);
+  await driver.closeSplitView(page);
+
+  // The pop-out at the 500 by 600 the product asks for (js/controllers/tab-controller.js)
+  const [pip] = await Promise.all([extension.context.waitForEvent('page'), page.locator('#pip-toggle').click()]);
+  await expect.poll(() => page.evaluate(() => Boolean(app.tabController.pipEditor && app.tabController.pipEditor.blocks.length > 0))).toBe(true);
+  await expect.poll(() => pip.locator('.page-timestamp').evaluate(el => getComputedStyle(el).fontSize), "the pop-out's copy of the page's stylesheet applies").toBe('13px');
+  await pip.setViewportSize({ width: 500, height: 600 });
+  await pip.locator('.pip-editor-wrapper .blocks-container > .block').nth(1).locator('.block-content').hover();
+  expect.soft(await pip.evaluate(handleOut, ['.pip-editor-wrapper', 1]), "the pop-out's handle at 500 by 600").toBe(0);
+  await touch(pip, true);
+  expect.soft(await pip.evaluate(handleOut, ['.pip-editor-wrapper', 1]), "the pop-out's touch handle at 500 by 600").toBe(0);
+  await expectNoUncaught(extension, page);
+  await pip.close().catch(() => {});
 });
