@@ -11,15 +11,35 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createIndexedDbReader } from '../../js/kernel/adapters/indexeddb/reader.js';
-import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
+import { DB_VERSION, IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
+import { IDB_SETTINGS_KEYS } from '../../js/kernel/core/ports/repository.js';
 import { reachGraph } from './import-graph.mjs';
+import { profileWith, synthesized } from './migration-support.mjs';
 import { adapterOn, closeAll, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
 import { CALLERS } from './support.mjs';
 
 /** @typedef {import('./storage-fixture.mjs').Profile} Profile */
+/** @typedef {import('../../js/kernel/core/ports/repository.js').StoreName} StoreName */
+/** @typedef {{value?: unknown, failed?: unknown[]}} Settled */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const INDEXEDDB = 'js/kernel/adapters/indexeddb';
+
+/** Every store #17's adapter reads */
+const STORE_NAMES = /** @type {StoreName[]} */ (Object.keys(IDB_STORES));
+
+/** The settings areas a context reads from chrome.storage.local (ports/repository.js, SettingsArea) */
+const AREAS = /** @type {const} */ (['preferences', 'session', 'jobs', 'chat', 'onboarding', 'backup', 'upgrade']);
+
+/** The keys each area is read for: ones the builds write, and one none does */
+const SETTING_KEYS = Object.freeze([
+  'theme',
+  'font',
+  'trashRetention',
+  'dailyNoteTemplate',
+  'lastAutoTitleRun',
+  'never-set',
+]);
 
 /** @type {Profile[]} */
 const profiles = [];
@@ -57,6 +77,49 @@ function readerOn(of, options = {}) {
  * @param {{type: string} & Record<string, unknown>} query
  */
 const asPopup = (store, query) => kernelOn(store, undefined, CALLERS.popup).query(/** @type {any} */ (query));
+
+/**
+ * What `run` answers, or how it fails: by cause and code, or by name for IndexedDB's own, so
+ * the reader's answers and #17's adapter's compare
+ * @param {() => unknown} run
+ * @returns {Promise<Settled>}
+ */
+async function settled(run) {
+  try {
+    return { value: await run() };
+  } catch (error) {
+    const { unavailableCause, code, retryable, name } = /** @type {any} */ (error);
+    return { failed: [unavailableCause, code, retryable, name] };
+  }
+}
+
+/**
+ * Every read method's answer on `store`, in one read through `on`: the reader or #17's adapter
+ * @param {any} on
+ * @param {StoreName} store
+ * @param {string} noteId - a note the database holds, for the reads by index
+ */
+const everyRead = (on, store, noteId) =>
+  settled(() =>
+    on.read([store], async (/** @type {any} */ tx) => {
+      const keys = await settled(() => tx.getAllKeys(store));
+      const key = Array.isArray(keys.value) && keys.value.length > 0 ? keys.value[0] : 'none';
+      const index = store === 'snapshots' ? 'noteId' : 'canvasId';
+      return {
+        has: await settled(() => tx.has(store)),
+        getAll: await settled(() => tx.getAll(store)),
+        keys,
+        get: await settled(() => tx.get(store, key)),
+        getKey: await settled(() => tx.getKey(store, key)),
+        revision: await settled(() => tx.revision(store, key)),
+        versions: await settled(() => tx.versions(store, key)),
+        unread: await settled(() => tx.versions(store, 'never-read')),
+        byIndex: await settled(() => tx.getAllByIndex(store, index, noteId)),
+        keysByIndex: await settled(() => tx.getKeysByIndex(store, index, noteId)),
+        dailyAnswer: await settled(() => tx.dailyAnswer()),
+      };
+    }),
+  );
 
 describe("#17's read-only reader (#35 slice 4b-0b)", () => {
   it("opens a database as it is, and answers Popup's queries and setting reads as #17's adapter does in existing mode", async () => {
@@ -147,6 +210,65 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
       assert.deepEqual(await reader.ledger.read(command), await adapter.ledger.read(command), label);
     }
     assert.deepEqual(await reader.ledger.read({ ...create, name: 'Another' }), { status: 'key-reuse' });
+  });
+
+  it("answers every read, Popup's queries, every settings read and the ledger as #17's adapter in existing mode does, on every synthesized fixture, and leaves each as it was", async () => {
+    const fixtures = synthesized();
+    assert.ok(fixtures.size >= 20, `${fixtures.size} fixtures`);
+    /**
+     * The fixtures both opened, so their reads answered more than the open's failure
+     * @type {string[]}
+     */
+    const read = [];
+    for (const [id, fixture] of fixtures) {
+      const of = /** @type {Profile} */ ({ ...(await profileWith(/** @type {any} */ (fixture))), adapters: [] });
+      profiles.push(of);
+      const had = (await of.real.databases()).some(database => database.name === 'CanvasTabDB');
+      const before = had ? await legacyEnv.dumpDatabase(of.real) : null;
+      const adapter = adapterOn(of, { mode: 'existing' });
+      const reader = readerOn(of);
+      const opened = await settled(() => adapter.open());
+      assert.deepEqual(await settled(() => reader.open()), opened, `${id}: the open`);
+      if (!('failed' in opened)) read.push(id);
+      const notes = await settled(() => adapter.read(['notes'], tx => tx.getAllKeys('notes')));
+      const noteId = Array.isArray(notes.value) && notes.value.length > 0 ? notes.value[0] : 'none';
+      for (const store of STORE_NAMES) {
+        assert.deepEqual(
+          await everyRead(reader, store, noteId),
+          await everyRead(adapter, store, noteId),
+          `${id}: ${store}`,
+        );
+      }
+      for (const query of [{ type: 'listNotes', view: 'popup' }, { type: 'getPopupInsightsEnabled' }]) {
+        assert.deepEqual(await asPopup(reader, query), await asPopup(adapter, query), `${id}: ${query.type}`);
+      }
+      /** @type {Array<[import('../../js/kernel/core/ports/repository.js').ReadableSettingsArea, readonly string[]]>} */
+      const settingReads = [
+        ['idbSettings', IDB_SETTINGS_KEYS],
+        ['idbSettings', ['llmApiKey']],
+        ...AREAS.map(area => /** @type {[typeof area, readonly string[]]} */ ([area, SETTING_KEYS])),
+      ];
+      for (const [area, keys] of settingReads) {
+        const answer = await settled(() => adapter.readSettings(area, keys));
+        assert.deepEqual(await settled(() => reader.readSettings(area, keys)), answer, `${id}: ${area} ${keys}`);
+      }
+      /** @type {any} */
+      const never = { type: 'createNote', commandId: 'c-never-sent', noteId: 'n-never', name: 'Never' };
+      const status = await settled(() => adapter.ledger.status(never.commandId));
+      assert.deepEqual(await settled(() => reader.ledger.status(never.commandId)), status, `${id}: status`);
+      const kept = await settled(() => adapter.ledger.read(never));
+      assert.deepEqual(await settled(() => reader.ledger.read(never)), kept, `${id}: the ledger's read`);
+      reader.close();
+      adapter.close();
+      if (before) assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before, `${id}: left as it was`);
+      else assert.deepEqual(await of.real.databases(), [], `${id}: no database made`);
+    }
+    // Both open every fixture as it is, an empty database at version 1 included, but the profile
+    // with no database and the one a later build upgraded to 12
+    assert.deepEqual(
+      [...fixtures.keys()].filter(id => !read.includes(id)),
+      ['none.basic', 'v9.newer'],
+    );
   });
 
   it('reaches no module the architecture list gives the role writer', () => {
