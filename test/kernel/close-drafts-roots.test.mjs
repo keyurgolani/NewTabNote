@@ -13,7 +13,7 @@
 // 1.4.3's catch-up key is read at the first start, then removed (QA4). On legacy-env pages over
 // one profile, sharing their localStorage and Web Locks.
 
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { applyCloseDrafts, closeDraftStore } from '../../js/kernel/core/application/close-drafts.js';
@@ -32,12 +32,14 @@ import { createPopupClient } from '../../js/kernel/composition/popup.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { blockDigest, recoveredIdOf } from '../../js/kernel/core/domain/close-draft.js';
 import { legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { popupWorker } from './popup-worker.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
 /** @typedef {import('../../js/kernel/core/domain/close-draft.js').CloseDraft} CloseDraft */
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').Command} Command */
 /** @typedef {import('../../js/kernel/composition/close-drafts.js').Applier} Applier */
+/** @typedef {import('../../js/kernel/core/application/close-drafts.js').ApplyResult} ApplyResult */
 /** @typedef {any} Row */
 
 const AT = Date.UTC(2026, 9, 31, 21, 41);
@@ -69,6 +71,24 @@ const pageHostOf = context => ({
   settings: context.env.chrome.api.storage.local,
   awaitUpgrade: async () => {},
 });
+
+/** The stand-ins for the worker a case made, which each case's end closes */
+/** @type {Array<ReturnType<typeof popupWorker>>} */
+const standIns = [];
+afterEach(() => {
+  for (const standIn of standIns.splice(0)) standIn.close();
+});
+
+/**
+ * Popup's host on `context`'s profile, with its runtime's port to a stand-in for the worker
+ * there (popup-worker.mjs, #35 slice 4b-2)
+ * @param {LegacyContext} context
+ */
+const popupHostOf = context => {
+  const standIn = popupWorker({ indexedDB: context.env.indexedDB, settings: context.env.chrome.api.storage.local });
+  standIns.push(standIn);
+  return { ...pageHostOf(context), runtime: standIn.runtime, extensionVersion: standIn.extensionVersion };
+};
 
 /**
  * The page's localStorage and Web Locks, as pageDrafts() reads them from its globals
@@ -233,10 +253,15 @@ function counted(context) {
   return { counts, load, drafts: { storage: context.env.global.localStorage, locks } };
 }
 
-const PAGES = /** @type {const} */ ([
-  ['Popup', createPopupClient, 'popup'],
-  ['Side Panel', createSidePanelClient, 'sidePanel'],
-]);
+/**
+ * Each page whose start applies the drafts, its root built on a case's profile, and the view it
+ * lists
+ * @type {ReadonlyArray<readonly [string, (context: LegacyContext, drafts: {storage: any, locks: any}, load: () => Promise<Applier>) => Client & {applied: () => Promise<ApplyResult | null>}, 'popup' | 'sidePanel']>}
+ */
+const PAGES = [
+  ['Popup', (context, drafts, load) => createPopupClient(popupHostOf(context), drafts, load), 'popup'],
+  ['Side Panel', (context, drafts, load) => createSidePanelClient(pageHostOf(context), drafts, load), 'sidePanel'],
+];
 
 /**
  * The new tab's page client over `tab`'s profile, as its root builds it, with `drafts` and the
@@ -293,7 +318,7 @@ describe('the close-time drafts at each start', () => {
       const { tab } = await profileWithA();
       write(tab, draftOfA());
       const { counts, load, drafts } = counted(tab);
-      const client = create(pageHostOf(tab), drafts, load);
+      const client = create(tab, drafts, load);
       assert.equal(await client.whenReady(), null);
       const listed = await client.query({ type: 'listNotes', view });
       assert.equal(listed.kind === 'ready' && listed.data.find(row => row.id === 'A')?.preview, 'alpha, edited as the tab closed');
@@ -320,7 +345,7 @@ describe('the close-time drafts at each start', () => {
           },
         };
       };
-      const client = create(pageHostOf(tab), draftsOf(tab), load);
+      const client = create(tab, draftsOf(tab), load);
       // What the page does at its start: wait for whenReady, then read
       await client.whenReady().then(() => order.push('ready'));
       const listed = await client.query({ type: 'listNotes', view });
@@ -339,7 +364,9 @@ describe('the close-time drafts at each start', () => {
         told.push([event, detail]);
       };
       try {
-        const client = create(pageHostOf(tab), draftsOf(tab), () => Promise.reject(new TypeError('Failed to fetch dynamically imported module')));
+        const client = create(tab, draftsOf(tab), () =>
+          Promise.reject(new TypeError('Failed to fetch dynamically imported module')),
+        );
         assert.equal(await client.whenReady(), null);
         const listed = await client.query({ type: 'listNotes', view });
         assert.equal(listed.kind === 'ready' && listed.data.find(row => row.id === 'A')?.preview, '', 'as stored: the edit waits in its draft');
@@ -353,10 +380,10 @@ describe('the close-time drafts at each start', () => {
     it(`${page} loads nothing and takes no lock for an untold entry with no draft, nor for nothing at all`, async () => {
       const { tab } = await profileWithA();
       const { counts, load, drafts } = counted(tab);
-      assert.equal(await create(pageHostOf(tab), drafts, load).whenReady(), null);
+      assert.equal(await create(tab, drafts, load).whenReady(), null);
       tab.env.global.localStorage.setItem(UNTOLD_KEY, JSON.stringify([{ id: 'draft-x-recovered', of: 'A' }]));
       tab.env.global.localStorage.setItem(SAVED_UNTOLD_KEY, JSON.stringify([{ id: 'B' }]));
-      assert.equal(await create(pageHostOf(tab), drafts, load).whenReady(), null);
+      assert.equal(await create(tab, drafts, load).whenReady(), null);
       assert.deepEqual(counts, { loads: 0, locks: 0 });
       assert.deepEqual(keysOf(tab).sort(), [SAVED_UNTOLD_KEY, UNTOLD_KEY].sort(), 'the lists wait for the new tab');
     });
@@ -450,7 +477,7 @@ describe('the close-time drafts at each start', () => {
   it('two pages starting together take turns: each draft is applied once', async () => {
     const { tab } = await profileWithA();
     write(tab, draftOfA());
-    const popup = createPopupClient(pageHostOf(tab), draftsOf(tab), LOAD);
+    const popup = createPopupClient(popupHostOf(tab), draftsOf(tab), LOAD);
     const panel = createSidePanelClient(pageHostOf(tab), draftsOf(tab), LOAD);
     const [first, second] = await Promise.all([popup.applied(), panel.applied()]);
     assert.deepEqual([first?.saved || [], second?.saved || []].flat(), ['A']);
@@ -491,10 +518,10 @@ describe('the close-time drafts at each start', () => {
   });
 
   it("reads 1.4.3's catch-up key at the first start, then removes it (QA4), on every page", async () => {
-    for (const create of [createPopupClient, createSidePanelClient]) {
+    for (const [, create] of PAGES) {
       const { tab } = await profileWithA();
       tab.env.global.localStorage.setItem(CATCH_UP_KEY, JSON.stringify({ dropped: ['A'], gone: ['Z'] }));
-      const client = create(pageHostOf(tab), draftsOf(tab), LOAD);
+      const client = create(tab, draftsOf(tab), LOAD);
       assert.deepEqual((await client.applied())?.catchUp, { dropped: ['A'], gone: ['Z'] });
       assert.deepEqual(keysOf(tab), []);
     }
@@ -1121,7 +1148,7 @@ describe("the new tab's toasts, from the untold lists (V3, Q-B6, Q-B7)", () => {
     it(`${page}'s start leaves the lists for the new tab`, async () => {
       const { tab } = await told();
       write(tab, draftOfA());
-      const client = create(pageHostOf(tab), draftsOf(tab), LOAD);
+      const client = create(tab, draftsOf(tab), LOAD);
       assert.equal(await client.whenReady(), null);
       assert.deepEqual(listOf(tab, UNTOLD_KEY), [{ id: 'R', of: 'A' }]);
       assert.deepEqual(listOf(tab, SAVED_UNTOLD_KEY), [{ id: 'C' }]);
