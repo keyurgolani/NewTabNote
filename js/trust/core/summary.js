@@ -22,8 +22,8 @@
  * build has no words for, and trust.summary's schema takes none other.
  */
 
-import { ERROR_CODES } from './codes.js';
-import { waits, whyOf } from './updates.js';
+import { ERROR_CODES, FAULT_CODES } from './codes.js';
+import { updateKeyOf, waits, whyOf } from './updates.js';
 import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
 
 /** @typedef {import('./records.js').HealthReceipt} HealthReceipt */
@@ -141,11 +141,20 @@ export function assess({ providers, receipts, incidents, copyRead, recordsRead, 
 }
 
 /**
- * A group's cause: its worst problem that needs action, or, with none, its worst member at
- * fault by its receipt, of the members with no open problem (one whose problems were all
- * dismissed, or whose update waits, says no more); null when nothing in it is at fault. A problem
- * says why by its own evidence, over its provider's latest receipt's when that receipt reports an
- * update (updates.js whyOf): a check's incidents carry no evidence of their own.
+ * Whether this build registers `incident`'s fault and severity. One a newer build wrote with
+ * either unregistered still needs action, but is never a cause: trust.summary's schema takes
+ * neither, and an unknown severity has no place in the worst-first order.
+ * @param {Incident} incident
+ */
+const registered = incident => FAULT_CODES.includes(incident.faultCode) && SEVERITIES.includes(incident.severity);
+
+/**
+ * A group's cause: its worst registered problem that needs action, or, with none, its worst
+ * member at fault by its receipt, of the members with no open problem (one whose problems were
+ * all dismissed, or whose update waits, says no more); null when nothing in it is at fault. A
+ * problem says why by its own evidence, as the Trust Center reads it, and storage's update, whose
+ * check's incident carries none, by storage's latest receipt when that receipt reports the
+ * update (updates.js whyOf).
  * @param {ReturnType<typeof assess>['all']} members
  * @param {readonly Incident[]} needs - the group's incidents that need action
  * @param {readonly Incident[]} open - every open incident, dismissed ones included
@@ -153,13 +162,14 @@ export function assess({ providers, receipts, incidents, copyRead, recordsRead, 
  * @returns {Cause | null}
  */
 function causeOf(members, needs, open, latest) {
-  const [worst] = worstFirst(needs);
+  const [worst] = worstFirst(needs.filter(registered));
   if (worst) {
+    const update = worst.providerId === 'storage' && updateKeyOf(worst.faultCode, null) !== null;
     return {
       from: 'incident',
       providerId: worst.providerId,
       faultCode: worst.faultCode,
-      errorCode: errorCodeOf(whyOf(latest.get(worst.providerId) || null, worst.evidence || {})),
+      errorCode: errorCodeOf(update ? whyOf(latest.get('storage') || null, worst.evidence || {}) : worst.evidence),
       severity: worst.severity,
       consequenceKey: null,
       incidentId: worst.id,
