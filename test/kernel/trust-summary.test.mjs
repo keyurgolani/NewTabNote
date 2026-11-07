@@ -11,10 +11,13 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as v from '../../js/lib/valibot/index.mjs';
 
 import { createRegistryRoot } from '../../js/kernel/registry/root.js';
 import { createRuntime } from '../../js/kernel/registry/runtime.js';
+import { PROVIDER_IDS } from '../../js/trust/core/codes.js';
 import { health } from '../../js/trust/core/families.js';
 import { createDiagnosticJournal } from '../../js/trust/core/journal.js';
 import { createMemoryTrustStore } from '../../js/trust/core/memory-store.js';
@@ -22,10 +25,13 @@ import { summarySchema } from '../../js/trust/core/operations/trust-summary.js';
 import { PROVIDERS } from '../../js/trust/core/providers/catalog.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
 import { createTrustUseCases } from '../../js/trust/core/use-cases.js';
+import { HEALTH_GROUPS } from '../../js/trust/core/vocabulary.js';
+import { importGraph } from './import-graph.mjs';
 import { hexIds, lockManager, manualClock, realTimers, settingsArea } from './trust-support.mjs';
 
 /** @typedef {import('../../js/trust/core/operations/trust-summary.js').TrustSummary} TrustSummary */
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MINUTE = 60 * 1000;
 
 /** Storage's migration reader at this build's version */
@@ -213,6 +219,149 @@ describe("a group's cause says why an update waits or didn't finish, from storag
         ['incident', 'storage', faultCode, errorCode],
         JSON.stringify(state),
       );
+    }
+  });
+});
+
+describe("summarize: trust.summary from what the records read and the providers' rows (#20 slice 4c)", () => {
+  /**
+   * What summarize takes, as the records read it now
+   * @param {Awaited<ReturnType<typeof center>>} at
+   * @param {readonly {id: string, group: string, core: boolean}[]} providers
+   */
+  const inputOf = async ({ records, clock }, providers) => {
+    const read = await records.incidentsRead();
+    return {
+      providers,
+      receipts: await records.latestReceipts(),
+      incidents: read.incidents,
+      copyRead: read.copyRead,
+      recordsRead: read.recordsRead,
+      recordsState: records.state(),
+      now: clock.now(),
+    };
+  };
+
+  it("answers what trust.summary answers, from the providers' rows alone, with no registry", async () => {
+    const { summarize } = await import('../../js/trust/core/summary.js');
+    const { PROVIDER_ROWS } = await import('../../js/trust/core/providers/rows.js');
+    const rows = PROVIDER_ROWS.filter(row => row.id === 'capture' || row.id === 'storage');
+    for (const state of [null, { blocked: true }, { status: 'space-blocked', code: 'space-short' }]) {
+      const at = await center(state);
+      await checkOnOpen(at.trust);
+      assert.deepEqual(summarize(await inputOf(at, rows)), await summaryOf(at.trust), JSON.stringify(state));
+    }
+  });
+
+  it('reads capture as unknown, routes to the Recovery Center, and counts something as needing action while a read failed or the records fell back', async () => {
+    const { summarize } = await import('../../js/trust/core/summary.js');
+    const { PROVIDER_ROWS } = await import('../../js/trust/core/providers/rows.js');
+    const rows = PROVIDER_ROWS.filter(row => row.id === 'capture' || row.id === 'storage');
+    const at = await center(null);
+    await checkOnOpen(at.trust);
+    const input = await inputOf(at, rows);
+    const seen = summarize(input);
+    assert.deepEqual([seen.capture, seen.actionRequired, seen.route], ['safe', 0, 'trust']);
+    for (const blind of [
+      { copyRead: false },
+      { recordsRead: false },
+      { recordsState: /** @type {const} */ ('fallback') },
+    ]) {
+      const summary = summarize({ ...input, ...blind });
+      assert.deepEqual(
+        [summary.capture, summary.actionRequired, summary.route],
+        ['unknown', 1, 'recovery'],
+        JSON.stringify(blind),
+      );
+    }
+  });
+
+  it('never carries an unregistered code in a cause, from an incident or a receipt', async () => {
+    const { summarize } = await import('../../js/trust/core/summary.js');
+    const { PROVIDER_ROWS } = await import('../../js/trust/core/providers/rows.js');
+    const at = await center({ status: 'failed', code: 'schema-mismatch' });
+    await checkOnOpen(at.trust);
+    const input = await inputOf(
+      at,
+      PROVIDER_ROWS.filter(row => row.id === 'capture' || row.id === 'storage'),
+    );
+    /** @param {any} held */
+    const unregistered = held =>
+      held.providerId === 'storage' ? { ...held, evidence: { ...held.evidence, errorCode: 'not-a-code' } } : held;
+    const incidentCause = storageGroup(
+      summarize({ ...input, receipts: input.receipts.map(unregistered), incidents: input.incidents.map(unregistered) }),
+    ).cause;
+    assert.deepEqual(incidentCause && [incidentCause.from, incidentCause.errorCode], ['incident', null]);
+    // A group at fault with no incident names its receipt
+    const now = at.clock.now();
+    const lagging = {
+      id: 'r1',
+      providerId: 'index',
+      status: 'degraded',
+      verifiedAt: now,
+      freshnessMs: MINUTE,
+      consequenceKey: 'indexing.lagging',
+      evidence: { errorCode: 'not-a-code' },
+    };
+    const receiptCause = summarize({
+      providers: [{ id: 'index', group: 'indexing', core: false }],
+      receipts: /** @type {any} */ ([lagging]),
+      incidents: [],
+      copyRead: true,
+      recordsRead: true,
+      recordsState: 'open',
+      now,
+    }).groups[0].cause;
+    assert.deepEqual(receiptCause && [receiptCause.from, receiptCause.consequenceKey, receiptCause.errorCode], [
+      'receipt',
+      'indexing.lagging',
+      null,
+    ]);
+  });
+
+  it('reaches only the vocabulary, the codes and the update rule, so a status page loads no registry, checks module, Valibot or payload schema with it', async () => {
+    const reached = [...importGraph(path.join(ROOT, 'js', 'trust', 'core', 'summary.js'))].map(file =>
+      path.relative(ROOT, file).split(path.sep).join('/'),
+    );
+    assert.deepEqual(reached.sort(), [
+      'js/trust/core/codes.js',
+      'js/trust/core/summary.js',
+      'js/trust/core/updates.js',
+      'js/trust/core/vocabulary.js',
+    ]);
+    const rows = [...importGraph(path.join(ROOT, 'js', 'trust', 'core', 'providers', 'rows.js'))];
+    assert.equal(rows.length, 1, 'rows.js imports nothing');
+  });
+});
+
+describe("the providers' rows (#20 slice 4c)", () => {
+  it("are the catalog's id, group, core and hosts, one for one, in its order", async () => {
+    const { PROVIDER_ROWS } = await import('../../js/trust/core/providers/rows.js');
+    /** @param {{id: string, group: string, core?: boolean, hosts: readonly string[]}} item */
+    const fields = item => [item.id, item.group, item.core === true, [...item.hosts]];
+    const PAGES = ['workspace', 'recovery'];
+    // The groups every status page names its problems by: a change here changes what they say
+    assert.deepEqual(PROVIDER_ROWS.map(fields), [
+      ['capture', 'storage', true, PAGES],
+      ['storage', 'storage', true, PAGES],
+      ['recovery-readiness', 'recovery', false, PAGES],
+      ['backup', 'backup', false, PAGES],
+      ['sync', 'sync', false, PAGES],
+      ['credentials', 'vault', false, PAGES],
+      ['permissions', 'permissions', false, PAGES],
+      ['ai-scope-grants', 'permissions', false, PAGES],
+      ['remote-ai', 'inference', false, PAGES],
+      ['local-inference', 'inference', false, PAGES],
+      ['index', 'indexing', false, PAGES],
+      ['coordinator', 'platform', false, ['workspace']],
+      ['messaging', 'platform', false, PAGES],
+      ['contributions', 'platform', false, PAGES],
+      ['block-types', 'platform', false, PAGES],
+    ]);
+    assert.deepEqual(PROVIDERS.map(fields), PROVIDER_ROWS.map(fields));
+    for (const row of PROVIDER_ROWS) {
+      assert.ok(PROVIDER_IDS.includes(row.id), `${row.id} is a registered provider`);
+      assert.ok(HEALTH_GROUPS.includes(/** @type {any} */ (row.group)), `${row.id}'s group is a health group`);
     }
   });
 });

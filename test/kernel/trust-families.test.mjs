@@ -326,6 +326,38 @@ describe('provider fixtures aggregate into truthful status (#20, approved test p
     assert.equal((await statusesOf(trust)).capture, 'stale');
   });
 
+  it("summarize answers what trust.summary answers, from the records and each fixture's row, in every fixture's state (#20 slice 4c)", async () => {
+    // Loaded here, so the cases before this one run on a tree without it
+    const { summarize } = await import('../../js/trust/core/summary.js');
+    const { trust, records, clock } = await trustCenter();
+    const rows = PROVIDERS.map(({ id, group, core }) => ({
+      id: String(id),
+      group: String(group),
+      core: core === true,
+    }));
+    /** @param {string} when */
+    const alike = async when => {
+      const read = await records.incidentsRead();
+      const input = {
+        providers: rows,
+        receipts: await records.latestReceipts(),
+        incidents: read.incidents,
+        copyRead: read.copyRead,
+        recordsRead: read.recordsRead,
+        recordsState: records.state(),
+        now: clock.now(),
+      };
+      assert.deepEqual(summarize(/** @type {any} */ (input)), await summaryOf(trust), when);
+    };
+    await alike('before any check');
+    await trust.verify({ type: 'trust.verify', commandId: 'c1', trigger: 'verify-now' });
+    await alike('each fixture in its state');
+    clock.advance(60_001);
+    await alike('backup past its window');
+    clock.set(clock.now() - 2 * 60_001);
+    await alike('every receipt dated ahead');
+  });
+
   it('capture at risk or storage failing routes to the Recovery Center', async () => {
     const { trust } = await trustCenter();
     storageAnswer.next = {
