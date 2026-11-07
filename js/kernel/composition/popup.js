@@ -8,7 +8,7 @@ import { POPUP_HANDLERS } from '../core/application/handlers-popup.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { applyingCloseDrafts, pageDrafts } from './close-drafts.js';
 import { pageHost } from './host.js';
-import { PAGE_TIMERS, readsKernel, within } from './page-reads.js';
+import { PAGE_TIMERS, failingFast, readsKernel, within } from './page-reads.js';
 
 /** @typedef {import('./host.js').PageHost} PageHost */
 /** @typedef {import('./host.js').Client} Client */
@@ -110,6 +110,11 @@ function heldWrites(load, options) {
  * POPUP_APPLY_WAIT_MS once the reader is open (Q11), since a cold worker that migrates can take
  * its 5 seconds. Popup reads what's stored then, and `applied` answers once the apply is done.
  *
+ * Two runs send that apply: the start's, and the journal's apply of the editor saves closed pages
+ * left, which its send chunk starts (popupWrites). Each stops sending once the worker didn't take
+ * one of its commands (failingFast, #246), so a worker that doesn't answer holds the drafts' lock
+ * one wait per run, not one per edit. The quick note, a command of the page's own, never stops.
+ *
  * `writesReady` resolves once the writes are settled (heldWrites), or POPUP_WRITES_WAIT_MS after
  * its first ask, on the same timers. js/popup.js's quick note field takes Enter only then, since a
  * note sent before the writes are ready waits in the page, unjournaled, and a close would lose it
@@ -136,11 +141,18 @@ export function createPopupClient(
     ledger: reader.ledger,
     locks: host.locks ?? null,
     storage: drafts.storage,
+    failingFast,
   });
-  const client = applyingCloseDrafts(
-    /** @type {Client} */ (/** @type {unknown} */ (Object.freeze({ ...reads, execute: writes.execute }))),
+  // The start's run sends applyCloseDraft alone, which answers an Outcome
+  const run = failingFast(/** @type {(command: Command) => Promise<Outcome>} */ (writes.execute));
+  const started = applyingCloseDrafts(
+    /** @type {Client} */ (/** @type {unknown} */ (Object.freeze({ ...reads, execute: run }))),
     drafts,
     { load },
+  );
+  // The page's own commands, the quick note among them, never fail fast: only a run does
+  const client = /** @type {typeof started} */ (
+    /** @type {unknown} */ (Object.freeze({ ...started, execute: writes.execute }))
   );
   const timers = host.timers || PAGE_TIMERS;
   /** @type {ReturnType<Client['whenReady']> | undefined} */
