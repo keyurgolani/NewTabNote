@@ -581,7 +581,9 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     // Popup: 93,235 / 31,405 bytes in CI's strict build of fd6dc2c9, once #35 slice 4b-2 moved it,
     // plus 5%, rounded up (2026-11-06)
     assert.deepEqual(entries.popup.start.js, { raw: 97900, gzip: 33000 });
-    assert.deepEqual(entries.sidepanel.start.js, { raw: 112 * KIB, gzip: 40 * KIB });
+    // Side Panel: 90,066 / 30,643 bytes in CI's strict build of 0fdd7039, once #35 slice 4c moved
+    // it, plus 5%, rounded up (2026-11-07)
+    assert.deepEqual(entries.sidepanel.start.js, { raw: 94600, gzip: 32200 });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
     assert.equal(BUDGETS.timing.rounds, 12);

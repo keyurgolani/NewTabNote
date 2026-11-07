@@ -10,7 +10,7 @@
 | New tab | start CSS, raw / gzip | 105 / 19 KiB | 102.0 / 16.4 KiB (3.0 / 2.6) |
 | New tab | start HTML, raw / gzip | 72 / 12 KiB | 65.9 / 10.3 KiB (6.1 / 1.7) |
 | Popup | start JS, raw / gzip | 97,900 / 33,000 bytes | 93,235 / 31,405 bytes on #35 slice 4b-2 (4,665 / 1,595) |
-| Side Panel | start JS, raw / gzip | 112 / 40 KiB | 106.9 / 30.6 KiB (5.1 / 9.4) |
+| Side Panel | start JS, raw / gzip | 94,600 / 32,200 bytes | 90,066 / 30,643 bytes on #35 slice 4c (4,534 / 1,557) |
 | Offscreen | start JS, raw / gzip | 29 / 9 KiB | 27.5 / 8.6 KiB (1.5 / 0.4) |
 | Offscreen | start HTML, raw / gzip | 1 / 1 KiB | 230 / 174 bytes (794 / 850 bytes) |
 | `recovery.html` | start JS, raw / gzip | 395 / 123 KiB | 375.6 / 117.3 KiB on #115 (19.4 / 5.7) |
@@ -26,6 +26,7 @@
 - Offscreen's rows are today's size plus about 5%, set on 2026-11-01 from `7489d7b3`: start JS 28,150 / 8,818 bytes (the page's module and `js/network-guard.js`), and HTML 230 / 174. Its HTML row is 1 KiB, the smallest round row, since 5% of 230 bytes is 12. The workspace coordinator decided them for the owner, who can reverse it. The service worker's start is the whole of its one self-contained module, and its cold-start time is #35's.
 - The new tab's CSS row was first 100 KiB raw, sized from CSS CleanCSS minified, before #99 moved the build to lightningcss, which doesn't merge rules that aren't next to each other: the same sources minify about 5 KiB larger raw, while gzip went down. On 2026-10-31 the raw row went to 105 KiB, today's size plus about 5%, the rule the owner set for these rows: 102,274 bytes on `next` (126 under the old row), 103,744 with #27 slice 3b's failure and status states, and about 103,860 with #20 slice 4b's Settings section. The gzip row stays 19 KiB (16,672 bytes with 3b). The workspace coordinator decided it for the owner, who can reverse it. CSS beyond the row still needs the owner's call first.
 - Popup's JS row was 115 / 40 KiB until #35 slice 4b-2 moved its reads to #17's reader and its writes to the worker. On 2026-11-06 it went to that start plus 5%, rounded up, by the same rule: 93,235 / 31,405 bytes in CI's strict build of `fd6dc2c9`, run 42333740202. It was confirmed for the owner, who can reverse it.
+- Side Panel's JS row was 112 / 40 KiB until #35 slice 4c moved its reads to #17's reader and its writes to the worker. On 2026-11-07 it went to that start plus 5%, rounded up, by the same rule: 90,066 / 30,643 bytes in CI's strict build of `0fdd7039`. It was confirmed for the owner, who can reverse it.
 - `recovery.html`'s rows (#20 slice 4b) were set on 2026-11-01 by the same rule, today's size plus about 5%, from #115's strict build on `next` at `7489d7b`: start JS 384,641 / 120,126 bytes, start CSS 21,644 / 4,409, and start HTML 1,498 / 638. HTML takes the smallest round rows, since 5% of 1,498 bytes is 75. The workspace coordinator decided them for the owner, who can reverse it.
 
 ## The forbidden list

@@ -79,9 +79,9 @@
     "sidepanel": {
       "page": "sidepanel.html",
       "lazyChunks": ["close-drafts-applier", "journal-chunk", "sidepanel-send-chunk"],
-      "reason": "The Side Panel's start JS. Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #5's ready mark.",
+      "reason": "The Side Panel's start JS: its start once #35 slice 4c moved its reads to #17's reader and its writes to the worker, 90,066 / 30,643 bytes in CI's strict build of 0fdd7039, plus 5%, rounded up (2026-11-07; it was 112 / 40 KiB). Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #5's ready mark.",
       "start": {
-        "js": { "raw": 114688, "gzip": 40960 },
+        "js": { "raw": 94600, "gzip": 32200 },
         "css": null,
         "html": null,
         "fonts": null
