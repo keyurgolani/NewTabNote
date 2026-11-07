@@ -567,7 +567,9 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
     assert.deepEqual(entries.background.dependencies, ['valibot']);
-    assert.deepEqual(entries.popup.start.js, { raw: 115 * KIB, gzip: 40 * KIB });
+    // Popup: 93,235 / 31,405 bytes in CI's strict build of fd6dc2c9, once #35 slice 4b-2 moved it,
+    // plus 5%, rounded up (2026-11-06)
+    assert.deepEqual(entries.popup.start.js, { raw: 97900, gzip: 33000 });
     assert.deepEqual(entries.sidepanel.start.js, { raw: 112 * KIB, gzip: 40 * KIB });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
