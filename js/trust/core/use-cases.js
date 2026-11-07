@@ -32,10 +32,10 @@ import {
   unavailable,
   unavailableFrom,
 } from '../../kernel/core/contracts/outcomes.js';
-import { effectiveStatus, runCheck } from './checks.js';
+import { runCheck } from './checks.js';
 import { buildDiagnostics } from './diagnostics.js';
 import { pointId } from './evidence.js';
-import { incidentAction, nextActionOf, stillWorksOf, worstFirst } from './next-action.js';
+import { incidentAction, nextActionOf, stillWorksOf } from './next-action.js';
 import { payload as checkPayload } from './operations/recovery-check.js';
 import { payload as dismissPayload } from './operations/recovery-dismiss.js';
 import { payload as raisePayload } from './operations/recovery-raise.js';
@@ -43,6 +43,7 @@ import { payload as undismissPayload } from './operations/recovery-undismiss.js'
 import { payload as verifyPayload } from './operations/trust-verify.js';
 import { LEGACY_COPY_KEY } from './ports.js';
 import { incidentKey } from './records.js';
+import { effectiveStatus, worstFirst, worstStatus } from './summary.js';
 import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
 
 /** @typedef {import('./trust-records.js').TrustRecords} TrustRecords */
@@ -124,18 +125,6 @@ export function runsOn(costClass, trigger) {
   if (trigger === 'open') return costClass === 'local-cheap';
   if (trigger === 'idle') return costClass !== 'network';
   return true;
-}
-
-/**
- * The worst of `statuses`, or `unverified` when there are none
- * @param {readonly ProviderStatus[]} statuses
- * @returns {ProviderStatus}
- */
-export function worstStatus(statuses) {
-  if (statuses.length === 0) return 'unverified';
-  return /** @type {ProviderStatus} */ (
-    STATUS_ORDER[Math.min(...statuses.map(status => STATUS_ORDER.indexOf(/** @type {any} */ (status))))]
-  );
 }
 
 /**

@@ -59,9 +59,9 @@
 
 import * as v from '../../../lib/valibot/index.mjs';
 import { rejected, unavailable, unavailableFrom } from '../../../kernel/core/contracts/outcomes.js';
-import { effectiveStatus } from '../checks.js';
 import { RUN_OUTCOMES } from '../codes.js';
 import { payload as runPayload } from '../operations/recovery-run.js';
+import { effectiveStatus } from '../summary.js';
 import { CANCELLED_BY_USER, fileName, savedOf } from './catalog.js';
 import { CLASS_PROTECTIONS, checkConsent, checkProtected, needsConfirmation } from './gates.js';
 import {

@@ -19,7 +19,7 @@
 import * as v from '../../lib/valibot/index.mjs';
 import { providerId, recordId, remediationId } from './evidence.js';
 import { repairOf } from './remediation/repairs.js';
-import { SEVERITIES } from './vocabulary.js';
+import { worstFirst } from './summary.js';
 
 /** @typedef {import('./records.js').Incident} Incident */
 /** @typedef {import('./records.js').HealthReceipt} HealthReceipt */
@@ -37,19 +37,6 @@ export const nextActionSchema = v.variant('kind', [
 
 /** A receipt's error codes that say its check couldn't run, so Check now is the way on */
 const COULD_NOT_CHECK = Object.freeze(['check-timed-out', 'check-threw', 'invalid-check-result']);
-
-/**
- * `incidents` worst first: severity, then most recently seen
- * @template {{severity: string, lastSeenAt: number}} T
- * @param {readonly T[]} incidents
- * @returns {T[]}
- */
-export const worstFirst = incidents =>
-  [...incidents].sort(
-    (a, b) =>
-      SEVERITIES.indexOf(/** @type {any} */ (a.severity)) - SEVERITIES.indexOf(/** @type {any} */ (b.severity)) ||
-      b.lastSeenAt - a.lastSeenAt,
-  );
 
 /**
  * The remediation a view offers for a problem, or null
