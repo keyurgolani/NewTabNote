@@ -1,7 +1,8 @@
 /**
- * The journal's chunk on a page (#35 slice 3b): what the new tab, Popup and Side Panel load on
- * their first journaled command, or at idle once their first read is in (host.js,
- * journalingClient), so no page's start holds it. Its start, startPageJournal:
+ * The journal's chunk on a page (#35 slice 3b): what the new tab and Side Panel load on their first
+ * journaled command, or at idle once their first read is in (host.js, journalingClient), so neither
+ * page's start holds it. Popup's send chunk holds it instead, which Popup's root loads as it starts
+ * (composition/popup-send-chunk.js, #35 slice 4b-2, Q9). Its start, startPageJournal:
  * - The page's journaling (core/application/journaling.js), on `NewTabNoteJournal`, which it opens
  *   only once it's needed: at its start when the database is there, and otherwise at the first
  *   entry it writes, so a profile with no journal opens nothing and makes none until it does.
