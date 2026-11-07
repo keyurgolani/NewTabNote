@@ -24,6 +24,7 @@ import { createChromeFake } from './chrome-fake.mjs';
 
 /** @typedef {import('../../js/kernel/adapters/indexeddb/adapter.js').SettingsStore} SettingsStore */
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
+/** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} CoordinatorStatus */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Dispatch} Dispatch */
@@ -47,11 +48,13 @@ const PAGE_COMMANDS = handlerTable({
  *   settings: SettingsStore,
  *   status?: () => CoordinatorStatus,
  *   before?: (handed: Handed) => unknown,
+ *   answer?: (handed: Handed) => Outcome | undefined,
  *   page?: 'popup' | 'sidepanel',
  * }} profile - `status`: what each welcome says, ready unless a case says otherwise. `before`:
- *   what a handler awaits once it's handed a command, before it begins it
+ *   what a handler awaits once it's handed a command, before it begins it. `answer`: what a
+ *   handler answers in the kernel's place, for a command it gives an answer
  */
-export function popupWorker({ indexedDB, settings, status, before, page: which = 'popup' }) {
+export function popupWorker({ indexedDB, settings, status, before, answer, page: which = 'popup' }) {
   const fake = createChromeFake();
   /** @type {Array<{frame: unknown, operation: unknown}>} */
   const frames = [];
@@ -82,7 +85,7 @@ export function popupWorker({ indexedDB, settings, status, before, page: which =
     if (before) await before(one);
     // As the coordinator's turn does, it runs nothing once the router stopped waiting for it
     if (!context.begin()) return rejected('validation', 'cancelled');
-    return kernelOf(surface).execute(/** @type {any} */ (payload));
+    return answer?.(one) || kernelOf(surface).execute(/** @type {any} */ (payload));
   };
   fake.worker.install(chrome => {
     // Each frame a page's port brings, heard beside the router, which reads it too
