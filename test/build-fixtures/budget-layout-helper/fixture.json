@@ -1,5 +1,5 @@
 {
-  "rule": "the pages pass's host group leaves Vite's preload helper out, so it goes with the adapter group's modules and the pages' starts load it from the adapter chunk (#35 slice 4b-2, P1). The fixture raises the three pages' rows in its own build, so the move breaks no other rule",
+  "rule": "the pages pass's host group leaves Vite's preload helper out, so it goes with the adapter group's modules and the pages' starts load it from the adapter chunk (#35 slice 4b-2, P1). The fixture names close-drafts-chunk in the new tab's and Popup's rows, which the adapter chunk's close-drafts-on-demand.js then loads with import() from their starts, and raises the three pages' rows in its own build, so the move breaks no other rule",
   "expect": [
     "budget/layout"
   ],
@@ -11,6 +11,16 @@
       "file": "scripts/build/page-chunks.js",
       "replace": "{ name: 'host', test: (id) => id === PRELOAD_HELPER || host.has(id) },",
       "with": "{ name: 'host', test: (id) => host.has(id) },"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"startChunks\": [\"workspace\"],",
+      "with": "\"startChunks\": [\"workspace\"],\n      \"lazyChunks\": [\"close-drafts-chunk\"],"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"lazyChunks\": [\"close-drafts-applier\", \"popup-send-chunk\"]",
+      "with": "\"lazyChunks\": [\"close-drafts-applier\", \"close-drafts-chunk\", \"popup-send-chunk\"]"
     },
     {
       "file": "build/budgets.json",

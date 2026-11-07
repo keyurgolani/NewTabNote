@@ -1,5 +1,5 @@
 {
-  "rule": "Popup's root reads through #17's full adapter again, in place of its read-only reader, so its start loads the adapter chunk (#35 slice 4b-2, P2). The fixture raises Popup's row in its own build, so its bytes break no other rule",
+  "rule": "Popup's root reads through #17's full adapter again, in place of its read-only reader, so its start loads the adapter chunk (#35 slice 4b-2, P2). The fixture names close-drafts-chunk in Popup's row, which the adapter chunk's close-drafts-on-demand.js loads with import() from that start, and raises the row in its own build, so its lazy chunks and bytes break no other rule",
   "expect": [
     "budget/layout"
   ],
@@ -11,6 +11,11 @@
       "file": "js/kernel/composition/popup.js",
       "replace": "import { createIndexedDbReader } from '../adapters/indexeddb/reader.js';",
       "with": "import { createIndexedDbAdapter as createIndexedDbReader } from '../adapters/indexeddb/adapter.js';"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"lazyChunks\": [\"close-drafts-applier\", \"popup-send-chunk\"]",
+      "with": "\"lazyChunks\": [\"close-drafts-applier\", \"close-drafts-chunk\", \"popup-send-chunk\"]"
     },
     {
       "file": "build/budgets.json",

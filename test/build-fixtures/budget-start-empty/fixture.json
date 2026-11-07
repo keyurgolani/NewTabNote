@@ -1,7 +1,8 @@
 {
-  "rule": "the new tab's row empties startChunks, so its start would be the root alone: the root's import() of the workspace is named nowhere (#27 AC3)",
+  "rule": "the new tab's row empties startChunks, so its start would be the root alone: the root's import() of the workspace is named nowhere (#27 AC3). With the workspace chunk off the new tab's start, P4's check in scripts/build/budgets.js finds no adapter chunk there while Side Panel's start holds the adapter's modules, so budget/layout fails too (#35 slice 4b-2)",
   "expect": [
-    "budget/entry"
+    "budget/entry",
+    "budget/layout"
   ],
   "modes": [
     "production"
