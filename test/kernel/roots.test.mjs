@@ -178,14 +178,15 @@ describe('each composition root', () => {
     const [noteId] = created.kind === 'committed' ? created.changedIds : [];
     const renamed = await popup.execute({ type: 'renameNote', commandId: popup.ids.next(), noteId, name: 'Renamed' });
     assert.deepEqual(policyRefusal(renamed), ['validation', 'unknown-operation']);
-    // Side Panel reads, and writes nothing
+    // Side Panel reads, and its client, which sends the worker its apply of a closing tab's edit
+    // alone, refuses anything else before it goes (#35 slice 4c)
     const listed = await panel.query({ type: 'listNotes', view: 'sidePanel' });
     assert.deepEqual(listed.kind === 'ready' && listed.data.map(note => note.name).sort(), [
       'From the new tab',
       'Quick note',
     ]);
     const fromPanel = await panel.execute({ type: 'createNote', ...ids(panel) });
-    assert.deepEqual(policyRefusal(fromPanel), ['policy', 'not-on-surface']);
+    assert.deepEqual(policyRefusal(fromPanel), ['validation', 'unknown-operation']);
     // The worker captures, replays a note's creation a page journaled (#35 slice 3), and renames
     // nothing
     const captured = await worker.execute({
@@ -229,12 +230,12 @@ describe('each composition root', () => {
     const entry = { type: 'saveNoteContent', commandId: 'c-entry', noteId: 'n1', blocks: [] };
     const capture = /** @type {const} */ ({ type: 'text', content: 'From a page' });
     // A page's kernel and policy are on the shared catalog, which doesn't have them, so each is
-    // refused as unknown before any handler. Popup's client, which sends the worker its two
-    // commands alone, refuses them before they go (#35 slice 4b-2)
+    // refused as unknown before any handler. Popup's and Side Panel's clients, which send the
+    // worker their own commands alone, refuse them before they go (#35 slices 4b-2 and 4c)
     for (const [page, client, refusal] of /** @type {Array<[string, Client, string[]]>} */ ([
       ['the new tab', newtab, ['policy', 'unknown-command']],
       ['Popup', popup, ['validation', 'unknown-operation']],
-      ['Side Panel', panel, ['policy', 'unknown-command']],
+      ['Side Panel', panel, ['validation', 'unknown-operation']],
     ])) {
       const kept = await client.execute({
         type: 'keepJournalEntry',

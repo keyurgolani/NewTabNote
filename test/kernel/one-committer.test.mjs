@@ -263,7 +263,7 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
-  it("checks a root the build gains with no edit here: a planted Moment page whose script reaches Popup's root fails on the reader's open, which the list reads on popup alone (rule 2, #35 slice 4b-2)", () => {
+  it("checks a root the build gains with no edit here: a planted Moment page whose script reaches Popup's root fails on the reader's open, which the list reads on popup and sidepanel alone (rule 2, #35 slices 4b-2 and 4c)", () => {
     const problems = problemsOf({
       pages: { ...PAGES, moment: 'moment.html' },
       readFile: planted({
