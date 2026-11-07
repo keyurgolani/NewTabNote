@@ -8,6 +8,9 @@
  * root with `health`, and passes the ports each check reads (context.js) as the registry
  * context. Slice 4's Trust page and #35's coordinator are the first roots.
  *
+ * Each descriptor's id, group, core flag and hosts are its row's (rows.js), which a status page
+ * reads without this module, and so without any check in its graph (#20 slice 4c).
+ *
  * Every provider is owned by #20, which builds it; the interim ones name, in INTERIM, the
  * issue whose real provider replaces each. Each lists in `observes` the faults its check can
  * see, so an answer that no longer reports one resolves its incident; a provider that only
@@ -15,8 +18,9 @@
  * observes `open-failed` for CanvasTabDB only.
  */
 
+import { PROVIDER_ROWS } from './rows.js';
+
 /** @typedef {import('../../../kernel/registry/validate.js').Descriptor} Descriptor */
-/** @typedef {import('../vocabulary.js').HealthGroup} HealthGroup */
 /** @typedef {import('../vocabulary.js').CostClass} CostClass */
 /** @typedef {import('../vocabulary.js').Trigger} Trigger */
 
@@ -33,16 +37,13 @@ const CHEAP = Object.freeze(['open', 'verify-now', 'idle']);
 /** @type {readonly Trigger[]} */
 const EXPENSIVE = Object.freeze(['verify-now', 'idle']);
 
-/**
- * Where a provider runs: the new tab, and recovery.html (#20 slice 4b), whose Trust Center has a
- * row, a label and titles for every provider that runs there (test/kernel/recovery-surface.test.mjs)
- */
-const ON_PAGES = Object.freeze(/** @type {const} */ (['workspace', 'recovery']));
+/** Each provider's row, by id */
+const ROWS = new Map(PROVIDER_ROWS.map(item => [item.id, item]));
 
 /**
+ * A provider's descriptor: `fields`, with its row's group, core flag and hosts (rows.js)
  * @param {{
  *   id: string,
- *   group: HealthGroup,
  *   rank: number,
  *   label: string,
  *   operation: string,
@@ -51,19 +52,21 @@ const ON_PAGES = Object.freeze(/** @type {const} */ (['workspace', 'recovery']))
  *   triggers?: readonly Trigger[],
  *   observes: readonly string[],
  *   remediations?: readonly string[],
- *   core?: boolean,
- *   hosts?: readonly ('workspace' | 'recovery')[],
  *   load: () => Promise<unknown>,
- * }} fields - `hosts`: where it runs, the new tab and recovery.html unless it says otherwise
+ * }} fields
  * @returns {Descriptor}
  */
-function provider({ costClass = 'local-cheap', triggers, remediations, core, hosts = ON_PAGES, ...fields }) {
+function provider({ id, costClass = 'local-cheap', triggers, remediations, ...fields }) {
+  const row = ROWS.get(id);
+  if (!row) throw new Error(`no row for the provider ${id}`);
   /** @type {Descriptor} */
   const descriptor = {
+    id,
+    group: row.group,
     ...fields,
     version: 1,
     apiVersion: 1,
-    hosts: [...hosts],
+    hosts: [...row.hosts],
     owner: 20,
     costClass,
     timeoutMs: costClass === 'local-cheap' ? CHEAP_TIMEOUT_MS : EXPENSIVE_TIMEOUT_MS,
@@ -71,7 +74,7 @@ function provider({ costClass = 'local-cheap', triggers, remediations, core, hos
     fixtures: ['truthful-receipt'],
   };
   if (remediations) descriptor.remediations = remediations;
-  if (core) descriptor.core = true;
+  if (row.core) descriptor.core = true;
   return Object.freeze(descriptor);
 }
 
@@ -80,7 +83,6 @@ export const PROVIDERS = Object.freeze([
   // Where notes live: capture and storage (core), then recovery readiness
   provider({
     id: 'capture',
-    group: 'storage',
     rank: 10,
     label: 'Capture',
     operation: 'capture.probe-commit',
@@ -88,12 +90,10 @@ export const PROVIDERS = Object.freeze([
     freshnessMs: DAY,
     triggers: [...CHEAP, 'storage-restored'],
     remediations: ['retry-open'],
-    core: true,
     load: async () => (await import('./probe.js')).capture,
   }),
   provider({
     id: 'storage',
-    group: 'storage',
     rank: 20,
     label: 'Storage',
     operation: 'storage.probe-readwrite',
@@ -101,12 +101,10 @@ export const PROVIDERS = Object.freeze([
     freshnessMs: DAY,
     triggers: [...CHEAP, 'storage-restored'],
     remediations: ['retry-open', 'save-salvage-file'],
-    core: true,
     load: async () => (await import('./probe.js')).storage,
   }),
   provider({
     id: 'recovery-readiness',
-    group: 'recovery',
     rank: 10,
     label: 'Recovery points',
     operation: 'recovery.verify-newest-points',
@@ -119,7 +117,6 @@ export const PROVIDERS = Object.freeze([
   // What protects them: backup, sync, credentials (interim)
   provider({
     id: 'backup',
-    group: 'backup',
     rank: 10,
     label: 'Backup',
     operation: 'backup.read-legacy-settings',
@@ -129,7 +126,6 @@ export const PROVIDERS = Object.freeze([
   }),
   provider({
     id: 'sync',
-    group: 'sync',
     rank: 10,
     label: 'Sync',
     operation: 'sync.read-legacy-settings',
@@ -139,7 +135,6 @@ export const PROVIDERS = Object.freeze([
   }),
   provider({
     id: 'credentials',
-    group: 'vault',
     rank: 10,
     label: 'Saved keys',
     operation: 'credentials.find-legacy-secrets',
@@ -151,7 +146,6 @@ export const PROVIDERS = Object.freeze([
   // What can leave: permissions and destinations (real), AI scope grants and remote AI (interim)
   provider({
     id: 'permissions',
-    group: 'permissions',
     rank: 10,
     label: 'Permissions and destinations',
     operation: 'permissions.compare-manifest',
@@ -162,7 +156,6 @@ export const PROVIDERS = Object.freeze([
   }),
   provider({
     id: 'ai-scope-grants',
-    group: 'permissions',
     rank: 20,
     label: 'AI scope grants',
     operation: 'ai-scope-grants.read-grants',
@@ -172,7 +165,6 @@ export const PROVIDERS = Object.freeze([
   }),
   provider({
     id: 'remote-ai',
-    group: 'inference',
     rank: 10,
     label: 'Remote AI',
     operation: 'remote-ai.read-legacy-settings',
@@ -183,7 +175,6 @@ export const PROVIDERS = Object.freeze([
   // What runs on notes: local inference (interim), the index, and the platform (real)
   provider({
     id: 'local-inference',
-    group: 'inference',
     rank: 20,
     label: 'Local model',
     operation: 'local-inference.read-load-history',
@@ -195,7 +186,6 @@ export const PROVIDERS = Object.freeze([
   }),
   provider({
     id: 'index',
-    group: 'indexing',
     rank: 10,
     label: 'Index and derived data',
     operation: 'index.measure-lag',
@@ -206,20 +196,15 @@ export const PROVIDERS = Object.freeze([
   }),
   provider({
     id: 'coordinator',
-    group: 'platform',
     rank: 5,
     label: 'Background tasks',
     operation: 'coordinator.query-health',
     observes: ['start-failed'],
     freshnessMs: HOUR,
-    // Not on recovery.html yet: its row and words come with the slice that first shows it,
-    // through the design review, and the page's surface doesn't carry system.coordinatorHealth
-    hosts: ['workspace'],
     load: async () => (await import('./platform.js')).coordinator,
   }),
   provider({
     id: 'messaging',
-    group: 'platform',
     rank: 10,
     label: 'Messaging',
     operation: 'messaging.query-health',
@@ -229,7 +214,6 @@ export const PROVIDERS = Object.freeze([
   }),
   provider({
     id: 'contributions',
-    group: 'platform',
     rank: 20,
     label: 'Contributions',
     operation: 'contributions.read-resolution-report',
@@ -239,7 +223,6 @@ export const PROVIDERS = Object.freeze([
   }),
   provider({
     id: 'block-types',
-    group: 'platform',
     rank: 30,
     label: 'Block types',
     operation: 'block-types.read-resolution-report',
