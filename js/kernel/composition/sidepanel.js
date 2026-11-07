@@ -5,16 +5,15 @@
 
 import { createIndexedDbReader } from '../adapters/indexeddb/reader.js';
 import { SIDEPANEL_HANDLERS } from '../core/application/handlers-sidepanel.js';
-import { UnavailableError, unavailable } from '../core/contracts/outcomes.js';
+import { unavailable } from '../core/contracts/outcomes.js';
 import { applyingCloseDrafts, pageDrafts } from './close-drafts.js';
-import { journalingClient, kernelClient, pageHost } from './host.js';
+import { journalingClient, pageHost } from './host.js';
+import { PAGE_TIMERS, readsKernel, within } from './page-reads.js';
 
 /** @typedef {import('./host.js').PageHost} PageHost */
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('./close-drafts.js').Applier} Applier */
-/** @typedef {import('../adapters/indexeddb/reader.js').IndexedDbReader} IndexedDbReader */
 /** @typedef {import('../adapters/messaging/runtime-port.js').Runtime} Runtime */
-/** @typedef {import('../core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../core/ports/runtime.js').Timers} Timers */
 /** @typedef {import('../core/contracts/commands.js').Command} Command */
 /** @typedef {import('../core/contracts/outcomes.js').Outcome} Outcome */
@@ -37,12 +36,6 @@ export const SIDEPANEL_APPLY_WAIT_MS = 2000;
  * }} SidePanelHost
  */
 
-/** @type {Timers} the page's own */
-const PAGE_TIMERS = Object.freeze({
-  set: (callback, ms) => setTimeout(callback, ms),
-  clear: handle => clearTimeout(/** @type {ReturnType<typeof setTimeout>} */ (handle)),
-});
-
 /**
  * The page's own host
  * @returns {SidePanelHost}
@@ -55,30 +48,6 @@ export function sidePanelHost() {
     // No manifest, no version to say: the router refuses the hello
   }
   return { ...pageHost(), runtime: /** @type {Runtime | undefined} */ (globalThis.chrome?.runtime), extensionVersion };
-}
-
-/**
- * #17's reader as the kernel's adapter, for Side Panel's table of queries alone, as Popup's root
- * has it. Nothing that writes is there: the kernel refuses a command its table doesn't hold before
- * it recalls or commits anything (kernel.js), so nothing reaches the stand-ins, and each answers
- * as an adapter without it does.
- * @param {IndexedDbReader} reader
- * @returns {KernelAdapter & {open(): Promise<void>}}
- */
-function readsOnly(reader) {
-  const noExport = () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false));
-  return Object.freeze({
-    name: reader.name,
-    flags: reader.flags,
-    open: reader.open,
-    read: reader.read,
-    readSettings: reader.readSettings,
-    ledger: reader.ledger,
-    recall: () => undefined,
-    commit: () => Promise.resolve({ outcome: unavailable('adapter', 'adapter-failed', false), replayed: false }),
-    exportBackup: noExport,
-    exportData: noExport,
-  });
 }
 
 /**
@@ -125,22 +94,6 @@ function failingFast(send) {
 }
 
 /**
- * Resolves once `done` does, which never rejects, or `ms` from now on `timers`, whichever is first
- * @param {Promise<unknown>} done
- * @param {Timers} timers
- * @param {number} ms
- * @returns {Promise<void>}
- */
-const within = (done, timers, ms) =>
-  new Promise(resolve => {
-    const handle = timers.set(resolve, ms);
-    done.then(() => {
-      timers.clear(handle);
-      resolve();
-    });
-  });
-
-/**
  * Side Panel's client (#35 slice 4c). Its reads stay in the page, on #17's read-only reader (Q15),
  * which opens the database as it is and makes none. With no database, or one below this build's
  * version, it waits up to 5 seconds for the worker's migration run first (Q12). It answers
@@ -172,7 +125,7 @@ export function createSidePanelClient(
 ) {
   const { indexedDB, settings, awaitUpgrade } = host;
   const reader = createIndexedDbReader({ indexedDB, settings, awaitUpgrade });
-  const reads = kernelClient({ adapter: readsOnly(reader), surface: 'sidepanel', handlers: SIDEPANEL_HANDLERS });
+  const reads = readsKernel(reader, 'sidepanel', SIDEPANEL_HANDLERS);
   const sends = heldSends(send, {
     runtime: /** @type {Runtime} */ (host.runtime),
     extensionVersion: host.extensionVersion ?? '',

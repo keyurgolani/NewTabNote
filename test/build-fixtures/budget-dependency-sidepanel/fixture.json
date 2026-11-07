@@ -9,8 +9,8 @@
   "edits": [
     {
       "file": "js/kernel/composition/sidepanel.js",
-      "replace": "import { journalingClient, kernelClient, pageHost } from './host.js';\n",
-      "with": "import { journalingClient, kernelClient, pageHost } from './host.js';\nimport { payload as applyPayload } from '../core/contracts/operations/apply-close-draft.js';\n"
+      "replace": "import { journalingClient, pageHost } from './host.js';\n",
+      "with": "import { journalingClient, pageHost } from './host.js';\nimport { payload as applyPayload } from '../core/contracts/operations/apply-close-draft.js';\n"
     },
     {
       "file": "js/kernel/composition/sidepanel.js",
