@@ -182,9 +182,40 @@ describe("an update that is waiting needs action nowhere, in trust.summary as in
     }
   });
 
-  it('a group with a waiting update and another problem still needs action for the other, which is its cause', async () => {
-    const { trust, records, clock } = await center({});
-    // Another problem in the storage group, seen before the update's check
+  it('a group with a waiting update and another problem still needs action for the other, which is its cause, with its own code', async () => {
+    for (const state of [{}, { blocked: true }]) {
+      const { trust, records, clock } = await center(state);
+      // Another problem in the storage group, seen before the update's check
+      const raised = /** @type {any} */ (
+        await trust.raise({
+          type: 'recovery.raise',
+          commandId: 'c0',
+          providerId: 'storage',
+          faultCode: 'scan-findings',
+          subjectId: 'CanvasTabDB',
+          severity: 'degraded',
+          evidence: { count: 3 },
+        })
+      );
+      assert.equal(raised.kind, 'committed', JSON.stringify(raised));
+      clock.advance(MINUTE);
+      await checkOnOpen(trust);
+      const update = state.blocked ? 'storage/migration-blocked' : 'storage/migration-pending';
+      assert.deepEqual((await openFaults(records)).sort(), [update, 'storage/scan-findings']);
+      const group = storageGroup(await summaryOf(trust));
+      // The update's code (blocked-upgrade) is the update's own: the other problem's evidence has none
+      assert.deepEqual(
+        [group.needsAction, group.cause && group.cause.faultCode, group.cause && group.cause.errorCode],
+        [1, 'scan-findings', null],
+        JSON.stringify(state),
+      );
+    }
+  });
+
+  it("an update that didn't finish beside a later problem: the later one is the cause, with none of the update's code", async () => {
+    const { trust, records, clock } = await center({ status: 'failed', code: 'schema-mismatch' });
+    await checkOnOpen(trust);
+    clock.advance(MINUTE);
     const raised = /** @type {any} */ (
       await trust.raise({
         type: 'recovery.raise',
@@ -197,11 +228,22 @@ describe("an update that is waiting needs action nowhere, in trust.summary as in
       })
     );
     assert.equal(raised.kind, 'committed', JSON.stringify(raised));
-    clock.advance(MINUTE);
-    await checkOnOpen(trust);
-    assert.deepEqual((await openFaults(records)).sort(), ['storage/migration-pending', 'storage/scan-findings']);
+    assert.deepEqual((await openFaults(records)).sort(), ['storage/migration-failed', 'storage/scan-findings']);
     const group = storageGroup(await summaryOf(trust));
-    assert.deepEqual([group.needsAction, group.cause && group.cause.faultCode], [1, 'scan-findings']);
+    assert.deepEqual(
+      [group.needsAction, group.cause && group.cause.faultCode, group.cause && group.cause.errorCode],
+      [2, 'scan-findings', null],
+    );
+  });
+
+  it('a group whose only problem is an update that waits has no cause', async () => {
+    for (const state of [{}, { blocked: true }]) {
+      const { trust, records } = await center(state);
+      await checkOnOpen(trust);
+      assert.equal((await openFaults(records)).length, 1, JSON.stringify(state));
+      const group = storageGroup(await summaryOf(trust));
+      assert.deepEqual([group.needsAction, group.cause], [0, null], JSON.stringify(state));
+    }
   });
 });
 
@@ -319,6 +361,55 @@ describe("summarize: trust.summary from what the records read and the providers'
     ]);
   });
 
+  it("counts an incident whose fault code or severity this build doesn't register, but never makes it the cause", async () => {
+    const { summarize } = await import('../../js/trust/core/summary.js');
+    const now = 1_800_000_000_000;
+    /**
+     * An open storage incident, as a newer build could have written it
+     * @param {string} id
+     * @param {string} faultCode
+     * @param {string} severity
+     * @param {number} lastSeenAt
+     */
+    const incident = (id, faultCode, severity, lastSeenAt) => ({
+      id,
+      providerId: 'storage',
+      faultCode,
+      subjectId: 'CanvasTabDB',
+      severity,
+      state: 'open',
+      dismissed: false,
+      firstSeenAt: lastSeenAt,
+      lastSeenAt,
+      occurrences: 1,
+      evidence: {},
+      affected: [],
+      preserved: [],
+    });
+    /** @param {any[]} incidents */
+    const storageOf = incidents =>
+      summarize({
+        providers: [{ id: 'storage', group: 'storage', core: true }],
+        receipts: [],
+        incidents: /** @type {any} */ (incidents),
+        copyRead: true,
+        recordsRead: true,
+        recordsState: 'open',
+        now,
+      }).groups[0];
+    const known = incident('known', 'scan-findings', 'degraded', now - 2000);
+    // Seen later, so it would be the worst; and a severity no list has, which sorts first
+    for (const unknown of [
+      incident('new-fault', 'not-a-fault', 'degraded', now - 1000),
+      incident('new-severity', 'scan-findings', 'not-a-severity', now - 3000),
+    ]) {
+      const group = storageOf([known, unknown]);
+      assert.deepEqual([group.needsAction, group.cause && group.cause.incidentId], [2, 'known'], unknown.id);
+      const alone = storageOf([unknown]);
+      assert.deepEqual([alone.needsAction, alone.cause], [1, null], unknown.id);
+    }
+  });
+
   it('reaches only the vocabulary, the codes and the update rule, so a status page loads no registry, checks module, Valibot or payload schema with it', async () => {
     const reached = [...importGraph(path.join(ROOT, 'js', 'trust', 'core', 'summary.js'))].map(file =>
       path.relative(ROOT, file).split(path.sep).join('/'),
@@ -335,6 +426,70 @@ describe("summarize: trust.summary from what the records read and the providers'
 });
 
 describe("the providers' rows (#20 slice 4c)", () => {
+  it('rowsOn(host) gives the rows of the providers that run on a host, so summarize answers what a root on recovery.html answers over the whole catalog', async () => {
+    const { summarize } = await import('../../js/trust/core/summary.js');
+    const { PROVIDER_ROWS, rowsOn } = await import('../../js/trust/core/providers/rows.js');
+    const clock = manualClock();
+    const records = createTrustRecords({
+      store: createMemoryTrustStore(),
+      settings: settingsArea(),
+      clock,
+      ids: hexIds(),
+      locks: lockManager(),
+    });
+    await records.open();
+    // recovery.html's root registers the whole catalog, on its own host
+    const root = createRegistryRoot({ host: 'recovery' });
+    root.register(health, PROVIDERS);
+    const resolution = root.resolve();
+    const runtime = createRuntime(resolution);
+    await runtime.probe();
+    const trust = createTrustUseCases({
+      records,
+      journal: createDiagnosticJournal({ records, clock, strict: true }),
+      clock,
+      timers: realTimers,
+      locks: lockManager(),
+      registry: { resolution, runtime, context: {} },
+      versions: { extension: '1.4.1', browser: null, canvasSchema: 8, trustSchema: 1 },
+    });
+    // A problem of a provider that runs only on the new tab: it counts, in no group
+    const raised = /** @type {any} */ (
+      await trust.raise({
+        type: 'recovery.raise',
+        commandId: 'c0',
+        providerId: 'coordinator',
+        faultCode: 'start-failed',
+        severity: 'degraded',
+      })
+    );
+    assert.equal(raised.kind, 'committed', JSON.stringify(raised));
+    const read = await records.incidentsRead();
+    const summary = await summaryOf(trust);
+    assert.deepEqual(
+      summarize({
+        providers: rowsOn('recovery'),
+        receipts: await records.latestReceipts(),
+        incidents: read.incidents,
+        copyRead: read.copyRead,
+        recordsRead: read.recordsRead,
+        recordsState: records.state(),
+        now: clock.now(),
+      }),
+      summary,
+    );
+    const platform = summary.groups.find(group => group.group === 'platform');
+    assert.deepEqual(
+      [platform && platform.providers, PROVIDER_ROWS.filter(row => row.group === 'platform').length],
+      [3, 4],
+      'the coordinator runs only on the new tab',
+    );
+    assert.deepEqual(
+      rowsOn('workspace').map(row => row.id),
+      PROVIDER_ROWS.map(row => row.id),
+    );
+  });
+
   it("are the catalog's id, group, core and hosts, one for one, in its order", async () => {
     const { PROVIDER_ROWS } = await import('../../js/trust/core/providers/rows.js');
     /** @param {{id: string, group: string, core?: boolean, hosts: readonly string[]}} item */
