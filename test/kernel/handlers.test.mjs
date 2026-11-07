@@ -16,6 +16,7 @@ import path from 'node:path';
 import ts from 'typescript';
 
 import { POPUP_SENDS } from '../../js/kernel/composition/popup-send-chunk.js';
+import { SIDEPANEL_SENDS } from '../../js/kernel/composition/sidepanel-send-chunk.js';
 import { ALL_HANDLERS, NEWTAB_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
 import { CONTEXT_HANDLERS } from '../../js/kernel/core/application/handlers-newtab.js';
 import { POPUP_HANDLERS } from '../../js/kernel/core/application/handlers-popup.js';
@@ -73,7 +74,8 @@ const APPLIER_MODULES =
  * the kernel itself (kernel.js, maintain), and whether it writes notes, so its root applies a
  * closing tab's edits and journals what it sends (#33, #35 slice 3b). recovery.html reads only
  * its theme through its kernel, so it does neither (#20 slice 4b). `sends` looks up the commands a
- * page's root sends the worker over #13's port, not its kernel, as Popup's does (#35 slice 4b-2).
+ * page's root sends the worker over #13's port, not its kernel, as Popup's and Side Panel's do
+ * (#35 slices 4b-2 and 4c).
  * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, sends?: (type: string) => unknown, maintains: boolean, writesNotes: boolean}>}
  */
 const PAGES = [
@@ -91,6 +93,7 @@ const PAGES = [
     entries: ['js/sidepanel.js', 'js/insights-summary.js'],
     surface: 'sidepanel',
     table: SIDEPANEL_HANDLERS,
+    sends: SIDEPANEL_SENDS,
     maintains: false,
     writesNotes: true,
   },
@@ -412,6 +415,16 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     });
   }
 
+  it("Side Panel sends the worker no journaled command, so its journal's session needn't be its client's (#35 slice 4c, rule 4)", () => {
+    const sent = Object.keys(COMMANDS).filter(type => SIDEPANEL_SENDS(type));
+    assert.deepEqual(sent, ['applyCloseDraft']);
+    assert.deepEqual(
+      sent.filter(type => COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].journaled),
+      [],
+      'a journaled one would need the journal on the client session, as Popup has it',
+    );
+  });
+
   it('the scan reads a send wherever its object is built, and says what it cannot read', () => {
     const page = [
       "const command = { type: 'createNote', commandId: 'c1' };",
@@ -516,7 +529,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     assert.deepEqual(bulkWithoutRefusal(ALL_HANDLERS), []);
   });
 
-  it("the close-time drafts' apply is in the table of each page whose root applies them, or in its sends to the worker, as Popup's is, and not the worker's table, which leaves a journaled editor save to the pages (#33, #35 slices 3 and 4b-2)", () => {
+  it("the close-time drafts' apply is in the table of each page whose root applies them, or in its sends to the worker, as Popup's and Side Panel's are, and not the worker's table, which leaves a journaled editor save to the pages (#33, #35 slices 3, 4b-2 and 4c)", () => {
     for (const { page, entries, surface, table, sends, maintains, writesNotes } of PAGES) {
       const applies = surface !== 'worker-internal' && writesNotes;
       assert.equal(sentBy({ page, entries, maintains }).sent.has('applyCloseDraft'), applies, `${page} sends it`);
