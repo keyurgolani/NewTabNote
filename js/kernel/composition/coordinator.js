@@ -54,10 +54,13 @@
  * cuts the turn and starts the next, so one command that never settles can't hold every later one
  * for the worker's life. The cut command answers `unavailable`, retryable, `turn-exceeded`, and
  * commits nothing from the cut on (the kernel's fence, core/application/kernel.js), so no later
- * command is overtaken by an older one landing late. Its caller had its answer from its own client
- * long before, and a journaled one replays at the next drain. Each cut is `coordinator.turn-stuck`,
- * by the command's type and how long it ran. system.coordinatorHealth says which command holds the
- * queue (`running`), and how many turns it cut in this worker's life (`cutTurns`).
+ * command is overtaken by an older one landing late. A caller with a client deadline had its answer
+ * from that client long before, since a client gives up 31 s after it sends. One that sends with
+ * none, as the journal drain's replays and js/background.js's rerun of a capture with no entry do,
+ * gets its answer from the cut (contracts/limits.js, TURN_LIMIT_MS), and a journaled one replays at
+ * the next drain. Each cut is `coordinator.turn-stuck`, by the command's type and how long it ran.
+ * system.coordinatorHealth says which command holds the queue (`running`), and how many turns it
+ * cut in this worker's life (`cutTurns`).
  */
 
 import { TURN_EXCEEDED } from '../core/application/kernel.js';
