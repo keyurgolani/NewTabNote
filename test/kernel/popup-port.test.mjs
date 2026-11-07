@@ -4,7 +4,9 @@
 // starts. Each command waits for the chunk in order, then for the journal's owner lock, and goes,
 // journaled as the catalog says, on the session the worker's router knows the page by, the one its
 // journal names, so the drain on a closed port waits on that page alone. A chunk that can't load
-// sends nothing. On legacy-env profiles, with a stand-in for the worker (popup-worker.mjs).
+// sends nothing. Each of Popup's two runs, the start's apply and the journal's, stops sending once
+// the worker didn't take one of its commands, and the quick note never stops (#246). On legacy-env
+// profiles, with a stand-in for the worker (popup-worker.mjs).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,14 +18,15 @@ import { createPopupClient } from '../../js/kernel/composition/popup.js';
 import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
-import { DRAFT_PREFIX } from '../../js/kernel/core/domain/close-draft-keys.js';
-import { ownerLock } from '../../js/kernel/core/domain/journal.js';
+import { DRAFTS_LOCK, DRAFT_PREFIX } from '../../js/kernel/core/domain/close-draft-keys.js';
+import { journalEntry, ownerLock } from '../../js/kernel/core/domain/journal.js';
 import { legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { settle, testScheduler } from './messaging-support.mjs';
 import { popupWorker } from './popup-worker.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('./popup-worker.mjs').Handed} Handed */
+/** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/ports/runtime.js').Timers} Timers */
 
 /**
@@ -37,6 +40,9 @@ const APPLY_WAIT_MS = 2000;
 
 /** How long Popup's field waits for its writes, at most, before it takes Enter all the same (#242) */
 const WRITES_WAIT_MS = 5000;
+
+/** When the closing tabs and the closed pages wrote what they left */
+const AT = Date.UTC(2026, 10, 6, 9, 0);
 
 /** @type {(id: string, canvasId: string, order: number, content?: string) => any} */
 const block = (id, canvasId, order, content) => legacyEnv.block(id, canvasId, order, content);
@@ -68,14 +74,15 @@ async function profile() {
 /**
  * Popup on `tab`'s profile, its writes to a stand-in for the worker
  * @param {LegacyContext} tab
- * @param {{status?: any, before?: (handed: Handed) => unknown, timers?: Timers, locks?: unknown, send?: () => Promise<unknown>}} [options]
+ * @param {{status?: any, before?: (handed: Handed) => unknown, answer?: (handed: Handed) => Outcome | undefined, timers?: Timers, locks?: unknown, send?: () => Promise<unknown>}} [options]
  */
-function popupOn(tab, { status, before, timers, locks, send } = {}) {
+function popupOn(tab, { status, before, answer, timers, locks, send } = {}) {
   const stand = popupWorker({
     indexedDB: tab.env.indexedDB,
     settings: tab.env.chrome.api.storage.local,
     status,
     before,
+    answer,
   });
   const host = {
     indexedDB: tab.env.indexedDB,
@@ -130,16 +137,16 @@ async function journalOf(tab) {
 }
 
 /**
- * A closing tab's edit of A, a1 changed, on the base the tab saw, with `content` for a1
- * @param {LegacyContext} tab
+ * A closing tab's edit of A, a1 changed, on the base the tab saw
+ * @param {{id?: string, page?: string, at?: number, content?: string}} [options]
  */
-function writeDraft(tab, content = 'alpha, edited as the tab closed') {
-  const draft = {
+function draftOf({ id = 'draft-a', page = 'page-1', at = AT, content = 'alpha, edited as the tab closed' } = {}) {
+  return {
     v: 1,
-    id: 'draft-a',
-    page: 'page-1',
+    id,
+    page,
     noteId: 'A',
-    at: Date.UTC(2026, 10, 6, 9, 0),
+    at,
     base: {
       revision: 0,
       updatedAt: null,
@@ -157,9 +164,62 @@ function writeDraft(tab, content = 'alpha, edited as the tab closed') {
     todoProgress: null,
     linkedNames: [],
   };
+}
+
+/**
+ * A closing tab's edit of A, a1 changed, on the base the tab saw, with `content` for a1, where its
+ * closing tab leaves it, and its key
+ * @param {LegacyContext} tab
+ * @param {string} [content]
+ * @param {{id?: string, page?: string, at?: number}} [options]
+ */
+function writeDraft(tab, content = 'alpha, edited as the tab closed', options = {}) {
+  const draft = draftOf({ ...options, content });
   tab.env.global.localStorage.setItem(`${DRAFT_PREFIX}${draft.id}`, JSON.stringify(draft));
   return `${DRAFT_PREFIX}${draft.id}`;
 }
+
+/**
+ * An editor save of A's a1 that a page journaled and closed before its answer, under `id`, by the
+ * page `session`, at `at`
+ * @param {LegacyContext} tab
+ * @param {{id?: string, session?: string, at?: number}} [options]
+ */
+async function leaveSave(tab, { id = 'c-save', session = 'page-gone', at = AT } = {}) {
+  const content = 'alpha, saved as its page closed';
+  const blocks = [{ id: 'a1', type: 'text', content, order: 0 }];
+  const command = { type: 'saveNoteContent', commandId: id, noteId: 'A', blocks, deriveFromStored: true };
+  /** @type {any} the edit the page journaled with its save */
+  const draft = {
+    ...draftOf({ id, page: session, at, content }),
+    blocks: blocks.map(saved => ({ ...saved, canvasId: 'A' })),
+  };
+  const writer = inContextStores({ indexedDB: tab.env.indexedDB }).journal();
+  await writer.open();
+  await writer.put(
+    journalEntry({
+      command,
+      v: 1,
+      noteId: 'A',
+      surface: 'newtab',
+      ownerSessionId: session,
+      seq: 1,
+      createdAt: at,
+      draft,
+      pane: 'main',
+    }),
+  );
+  writer.close();
+}
+
+/**
+ * Whether the drafts' lock is held now, as a run holds it while it applies
+ * @param {LegacyContext} tab
+ */
+const holdsDraftsLock = async tab =>
+  ((await tab.env.global.navigator.locks.query()).held || []).some(
+    (/** @type {{name?: string}} */ lock) => lock.name === DRAFTS_LOCK,
+  );
 
 describe("Popup's writes, over #13's port (#35 slice 4b-2)", () => {
   it('sends the quick note to the worker as popup, journaled until its answer, and it commits there (rule 3)', async () => {
@@ -400,5 +460,106 @@ describe("When Popup's field takes Enter (#242)", () => {
     await scheduler.advance(1);
     assert.equal(answered, true, 'for 5 s at most');
     stand.close();
+  });
+});
+
+describe("Popup's runs stop sending once the worker didn't take one of their commands (#246, Q5's b)", () => {
+  /** The worker's answer when it can't take a command */
+  const notTaken = () => unavailable('coordinator', 'unavailable', true);
+
+  it("sends no more of the start's run once the worker didn't take one, and answers the rest at once, unsent", async () => {
+    const tab = await profile();
+    const keys = [
+      writeDraft(tab, 'alpha, from a first tab', { id: 'draft-a', page: 'page-1', at: AT }),
+      writeDraft(tab, 'alpha, from a second tab', { id: 'draft-b', page: 'page-2', at: AT + 1 }),
+      writeDraft(tab, 'alpha, from a third tab', { id: 'draft-c', page: 'page-3', at: AT + 2 }),
+    ];
+    const { stand, client } = popupOn(tab, { answer: notTaken });
+    try {
+      assert.deepEqual((await client.applied())?.kept, ['A', 'A', 'A'], 'all three stay for the next start');
+      assert.deepEqual(
+        stand.handed.map(one => one.commandId),
+        ['draft-a-apply'],
+        'the other two never went',
+      );
+      for (const key of keys) assert.notEqual(tab.env.global.localStorage.getItem(key), null);
+    } finally {
+      stand.close();
+    }
+  });
+
+  it("sends no more of the journal's run once the worker didn't take one of its saves, and both saves stay", async () => {
+    const tab = await profile();
+    await leaveSave(tab, { id: 'c-save', session: 'page-gone', at: AT });
+    await leaveSave(tab, { id: 'd-save', session: 'page-gone-2', at: AT + 1 });
+    const { stand } = popupOn(tab, { answer: notTaken });
+    try {
+      assert.equal(await until(() => stand.handed.length > 0), true, "the journal's run sent its first save");
+      // The run holds the drafts' lock until it's done, so the case's own request waits for its end
+      await tab.env.global.navigator.locks.request(DRAFTS_LOCK, { mode: 'exclusive' }, async () => {});
+      assert.deepEqual(
+        stand.handed.map(one => one.commandId),
+        ['c-save-apply'],
+        'the second never went',
+      );
+      assert.deepEqual(
+        (await journalOf(tab)).map(entry => entry.opId).sort(),
+        ['c-save', 'd-save'],
+        'both stay for the next start',
+      );
+    } finally {
+      stand.close();
+    }
+  });
+
+  it("still sends the quick note once the start's run stopped, since a page's own command never fails fast", async () => {
+    const tab = await profile();
+    writeDraft(tab);
+    const { stand, client } = popupOn(tab, {
+      answer: one => (one.type === 'applyCloseDraft' ? notTaken() : undefined),
+    });
+    try {
+      assert.deepEqual((await client.applied())?.kept, ['A'], "the start's run stopped at its edit");
+      const note = quickNote(client);
+      assert.equal((await client.execute(note)).kind, 'committed', 'the quick note went, and committed');
+      assert.deepEqual(
+        stand.handed.map(one => [one.type, one.commandId]),
+        [
+          ['applyCloseDraft', 'draft-a-apply'],
+          ['createNote', note.commandId],
+        ],
+      );
+    } finally {
+      stand.close();
+    }
+  });
+
+  it("starts the journal's run afresh after the start's run stopped, so its first save still goes", async () => {
+    const tab = await profile();
+    writeDraft(tab);
+    await leaveSave(tab);
+    /** @type {(value?: unknown) => void} */
+    let chunkIn = () => {};
+    const loaded = new Promise(resolve => {
+      chunkIn = resolve;
+    });
+    const { stand, client } = popupOn(tab, {
+      answer: one => (one.commandId === 'draft-a-apply' ? notTaken() : undefined),
+      send: () => loaded.then(() => import('../../js/kernel/composition/popup-send-chunk.js')),
+    });
+    try {
+      const applied = client.applied();
+      // The start's run takes the drafts' lock before the send chunk is in, so it goes first
+      assert.equal(await until(() => holdsDraftsLock(tab)), true, "the start's run holds the drafts' lock");
+      chunkIn();
+      assert.deepEqual((await applied)?.kept, ['A']);
+      assert.equal(await until(() => stand.handed.length === 2), true, "the journal's run sent its own");
+      assert.deepEqual(
+        stand.handed.map(one => one.commandId),
+        ['draft-a-apply', 'c-save-apply'],
+      );
+    } finally {
+      stand.close();
+    }
   });
 });
