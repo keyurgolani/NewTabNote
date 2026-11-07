@@ -14,7 +14,9 @@
  * Status is always aggregated from receipts, never from settings: a provider with no receipt
  * reads `unverified`, a receipt past its window or dated in the future reads `stale`, and the
  * worst core status counts `unverified` and `stale` as worse than `verified`, so no summary is
- * healthy until a real check passed (approved AC3).
+ * healthy until a real check passed (approved AC3). trust.summary is summary.js's summarize, and
+ * trust.report reads each provider by its assess, over the providers the registry root resolved
+ * (#20 slice 4c), so a page that computes the summary itself answers alike.
  *
  * Checks run in the page that asks until #35 schedules them: opening Trust runs `local-cheap`
  * checks only, idle work adds `local-expensive` ones, and Verify now runs them all. Each
@@ -43,8 +45,8 @@ import { payload as undismissPayload } from './operations/recovery-undismiss.js'
 import { payload as verifyPayload } from './operations/trust-verify.js';
 import { LEGACY_COPY_KEY } from './ports.js';
 import { incidentKey } from './records.js';
-import { effectiveStatus, worstFirst, worstStatus } from './summary.js';
-import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
+import { assess, summarize } from './summary.js';
+import { SEVERITIES } from './vocabulary.js';
 
 /** @typedef {import('./trust-records.js').TrustRecords} TrustRecords */
 /** @typedef {import('./journal.js').DiagnosticJournal} DiagnosticJournal */
@@ -62,25 +64,13 @@ import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
 /** @typedef {import('../../kernel/registry/resolve.js').Resolution} Resolution */
 /** @typedef {import('../../kernel/registry/resolve.js').Contribution} Contribution */
 /** @typedef {import('../../kernel/registry/runtime.js').Runtime} Runtime */
-/** @typedef {import('./operations/trust-summary.js').TrustSummary} TrustSummary */
-/** @typedef {import('./operations/trust-summary.js').Cause} Cause */
 /** @typedef {import('./operations/trust-report.js').TrustReport} TrustReport */
 /** @typedef {import('./operations/recovery-check.js').Checked} Checked */
 /** @typedef {import('./operations/recovery-copies.js').Copy} Copy */
 /** @typedef {import('../../kernel/core/contracts/outcomes.js').Outcome} Outcome */
 
-/** The statuses that are a fault, which a group with no open problem names as its cause */
-const FAULT_STATUSES = Object.freeze(['failed', 'action-required', 'degraded']);
-
 /** The most copies recovery.copies lists */
 const MAX_COPIES = 500;
-
-/**
- * The cause an incident's or a receipt's evidence names: its error code, or null
- * @param {{evidence: Record<string, unknown>}} held
- * @returns {any}
- */
-const errorCodeOf = held => (typeof held.evidence.errorCode === 'string' ? held.evidence.errorCode : null);
 
 /**
  * Whether a check's `looked` covers `incident`: its fault, for every subject or its own
@@ -171,17 +161,14 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       });
 
   /**
-   * Every provider with its latest receipt and the status that reads as now
+   * What trust.summary and trust.report read: the providers that run here, and what the records
+   * hold now (summary.js)
    * @param {number} now
    */
-  const statuses = async now => {
-    const latest = new Map((await records.latestReceipts()).map(receipt => [receipt.providerId, receipt]));
-    return providers().map(provider => {
-      const receipt = latest.get(provider.id) || null;
-      /** @type {ProviderStatus} */
-      const status = receipt ? effectiveStatus(receipt, now) : 'unverified';
-      return { provider, receipt, status };
-    });
+  const read = async now => {
+    const receipts = await records.latestReceipts();
+    const { incidents, copyRead, recordsRead } = await records.incidentsRead();
+    return { providers: providers(), receipts, incidents, copyRead, recordsRead, recordsState: records.state(), now };
   };
 
   /**
@@ -272,81 +259,6 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
   };
 
   /**
-   * What every status page reads: each provider's status, the incidents, and what they add up
-   * to. Dismissed incidents stay listed but leave Needs action and the cards. Capture risk
-   * stays strict: capture reads `safe` only on a fresh core receipt verified after the latest
-   * sighting of every open capture-risk incident, dismissed ones included (the records time a
-   * capture-risk sighting after the newest core receipt, whatever the clock), so a dismissed one
-   * reads `unknown` until a later probe passes, never `safe`, and a new failure ends its
-   * dismissal (incidents.js).
-   * @param {number} now
-   */
-  const assess = async now => {
-    const all = await statuses(now);
-    const { incidents: listed, copyRead, recordsRead } = await records.incidentsRead();
-    const open = listed.filter(incident => incident.state !== 'resolved');
-    // Writes failing, or a store or settings copy this read couldn't reach: what's held or
-    // stored is unknown, so nothing is called safe and something needs action
-    const blind = records.state() === 'fallback' || !copyRead || !recordsRead;
-    const needsAction = open.filter(incident => !incident.dismissed);
-    const core = all.filter(({ provider }) => provider.core);
-    const fresh = core.filter(({ status }) => status !== 'stale');
-    const atRisk =
-      fresh.some(({ receipt }) => receipt && receipt.capture === 'at-risk') ||
-      needsAction.some(incident => incident.severity === 'capture-risk');
-    // The latest sighting of any open capture-risk incident, dismissed or not
-    const riskSeenAt = Math.max(
-      -1,
-      ...open.filter(incident => incident.severity === 'capture-risk').map(incident => incident.lastSeenAt),
-    );
-    const safe = fresh.some(({ receipt }) => receipt && receipt.capture === 'safe' && receipt.verifiedAt > riskSeenAt);
-    return { all, listed, copyRead, recordsRead, open, blind, needsAction, core, atRisk, safe };
-  };
-
-  /**
-   * A group's cause: its worst problem that needs action, or, with none, its worst member at
-   * fault by its receipt, of the members with no open problem (one whose problems were all
-   * dismissed says no more); null when nothing in it is at fault
-   * @param {{provider: ProviderInfo, receipt: HealthReceipt | null, status: ProviderStatus}[]} members
-   * @param {readonly Incident[]} needs - the group's incidents that need action
-   * @param {readonly Incident[]} open - every open incident, dismissed ones included
-   * @returns {Cause | null}
-   */
-  const causeOf = (members, needs, open) => {
-    const [worst] = worstFirst(needs);
-    if (worst) {
-      return {
-        from: 'incident',
-        providerId: worst.providerId,
-        faultCode: worst.faultCode,
-        errorCode: errorCodeOf(worst),
-        severity: worst.severity,
-        consequenceKey: null,
-        incidentId: worst.id,
-        at: worst.lastSeenAt,
-      };
-    }
-    const rank = (/** @type {ProviderStatus} */ status) => STATUS_ORDER.indexOf(/** @type {any} */ (status));
-    const [faulty] = members
-      .filter(
-        ({ provider, receipt, status }) =>
-          receipt && FAULT_STATUSES.includes(status) && !open.some(incident => incident.providerId === provider.id),
-      )
-      .sort((a, b) => rank(a.status) - rank(b.status));
-    if (!faulty || !faulty.receipt) return null;
-    return {
-      from: 'receipt',
-      providerId: faulty.receipt.providerId,
-      faultCode: null,
-      errorCode: errorCodeOf(faulty.receipt),
-      severity: null,
-      consequenceKey: faulty.receipt.consequenceKey,
-      incidentId: null,
-      at: faulty.receipt.verifiedAt,
-    };
-  };
-
-  /**
    * Sets or clears an incident's dismissal: recovery.dismiss and recovery.undismiss
    * @param {v.GenericSchema} schema
    * @param {boolean} dismissed
@@ -381,38 +293,7 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     async summary() {
       const now = clock.now();
       try {
-        const { all, open, blind, needsAction, core, atRisk, safe } = await assess(now);
-        const storageDown =
-          blind ||
-          all.some(({ provider, status }) => provider.id === 'storage' && status === 'failed') ||
-          needsAction.some(incident => incident.providerId === 'storage' && incident.faultCode === 'open-failed');
-        const groups = HEALTH_GROUPS.map(group => {
-          const members = all.filter(({ provider }) => provider.group === group);
-          const ids = members.map(({ provider }) => provider.id);
-          const needs = needsAction.filter(incident => ids.includes(incident.providerId));
-          const times = members.flatMap(({ receipt }) => (receipt ? [receipt.verifiedAt] : []));
-          return {
-            group,
-            providers: members.length,
-            needsAction: needs.length,
-            worst: worstStatus(members.map(({ status }) => status)),
-            // When it was last checked: its newest receipt's time, null before any check
-            checkedAt: times.length > 0 ? Math.max(...times) : null,
-            cause: causeOf(members, needs, open),
-          };
-        }).filter(group => group.providers > 0);
-        /** @type {TrustSummary} */
-        const summary = {
-          worstCore: worstStatus(core.map(({ status }) => status)),
-          // While writes fail, nothing proves capture safe
-          capture: atRisk ? 'at-risk' : safe && !blind ? 'safe' : 'unknown',
-          // While writes fail, or the copy can't be read, something always needs action
-          actionRequired: Math.max(needsAction.length, blind ? 1 : 0),
-          route: atRisk || storageDown ? 'recovery' : 'trust',
-          records: records.state(),
-          groups,
-        };
-        return ready(now, summary);
+        return ready(now, summarize(await read(now)));
       } catch (error) {
         return failedFrom(error);
       }
@@ -422,7 +303,9 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
     async report() {
       const now = clock.now();
       try {
-        const { all, listed, copyRead, recordsRead, needsAction, atRisk } = await assess(now);
+        const input = await read(now);
+        const { incidents: listed, copyRead, recordsRead } = input;
+        const { all, needsAction, atRisk } = assess(input);
         /** @type {TrustReport} */
         const report = {
           records: records.state(),
