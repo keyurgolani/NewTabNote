@@ -392,6 +392,11 @@ async function init() {
     return;
   }
 
+  // The field takes Enter once Popup's writes are ready, 5 s at most: until then a quick note waits
+  // in the page, unjournaled, and closing Popup would lose it (#242). An Enter before then does
+  // nothing, as one before the first list does, and the text stays.
+  await kernel.writesReady();
+
   // The quick note last sent that may still land: the journal keeps it under its ids for the drain,
   // so another Enter of the same text sends it again under them, and it's made once (#35 slice 3b)
   /** @type {{text: string, commandId: string, noteId: string}|null} */

@@ -27,6 +27,13 @@ import { kernelClient, pageHost } from './host.js';
 export const POPUP_APPLY_WAIT_MS = 2000;
 
 /**
+ * How long Popup's quick note field waits for its writes, at most, before it takes Enter all the
+ * same (#242): the reader's own wait for the worker (Q12), so an owner lock that never comes can't
+ * leave the field dead
+ */
+export const POPUP_WRITES_WAIT_MS = 5000;
+
+/**
  * What Popup's root runs on: a page's host, with what its writes need, the page's chrome.runtime,
  * the manifest's version and the Web Locks its journal holds its owner lock in, and the timers its
  * start's wait runs on, the page's own unless a test passes others. With no runtime, a write
@@ -92,10 +99,12 @@ function readsOnly(reader) {
  * waits for it, then for its journal's owner lock, since the journal sends a command unjournaled
  * until it holds it, and then goes, first to last, so no later command passes an earlier one. A
  * chunk that can't load or start answers each unavailable, as one that can't reach the coordinator
- * is, `reload-required`: nothing went, and only a reload can load it.
+ * is, `reload-required`: nothing went, and only a reload can load it. `settled` resolves once the
+ * writes are ready, or once the chunk can't load or start, so no command waits in the page any
+ * more: one sent then goes, or answers at once (#242). It never rejects.
  * @param {() => Promise<SendChunk>} load
  * @param {Parameters<SendChunk['popupWrites']>[0]} options
- * @returns {(command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>}
+ * @returns {{execute: (command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>, settled: Promise<void>}}
  */
 function heldWrites(load, options) {
   const writes = (async () => {
@@ -105,11 +114,17 @@ function heldWrites(load, options) {
   })();
   // Each command's own wait answers for a chunk that couldn't load
   writes.catch(() => {});
-  return (command, journaling) =>
-    writes.then(
-      started => started.execute(command, journaling),
-      () => unavailable('coordinator', 'reload-required', false),
-    );
+  return {
+    execute: (command, journaling) =>
+      writes.then(
+        started => started.execute(command, journaling),
+        () => unavailable('coordinator', 'reload-required', false),
+      ),
+    settled: writes.then(
+      () => undefined,
+      () => undefined,
+    ),
+  };
 }
 
 /**
@@ -140,6 +155,11 @@ const within = (done, timers, ms) =>
  * an edit, whenReady waits for its apply, with the applier `load` hands over, at most
  * POPUP_APPLY_WAIT_MS once the reader is open (Q11), since a cold worker that migrates can take
  * its 5 seconds. Popup reads what's stored then, and `applied` answers once the apply is done.
+ *
+ * `writesReady` resolves once the writes are settled (heldWrites), or POPUP_WRITES_WAIT_MS after
+ * its first ask, on the same timers. js/popup.js's quick note field takes Enter only then, since a
+ * note sent before the writes are ready waits in the page, unjournaled, and a close would lose it
+ * (#242).
  * @param {PopupHost} [host]
  * @param {ReturnType<typeof pageDrafts>} [drafts]
  * @param {() => Promise<Applier>} [load]
@@ -154,7 +174,7 @@ export function createPopupClient(
   const { indexedDB, settings, awaitUpgrade } = host;
   const reader = createIndexedDbReader({ indexedDB, settings, awaitUpgrade });
   const reads = kernelClient({ adapter: readsOnly(reader), surface: 'popup', handlers: POPUP_HANDLERS });
-  const execute = heldWrites(send, {
+  const writes = heldWrites(send, {
     reads,
     runtime: /** @type {PopupRuntime} */ (host.runtime),
     extensionVersion: host.extensionVersion ?? '',
@@ -164,7 +184,7 @@ export function createPopupClient(
     storage: drafts.storage,
   });
   const client = applyingCloseDrafts(
-    /** @type {Client} */ (/** @type {unknown} */ (Object.freeze({ ...reads, execute }))),
+    /** @type {Client} */ (/** @type {unknown} */ (Object.freeze({ ...reads, execute: writes.execute }))),
     drafts,
     { load },
   );
@@ -176,5 +196,8 @@ export function createPopupClient(
       if (failure) return failure;
       return within(client.applied(), timers, POPUP_APPLY_WAIT_MS).then(() => reads.whenReady());
     }));
-  return Object.freeze({ ...client, whenReady });
+  /** @type {Promise<void> | undefined} */
+  let writable;
+  const writesReady = () => (writable ||= within(writes.settled, timers, POPUP_WRITES_WAIT_MS));
+  return Object.freeze({ ...client, whenReady, writesReady });
 }
