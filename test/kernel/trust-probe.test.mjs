@@ -7,7 +7,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { unavailable } from '../../js/kernel/core/contracts/outcomes.js';
+import { UnavailableError, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { runCheck } from '../../js/trust/core/checks.js';
 import { PROBE_KEY, capture, probeCommit, storage } from '../../js/trust/core/providers/probe.js';
 import { dump, legacyEnv, run as migrate } from './migration-support.mjs';
@@ -288,6 +288,7 @@ describe('every code the adapters answer reads as ruled, for capture and storage
     ['store-unavailable', 'storage', false, FAILED, FAILED],
     ['constraint', 'storage', false, FAILED, FAILED],
     ['unreadable', 'storage', false, FAILED, FAILED],
+    ['transaction-ended-early', 'adapter', false, FAILED, FAILED],
     ['timed-out', 'storage', true, UNVERIFIED, UNVERIFIED],
     ['transaction-failed', 'storage', true, UNVERIFIED, UNVERIFIED],
     ['retries-exhausted', 'storage', true, UNVERIFIED, UNVERIFIED],
@@ -326,6 +327,23 @@ describe('every code the adapters answer reads as ruled, for capture and storage
         );
       }
     }
+  });
+
+  it('reads a template read the adapter answers settings-read-failed for as capture unverified, with its code, and commits nothing', async () => {
+    const failing = {
+      readSettings: async () => {
+        throw new UnavailableError('storage', 'settings-read-failed', true);
+      },
+      read: async () => undefined,
+      commit: async () => {
+        throw new Error('the probe committed after its template read failed');
+      },
+    };
+    const { receipt, faults } = await run('capture', { storage: failing });
+    assert.deepEqual(
+      [receipt.status, receipt.capture, faults, receipt.evidence],
+      ['unverified', undefined, [], { cause: 'storage', errorCode: 'settings-read-failed' }],
+    );
   });
 
   it("reads a TransactionInactiveError #17's adapter hits on the probe's write as failed, capture at risk, with reading still working", async () => {
