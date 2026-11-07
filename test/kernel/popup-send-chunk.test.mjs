@@ -2,8 +2,8 @@
 // fake. Its client sends the worker Popup's two commands as `popup` over the runtime port, and
 // refuses any other operation before it goes. It keeps #13's caps, so a close-time draft over
 // 1 MiB never goes (rule 10). Its popupWrites starts Popup's journal on the client's session, the
-// one the worker's router knows the page by (rule 7). Popup's root sends through it once its writes
-// move.
+// one the worker's router knows the page by (rule 7), and answers ready only once that journal holds
+// its owner lock (rule 3). Popup's root sends through it once its writes move.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +19,7 @@ import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { systemClock } from '../../js/kernel/core/ports/runtime.js';
 import { createChromeFake } from './chrome-fake.mjs';
 import { COMMAND_SAMPLES } from './command-samples.mjs';
-import { VERSION } from './messaging-support.mjs';
+import { VERSION, settle } from './messaging-support.mjs';
 
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Handler} Handler */
 
@@ -105,6 +105,36 @@ describe("Popup's send chunk (composition/popup-send-chunk.js)", () => {
     });
     assert.equal(await writes.ready, true);
     assert.deepEqual(requested, [ownerLock(writes.client.sessionId)]);
+    writes.client.close();
+  });
+
+  it('answers ready only once the journal holds its owner lock, since until then the journal sends a journaled command unjournaled (rule 3)', async () => {
+    /** @type {Array<() => void>} */
+    const grants = [];
+    // The grant waits until the case lets it go, as Chrome's comes a task or more after the request
+    const locks = {
+      request: (/** @type {string} */ name, /** @type {any} */ options, /** @type {() => Promise<any>} */ held) =>
+        new Promise(resolve => {
+          grants.push(() => resolve(held()));
+        }),
+    };
+    const writes = popupWrites({
+      reads: /** @type {any} */ ({ execute: async () => committed('note-created', ['n1']) }),
+      runtime: createChromeFake().page('popup').chrome.runtime,
+      extensionVersion: VERSION,
+      // A profile with no journal, so its start opens nothing
+      indexedDB: /** @type {any} */ ({ databases: async () => [] }),
+      locks: /** @type {any} */ (locks),
+    });
+    let ready = false;
+    writes.ready.then(() => {
+      ready = true;
+    });
+    await settle();
+    assert.equal(ready, false, 'ready waits for the owner lock');
+    assert.equal(grants.length, 1, 'the journal asked for its owner lock');
+    grants[0]();
+    assert.equal(await writes.ready, true);
     writes.client.close();
   });
 });
