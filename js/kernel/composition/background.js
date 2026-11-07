@@ -1052,9 +1052,10 @@ const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
 
 /**
  * The commands a page sends the worker over the port, as its router finds them (#35 slice 4b-2,
- * rule 5): Popup's two, on the shared catalog's entries, with the schemas their modules export,
- * imported here since an MV3 worker can't import() (messaging/operations.js). The router knows
- * the coordinator's own queries besides, and no other operation.
+ * rule 5): Popup's two, the second of them also Side Panel's one (#35 slice 4c), on the shared
+ * catalog's entries, with the schemas their modules export, imported here since an MV3 worker
+ * can't import() (messaging/operations.js). The router knows the coordinator's own queries
+ * besides, and no other operation.
  */
 const PAGE_LOOKUP = createLookup({
   createNote: operationOf(COMMANDS.createNote, createNoteOperation),
