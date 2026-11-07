@@ -181,9 +181,14 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     assert.equal(pages.build.modulePreload.polyfill, false);
   });
 
-  it("preloads nothing beside close-drafts-applier, which the pages import on a start that finds a draft, or close-drafts-chunk under it, or beside journal-chunk, which they import on their first journaled command or at idle, and every other import's own list (#33, the lead's trim 2; #35 slice 3b; #6)", () => {
+  it("preloads nothing beside close-drafts-applier, which the pages import on a start that finds a draft, or close-drafts-chunk under it, or beside journal-chunk, which they import on their first journaled command or at idle, or beside Side Panel's send chunk, which it imports at its first command, and every other import's own list (#33, the lead's trim 2; #35 slices 3b and 4c; #6)", () => {
     const { resolveDependencies } = config.pagesConfig(passOptions()).build.modulePreload;
     const deps = ['assets/close-drafts-BkxcNLcj.js', 'assets/checks-RYHEq65f.js', 'assets/host-Bn7ueUNG.js'];
+    assert.deepEqual(
+      resolveDependencies('assets/sidepanel-send-chunk-Hq4mW0pX.js', [...deps], { hostId: 'assets/sidepanel-T2vN8kLc.js', hostType: 'js' }),
+      [],
+      "Side Panel's send chunk",
+    );
     for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/workspace-6rz5AjPO.js']) {
       assert.deepEqual(resolveDependencies('assets/close-drafts-applier-C1e7RqXa.js', [...deps], { hostId, hostType: 'js' }), [], hostId);
     }
@@ -193,10 +198,12 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/workspace-6rz5AjPO.js']) {
       assert.deepEqual(resolveDependencies('assets/journal-chunk-Dq3xT9aZ.js', [...deps], { hostId, hostType: 'js' }), [], hostId);
     }
-    // The applier the chunk imports, the new tab's lazy chunks, and a page's own entry keep theirs
+    // The applier the chunk imports, the new tab's lazy chunks, Popup's send chunk, which loads at
+    // its start, and a page's own entry keep theirs
     for (const [filename, hostType] of [
       ['assets/close-drafts-BkxcNLcj.js', 'js'],
       ['assets/workspace-6rz5AjPO.js', 'js'],
+      ['assets/popup-send-chunk-B1zMgExO.js', 'js'],
       ['assets/trust-BxBa-zUr.js', 'js'],
       ['assets/newtab-DctDvCBY.js', 'html'],
     ]) {

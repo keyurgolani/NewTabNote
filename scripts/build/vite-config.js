@@ -419,18 +419,20 @@ function chunkFileName(root) {
 }
 
 /**
- * The files of close-drafts-applier, close-drafts-chunk and journal-chunk, which the pages import
- * only with import()
+ * The files of close-drafts-applier, close-drafts-chunk, journal-chunk and Side Panel's send
+ * chunk, which the pages import only with import()
  */
-const UNPRELOADED_CHUNKS = /(?:^|\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk)-[A-Za-z0-9_-]+\.js$/;
+const UNPRELOADED_CHUNKS =
+  /(?:^|\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk|sidepanel-send-chunk)-[A-Za-z0-9_-]+\.js$/;
 
 /**
  * The files the bundler preloads beside a dynamic import, or beside a page's entry: none beside
  * close-drafts-applier, which the new tab, Popup and Side Panel import on a start that finds work
  * for it (#33, #6, composition/close-drafts.js), or beside close-drafts-chunk, which it imports
  * and applyCloseDraft's wrapper imports at first use, or beside journal-chunk, which they import
- * on their first journaled command or at idle (#35 slice 3b, composition/host.js), so no page's
- * start carries a preload list for any of them, and every other import's own (the lead's trim 2).
+ * on their first journaled command or at idle (#35 slice 3b, composition/host.js), or beside Side
+ * Panel's send chunk, which it imports at its first command (#35 slice 4c), so no page's start
+ * carries a preload list for any of them, and every other import's own (the lead's trim 2).
  * A start that loads one then loads its files one after another, which the lead takes.
  * @param {string} filename - the file imported, or the page's entry
  * @param {string[]} deps
@@ -485,7 +487,8 @@ function pagePassConfig(options, pages, { blockChunk = false, pageChunks = false
     build: {
       ...buildOptions(options),
       // Chrome 116 has modulepreload, so the polyfill would only add code. close-drafts-applier,
-      // close-drafts-chunk and journal-chunk preload nothing beside them (preloadsFor).
+      // close-drafts-chunk, journal-chunk and Side Panel's send chunk preload nothing beside them
+      // (preloadsFor).
       modulePreload: { polyfill: false, resolveDependencies: preloadsFor },
       rolldownOptions: {
         input: Object.fromEntries(pages.map((name) => [name, path.join(root, /** @type {Record<string, string>} */ (PAGES)[name])])),

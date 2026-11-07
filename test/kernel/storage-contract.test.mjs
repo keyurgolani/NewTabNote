@@ -80,8 +80,9 @@ function pageGraphs(readFile) {
 
 /**
  * What a page's graph breaks of the roots rule: a page that reaches one of the worker's own
- * modules, Side Panel or the new tab without #17's adapter, Popup without #17's reader, the
- * offscreen document with any adapter, and an import() no reading can follow but the loader's
+ * modules, the new tab or recovery.html without #17's adapter, Popup or Side Panel without #17's
+ * reader, the offscreen document with any adapter, and an import() no reading can follow but the
+ * loader's
  * @param {(file: string) => string} [readFile]
  * @returns {string[]}
  */
@@ -91,7 +92,7 @@ function rootProblems(readFile) {
     for (const [file, what] of Object.entries(WORKER_ONLY)) if (modules.has(file)) problems.push(`${page} reaches ${what}`);
     if (page === 'offscreen.html') {
       for (const file of modules) if (file.startsWith('js/kernel/adapters/')) problems.push(`${page} reaches ${file}`);
-    } else if (page === 'popup.html') {
+    } else if (page === 'popup.html' || page === 'sidepanel.html') {
       if (!modules.has(READER)) problems.push(`${page} doesn't load #17's reader`);
     } else if (!modules.has(ADAPTER)) {
       problems.push(`${page} doesn't load #17's adapter`);
@@ -103,16 +104,16 @@ function rootProblems(readFile) {
   return problems;
 }
 
-it("every root loads the IndexedDB adapter but Popup's, which loads #17's reader (#35 slice 4b-2), and the legacy one is gone; only the worker runs migrations, transforms, and the purge", () => {
+it("every root loads the IndexedDB adapter but Popup's and Side Panel's, which load #17's reader (#35 slices 4b-2 and 4c), and the legacy one is gone; only the worker runs migrations, transforms, and the purge", () => {
   const { all, pages } = pageGraphs();
   assert.deepEqual(all.problems, []);
   // #17 PR 1b: the worker upgrades the database through the runner, then opens #17's adapter
   assert.ok(all.workerFiles.has(ADAPTER), 'the worker loads the adapter');
   for (const [file, what] of Object.entries(WORKER_ONLY)) assert.ok(all.workerFiles.has(file), `the worker loads ${what}`);
   assert.ok(!fs.existsSync(path.join(ROOT, LEGACY_ADAPTER)), 'the legacy adapter went with #17 PR 4a');
-  // Side Panel opens it as it is (Q3), and so does the new tab since #17 PR 4a, and Popup opens
-  // #17's reader in its place since #35 slice 4b-2, every chunk each loads included, and none
-  // runs a migration; the offscreen document only makes #21's API requests, and opens no storage
+  // The new tab opens it as it is since #17 PR 4a, and Popup and Side Panel open #17's reader in
+  // its place since #35 slices 4b-2 and 4c, every chunk each loads included, and none runs a
+  // migration; the offscreen document only makes #21's API requests, and opens no storage
   assert.deepEqual(rootProblems(), []);
   // The new tab reaches its composition root through the workspace chunk, which the boot root
   // loads at once through the loader (#27 slice 3), and the trust chunk, and reads the

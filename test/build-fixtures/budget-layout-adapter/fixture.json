@@ -1,5 +1,5 @@
 {
-  "rule": "the pages pass drops the adapter group, so the bundler's own split takes #17's adapter and the new tab's and Side Panel's starts load no adapter chunk (#35 slice 4b-2, P4). The fixture raises the three pages' rows in its own build, so the split breaks no other rule",
+  "rule": "the pages pass drops the adapter group, so the bundler's own split takes #17's adapter and the new tab's start loads no adapter chunk, the one start that holds the adapter's modules once Side Panel reads through #17's reader too (#35 slices 4b-2 and 4c, P4). The fixture raises the three pages' rows in its own build, so the split breaks no other rule",
   "expect": [
     "budget/layout"
   ],
@@ -24,7 +24,7 @@
     },
     {
       "file": "build/budgets.json",
-      "replace": "\"js\": { \"raw\": 114688, \"gzip\": 40960 }",
+      "replace": "\"js\": { \"raw\": 94600, \"gzip\": 32200 }",
       "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
     }
   ]

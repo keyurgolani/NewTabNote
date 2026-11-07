@@ -234,6 +234,9 @@ const KEPT_CAPTURE = Object.freeze({
   // #35 slice 4a: the coordinator didn't start it by its deadline, so the drain adds it once the
   // queue lets it, which may be at the worker's next start (the director's words)
   busy: "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added as soon as NewTabNote can.",
+  // #35 slice 4c: the queue cut its turn, so only the drain after the cut adds it, and no time can
+  // be named (the lead's words of 2026-11-07)
+  cut: "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added later.",
 });
 const UNREPLAYABLE_CAPTURE = Object.freeze({
   title: 'Not captured',
@@ -265,10 +268,13 @@ function captureRefusal({ cause, code }) {
  */
 const DEADLINE_EXCEEDED = 'deadline-exceeded';
 
+/** The code the coordinator's queue answers a turn it cut with (#35 slice 4b-1, TURN_LIMIT_MS) */
+const TURN_EXCEEDED = 'turn-exceeded';
+
 /**
  * What a kept capture says for the answer that kept it: what will add it, when that's up to
- * the user, that it's added as soon as it can be, when the coordinator was busy, and otherwise
- * that it's added when the notes open
+ * the user, that it's added as soon as it can be, when the coordinator was busy, that it's added
+ * later, when the queue cut its turn, and otherwise that it's added when the notes open
  * @param {{cause?: string, code?: string}} answer
  * @returns {string}
  */
@@ -277,6 +283,7 @@ function keptMessage({ cause, code }) {
   if (code === 'blocked-upgrade') return KEPT_CAPTURE.blockedUpgrade;
   if (code === 'missing-core-stores') return KEPT_CAPTURE.missingStores;
   if (code === DEADLINE_EXCEEDED) return KEPT_CAPTURE.busy;
+  if (code === TURN_EXCEEDED) return KEPT_CAPTURE.cut;
   return KEPT_CAPTURE.message;
 }
 
@@ -286,6 +293,8 @@ function keptMessage({ cause, code }) {
  */
 const CAPTURE_FAILURES = {
   'unavailable.quota': 'there is no room left to store it',
+  // #35 slice 4c: the queue cut its turn (the lead's words of 2026-11-07)
+  'unavailable.turn-exceeded': 'it took too long',
 };
 const CAPTURE_FAILED = "the notes database couldn't store it";
 

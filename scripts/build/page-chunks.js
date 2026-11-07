@@ -10,15 +10,16 @@
  * its row. The pages pass writes two chunks in their place (scripts/build/vite-config.js), and
  * test/page-chunks.test.js holds both lists to the pages' import graphs.
  *   host     the first five merged: what the three starts share, and the helper they preload
- *            through. So it holds codec.js, which Side Panel's start doesn't import and Popup
- *            imports only in its send chunk, and op-fields.js, which Popup imports only there
- *            too: merged, the new tab's start measured about 1,350 bytes gzip under the
- *            bundler's own split. The group names the helper itself, since no host module calls
- *            import(). Left out, it went with the adapter's group, whose close-drafts-on-demand.js
- *            does call import(), and Popup loaded the adapter chunk for it.
+ *            through. So it holds codec.js, which Popup and Side Panel import only in their send
+ *            chunks, and op-fields.js, which Popup imports only in its send chunk too: merged,
+ *            the new tab's start measured about 1,350 bytes gzip under the bundler's own split.
+ *            The group names the helper itself, since no host module calls import(). Left out,
+ *            it went with the adapter's group, whose close-drafts-on-demand.js does call
+ *            import(), and Popup loaded the adapter chunk for it.
  *   adapter  the rest of #17's adapter, adapter.js and what it imports that host doesn't hold,
- *            and close-drafts-on-demand.js, applyCloseDraft's handler. Once Popup reads through
- *            the reader, only the new tab's and Side Panel's starts load it (ADAPTER_PAGES).
+ *            and close-drafts-on-demand.js, applyCloseDraft's handler. Once Popup and Side Panel
+ *            read through the reader (#35 slices 4b-2 and 4c), only the new tab's start loads it
+ *            (ADAPTER_PAGES).
  * Three modules stay in chunks of the bundler's own:
  *   - preferences.js, the domain's and the application's. Only the new tab's and Popup's starts
  *     import them, so in host Side Panel's start would carry them.
@@ -99,7 +100,7 @@ const PRELOAD_HELPER = '\0vite/preload-helper.js';
 const PAGE_CHUNKS = Object.freeze(['host', 'adapter']);
 
 /** The pages whose start loads the adapter chunk */
-const ADAPTER_PAGES = Object.freeze(['newtab', 'sidepanel']);
+const ADAPTER_PAGES = Object.freeze(['newtab']);
 
 /**
  * The pages pass's groups for the two chunks. Each knows its modules by the sources' path and

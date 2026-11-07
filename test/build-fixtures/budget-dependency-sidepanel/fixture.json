@@ -1,0 +1,26 @@
+{
+  "rule": "Side Panel's root imports the apply's schema statically and hands it out on its client, so its start holds valibot, which its row allows lazy only (#35 slice 4c, G3, as budget-dependency-popup has it for Popup). The send chunk stays lazy, and the fixture raises Side Panel's row, so only valibot's place breaks a rule",
+  "expect": [
+    "budget/dependency"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "js/kernel/composition/sidepanel.js",
+      "replace": "import { journalingClient, pageHost } from './host.js';\n",
+      "with": "import { journalingClient, pageHost } from './host.js';\nimport { payload as applyPayload } from '../core/contracts/operations/apply-close-draft.js';\n"
+    },
+    {
+      "file": "js/kernel/composition/sidepanel.js",
+      "replace": "  return journalingClient(client, 'sidepanel', chunk, host.requestIdle || globalThis.requestIdleCallback);\n",
+      "with": "  return Object.freeze({ ...journalingClient(client, 'sidepanel', chunk, host.requestIdle || globalThis.requestIdleCallback), applyPayload });\n"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 94600, \"gzip\": 32200 }",
+      "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
+    }
+  ]
+}
