@@ -9,8 +9,8 @@
   "edits": [
     {
       "file": "js/kernel/composition/popup.js",
-      "replace": "import { kernelClient, pageHost } from './host.js';\n",
-      "with": "import { kernelClient, pageHost } from './host.js';\nimport { payload as quickNotePayload } from '../core/contracts/operations/create-note.js';\n"
+      "replace": "import { pageHost } from './host.js';\n",
+      "with": "import { pageHost } from './host.js';\nimport { payload as quickNotePayload } from '../core/contracts/operations/create-note.js';\n"
     },
     {
       "file": "js/kernel/composition/popup.js",

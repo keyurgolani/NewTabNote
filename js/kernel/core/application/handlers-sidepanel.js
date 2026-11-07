@@ -1,14 +1,13 @@
 /**
  * Side Panel's table (handlers.js): what js/sidepanel.js sends, the one read of the notes it
- * summarizes, and what its root sends as it starts when the page holds a closing tab's edit,
- * that edit's apply (#33), whose handler loads at its first use
+ * summarizes. Its one write, the apply of a closing tab's edit (#33), goes to the worker over #13's
+ * port, through Side Panel's send chunk (composition/sidepanel-send-chunk.js, #35 slice 4c), so
+ * the table holds no command.
  */
 
-import { applyCloseDraftOnDemand } from './close-drafts-on-demand.js';
 import { handlerTable } from './handlers.js';
 import { noteQueries } from './notes.js';
 
 export const SIDEPANEL_HANDLERS = handlerTable({
-  commands: { applyCloseDraft: applyCloseDraftOnDemand },
   queries: { listNotes: noteQueries.listNotes },
 });

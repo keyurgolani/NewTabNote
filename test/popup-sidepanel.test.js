@@ -95,25 +95,33 @@ async function popupOnWorker(records = { canvases: notes() }, prepare = () => {}
 }
 
 /**
- * A Side Panel on `records`, started as sidepanel.html starts it
+ * A Side Panel on `records`, started as sidepanel.html starts it. On `worker`'s profile it shares
+ * the worker's IndexedDB, chrome.* and Web Locks, as Popup's does there, and loads its chunks
+ * through import(). With `wait` false, its start goes on while the case reads the page.
  * @param {Object} [records] - rows per store, or null for a profile with no database
+ * @param {{worker?: any, prepare?: (env: any) => void, wait?: boolean}} [options] - `prepare`
+ *   runs on the environment before Side Panel starts
  */
-async function sidePanel(records = { canvases: notes() }) {
-  const env = createLegacyEnv();
-  if (records) await createDatabase(env.indexedDB, { records });
+async function sidePanel(records = { canvases: notes() }, { worker = null, prepare = () => {}, wait = true } = {}) {
+  const env = worker
+    ? createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.env.chrome, locks: worker.env.global.navigator.locks })
+    : createLegacyEnv();
+  if (records && !worker) await createDatabase(env.indexedDB, { records });
+  prepare(env);
   const els = env.document.stub(['open-notes', 'status', 'status-count', 'sections', 'empty-state']);
   const openButton = env.document.createElement('button');
   openButton.setAttribute('data-open-notes', '');
   env.document.body.appendChild(openButton);
   env.load('js/insights-summary.js');
-  await loadPageModule(env, 'js/sidepanel.js');
-  await Promise.all(env.document.fire('DOMContentLoaded'));
+  await loadPageModule(env, 'js/sidepanel.js', { dynamicImports: Boolean(worker) });
+  const started = Promise.all(env.document.fire('DOMContentLoaded'));
+  if (wait) await started;
   /** Each section the panel shows, with its items' texts */
   const sections = () => els.sections.querySelectorAll('.section').map((section) => [
     section.querySelector('.section-header').textContent,
     section.querySelectorAll('.item-text').map((item) => item.textContent),
   ]);
-  return { env, els, sections };
+  return { env, els, sections, started };
 }
 
 describe('what Popup shows', () => {
@@ -293,6 +301,56 @@ describe('what Side Panel shows', () => {
       const { sections, els } = await sidePanel(records);
       assert.deepEqual(sections(), []);
       assert.equal(els['empty-state'].classList.contains('hidden'), false);
+    }
+  });
+
+  // #35 slice 4c: Side Panel's start waits at most 2 s for its apply of closing tabs' edits, which
+  // goes to the worker over the port, then shows what's stored, and shows its notes again once
+  // the apply saved one (rule 5, Q11's wait, as Popup's)
+  it("shows what's stored once its apply has waited 2 s, and its notes again once the apply saves the edit (#35 slice 4c)", async () => {
+    const { DRAFT_PREFIX, DRAFTS_LOCK } = await import('../js/kernel/core/domain/close-draft-keys.js');
+    const todo = (/** @type {string} */ id) => ({ todos: [`todo ${id}`], reminders: [], deadlines: [], highlights: [] });
+    const records = {
+      canvases: [
+        note('first', { name: 'First', updatedAt: AT + 2, insights: todo('first') }),
+        note('second', { name: 'Second', updatedAt: AT + 1, insights: todo('second') }),
+      ],
+    };
+    const worker = await loadBackground({ setup: (env) => createDatabase(env.indexedDB, { records }) });
+    connectPage(worker.env.chrome, 'sidepanel.html');
+    // A closing tab's edit of Second with no block digests, as 1.4.3 left one, so the apply weighs
+    // Second's updatedAt alone, which no one changed since
+    const content = 'second, edited as its tab closed';
+    const draft = {
+      v: 1, id: 'draft-second', page: 'page-1', noteId: 'second', at: AT + 5,
+      base: { updatedAt: AT + 1, issued: [], name: 'Second' },
+      blocks: [{ id: 'b-second', canvasId: 'second', type: 'text', content, order: 0 }],
+      deletedBlockIds: [], preview: content, todoProgress: null, linkedNames: [],
+    };
+    // Another page's apply holds the drafts' lock, so Side Panel's waits past its 2 s
+    let release = () => {};
+    const held = new Promise((resolve) => { release = resolve; });
+    let holding = false;
+    worker.env.global.navigator.locks.request(DRAFTS_LOCK, { mode: 'exclusive' }, () => {
+      holding = true;
+      return held;
+    });
+    await waitFor(() => holding, { withinMs: 2000, message: 'the lock is held' });
+    try {
+      const prepare = (/** @type {any} */ env) => env.global.localStorage.setItem(`${DRAFT_PREFIX}${draft.id}`, JSON.stringify(draft));
+      const panel = await sidePanel(null, { worker, prepare, wait: false });
+      const todos = () => panel.sections().flatMap(([, items]) => items);
+      // The page's clock runs its 2 s wait, in steps, while its reads go in real time
+      for (const end = Date.now() + 5000; todos().length === 0 && Date.now() < end;) {
+        panel.env.clock.tick(100);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.deepEqual(todos(), ['todo first', 'todo second'], "what's stored, while the apply waits");
+      release();
+      await waitFor(() => todos()[0] === 'todo second', { withinMs: 5000, message: 'the saved note first, once the apply saved it' });
+      await panel.started;
+    } finally {
+      release();
     }
   });
 });

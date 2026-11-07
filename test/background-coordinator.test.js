@@ -825,6 +825,17 @@ const KEPT_BUSY = Object.freeze([
 ]);
 
 /**
+ * What a capture says whose turn the coordinator's queue cut (#35 slice 4c, the lead's words of
+ * 2026-11-07 04:45:59 PST): with no journal entry, that it failed because it took too long; kept,
+ * that it's added later, since only the drain after the cut adds it and no time can be named
+ */
+const CUT_NOT_CAPTURED = Object.freeze(['Not captured', "Saving to today's note failed: it took too long"]);
+const KEPT_CUT = Object.freeze([
+  "Kept for today's note",
+  "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added later.",
+]);
+
+/**
  * The kernel's capture waits `ms` on the worker's fake clock before its transaction, so it holds
  * the coordinator's queue as a slow command would (#204's review, its probes)
  * @param {number} ms
@@ -982,7 +993,7 @@ describe("a turn the coordinator's queue cuts, through the worker (#35 slice 4b-
     assert.deepEqual(await dailyUrls(worker), [worker.tab.url], 'the second attempt saved it');
   });
 
-  it("says Not captured at 240 s for a capture with no entry whose rerun is cut, and its capture.failed evidence names turn-exceeded (#224's review, F1)", async () => {
+  it("says Not captured at 240 s, because it took too long, for a capture with no entry whose rerun is cut, and its capture.failed evidence names turn-exceeded (#224's review, F1; #35 slice 4c's words)", async () => {
     // The journal can't open, so the capture has no entry, and the kernel's capture waits 130 s
     // before its work. The worker's client gives up on it at 31 s, so it runs again on the queue
     // with no client deadline, behind its own first turn. The queue cuts that turn at 120 s, the
@@ -999,7 +1010,11 @@ describe("a turn the coordinator's queue cuts, through the worker (#35 slice 4b-
     assert.deepEqual(titles(), [], 'nothing is said while the rerun waits and runs');
     worker.env.clock.tick(1_000);
     await worker.drain();
-    assert.deepEqual(titles(), ['Not captured'], "the rerun's cut says Not captured");
+    assert.deepEqual(
+      plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]),
+      [[...CUT_NOT_CAPTURED]],
+      "the rerun's cut says Not captured, and why",
+    );
     const { fields } = await trustOf(worker.indexedDB);
     const failed = fields.filter(([code]) => code === 'capture.failed').map(([, journaled]) => journaled);
     assert.equal(failed.length, 1, JSON.stringify(failed));
@@ -1010,6 +1025,34 @@ describe("a turn the coordinator's queue cuts, through the worker (#35 slice 4b-
       { cause: 'coordinator', errorCode: 'turn-exceeded', retryable: true, surface: 'worker-internal' },
       'its evidence says the turn limit was why',
     );
+  });
+
+  it("says Kept for today's note, to be added later, for a kept capture the queue cuts at 120 s when the worker's own client couldn't be built (#35 slice 4c's words)", async () => {
+    // With no client of its own, the worker runs a capture on the queue with no client deadline,
+    // so the cut answers it. Its entry stays, and only the drain after the cut adds it.
+    const worker = await loadBackground({
+      rewrite: {
+        ...slowCapture(130_000),
+        'js/background.js': (source) => source.replace(
+          'ownClient = createWorkerInternalClient({ router });',
+          "throw new Error('test: building the worker client threw');",
+        ),
+      },
+    });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    const notices = () => plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]);
+    worker.env.clock.tick(119_000);
+    await worker.drain();
+    assert.deepEqual(notices(), [], 'nothing is said while its turn runs');
+    worker.env.clock.tick(1_000);
+    await worker.drain();
+    assert.deepEqual(notices(), [[...KEPT_CUT]], "the cut says it's kept, and added later");
+    assert.equal((await journalOf(worker.indexedDB)).length, 1, 'its entry stays for the drain');
+    // Past the 130 s the capture waits, so it ends, having committed nothing
+    worker.env.clock.tick(11_000);
+    await worker.drain();
+    assert.deepEqual(await dailyUrls(worker), []);
   });
 });
 
@@ -1267,5 +1310,42 @@ describe("Popup's commands over the port, in the worker (#35 slice 4b-2)", () =>
     await worker.drain();
     assert.equal(await holdsNote(worker, 'n-quick'), true, 'once its owner lock goes');
     assert.deepEqual(await journalOf(worker.indexedDB), []);
+  });
+});
+
+describe("Side Panel's command over the port, in the worker (#35 slice 4c)", () => {
+  it("commits Side Panel's apply of a closing tab's edit on its own kernel, and refuses its createNote at the router, as the catalog has it (#35 slice 4c, G4)", async () => {
+    const at = 1700000000000;
+    const worker = await loadBackground({
+      setup: (env) => createDatabase(env.indexedDB, { records: { canvases: [note('n-side', { name: 'Side', updatedAt: at })] } }),
+    });
+    const page = pagePort('sidepanel');
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('sidepanel-apply');
+    // Its client sends once welcomed, which waits for the worker's run on the 1.4.x profile
+    await worker.drain();
+    assert.ok(page.received.some((frame) => frame.frame === 'welcome'), JSON.stringify(page.received));
+    // A closing tab's edit with no block digests, as 1.4.3 left one, on Side's updatedAt
+    const content = 'side, edited as its tab closed';
+    requestOn(page, 'a1', {
+      type: 'applyCloseDraft',
+      commandId: 'draft-side-apply',
+      draft: {
+        v: 1, id: 'draft-side', page: 'page-1', noteId: 'n-side', at: at + 5,
+        base: { updatedAt: at, issued: [], name: 'Side' },
+        blocks: [{ id: 'b-side', canvasId: 'n-side', type: 'text', content, order: 0 }],
+        deletedBlockIds: [], preview: content, todoProgress: null, linkedNames: [],
+      },
+    });
+    requestOn(page, 'q1', { ...QUICK_NOTE, commandId: 'c-side-quick', noteId: 'n-side-quick' });
+    await worker.drain();
+    const answer = (requestId) => page.received.find((frame) => frame.requestId === requestId) || {};
+    const applied = answer('a1');
+    assert.deepEqual([applied.frame, applied.result && applied.result.kind, applied.result && applied.result.code], ['response', 'committed', 'close-draft-saved'], JSON.stringify(applied));
+    const made = answer('q1');
+    assert.deepEqual([made.frame, made.code], ['error', 'forbidden-for-surface'], JSON.stringify(made));
+    assert.equal(await holdsNote(worker, 'n-side-quick'), false);
+    const elements = Object.values(recordsOf(await dumpDatabase(worker.indexedDB), 'elements'));
+    assert.deepEqual(elements.filter((element) => element.id === 'b-side').map((element) => element.content), [content]);
   });
 });

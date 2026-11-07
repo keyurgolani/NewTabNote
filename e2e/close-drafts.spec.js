@@ -125,3 +125,33 @@ test('two new tabs that open at once on a profile with a draft apply it once, wi
   expect(await draftsIn(one)).toBe(0);
   await expectNoUncaught(extension, one);
 });
+
+// #35 slice 4c: Side Panel's start sends its apply of a closing tab's edit to the worker over the
+// port, and the next new tab shows the edit. The edit is written where a closing tab leaves one,
+// with no block digests, as 1.4.3 left one, on the note's updatedAt, so its apply saves it, and the
+// case waits on the drafts themselves, with no hold of fixed time (#244).
+test("Side Panel's start has the worker apply a closing tab's edit, and the next new tab shows it", async ({ extension }) => {
+  test.setTimeout(60_000);
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Closing', blocks: [{ type: 'text', content: 'first' }, { type: 'text', content: 'start' }] }]);
+  const popup = await extension.openSurface('popup');
+  const note = (await profileStore(popup).getAllNotes(true)).find(stored => stored.name === 'Closing');
+  await popup.evaluate(({ noteId, updatedAt }) => {
+    const content = 'from Side Panel';
+    const draft = {
+      v: 1, id: 'draft-side', page: 'page-gone', noteId, at: Date.now(),
+      base: { updatedAt, issued: [], name: 'Closing' },
+      blocks: [{ id: 'b-side-panel', canvasId: noteId, type: 'text', content, order: 2 }],
+      deletedBlockIds: [], preview: 'first', todoProgress: null, linkedNames: [],
+    };
+    localStorage.setItem(`ntn-close-draft:${draft.id}`, JSON.stringify(draft));
+  }, { noteId: note.id, updatedAt: note.updatedAt });
+  expect(await draftsIn(popup), 'the edit waits where a closing tab leaves it').toBe(1);
+
+  const panel = await extension.openSurface('sidepanel');
+  await expect.poll(() => draftsIn(panel), { message: "Side Panel's start applied it, and it went" }).toBe(0);
+  const page = await reopen(extension);
+  await expect.poll(async () => (await driver.blocks(page)).map(block => block.text)).toEqual(['first', 'start', 'from Side Panel']);
+  expect((await noteNames(page)).filter(name => name.startsWith('Recovered:')), 'no recovered note').toEqual([]);
+  await expectNoUncaught(extension, page);
+});

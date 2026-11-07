@@ -91,6 +91,21 @@ const popupHostOf = context => {
 };
 
 /**
+ * Side Panel's host on `context`'s profile, with its runtime's port to a stand-in for the worker
+ * there, on a sidepanel.html page (#35 slice 4c)
+ * @param {LegacyContext} context
+ */
+const sidePanelHostOf = context => {
+  const standIn = popupWorker({
+    indexedDB: context.env.indexedDB,
+    settings: context.env.chrome.api.storage.local,
+    page: 'sidepanel',
+  });
+  standIns.push(standIn);
+  return { ...pageHostOf(context), runtime: standIn.runtime, extensionVersion: standIn.extensionVersion };
+};
+
+/**
  * The page's localStorage and Web Locks, as pageDrafts() reads them from its globals
  * @param {LegacyContext} context
  */
@@ -260,7 +275,7 @@ function counted(context) {
  */
 const PAGES = [
   ['Popup', (context, drafts, load) => createPopupClient(popupHostOf(context), drafts, load), 'popup'],
-  ['Side Panel', (context, drafts, load) => createSidePanelClient(pageHostOf(context), drafts, load), 'sidePanel'],
+  ['Side Panel', (context, drafts, load) => createSidePanelClient(sidePanelHostOf(context), drafts, load), 'sidePanel'],
 ];
 
 /**
@@ -478,7 +493,7 @@ describe('the close-time drafts at each start', () => {
     const { tab } = await profileWithA();
     write(tab, draftOfA());
     const popup = createPopupClient(popupHostOf(tab), draftsOf(tab), LOAD);
-    const panel = createSidePanelClient(pageHostOf(tab), draftsOf(tab), LOAD);
+    const panel = createSidePanelClient(sidePanelHostOf(tab), draftsOf(tab), LOAD);
     const [first, second] = await Promise.all([popup.applied(), panel.applied()]);
     assert.deepEqual([first?.saved || [], second?.saved || []].flat(), ['A']);
     assert.deepEqual([...(first?.dropped || []), ...(second?.dropped || [])], [], 'the second found the draft gone, not already in');

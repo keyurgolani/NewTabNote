@@ -1,11 +1,12 @@
-// A stand-in for the service worker that Popup's root sends its writes to (#35 slice 4b-2), for
-// the kernel tests that build Popup's root on a legacy-env profile. It is the worker's own port
-// router, installed as js/background.js installs it (composition/background.js,
-// installWorkerRouter), on the Chrome fake's runtime (chrome-fake.mjs), with handlers for
-// Popup's two commands, createNote and applyCloseDraft. Each runs on a kernel of the caller's
-// surface, on the shared catalog, over the profile's CanvasTabDB through #17's adapter. The
-// coordinator's queue is all it leaves out, so it's a stand-in: the worker's own path, its queue
-// and its kernel per surface, is held by test/kernel/worker-root.test.mjs,
+// A stand-in for the service worker that Popup's and Side Panel's roots send their writes to (#35
+// slices 4b-2 and 4c), for the kernel tests that build those roots on a legacy-env profile. It is
+// the worker's own port router, installed as js/background.js installs it
+// (composition/background.js, installWorkerRouter), on the Chrome fake's runtime
+// (chrome-fake.mjs), with handlers for the pages' two commands, createNote and applyCloseDraft.
+// Each runs on a kernel of the caller's surface, on the shared catalog, over the profile's
+// CanvasTabDB through #17's adapter, so Side Panel's createNote is refused as the worker refuses
+// it. The coordinator's queue is all it leaves out, so it's a stand-in: the worker's own path, its
+// queue and its kernel per surface, is held by test/kernel/worker-root.test.mjs,
 // test/kernel/worker-router.test.mjs and test/background-coordinator.test.js, and by
 // test/popup-sidepanel.test.js's quick note, which runs js/popup.js against js/background.js
 // itself. It keeps each frame its ports heard, by its kind and operation, and what its router
@@ -23,11 +24,12 @@ import { createChromeFake } from './chrome-fake.mjs';
 
 /** @typedef {import('../../js/kernel/adapters/indexeddb/adapter.js').SettingsStore} SettingsStore */
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
+/** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/contracts/surfaces.js').Surface} Surface */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} CoordinatorStatus */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Dispatch} Dispatch */
 
-/** Popup's two commands, as the worker serves them a page, on the shared catalog */
+/** The pages' two commands, as the worker serves them a page, on the shared catalog */
 const PAGE_COMMANDS = handlerTable({
   commands: { createNote: noteCommands.createNote, applyCloseDraft: closeDraftCommands.applyCloseDraft },
 });
@@ -39,17 +41,20 @@ const PAGE_COMMANDS = handlerTable({
  */
 
 /**
- * The stand-in, and Popup's runtime to it: a popup.html page on the same fake, whose first send
- * starts the worker
+ * The stand-in, and a page's runtime to it: popup.html, unless a case names sidepanel.html, on
+ * the same fake, whose first send starts the worker
  * @param {{
  *   indexedDB: IDBFactory,
  *   settings: SettingsStore,
  *   status?: () => CoordinatorStatus,
  *   before?: (handed: Handed) => unknown,
+ *   answer?: (handed: Handed) => Outcome | undefined,
+ *   page?: 'popup' | 'sidepanel',
  * }} profile - `status`: what each welcome says, ready unless a case says otherwise. `before`:
- *   what a handler awaits once it's handed a command, before it begins it
+ *   what a handler awaits once it's handed a command, before it begins it. `answer`: what a
+ *   handler answers in the kernel's place, for a command it gives an answer
  */
-export function popupWorker({ indexedDB, settings, status, before }) {
+export function popupWorker({ indexedDB, settings, status, before, answer, page: which = 'popup' }) {
   const fake = createChromeFake();
   /** @type {Array<{frame: unknown, operation: unknown}>} */
   const frames = [];
@@ -80,7 +85,7 @@ export function popupWorker({ indexedDB, settings, status, before }) {
     if (before) await before(one);
     // As the coordinator's turn does, it runs nothing once the router stopped waiting for it
     if (!context.begin()) return rejected('validation', 'cancelled');
-    return kernelOf(surface).execute(/** @type {any} */ (payload));
+    return answer?.(one) || kernelOf(surface).execute(/** @type {any} */ (payload));
   };
   fake.worker.install(chrome => {
     // Each frame a page's port brings, heard beside the router, which reads it too
@@ -97,9 +102,9 @@ export function popupWorker({ indexedDB, settings, status, before }) {
       handlers: Object.freeze({ createNote: serve, applyCloseDraft: serve }),
     });
   });
-  const page = fake.page('popup');
+  const page = fake.page(which);
   return {
-    /** Popup's chrome.runtime, which its root's host hands its send chunk */
+    /** The page's chrome.runtime, which its root's host hands its send chunk */
     runtime: page.chrome.runtime,
     /** The version the fake's manifest says, which the router's welcome says too */
     extensionVersion: /** @type {string} */ (page.chrome.runtime.getManifest().version),

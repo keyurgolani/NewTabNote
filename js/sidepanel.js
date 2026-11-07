@@ -174,9 +174,19 @@ async function init() {
   document.querySelector('[data-open-notes]').addEventListener('click', openNotes);
 
   try {
-    const notes = await readNotes(createSidePanelClient());
-    const summary = InsightsSummary.buildInsightsSummary(notes, { maxItems: 8 });
-    renderSummary(summary);
+    const kernel = createSidePanelClient();
+    const show = async () => renderSummary(InsightsSummary.buildInsightsSummary(await readNotes(kernel), { maxItems: 8 }));
+    await show();
+    // The start waits at most 2 s for its apply of closing tabs' edits (#35 slice 4c, Q11), so
+    // once the apply is done, the notes it saved, recovered or caught up are read and shown again
+    kernel.applied().then(async (result) => {
+      if (!result || [result.saved, result.recovered, result.caughtUp].every((list) => list.length === 0)) return;
+      try {
+        await show();
+      } catch (error) {
+        console.error('Failed to load side panel intelligence:', error);
+      }
+    });
   } catch (error) {
     if (error && error.code === 'NEWER_SCHEMA') {
       renderStorageGuard();

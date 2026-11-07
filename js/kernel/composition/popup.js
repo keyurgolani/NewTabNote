@@ -5,15 +5,14 @@
 
 import { createIndexedDbReader } from '../adapters/indexeddb/reader.js';
 import { POPUP_HANDLERS } from '../core/application/handlers-popup.js';
-import { UnavailableError, unavailable } from '../core/contracts/outcomes.js';
+import { unavailable } from '../core/contracts/outcomes.js';
 import { applyingCloseDrafts, pageDrafts } from './close-drafts.js';
-import { kernelClient, pageHost } from './host.js';
+import { pageHost } from './host.js';
+import { PAGE_TIMERS, readsKernel, within } from './page-reads.js';
 
 /** @typedef {import('./host.js').PageHost} PageHost */
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('./close-drafts.js').Applier} Applier */
-/** @typedef {import('../adapters/indexeddb/reader.js').IndexedDbReader} IndexedDbReader */
-/** @typedef {import('../core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../core/ports/runtime.js').Timers} Timers */
 /** @typedef {import('../core/application/journaling.js').JournalingLocks} JournalingLocks */
 /** @typedef {import('../core/application/journaling.js').JournalingOptions} JournalingOptions */
@@ -46,12 +45,6 @@ export const POPUP_WRITES_WAIT_MS = 5000;
  * }} PopupHost
  */
 
-/** @type {Timers} the page's own */
-const PAGE_TIMERS = Object.freeze({
-  set: (callback, ms) => setTimeout(callback, ms),
-  clear: handle => clearTimeout(/** @type {ReturnType<typeof setTimeout>} */ (handle)),
-});
-
 /**
  * The page's own host
  * @returns {PopupHost}
@@ -69,29 +62,6 @@ export function popupHost() {
     extensionVersion,
     locks: /** @type {JournalingLocks | null} */ (/** @type {unknown} */ (globalThis.navigator?.locks || null)),
   };
-}
-
-/**
- * #17's reader as the kernel's adapter, for Popup's table of queries alone. Nothing that writes is
- * there: the kernel refuses a command its table doesn't hold before it recalls or commits anything
- * (kernel.js), so nothing reaches the stand-ins, and each answers as an adapter without it does.
- * @param {IndexedDbReader} reader
- * @returns {KernelAdapter & {open(): Promise<void>}}
- */
-function readsOnly(reader) {
-  const noExport = () => Promise.reject(new UnavailableError('adapter', 'backups-need-legacy-storage', false));
-  return Object.freeze({
-    name: reader.name,
-    flags: reader.flags,
-    open: reader.open,
-    read: reader.read,
-    readSettings: reader.readSettings,
-    ledger: reader.ledger,
-    recall: () => undefined,
-    commit: () => Promise.resolve({ outcome: unavailable('adapter', 'adapter-failed', false), replayed: false }),
-    exportBackup: noExport,
-    exportData: noExport,
-  });
 }
 
 /**
@@ -128,22 +98,6 @@ function heldWrites(load, options) {
 }
 
 /**
- * Resolves once `done` does, which never rejects, or `ms` from now on `timers`, whichever is first
- * @param {Promise<unknown>} done
- * @param {Timers} timers
- * @param {number} ms
- * @returns {Promise<void>}
- */
-const within = (done, timers, ms) =>
-  new Promise(resolve => {
-    const handle = timers.set(resolve, ms);
-    done.then(() => {
-      timers.clear(handle);
-      resolve();
-    });
-  });
-
-/**
  * Popup's client (#35 slice 4b-2). Its reads stay in the page, on #17's read-only reader (Q15),
  * which opens the database as it is and makes none. With no database, or one below this build's
  * version, it waits up to 5 seconds for the worker's migration run first (Q12). It answers
@@ -173,7 +127,7 @@ export function createPopupClient(
 ) {
   const { indexedDB, settings, awaitUpgrade } = host;
   const reader = createIndexedDbReader({ indexedDB, settings, awaitUpgrade });
-  const reads = kernelClient({ adapter: readsOnly(reader), surface: 'popup', handlers: POPUP_HANDLERS });
+  const reads = readsKernel(reader, 'popup', POPUP_HANDLERS);
   const writes = heldWrites(send, {
     reads,
     runtime: /** @type {PopupRuntime} */ (host.runtime),

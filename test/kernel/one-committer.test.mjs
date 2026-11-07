@@ -263,7 +263,7 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
-  it("checks a root the build gains with no edit here: a planted Moment page whose script reaches Popup's root fails on the reader's open, which the list reads on popup alone (rule 2, #35 slice 4b-2)", () => {
+  it("checks a root the build gains with no edit here: a planted Moment page whose script reaches Popup's root fails on the reader's open, which the list reads on popup and sidepanel alone (rule 2, #35 slices 4b-2 and 4c)", () => {
     const problems = problemsOf({
       pages: { ...PAGES, moment: 'moment.html' },
       readFile: planted({
@@ -395,6 +395,22 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     };
     assert.deepEqual(
       problemsOf({ list }).filter(problem => problem.startsWith('popup ')),
+      [],
+    );
+  });
+
+  it("reaches #17's reader alone from Side Panel's start too, with its untilMoved row gone, and the list reads the reader's open on popup and sidepanel (#35 slice 4c)", () => {
+    const connection = 'js/kernel/adapters/indexeddb/connection.js';
+    const list = {
+      ...LIST,
+      untilMoved: LIST.untilMoved.filter(/** @param {{root: string}} row */ row => row.root !== 'sidepanel'),
+      reads: [
+        ...LIST.reads.filter(/** @param {{file: string}} row */ row => row.file !== connection),
+        { file: connection, roots: ['popup', 'sidepanel'], why: "the reader's open, in existing mode", owner: 35 },
+      ],
+    };
+    assert.deepEqual(
+      problemsOf({ list }).filter(problem => problem.startsWith('sidepanel ')),
       [],
     );
   });
