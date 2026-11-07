@@ -47,7 +47,13 @@ async function profile() {
   );
   assert.equal(await newtab.whenReady(), null);
   const blocks = [block('a1', 'A', 0, 'alpha'), block('a2', 'A', 1, 'alpha two')];
-  const made = await newtab.execute({ type: 'createNote', commandId: newtab.ids.next(), noteId: 'A', name: 'Alpha plan', blocks });
+  const made = await newtab.execute({
+    type: 'createNote',
+    commandId: newtab.ids.next(),
+    noteId: 'A',
+    name: 'Alpha plan',
+    blocks,
+  });
   assert.equal(made.kind, 'committed');
   return tab;
 }
@@ -98,8 +104,12 @@ const journalOn = tab => async () => {
     runtime: { sendMessage: async () => {} },
   };
   return {
-    startPageJournal: (/** @type {any} */ client, /** @type {string} */ sessionId, /** @type {any} */ surface, /** @type {any} */ given) =>
-      chunk.startPageJournal(client, sessionId, surface, { ...given, ...ports }),
+    startPageJournal: (
+      /** @type {any} */ client,
+      /** @type {string} */ sessionId,
+      /** @type {any} */ surface,
+      /** @type {any} */ given,
+    ) => chunk.startPageJournal(client, sessionId, surface, { ...given, ...ports }),
   };
 };
 
@@ -139,7 +149,10 @@ async function journalOf(tab) {
  * @param {{id?: string, page?: string, at?: number, content?: string}} [options]
  */
 function draftOf({ id = 'draft-a', page = 'page-1', at = AT, content = 'alpha, edited as the tab closed' } = {}) {
-  const digests = { a1: blockDigest(block('a1', 'A', 0, 'alpha'), 'A'), a2: blockDigest(block('a2', 'A', 1, 'alpha two'), 'A') };
+  const digests = {
+    a1: blockDigest(block('a1', 'A', 0, 'alpha'), 'A'),
+    a2: blockDigest(block('a2', 'A', 1, 'alpha two'), 'A'),
+  };
   return {
     v: 1,
     id,
@@ -181,11 +194,26 @@ async function leaveSave(tab) {
   const blocks = [{ id: 'a1', type: 'text', content, order: 0 }];
   const command = { type: 'saveNoteContent', commandId: 'c-save', noteId: 'A', blocks, deriveFromStored: true };
   /** @type {any} the edit the page journaled with its save */
-  const draft = { ...draftOf({ id: 'c-save', page: 'page-gone', content }), blocks: blocks.map(saved => ({ ...saved, canvasId: 'A' })) };
+  const draft = {
+    ...draftOf({ id: 'c-save', page: 'page-gone', content }),
+    blocks: blocks.map(saved => ({ ...saved, canvasId: 'A' })),
+  };
   const writer = inContextStores({ indexedDB: tab.env.indexedDB }).journal();
   await writer.open();
   const ownerSessionId = 'page-gone';
-  await writer.put(journalEntry({ command, v: 1, noteId: 'A', surface: 'newtab', ownerSessionId, seq: 1, createdAt: AT, draft, pane: 'main' }));
+  await writer.put(
+    journalEntry({
+      command,
+      v: 1,
+      noteId: 'A',
+      surface: 'newtab',
+      ownerSessionId,
+      seq: 1,
+      createdAt: AT,
+      draft,
+      pane: 'main',
+    }),
+  );
   writer.close();
 }
 
@@ -236,7 +264,11 @@ describe("Side Panel's writes, over #13's port (#35 slice 4c)", () => {
     const { stand, client } = sidePanelOn(tab);
     try {
       assert.deepEqual((await client.applied())?.kept, ['A'], "Side Panel's start applied it, and kept it");
-      assert.deepEqual(stand.frames.filter(frame => frame.operation === 'applyCloseDraft'), [], 'nothing went on the port');
+      assert.deepEqual(
+        stand.frames.filter(frame => frame.operation === 'applyCloseDraft'),
+        [],
+        'nothing went on the port',
+      );
       assert.notEqual(tab.env.global.localStorage.getItem(key), null, 'the draft stays');
     } finally {
       stand.close();
@@ -341,14 +373,18 @@ describe("Side Panel's writes, over #13's port (#35 slice 4c)", () => {
     const tab = await profile();
     writeDraft(tab);
     await leaveSave(tab);
-    const answer = (/** @type {Handed} */ one) => (one.commandId === 'draft-a-apply' ? unavailable('coordinator', 'unavailable', true) : undefined);
+    const answer = (/** @type {Handed} */ one) =>
+      one.commandId === 'draft-a-apply' ? unavailable('coordinator', 'unavailable', true) : undefined;
     const { stand, client } = sidePanelOn(tab, { answer, journal: journalOn(tab), requestIdle: idleNow });
     try {
       assert.deepEqual((await client.applied())?.kept, ['A']);
       assert.equal(await client.whenReady(), null);
       assert.equal((await client.query({ type: 'listNotes', view: 'sidePanel' })).kind, 'ready');
       assert.equal(await until(() => stand.handed.length === 2), true, "the journal's run sent its own");
-      assert.deepEqual(stand.handed.map(one => one.commandId), ['draft-a-apply', 'c-save-apply']);
+      assert.deepEqual(
+        stand.handed.map(one => one.commandId),
+        ['draft-a-apply', 'c-save-apply'],
+      );
     } finally {
       stand.close();
     }

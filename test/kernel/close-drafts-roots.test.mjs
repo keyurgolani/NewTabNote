@@ -96,7 +96,11 @@ const popupHostOf = context => {
  * @param {LegacyContext} context
  */
 const sidePanelHostOf = context => {
-  const standIn = popupWorker({ indexedDB: context.env.indexedDB, settings: context.env.chrome.api.storage.local, page: 'sidepanel' });
+  const standIn = popupWorker({
+    indexedDB: context.env.indexedDB,
+    settings: context.env.chrome.api.storage.local,
+    page: 'sidepanel',
+  });
   standIns.push(standIn);
   return { ...pageHostOf(context), runtime: standIn.runtime, extensionVersion: standIn.extensionVersion };
 };
