@@ -300,9 +300,10 @@ export function createKernel({
   /**
    * A use case's work committed, or the outcome it answered with itself. When the command's turn on
    * the coordinator's queue gave a `live`, it's checked right before the adapter's commit (#35 slice
-   * 4b-1): once the queue has cut the turn, nothing commits, so a command the queue gave up on never
-   * lands after a later one. A commit already inside the adapter ends on its own, since an IndexedDB
-   * transaction can't be held open across anything else.
+   * 4b-1), and the adapter asks it again inside the commit, once its transaction has started, before
+   * each unit, and before its bookkeeping (#247). Once the queue has cut the turn, nothing more of it
+   * commits, so a command the queue gave up on never lands after a later one. Only a commit
+   * IndexedDB had already begun can, which the coordinator records (coordinator.js).
    * @param {UseCaseResult} result
    * @param {(() => boolean) | null} live
    * @returns {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>}
@@ -312,7 +313,7 @@ export function createKernel({
     if (live !== null && live() !== true) {
       return Promise.resolve({ outcome: unavailable('coordinator', TURN_EXCEEDED, true), replayed: false });
     }
-    return Promise.resolve(adapter.commit(result)).then(commitResultOf);
+    return Promise.resolve(adapter.commit(result, live === null ? undefined : { live })).then(commitResultOf);
   };
 
   /**

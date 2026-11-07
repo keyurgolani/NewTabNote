@@ -173,7 +173,8 @@ export function conflict(code, currentRevision) {
 
 /**
  * The code a command answers, `unavailable` and retryable, when the coordinator's queue cut its turn
- * before it committed (#35 slice 4b-1): nothing of it landed, so it can be sent again
+ * before it committed (#35 slice 4b-1): nothing of it landed, so it can be sent again. The kernel
+ * answers it for a turn cut before the commit, and an adapter for one cut inside it (#247).
  */
 export const TURN_EXCEEDED = 'turn-exceeded';
 

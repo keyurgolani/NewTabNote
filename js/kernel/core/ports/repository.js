@@ -241,6 +241,12 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  */
 
 /**
+ * How a commit runs: `live` is its turn's on the coordinator's queue, which answers false once
+ * the queue has cut the turn (#247). A commit with none runs as before.
+ * @typedef {{live?: (() => boolean) | null}} CommitOptions
+ */
+
+/**
  * What commit answers. `replayed` is true when the commandId already had this outcome, from a
  * send of the same command that committed first, so the kernel doesn't publish it again.
  * @typedef {{outcome: Outcome, replayed: boolean}} CommitResult
@@ -287,9 +293,12 @@ export const IDB_SETTINGS_KEYS = Object.freeze(['insightsEnabled']);
  *   its items runs. The kernel refuses a bulk command for its action or its notes before it
  *   asks, so a refused one gets none. Synchronous, so a save can still open its transaction
  *   in the calling task.
- * @property {(work: Work) => Promise<CommitResult>} commit
+ * @property {(work: Work, options?: CommitOptions) => Promise<CommitResult>} commit
  *   Opens the first transaction before it returns. It never rejects: a failure is an
- *   `unavailable` outcome.
+ *   `unavailable` outcome. With `options.live`, its turn's on the coordinator's queue (#35 slice
+ *   4b-1), it asks the turn again inside the commit, before each unit, once the transaction has
+ *   started, and before its bookkeeping (#247). Once the queue has cut the turn, it commits
+ *   nothing and answers `unavailable` `coordinator` `turn-exceeded`, retryable.
  * @property {<T>(stores: StoreName[], body: (tx: ReadTx) => Promise<T>) => Promise<T>} read
  *   Rejects with an UnavailableError when storage fails
  * @property {(area: ReadableSettingsArea, keys: readonly string[]) => Promise<Record<string, unknown>>} readSettings

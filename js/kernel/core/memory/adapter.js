@@ -42,7 +42,7 @@
 import { clone } from '../contracts/clone.js';
 // Every command a context runs, the worker's own too, since the tests run both on this adapter
 import { WORKER_COMMANDS as COMMANDS } from '../contracts/worker-catalog.js';
-import { UnavailableError, rejected, unavailable, unavailableFrom } from '../contracts/outcomes.js';
+import { TURN_EXCEEDED, UnavailableError, rejected, unavailable, unavailableFrom } from '../contracts/outcomes.js';
 import { blocksByNote, folderOps, noteOps } from '../domain/changes.js';
 import { DEFAULT_PREFERENCES } from '../domain/preferences.js';
 import { DEFAULT_SESSION } from '../domain/session.js';
@@ -475,9 +475,12 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
 
   /**
    * @param {Work} work
+   * @param {(() => boolean) | null} [live] - the turn's, asked before each unit and before the
+   *   writes go in, as #17's adapter asks it inside its transaction (#247)
    * @returns {Promise<Applied>}
    */
-  const apply = async work => {
+  const apply = async (work, live = null) => {
+    const cut = () => ({ outcome: unavailable('coordinator', TURN_EXCEEDED, true), changed: [], tombstones: [] });
     const { effect } = work;
     if (effect.kind === 'settings') {
       const entries = Object.entries(effect.values);
@@ -508,6 +511,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
     const pending = new Map();
     for (const unit of effect.units) {
       if (unit.when && !unit.when()) continue;
+      if (live && live() !== true) return cut();
       const stop = await unit.run(transaction(pending, unit.mode || 'readwrite', unit.stores));
       if (stop) {
         if (stop.kind === 'conflict') {
@@ -520,6 +524,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         return { outcome: stop, changed: [], tombstones: [] };
       }
     }
+    if (live && live() !== true) return cut();
     // The change log's ops, from the records as they were, before the writes go in
     const ops = changeOps(pending);
     // A deleted record's revision stays, as #17's tombstone keeps `lastRevision`, so a record
@@ -618,7 +623,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
       return kept;
     },
 
-    commit(work) {
+    commit(work, options) {
       return serial(async () => {
         // Only a catalog command has a key to keep: other work, such as #20's storage probe,
         // runs each time and keeps no record, as on #17's adapter
@@ -629,7 +634,7 @@ export function createMemoryAdapter({ beforeWrite = () => {}, ledger, commitLog 
         /** @type {Applied} */
         let applied;
         try {
-          applied = await apply(work);
+          applied = await apply(work, options?.live ?? null);
         } catch (error) {
           return { outcome: unavailableFrom(error), replayed: false };
         }
