@@ -35,6 +35,9 @@ const popupClient = /** @type {any} */ (createPopupClient);
 /** Q11's wait */
 const APPLY_WAIT_MS = 2000;
 
+/** How long Popup's field waits for its writes, at most, before it takes Enter all the same (#242) */
+const WRITES_WAIT_MS = 5000;
+
 /** @type {(id: string, canvasId: string, order: number, content?: string) => any} */
 const block = (id, canvasId, order, content) => legacyEnv.block(id, canvasId, order, content);
 
@@ -342,6 +345,60 @@ describe("Popup's writes, over #13's port (#35 slice 4b-2)", () => {
     });
     assert.deepEqual(await client.execute(quickNote(client)), unavailable('coordinator', 'reload-required', false));
     assert.deepEqual(stand.frames, []);
+    stand.close();
+  });
+});
+
+describe("When Popup's field takes Enter (#242)", () => {
+  it('answers writesReady once the send chunk is in and its journal holds the owner lock, and not before', async () => {
+    const tab = await profile();
+    /** @type {(value?: unknown) => void} */
+    let chunkIn = () => {};
+    /** @type {(value: boolean) => void} */
+    let lockHeld = () => {};
+    const loaded = new Promise(resolve => {
+      chunkIn = resolve;
+    });
+    /** @type {Promise<boolean>} */
+    const ready = new Promise(resolve => {
+      lockHeld = resolve;
+    });
+    const chunk = { popupWrites: () => ({ ready, execute: async () => committed('note-created', []) }) };
+    // The test's timers, never moved on, so only the writes can answer it
+    const scheduler = testScheduler();
+    const { stand, client } = popupOn(tab, { timers: scheduler.timers, send: () => loaded.then(() => chunk) });
+    const writes = /** @type {any} */ (client);
+    let answered = false;
+    writes.writesReady().then(() => {
+      answered = true;
+    });
+    await settle();
+    assert.equal(answered, false, 'not before the send chunk is in');
+    chunkIn();
+    await settle();
+    assert.equal(answered, false, 'not before its journal holds the owner lock');
+    lockHeld(true);
+    assert.equal(await until(() => answered), true, 'once both are in');
+    stand.close();
+  });
+
+  it("answers writesReady after 5 s when the journal's owner lock never comes, and not before, so the field can't stay dead", async () => {
+    const tab = await profile();
+    const chunk = {
+      popupWrites: () => ({ ready: new Promise(() => {}), execute: async () => committed('note-created', []) }),
+    };
+    const scheduler = testScheduler();
+    const { stand, client } = popupOn(tab, { timers: scheduler.timers, send: async () => chunk });
+    const writes = /** @type {any} */ (client);
+    let answered = false;
+    writes.writesReady().then(() => {
+      answered = true;
+    });
+    await settle();
+    await scheduler.advance(WRITES_WAIT_MS - 1);
+    assert.equal(answered, false, 'it waits for the lock');
+    await scheduler.advance(1);
+    assert.equal(answered, true, 'for 5 s at most');
     stand.close();
   });
 });

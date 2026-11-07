@@ -44,9 +44,11 @@ function notes() {
  * worker's IndexedDB, chrome.* and Web Locks, as an extension's page does.
  * @param {Object} [records] - rows per store, or null for a profile with no database
  * @param {(env: any) => void} [prepare] - runs on the environment before Popup starts
- * @param {{worker?: any}} [options] - a worker test/helpers/load-background.js started
+ * @param {{worker?: any, wait?: boolean}} [options] - `worker`: a worker test/helpers/load-background.js
+ *   started. `wait`: whether to answer only once Popup's start is done, as by default, or at once,
+ *   with `started` for it
  */
-async function popup(records = { canvases: notes() }, prepare = () => {}, { worker = null } = {}) {
+async function popup(records = { canvases: notes() }, prepare = () => {}, { worker = null, wait = true } = {}) {
   // On the worker's profile, one lock manager, the worker's, as Chrome shares navigator.locks
   // between an extension's pages and its worker, so the worker sees the page's owner lock
   const env = worker
@@ -60,7 +62,8 @@ async function popup(records = { canvases: notes() }, prepare = () => {}, { work
   ]);
   // Popup loads its chunks through import(), as Chrome loads them
   await loadPageModule(env, 'js/popup.js', { dynamicImports: true });
-  await Promise.all(env.document.fire('DOMContentLoaded'));
+  const started = Promise.all(env.document.fire('DOMContentLoaded'));
+  if (wait) await started;
   /** The recent list as it reads: each note's name, or the list's message */
   const recent = () => {
     const items = els['page-list'].querySelectorAll('.page-item');
@@ -70,7 +73,7 @@ async function popup(records = { canvases: notes() }, prepare = () => {}, { work
   const summary = () => (els['main-content'].classList.contains('no-summary')
     ? null
     : els['summary-content'].querySelectorAll('li').map((item) => item.textContent));
-  return { env, els, recent, summary };
+  return { env, els, recent, summary, started };
 }
 
 /**
@@ -78,15 +81,17 @@ async function popup(records = { canvases: notes() }, prepare = () => {}, { work
  * it, whose port reaches the port listener the worker's router installs
  * (test/helpers/runtime-ports.js)
  * @param {Object} [records] - rows per store, or null for a profile with no database
+ * @param {(env: any) => void} [prepare] - runs on Popup's environment before Popup starts
+ * @param {{wait?: boolean}} [options] - as popup()'s
  */
-async function popupOnWorker(records = { canvases: notes() }) {
+async function popupOnWorker(records = { canvases: notes() }, prepare = () => {}, { wait = true } = {}) {
   const worker = await loadBackground({
     setup: async (env) => {
       if (records) await createDatabase(env.indexedDB, { records });
     },
   });
   connectPage(worker.env.chrome, 'popup.html');
-  return { worker, ...(await popup(null, () => {}, { worker })) };
+  return { worker, ...(await popup(null, prepare, { worker, wait })) };
 }
 
 /**
@@ -237,6 +242,42 @@ describe("Popup's quick note", () => {
     } finally {
       IDBObjectStore.prototype.put = original;
     }
+  });
+
+  // #242: until Popup's writes are ready, its send chunk in and its journal holding the owner lock,
+  // a note sent waits in the page, unjournaled, and a close loses it. So the field takes Enter only
+  // once they are, and an Enter before then leaves the text where it is.
+  it("takes no Enter until Popup's writes are ready, so no quick note waits unjournaled where a close loses it (#242)", async () => {
+    /** @type {() => void} */
+    let letGo = () => {};
+    const gate = new Promise((resolve) => {
+      letGo = resolve;
+    });
+    // The page's own Web Locks: its journal's owner lock waits for the gate, and every other request
+    // goes to the manager it shares with the worker, as it is
+    const holdOwnerLock = (/** @type {any} */ env) => {
+      const shared = env.global.navigator.locks;
+      env.global.navigator.locks = {
+        request: (/** @type {any[]} */ ...args) => (String(args[0]).startsWith('journal.owner.')
+          ? gate.then(() => shared.request(...args))
+          : shared.request(...args)),
+        query: () => shared.query(),
+      };
+    };
+    const { els, recent, started } = await popupOnWorker({ canvases: notes() }, holdOwnerLock, { wait: false });
+    await waitFor(() => Array.isArray(recent()) && recent().includes('Newest'), { withinMs: 5000, message: "Popup's list" });
+    const input = els['quick-note-input'];
+    input.value = 'Call the plumber';
+    input.dispatchEvent({ type: 'keydown', key: 'Enter' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(input.disabled, false, "the field didn't take it, so no note waits in the page");
+    assert.equal(input.value, 'Call the plumber', 'its text stays');
+    // Once the lock is in, Popup's start is done, and an Enter takes the note, which lands
+    letGo();
+    await started;
+    input.dispatchEvent({ type: 'keydown', key: 'Enter' });
+    await waitFor(() => recent()[0] === 'Call the plumber', { withinMs: 5000, message: 'the quick note listed first' });
+    assert.equal(input.value, '');
   });
 });
 
