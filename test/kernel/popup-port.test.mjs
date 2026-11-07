@@ -234,6 +234,7 @@ describe("Popup's writes, over #13's port (#35 slice 4b-2)", () => {
       'nothing went on the port',
     );
     assert.notEqual(tab.env.global.localStorage.getItem(key), null, 'the draft stays');
+    assert.deepEqual((await client.applied())?.kept, ['A'], "Popup's start applied it, and kept it");
     stand.close();
   });
 
