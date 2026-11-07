@@ -1,10 +1,10 @@
 // #35 slice 4b-2: Popup's page side once its writes go to the worker over #13's port (the 4b
-// plan's rules 3, 8 and 9, and Q9). Popup's root reads in the page, on #17's reader, and
+// plan's rules 3, 7, 8, 9 and 10, Q9 and Q11). Popup's root reads in the page, on #17's reader, and
 // sends its quick note and a closing tab's edit through its send chunk, which it loads as it
 // starts. Each command waits for the chunk in order, then for the journal's owner lock, and goes,
 // journaled as the catalog says, on the session the worker's router knows the page by, the one its
-// journal names, so the drain on a closed port waits on that page alone. On legacy-env profiles,
-// with a stand-in for the worker (popup-worker.mjs).
+// journal names, so the drain on a closed port waits on that page alone. A chunk that can't load
+// sends nothing. On legacy-env profiles, with a stand-in for the worker (popup-worker.mjs).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +13,13 @@ import { inContextStores } from '../../js/kernel/adapters/in-context.js';
 import { waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import { createNewTabAdapter, createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
+import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
+import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
+import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
+import { DRAFT_PREFIX } from '../../js/kernel/core/domain/close-draft-keys.js';
+import { ownerLock } from '../../js/kernel/core/domain/journal.js';
 import { legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { settle, testScheduler } from './messaging-support.mjs';
 import { popupWorker } from './popup-worker.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
@@ -25,6 +31,9 @@ import { popupWorker } from './popup-worker.mjs';
  * @type {(...args: unknown[]) => ReturnType<typeof createPopupClient>}
  */
 const popupClient = /** @type {any} */ (createPopupClient);
+
+/** Q11's wait */
+const APPLY_WAIT_MS = 2000;
 
 /** @type {(id: string, canvasId: string, order: number, content?: string) => any} */
 const block = (id, canvasId, order, content) => legacyEnv.block(id, canvasId, order, content);
@@ -117,6 +126,38 @@ async function journalOf(tab) {
   }
 }
 
+/**
+ * A closing tab's edit of A, a1 changed, on the base the tab saw, with `content` for a1
+ * @param {LegacyContext} tab
+ */
+function writeDraft(tab, content = 'alpha, edited as the tab closed') {
+  const draft = {
+    v: 1,
+    id: 'draft-a',
+    page: 'page-1',
+    noteId: 'A',
+    at: Date.UTC(2026, 10, 6, 9, 0),
+    base: {
+      revision: 0,
+      updatedAt: null,
+      issued: [],
+      name: 'Alpha plan',
+      blocks: {
+        a1: blockDigest(block('a1', 'A', 0, 'alpha'), 'A'),
+        a2: blockDigest(block('a2', 'A', 1, 'alpha two'), 'A'),
+      },
+      issuedSaves: [],
+    },
+    blocks: [block('a1', 'A', 0, content)],
+    deletedBlockIds: [],
+    preview: content.slice(0, 80),
+    todoProgress: null,
+    linkedNames: [],
+  };
+  tab.env.global.localStorage.setItem(`${DRAFT_PREFIX}${draft.id}`, JSON.stringify(draft));
+  return `${DRAFT_PREFIX}${draft.id}`;
+}
+
 describe("Popup's writes, over #13's port (#35 slice 4b-2)", () => {
   it('sends the quick note to the worker as popup, journaled until its answer, and it commits there (rule 3)', async () => {
     const tab = await profile();
@@ -180,5 +221,126 @@ describe("Popup's writes, over #13's port (#35 slice 4b-2)", () => {
     } finally {
       stand.close();
     }
+  });
+
+  it("sends nothing for a closing tab's edit over the port's 1 MiB, which stays for a page that applies it in-process (rule 10)", async () => {
+    const tab = await profile();
+    const key = writeDraft(tab, 'x'.repeat(MAX_MESSAGE_BYTES));
+    const { stand, client } = popupOn(tab);
+    assert.equal(await client.whenReady(), null);
+    assert.deepEqual(
+      stand.frames.filter(frame => frame.operation === 'applyCloseDraft'),
+      [],
+      'nothing went on the port',
+    );
+    assert.notEqual(tab.env.global.localStorage.getItem(key), null, 'the draft stays');
+    stand.close();
+  });
+
+  it("waits at most 2 s for the start's apply, then reads what's stored, and applied answers once it's done (Q11)", async () => {
+    const tab = await profile();
+    writeDraft(tab);
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const held = new Promise(resolve => {
+      release = resolve;
+    });
+    const scheduler = testScheduler();
+    const { stand, client } = popupOn(tab, {
+      timers: scheduler.timers,
+      before: one => (one.type === 'applyCloseDraft' ? held : undefined),
+    });
+    let ready = false;
+    client.whenReady().then(() => {
+      ready = true;
+    });
+    assert.ok(await until(() => stand.handed.some(one => one.type === 'applyCloseDraft')), 'the apply sent the edit');
+    await scheduler.advance(APPLY_WAIT_MS - 1);
+    assert.equal(ready, false, 'it waits for the apply');
+    await scheduler.advance(1);
+    assert.equal(ready, true, 'for 2 s at most');
+    release();
+    const applied = await client.applied();
+    assert.deepEqual(applied?.saved, ['A']);
+    stand.close();
+  });
+
+  it("names the journal's owner lock and each entry for the session its hello says, which the worker's drain on a closed port waits on (rule 7)", async () => {
+    const tab = await profile();
+    const real = tab.env.global.navigator.locks;
+    /** @type {string[]} */
+    const requested = [];
+    const locks = {
+      request: (/** @type {string} */ name, /** @type {any} */ options, /** @type {any} */ callback) => {
+        requested.push(name);
+        return real.request(name, options, callback);
+      },
+      query: () => real.query(),
+    };
+    /** @type {unknown[]} */
+    let owners = [];
+    const { stand, client } = popupOn(tab, {
+      locks,
+      before: async one => {
+        await until(async () => (await journalOf(tab)).some(entry => entry.opId === one.commandId));
+        owners = (await journalOf(tab)).map(entry => entry.ownerSessionId);
+      },
+    });
+    assert.equal((await client.execute(quickNote(client))).kind, 'committed');
+    const [sent] = stand.handed;
+    assert.ok(sent, 'the worker got it');
+    assert.ok(requested.includes(ownerLock(sent.sessionId)), requested.join(', '));
+    assert.deepEqual(owners, [sent.sessionId]);
+    stand.close();
+  });
+
+  it('holds each command, in order, until the send chunk is in and its journal holds the owner lock (rule 3)', async () => {
+    const tab = await profile();
+    /** @type {(value?: unknown) => void} */
+    let chunkIn = () => {};
+    /** @type {(value: boolean) => void} */
+    let lockHeld = () => {};
+    const loaded = new Promise(resolve => {
+      chunkIn = resolve;
+    });
+    /** @type {Promise<boolean>} */
+    const ready = new Promise(resolve => {
+      lockHeld = resolve;
+    });
+    /** @type {string[]} */
+    const went = [];
+    const chunk = {
+      popupWrites: () => ({
+        ready,
+        execute: async (/** @type {{commandId: string, noteId: string}} */ command) => {
+          went.push(command.commandId);
+          return committed('note-created', [command.noteId]);
+        },
+      }),
+    };
+    const { stand, client } = popupOn(tab, { send: () => loaded.then(() => chunk) });
+    const first = quickNote(client, 'First');
+    const second = quickNote(client, 'Second');
+    const answers = [client.execute(first), client.execute(second)];
+    await settle();
+    chunkIn();
+    await settle();
+    assert.deepEqual(went, [], 'nothing goes before the owner lock');
+    const third = quickNote(client, 'Third');
+    answers.push(client.execute(third));
+    lockHeld(true);
+    await Promise.all(answers);
+    assert.deepEqual(went, [first.commandId, second.commandId, third.commandId]);
+    stand.close();
+  });
+
+  it("answers each command unavailable, reload-required, when the send chunk can't load, and sends nothing", async () => {
+    const tab = await profile();
+    const { stand, client } = popupOn(tab, {
+      send: () => Promise.reject(new TypeError('Failed to fetch dynamically imported module')),
+    });
+    assert.deepEqual(await client.execute(quickNote(client)), unavailable('coordinator', 'reload-required', false));
+    assert.deepEqual(stand.frames, []);
+    stand.close();
   });
 });

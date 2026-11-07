@@ -381,6 +381,22 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
+  it("reaches #17's reader alone from Popup's start, with its untilMoved row gone: no writer, and no write but the reader's open, which the list reads on popup (#35 slice 4b-2)", () => {
+    const connection = 'js/kernel/adapters/indexeddb/connection.js';
+    const list = {
+      ...LIST,
+      untilMoved: LIST.untilMoved.filter(/** @param {{root: string}} row */ row => row.root !== 'popup'),
+      reads: [
+        ...LIST.reads.filter(/** @param {{file: string}} row */ row => row.file !== connection),
+        { file: connection, roots: ['popup'], why: "the reader's open, in existing mode", owner: 35 },
+      ],
+    };
+    assert.deepEqual(
+      problemsOf({ list }).filter(problem => problem.startsWith('popup ')),
+      [],
+    );
+  });
+
   it('fails an untilMoved row whose page no longer reaches the adapter, and a page that joins the list (rule 3)', () => {
     const list = {
       ...LIST,
