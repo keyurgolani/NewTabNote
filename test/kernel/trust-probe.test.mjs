@@ -7,6 +7,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { runCheck } from '../../js/trust/core/checks.js';
 import { PROBE_KEY, capture, probeCommit, storage } from '../../js/trust/core/providers/probe.js';
 import { dump, legacyEnv, run as migrate } from './migration-support.mjs';
@@ -243,6 +244,113 @@ describe("a probe write #17's adapter can't commit, as a transient UnknownError 
     of.faults.throwOnNextWrite('canvases', 'UnknownError');
     const { receipt } = await run('storage', { storage: adapter });
     assert.deepEqual([receipt.status, receipt.evidence], ['unverified', { cause: 'storage', errorCode: 'retries-exhausted' }]);
+    adapter.close();
+  });
+});
+
+// Every code #17's adapter (failures.js), its connection (connection.js) and the memory adapter
+// answer a commit with, as each answers it, reads as ruled for both core providers: a full disk
+// or a newer build's database needs the user; a failure no resend fixes is failed, with capture
+// at risk, but reload-required, which a reload fixes (the lead, 2026-10-31 11:55), and
+// migration-required, which isn't capture's path; and one a resend may fix verified nothing.
+// The memory adapter refuses the probe's array key itself (invalid-key), so its codes are
+// answered here as it answers them, not by it.
+describe('every code the adapters answer reads as ruled, for capture and storage (#20 slice 4c)', () => {
+  // What a probe reads on `code`: its status, capture state, faults, and the code its receipt carries
+  /** @typedef {(code: string) => unknown[]} Reads */
+  /** @type {Reads} */
+  const ACTION = code => ['action-required', 'at-risk', [code], code];
+  /** @type {Reads} */
+  const FAILED = code => ['failed', 'at-risk', ['probe-failed'], code];
+  /** @type {Reads} */
+  const UNVERIFIED = code => ['unverified', undefined, [], code];
+  /**
+   * A database that won't open, keyed as slice 1b's worker raises it
+   * @type {Reads}
+   */
+  const OPEN_FAILED = code => ['failed', 'at-risk', ['open-failed'], code];
+  /**
+   * Storage's update waiting: its evidence says why the update waits, and nothing does here
+   * @type {Reads}
+   */
+  const PENDING = () => ['degraded', undefined, ['migration-pending'], undefined];
+  /**
+   * Each code as an adapter answers it, and what capture and storage read on it
+   * @type {Array<[code: string, cause: string, retryable: boolean, capture: Reads, storage: Reads]>}
+   */
+  const CODES = [
+    ['quota', 'quota', false, ACTION, ACTION],
+    ['version-too-new', 'newer-schema', false, ACTION, ACTION],
+    ['transaction-inactive', 'adapter', false, FAILED, FAILED],
+    ['write-in-readonly-transaction', 'adapter', false, FAILED, FAILED],
+    ['not-cloneable', 'adapter', false, FAILED, FAILED],
+    ['invalid-key', 'adapter', false, FAILED, FAILED],
+    ['store-unavailable', 'storage', false, FAILED, FAILED],
+    ['constraint', 'storage', false, FAILED, FAILED],
+    ['unreadable', 'storage', false, FAILED, FAILED],
+    ['timed-out', 'storage', true, UNVERIFIED, UNVERIFIED],
+    ['transaction-failed', 'storage', true, UNVERIFIED, UNVERIFIED],
+    ['retries-exhausted', 'storage', true, UNVERIFIED, UNVERIFIED],
+    ['adapter-failed', 'adapter', true, UNVERIFIED, UNVERIFIED],
+    ['reload-required', 'storage', false, UNVERIFIED, UNVERIFIED],
+    ['migration-required', 'storage', true, UNVERIFIED, PENDING],
+    ['no-database', 'storage', true, UNVERIFIED, UNVERIFIED],
+    ['missing-core-stores', 'storage', false, FAILED, OPEN_FAILED],
+    ['open-failed', 'storage', true, UNVERIFIED, UNVERIFIED],
+    ['open-pending', 'storage', true, UNVERIFIED, UNVERIFIED],
+    ['blocked-upgrade', 'storage', true, UNVERIFIED, UNVERIFIED],
+    ['not-open', 'adapter', false, FAILED, FAILED],
+    ['unknown-store', 'adapter', false, FAILED, FAILED],
+    ['store-outside-transaction', 'adapter', false, FAILED, FAILED],
+    ['revision-before-get', 'adapter', false, FAILED, FAILED],
+    ['setting-not-served', 'adapter', false, FAILED, FAILED],
+  ];
+
+  it('maps each to its status, capture state and fault, and carries the code', async () => {
+    for (const [code, cause, retryable, captureReads, storageReads] of CODES) {
+      // An adapter whose commit answers the code, and whose reads still answer
+      const answering = {
+        readSettings: async () => ({}),
+        read: async () => undefined,
+        commit: async () => ({ outcome: unavailable(/** @type {any} */ (cause), code, retryable), replayed: false }),
+      };
+      for (const [id, reads] of /** @type {const} */ ([
+        ['capture', captureReads],
+        ['storage', storageReads],
+      ])) {
+        const { receipt, faults } = await run(id, { storage: answering });
+        assert.deepEqual(
+          [receipt.status, receipt.capture, faults.map(fault => fault.faultCode), receipt.evidence.errorCode],
+          reads(code),
+          `${code}, ${id}`,
+        );
+      }
+    }
+  });
+
+  it("reads a TransactionInactiveError #17's adapter hits on the probe's write as failed, capture at risk, with reading still working", async () => {
+    const of = freshProfile();
+    const adapter = adapterOn(of);
+    await adapter.open();
+    for (const id of /** @type {const} */ (['capture', 'storage'])) {
+      of.faults.throwOnNextWrite('canvases', 'TransactionInactiveError');
+      const { receipt, faults } = await run(id, { storage: adapter });
+      assert.deepEqual(
+        [
+          receipt.status,
+          receipt.capture,
+          receipt.evidence,
+          faults.map(fault => [fault.faultCode, fault.severity, fault.preserved]),
+        ],
+        [
+          'failed',
+          'at-risk',
+          { cause: 'adapter', errorCode: 'transaction-inactive', subjectId: 'CanvasTabDB' },
+          [['probe-failed', 'capture-risk', ['reading']]],
+        ],
+        id,
+      );
+    }
     adapter.close();
   });
 });
