@@ -10,13 +10,20 @@
  * worst core status counts `unverified` and `stale` as worse than `verified`, so no summary is
  * healthy until a real check passed (approved AC3).
  *
- * Dismissed incidents stay listed but leave Needs action. Capture risk stays strict: capture
- * reads `safe` only on a fresh core receipt verified after the latest sighting of every open
- * capture-risk incident, dismissed ones included (the records time a capture-risk sighting after
- * the newest core receipt, whatever the clock), so a dismissed one reads `unknown` until a later
- * probe passes, never `safe`, and a new failure ends its dismissal (incidents.js).
+ * Dismissed incidents stay listed but leave Needs action, and so does an update that's waiting
+ * (updates.js, the design review's change 9), which needs no one: the Trust Center reads it by the
+ * same rule. Capture risk stays strict: capture reads `safe` only on a fresh core receipt verified
+ * after the latest sighting of every open capture-risk incident, dismissed ones included (the
+ * records time a capture-risk sighting after the newest core receipt, whatever the clock), so a
+ * dismissed one reads `unknown` until a later probe passes, never `safe`, and a new failure ends
+ * its dismissal (incidents.js).
+ *
+ * A cause carries only a registered error code: records a newer build wrote can hold one this
+ * build has no words for, and trust.summary's schema takes none other.
  */
 
+import { ERROR_CODES } from './codes.js';
+import { waits, whyOf } from './updates.js';
 import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
 
 /** @typedef {import('./records.js').HealthReceipt} HealthReceipt */
@@ -86,15 +93,19 @@ export const worstFirst = incidents =>
   );
 
 /**
- * The error code `evidence` names, or null
+ * The registered error code `evidence` names, or null
  * @param {Readonly<Record<string, unknown>> | null | undefined} evidence
- * @returns {any}
+ * @returns {Cause['errorCode']}
  */
-const errorCodeOf = evidence => (evidence && typeof evidence.errorCode === 'string' ? evidence.errorCode : null);
+const errorCodeOf = evidence => {
+  const code = evidence ? evidence.errorCode : undefined;
+  return typeof code === 'string' && ERROR_CODES.includes(code) ? /** @type {Cause['errorCode']} */ (code) : null;
+};
 
 /**
  * What every status page reads: each provider's status, the open incidents, and what they add up
- * to. `needsAction` is every open incident the user hasn't dismissed.
+ * to. `shown` is every open incident the user hasn't dismissed; `needsAction` is those but an
+ * update that's waiting.
  * @template {SummaryProvider} P
  * @param {Omit<SummaryInput, 'providers'> & {providers: readonly P[]}} input - the providers as
  *   the caller has them, which each status keeps
@@ -111,38 +122,44 @@ export function assess({ providers, receipts, incidents, copyRead, recordsRead, 
   // Writes failing, or a store or settings copy this read couldn't reach: what's held or
   // stored is unknown, so nothing is called safe and something needs action
   const blind = recordsState === 'fallback' || !copyRead || !recordsRead;
-  const needsAction = open.filter(incident => !incident.dismissed);
+  const shown = open.filter(incident => !incident.dismissed);
+  // An update that's waiting needs no one: it's shown, and needs no action (change 9)
+  const storageReceipt = latest.get('storage') || null;
+  const needsAction = shown.filter(incident => !waits(incident, storageReceipt));
   const core = all.filter(({ provider }) => provider.core);
   const fresh = core.filter(({ status }) => status !== 'stale');
   const atRisk =
     fresh.some(({ receipt }) => receipt && receipt.capture === 'at-risk') ||
-    needsAction.some(incident => incident.severity === 'capture-risk');
+    shown.some(incident => incident.severity === 'capture-risk');
   // The latest sighting of any open capture-risk incident, dismissed or not
   const riskSeenAt = Math.max(
     -1,
     ...open.filter(incident => incident.severity === 'capture-risk').map(incident => incident.lastSeenAt),
   );
   const safe = fresh.some(({ receipt }) => receipt && receipt.capture === 'safe' && receipt.verifiedAt > riskSeenAt);
-  return { all, open, blind, needsAction, core, atRisk, safe };
+  return { all, latest, open, blind, shown, needsAction, core, atRisk, safe };
 }
 
 /**
  * A group's cause: its worst problem that needs action, or, with none, its worst member at
  * fault by its receipt, of the members with no open problem (one whose problems were all
- * dismissed says no more); null when nothing in it is at fault
+ * dismissed, or whose update waits, says no more); null when nothing in it is at fault. A problem
+ * says why by its own evidence, over its provider's latest receipt's when that receipt reports an
+ * update (updates.js whyOf): a check's incidents carry no evidence of their own.
  * @param {ReturnType<typeof assess>['all']} members
  * @param {readonly Incident[]} needs - the group's incidents that need action
  * @param {readonly Incident[]} open - every open incident, dismissed ones included
+ * @param {ReadonlyMap<string, HealthReceipt>} latest - each provider's latest receipt
  * @returns {Cause | null}
  */
-function causeOf(members, needs, open) {
+function causeOf(members, needs, open, latest) {
   const [worst] = worstFirst(needs);
   if (worst) {
     return {
       from: 'incident',
       providerId: worst.providerId,
       faultCode: worst.faultCode,
-      errorCode: errorCodeOf(worst.evidence),
+      errorCode: errorCodeOf(whyOf(latest.get(worst.providerId) || null, worst.evidence || {})),
       severity: worst.severity,
       consequenceKey: null,
       incidentId: worst.id,
@@ -175,11 +192,11 @@ function causeOf(members, needs, open) {
  * @returns {TrustSummary}
  */
 export function summarize(input) {
-  const { all, open, blind, needsAction, core, atRisk, safe } = assess(input);
+  const { all, latest, open, blind, shown, needsAction, core, atRisk, safe } = assess(input);
   const storageDown =
     blind ||
     all.some(({ provider, status }) => provider.id === 'storage' && status === 'failed') ||
-    needsAction.some(incident => incident.providerId === 'storage' && incident.faultCode === 'open-failed');
+    shown.some(incident => incident.providerId === 'storage' && incident.faultCode === 'open-failed');
   const groups = HEALTH_GROUPS.map(group => {
     const members = all.filter(({ provider }) => provider.group === group);
     const ids = members.map(({ provider }) => provider.id);
@@ -192,7 +209,7 @@ export function summarize(input) {
       worst: worstStatus(members.map(({ status }) => status)),
       // When it was last checked: its newest receipt's time, null before any check
       checkedAt: times.length > 0 ? Math.max(...times) : null,
-      cause: causeOf(members, needs, open),
+      cause: causeOf(members, needs, open, latest),
     };
   }).filter(group => group.providers > 0);
   return {

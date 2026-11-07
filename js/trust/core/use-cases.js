@@ -305,12 +305,14 @@ export function createTrustUseCases({ records, journal, clock, timers, locks = n
       try {
         const input = await read(now);
         const { incidents: listed, copyRead, recordsRead } = input;
-        const { all, needsAction, atRisk } = assess(input);
+        // Each row's next action and Still works read every problem the user hasn't dismissed,
+        // a waiting update's included, as they did: the Trust Center leaves the wait out itself
+        const { all, shown, atRisk } = assess(input);
         /** @type {TrustReport} */
         const report = {
           records: records.state(),
           providers: all.map(({ provider, receipt, status }) => {
-            const own = needsAction.filter(incident => incident.providerId === provider.id);
+            const own = shown.filter(incident => incident.providerId === provider.id);
             return {
               providerId: provider.id,
               group: provider.group,
