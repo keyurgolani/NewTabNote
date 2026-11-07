@@ -656,6 +656,31 @@ describe("the backup commands on #17's adapter (#17 PR 4a)", () => {
     adapter.close();
   });
 
+  it("commits nothing of a Replace all whose turn is cut while it prepares, so every note stays (#247, 4d's S2)", async () => {
+    const of = await latest();
+    const { adapter, kernel, command } = await newTab(of);
+    const file = {
+      version: 1,
+      canvases: [note('X', { name: 'From the file' })],
+      elements: [block('x1', 'X', 0, 'line')],
+    };
+    const before = legacyEnv.recordsOf(await legacyEnv.dumpDatabase(of.real), 'canvases');
+    let asked = 0;
+    // True for the kernel's own check before the commit, then false, as for a turn the
+    // coordinator's queue cuts while the import prepares
+    const live = () => ++asked === 1;
+    const outcome = await kernel.execute(command('importBackup', { mode: 'replace', backup: file }), { live });
+    assert.deepEqual(outcome, unavailable('coordinator', 'turn-exceeded', true));
+    assert.deepEqual(
+      legacyEnv.recordsOf(await legacyEnv.dumpDatabase(of.real), 'canvases'),
+      before,
+      'every note stays',
+    );
+    // Its recovery copy was saved before the unit, and changes no note
+    assert.equal(backupKeys(of).filter(key => key.startsWith('recovery_backup_')).length, 1);
+    adapter.close();
+  });
+
   it('the file exportBackup makes here imports through the frozen 1.4.1, every note, block, media item, and folder, with none of the six fields', async () => {
     const records = RECORDS();
     records.canvases = records.canvases.map(n => ({ ...n, ...PLACEMENT_FIELDS }));

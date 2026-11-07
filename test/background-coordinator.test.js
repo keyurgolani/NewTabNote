@@ -857,6 +857,50 @@ function unwritableJournal(env) {
   };
 }
 
+/**
+ * A readwrite transaction of the case's own over the worker's ledger store, kept open by a chain
+ * of counts until `release`, as another context's long write would hold it. Every command's
+ * commit spans that store and a capture's reads don't, so a capture's commit then waits to start
+ * (#247). While it's held the worker is never idle, so a case moves on with whileHeld, not drain.
+ * @param {IDBFactory} factory
+ */
+function holdLedger(factory) {
+  let held = true;
+  let started = () => {};
+  const holding = new Promise((resolve) => {
+    started = resolve;
+  });
+  const done = new Promise((resolve, reject) => {
+    const open = factory.open('CanvasTabDB');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction(['operations'], 'readwrite');
+      const spin = () => {
+        tx.objectStore('operations').count().onsuccess = () => {
+          started();
+          if (held) spin();
+        };
+      };
+      spin();
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    };
+  });
+  return { holding, done, release: () => { held = false; } };
+}
+
+/** Lets the worker run `rounds` setImmediate rounds, while a hold keeps it from being idle */
+async function whileHeld(rounds = 400) {
+  for (let round = 0; round < rounds; round++) await new Promise((resolve) => setImmediate(resolve));
+}
+
 /** The urls of the blocks in the worker's Daily Notes */
 async function dailyUrls(worker) {
   const dump = await dumpDatabase(worker.indexedDB);
@@ -1053,6 +1097,60 @@ describe("a turn the coordinator's queue cuts, through the worker (#35 slice 4b-
     worker.env.clock.tick(11_000);
     await worker.drain();
     assert.deepEqual(await dailyUrls(worker), []);
+  });
+
+  it("lands nothing of a capture with no entry whose commit waited to start past both its cuts, so the Not captured it said holds (#247)", async () => {
+    // The journal can't open, so the capture has no entry. The case holds the ledger store, so
+    // the capture's commit waits to start, as behind another context's long write. The worker's
+    // client gives up at 31 s and the rerun waits its turn; the queue cuts the first turn at 120 s
+    // and the rerun's at 240 s, which says Not captured. Then the hold ends, and the two commits
+    // start, after their cuts.
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env) });
+    const hold = holdLedger(worker.indexedDB);
+    try {
+      await hold.holding;
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+      await whileHeld();
+      for (const step of [31_000, 89_000, 119_000, 1_000]) {
+        worker.env.clock.tick(step);
+        await whileHeld();
+      }
+      assert.deepEqual(
+        plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]),
+        [[...CUT_NOT_CAPTURED]],
+        "the rerun's cut says Not captured, and why",
+      );
+    } finally {
+      // Released whatever the case found, so no later case runs behind a held store
+      hold.release();
+      await hold.done.catch(() => {});
+    }
+    await worker.drain();
+    assert.deepEqual(await dailyUrls(worker), [], "today's note never gets it, so capturing it again adds it once");
+  });
+
+  it("lands a kept capture once, by its replay, when its first commit waited to start past its cut (#247)", async () => {
+    // The capture's entry is kept. Its first commit waits behind the held ledger store, its client
+    // gives up at 31 s, and the drain's replay waits its turn until the queue cuts the first one
+    // at 120 s. The hold ends within the replay's turn, so the first commit starts after its cut
+    // and the replay's within its turn.
+    const worker = await loadBackground();
+    const hold = holdLedger(worker.indexedDB);
+    try {
+      await hold.holding;
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+      await whileHeld();
+      for (const step of [31_000, 89_000, 10_000]) {
+        worker.env.clock.tick(step);
+        await whileHeld();
+      }
+    } finally {
+      hold.release();
+      await hold.done.catch(() => {});
+    }
+    await worker.drain();
+    assert.deepEqual(await dailyUrls(worker), [worker.tab.url], 'it lands once');
+    assert.deepEqual(await journalOf(worker.indexedDB), [], 'its entry goes');
   });
 });
 
