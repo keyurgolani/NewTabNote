@@ -1312,3 +1312,40 @@ describe("Popup's commands over the port, in the worker (#35 slice 4b-2)", () =>
     assert.deepEqual(await journalOf(worker.indexedDB), []);
   });
 });
+
+describe("Side Panel's command over the port, in the worker (#35 slice 4c)", () => {
+  it("commits Side Panel's apply of a closing tab's edit on its own kernel, and refuses its createNote at the router, as the catalog has it (#35 slice 4c, G4)", async () => {
+    const at = 1700000000000;
+    const worker = await loadBackground({
+      setup: (env) => createDatabase(env.indexedDB, { records: { canvases: [note('n-side', { name: 'Side', updatedAt: at })] } }),
+    });
+    const page = pagePort('sidepanel');
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('sidepanel-apply');
+    // Its client sends once welcomed, which waits for the worker's run on the 1.4.x profile
+    await worker.drain();
+    assert.ok(page.received.some((frame) => frame.frame === 'welcome'), JSON.stringify(page.received));
+    // A closing tab's edit with no block digests, as 1.4.3 left one, on Side's updatedAt
+    const content = 'side, edited as its tab closed';
+    requestOn(page, 'a1', {
+      type: 'applyCloseDraft',
+      commandId: 'draft-side-apply',
+      draft: {
+        v: 1, id: 'draft-side', page: 'page-1', noteId: 'n-side', at: at + 5,
+        base: { updatedAt: at, issued: [], name: 'Side' },
+        blocks: [{ id: 'b-side', canvasId: 'n-side', type: 'text', content, order: 0 }],
+        deletedBlockIds: [], preview: content, todoProgress: null, linkedNames: [],
+      },
+    });
+    requestOn(page, 'q1', { ...QUICK_NOTE, commandId: 'c-side-quick', noteId: 'n-side-quick' });
+    await worker.drain();
+    const answer = (requestId) => page.received.find((frame) => frame.requestId === requestId) || {};
+    const applied = answer('a1');
+    assert.deepEqual([applied.frame, applied.result && applied.result.kind, applied.result && applied.result.code], ['response', 'committed', 'close-draft-saved'], JSON.stringify(applied));
+    const made = answer('q1');
+    assert.deepEqual([made.frame, made.code], ['error', 'forbidden-for-surface'], JSON.stringify(made));
+    assert.equal(await holdsNote(worker, 'n-side-quick'), false);
+    const elements = Object.values(recordsOf(await dumpDatabase(worker.indexedDB), 'elements'));
+    assert.deepEqual(elements.filter((element) => element.id === 'b-side').map((element) => element.content), [content]);
+  });
+});
