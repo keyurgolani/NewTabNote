@@ -14,15 +14,17 @@
  * - A capture the worker was stopped in the middle of lands at the worker's next start, in
  *   today's Daily Note.
  * In each, another page holds the stores the command writes in a readwrite transaction, so the
- * command is sent and waits there. The tests also fail on an uncaught exception that
- * test/known-defects.json doesn't list.
+ * command is sent and waits there. In the last four, the hold lasts until the case ends it, once
+ * the command's page has closed or its worker has stopped, and the case checks that it still held
+ * then, so what lands after is what the case claims, never the live turn landing first (#241).
+ * The tests also fail on an uncaught exception that test/known-defects.json doesn't list.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
 const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
-/** How long the holding page keeps the stores, which is longer than each test needs to set up */
+/** How long the first test's holding page keeps the stores, which is longer than it needs to set up */
 const HOLD_MS = 4000;
 
 /** In `page`: a readwrite transaction over CanvasTabDB's `stores`, kept busy for `ms` */
@@ -42,6 +44,76 @@ function holdStores(page, stores, ms) {
       resolve();
     };
   }), [stores, ms]);
+}
+
+/**
+ * In `page`: a readwrite transaction over CanvasTabDB's `stores`, kept busy until the case
+ * releases it, so a command that writes in one of them waits there for as long as the case says.
+ * Nothing else ends it but the page's close. `active()` answers whether it still holds, and
+ * `release()` ends it and answers how it ended: `complete` once it has committed.
+ */
+async function holdStoresUntilReleased(page, stores) {
+  await page.evaluate(names => new Promise((resolve, reject) => {
+    const open = indexedDB.open('CanvasTabDB');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction(names, 'readwrite');
+      const hold = { active: true, released: false, ended: null };
+      hold.ended = new Promise(ended => {
+        const end = how => () => {
+          hold.active = false;
+          db.close();
+          ended(how);
+        };
+        tx.oncomplete = end('complete');
+        tx.onabort = end('abort');
+      });
+      const spin = () => {
+        if (!hold.released) tx.objectStore(names[0]).get('ntn-hold').onsuccess = spin;
+      };
+      spin();
+      window.__ntnHold = hold;
+      resolve();
+    };
+  }), stores);
+  return {
+    active: () => page.evaluate(() => window.__ntnHold.active),
+    release: () => page.evaluate(() => {
+      window.__ntnHold.released = true;
+      return window.__ntnHold.ended;
+    }),
+  };
+}
+
+/**
+ * Stop the extension's service worker through CDP, as harness.spec.js and worker.spec.js do, and
+ * resolve once CDP has reported each version of it that it saw starting or running as stopped, so
+ * nothing the case does next reaches the worker the stop ended. A version CDP never reported
+ * starting or running, such as a redundant one, can't satisfy it with a stale stop.
+ */
+async function stopWorker(extension) {
+  const blank = await extension.context.newPage();
+  const cdp = await extension.context.newCDPSession(blank);
+  /** Each version of the extension's worker CDP reported starting or running, and whether it has reported stopped since */
+  const seen = new Map();
+  cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
+    for (const { versionId, scriptURL, runningStatus } of versions) {
+      if (!scriptURL.startsWith(extension.url(''))) continue;
+      if (runningStatus === 'starting' || runningStatus === 'running') {
+        if (!seen.has(versionId)) seen.set(versionId, false);
+      } else if (runningStatus === 'stopped' && seen.has(versionId)) {
+        seen.set(versionId, true);
+      }
+    }
+  });
+  await cdp.send('ServiceWorker.enable');
+  await cdp.send('ServiceWorker.stopAllWorkers');
+  await expect.poll(() => seen.size > 0 && [...seen.values()].every(Boolean), {
+    message: "CDP says each version of the extension's worker it saw running stopped",
+  }).toBe(true);
+  await cdp.detach();
+  await blank.close();
 }
 
 /** Whether `page` holds its journal's owner lock, which it takes once its journal chunk is in */
@@ -239,7 +311,7 @@ test("an editor's save that its new tab closed before its closing save's answer 
   await driver.openNote(page, 'Closing');
   await expect.poll(() => journalIn(page), { message: "the new tab's journal is in" }).toBe(true);
   const holder = await extension.openSurface('popup');
-  await holdStores(holder, ['canvases', 'elements'], HOLD_MS);
+  const hold = await holdStoresUntilReleased(holder, ['canvases', 'elements']);
 
   // A save, sent: it waits behind the hold, and its entry is in the journal
   await page.locator('#blocks-container > .block .block-content').first().click();
@@ -254,6 +326,9 @@ test("an editor's save that its new tab closed before its closing save's answer 
   // its closing save waits behind the hold and goes with the tab
   await page.keyboard.type(', and more');
   await Promise.all([page.waitForEvent('close'), page.close({ runBeforeUnload: true })]);
+  // The tab went while the hold still held, so neither save committed. Then the case ends the hold
+  expect(await hold.active(), 'the hold still holds once the tab has closed').toBe(true);
+  expect(await hold.release(), 'the hold, released').toBe('complete');
   const drafts = await holder.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('ntn-close-draft:')).length);
   expect(drafts, 'the closing tab left its draft').toBe(1);
 
@@ -262,7 +337,7 @@ test("an editor's save that its new tab closed before its closing save's answer 
   const next = await driver.openNewTab(extension);
   await expect.poll(async () => (await profileStore(next).getElementsByNote(id)).map(element => element.content), {
     message: "the closing tab's draft, applied",
-    timeout: HOLD_MS + 3000,
+    timeout: 10_000,
   }).toEqual(['Before the close, and after, and more']);
   await expect.poll(() => journalIn(next), { message: "the next page's journal is in" }).toBe(true);
   await expect.poll(() => journalEntries(next), { message: "the save's entry is gone" }).toEqual([]);
@@ -277,7 +352,7 @@ test('a begun quick note lands once Popup closes, made once', async ({ extension
   const popup = await extension.openSurface('popup');
   await expect.poll(() => journalIn(popup), { message: "Popup's journal is in" }).toBe(true);
   const holder = await extension.openSurface('sidepanel');
-  await holdStores(holder, ['canvases'], HOLD_MS);
+  const hold = await holdStoresUntilReleased(holder, ['canvases']);
 
   // Sent: it waits behind the hold, and its entry is in the journal
   const input = popup.locator('#quick-note-input');
@@ -285,6 +360,10 @@ test('a begun quick note lands once Popup closes, made once', async ({ extension
   await input.press('Enter');
   await expect.poll(() => journalEntries(holder), { message: 'the quick note is journaled' }).toEqual(['createNote']);
   await popup.close();
+  // Popup went while the hold still held, so the worker's turn was still waiting. Then the case
+  // ends the hold
+  expect(await hold.active(), 'the hold still holds once Popup has closed').toBe(true);
+  expect(await hold.release(), 'the hold, released').toBe('complete');
 
   // The worker's turn has begun, so it runs to its outcome once the hold ends: the next new tab
   // finds the note, made once
@@ -303,7 +382,7 @@ test("a Popup quick note the worker was stopped in the middle of lands at the wo
   const popup = await extension.openSurface('popup');
   await expect.poll(() => journalIn(popup), { message: "Popup's journal is in" }).toBe(true);
   const holder = await extension.openSurface('sidepanel');
-  await holdStores(holder, ['canvases'], HOLD_MS);
+  const hold = await holdStoresUntilReleased(holder, ['canvases']);
 
   // Sent: it waits behind the hold, and its entry is in the journal. Popup closes, so its client
   // can't send it again, and the worker it waits in is stopped before it lands
@@ -312,12 +391,12 @@ test("a Popup quick note the worker was stopped in the middle of lands at the wo
   await input.press('Enter');
   await expect.poll(() => journalEntries(holder), { message: 'the quick note is journaled' }).toEqual(['createNote']);
   await popup.close();
-  const blank = await extension.context.newPage();
-  const cdp = await extension.context.newCDPSession(blank);
-  await cdp.send('ServiceWorker.enable');
-  await cdp.send('ServiceWorker.stopAllWorkers');
-  await cdp.detach();
-  await blank.close();
+  await stopWorker(extension);
+  // The stop landed while the hold held, so the live turn never committed, and its entry is still
+  // there: only the next start's drain can make the note. Then the case ends the hold
+  expect(await hold.active(), 'the hold still holds once the worker is stopped').toBe(true);
+  expect(await journalEntries(holder), 'its entry, still journaled').toEqual(['createNote']);
+  expect(await hold.release(), 'the hold, released').toBe('complete');
 
   // The worker's next start drains the journal once its coordinator is ready, and its replay of
   // the entry Popup left makes the note once
@@ -334,18 +413,18 @@ test('a capture the worker was stopped in the middle of lands at its next start,
   await extension.seedOnboarded();
   const page = await driver.openNewTab(extension);
   const holder = await extension.openSurface('popup');
-  await holdStores(holder, ['canvases', 'elements'], HOLD_MS);
+  const hold = await holdStoresUntilReleased(holder, ['canvases', 'elements']);
 
   // Sent: it waits behind the hold, and its entry is in the journal. The worker it ran in is
   // stopped before it answers, so what the call answers is nothing to wait on
   driver.captureText(extension, { text: 'Kept through a stop', source: 'https://example.test/stopped' }).catch(() => {});
   await expect.poll(() => journalEntries(holder), { message: 'the capture is journaled' }).toEqual(['captureToDailyNote']);
-  const blank = await extension.context.newPage();
-  const cdp = await extension.context.newCDPSession(blank);
-  await cdp.send('ServiceWorker.enable');
-  await cdp.send('ServiceWorker.stopAllWorkers');
-  await cdp.detach();
-  await blank.close();
+  await stopWorker(extension);
+  // The stop landed while the hold held, so the live turn never committed, and its entry is still
+  // there: only the next start's drain can land the capture. Then the case ends the hold
+  expect(await hold.active(), 'the hold still holds once the worker is stopped').toBe(true);
+  expect(await journalEntries(holder), 'its entry, still journaled').toEqual(['captureToDailyNote']);
+  expect(await hold.release(), 'the hold, released').toBe('complete');
   await page.close();
 
   // The worker's next start drains the journal once its coordinator is ready
