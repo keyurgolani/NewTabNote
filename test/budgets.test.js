@@ -306,6 +306,121 @@ describe('the budget gate', () => {
     }
   });
 
+  // #35 slice 4b-2's chunk layout. The first page pass has two named groups: host, which every
+  // page's start shares and which holds Vite's preload helper, and adapter, the half of #17's
+  // adapter only the new tab's and Side Panel's starts load. Recovery's own pass takes neither.
+  const HELPER = '\0vite/preload-helper.js';
+  /**
+   * The pages after 4b-2, with `changes` applied: the new tab boots the workspace chunk, which
+   * imports host and adapter; Popup imports host and loads its send chunk, which holds valibot,
+   * with import(); Side Panel imports host and adapter; recovery has its own entry and its own
+   * copy of the helper
+   * @param {{helperChunk?: boolean, popupAdapter?: boolean, popupValibot?: boolean, sidePanelAdapter?: boolean, recoveryAdapter?: boolean}} [changes]
+   */
+  function layoutFixture({ helperChunk = false, popupAdapter = false, popupValibot = false, sidePanelAdapter = true, recoveryAdapter = false } = {}) {
+    const helperFile = helperChunk ? ['assets/preload-helper.js'] : [];
+    const files = new Map([
+      ['newtab.html', Buffer.from('<link rel="modulepreload" href="/js/runtime/lazy.js"><script type="module" src="/assets/newtab.js"></script>')],
+      ['popup.html', Buffer.from('<script type="module" src="/assets/popup.js"></script>')],
+      ['sidepanel.html', Buffer.from('<script type="module" src="/assets/sidepanel.js"></script>')],
+      ['recovery.html', Buffer.from('<script type="module" src="/assets/recovery.js"></script>')],
+      ['js/background.js', Buffer.from('self.x = 1;')],
+      ['js/runtime/lazy.js', Buffer.from('export const loader = 1;')],
+      ['assets/newtab.js', Buffer.from('import "../js/runtime/lazy.js"; import("./workspace.js");')],
+      ['assets/workspace.js', Buffer.from('import "./host.js"; import "./adapter.js";')],
+      ['assets/host.js', Buffer.from('export const host = 1;')],
+      ['assets/adapter.js', Buffer.from('export const adapter = 1;')],
+      ['assets/popup.js', Buffer.from('import "./host.js"; import("./popup-send-chunk.js");')],
+      ['assets/popup-send-chunk.js', Buffer.from('export const send = 1;')],
+      ['assets/sidepanel.js', Buffer.from('import "./host.js";')],
+      ['assets/recovery.js', Buffer.from('export const recovery = 1;')],
+      ['assets/recovery-adapter.js', Buffer.from('export const adapter = 1;')],
+      ['assets/preload-helper.js', Buffer.from('export const preload = 1;')],
+    ]);
+    const kernel = [id('js/kernel/composition/host.js')];
+    const chunks = [
+      chunk({ fileName: 'assets/newtab.js', isEntry: true, imports: ['js/runtime/lazy.js', ...helperFile], dynamicImports: ['assets/workspace.js'], moduleIds: [id('js/entries/newtab.js')] }),
+      chunk({ fileName: 'js/runtime/lazy.js', moduleIds: [id('js/runtime/lazy.js')] }),
+      chunk({ fileName: 'assets/workspace.js', isDynamicEntry: true, imports: ['assets/host.js', 'assets/adapter.js'], moduleIds: [id('js/workspace.js')] }),
+      chunk({ fileName: 'assets/host.js', moduleIds: helperChunk ? kernel : [...kernel, HELPER] }),
+      chunk({ fileName: 'assets/adapter.js', moduleIds: [id('js/kernel/adapters/indexeddb/adapter.js')] }),
+      chunk({ fileName: 'assets/preload-helper.js', moduleIds: [HELPER] }),
+      chunk({
+        fileName: 'assets/popup.js',
+        isEntry: true,
+        imports: ['assets/host.js', ...(popupAdapter ? ['assets/adapter.js'] : []), ...helperFile],
+        dynamicImports: ['assets/popup-send-chunk.js'],
+        moduleIds: [id('js/popup.js'), ...(popupValibot ? [id('js/lib/valibot/index.mjs')] : [])],
+      }),
+      chunk({ fileName: 'assets/popup-send-chunk.js', isDynamicEntry: true, moduleIds: [id('js/kernel/composition/popup-send-chunk.js'), id('js/lib/valibot/index.mjs')] }),
+      chunk({ fileName: 'assets/sidepanel.js', isEntry: true, imports: ['assets/host.js', ...(sidePanelAdapter ? ['assets/adapter.js'] : []), ...helperFile], moduleIds: [id('js/sidepanel.js')] }),
+      chunk({ fileName: 'assets/recovery.js', isEntry: true, imports: recoveryAdapter ? ['assets/recovery-adapter.js'] : [], moduleIds: [id('js/recovery.js'), HELPER] }),
+      chunk({ fileName: 'assets/recovery-adapter.js', name: 'adapter', moduleIds: [id('js/kernel/adapters/indexeddb/adapter.js')] }),
+      chunk({ fileName: 'js/background.js', pass: 'background', isEntry: true, moduleIds: [id('js/background.js')] }),
+    ];
+    const loaderChunks = { workspace: 'assets/workspace.js', 'popup-send-chunk': 'assets/popup-send-chunk.js', newtab: 'assets/newtab.js', popup: 'assets/popup.js', sidepanel: 'assets/sidepanel.js', recovery: 'assets/recovery.js' };
+    return { files: fromMap(files, 'the fixture'), chunks, loaderChunks };
+  }
+  /** The fixture's rows: Popup allows valibot lazy only, in its send chunk */
+  const layoutBudgets = () => {
+    const page = (/** @type {string} */ html, /** @type {object} */ rest = {}) => ({ page: html, reason: 'the page', start: { js: { raw: 100 * KIB, gzip: 100 * KIB } }, forbidden: [], dependencies: [], ...rest });
+    return {
+      forbidden: {},
+      entries: {
+        newtab: page('newtab.html', { startChunks: ['workspace'] }),
+        popup: page('popup.html', { lazyChunks: ['popup-send-chunk'], lazyDependencies: ['valibot'] }),
+        sidepanel: page('sidepanel.html'),
+        recovery: page('recovery.html'),
+        background: { reason: 'the worker', start: {} },
+      },
+    };
+  };
+  const layout = (/** @type {string} */ page, /** @type {string} */ message) => `budget/layout ${page}: ${message}`;
+
+  it("passes the pages' layout: Vite's preload helper in host, the adapter chunk on the new tab's and Side Panel's starts alone, and valibot in Popup's send chunk (#35 slice 4b-2)", () => {
+    assert.deepEqual(run(layoutBudgets(), layoutFixture()), []);
+    // The chunk graph names the helper on each start that holds it
+    const graphs = analyze({ ...layoutFixture(), budgets: layoutBudgets() });
+    for (const page of ['newtab', 'popup', 'sidepanel', 'recovery']) assert.ok(graphs[page].start.modules.includes('vite/preload-helper.js'), `${page}'s start names the helper`);
+    // P1 is the first page pass's: recovery's own pass keeps its own copy of the helper, in its
+    // entry chunk, and passes
+    assert.ok(layoutFixture().chunks.find(entry => entry.fileName === 'assets/recovery.js').moduleIds.includes(HELPER));
+    assert.ok(!graphs.recovery.start.files.some(entry => entry.file === 'assets/host.js'));
+    assert.deepEqual(graphs.popup.start.packages, []);
+    assert.deepEqual(graphs.popup.lazy.packages, ['valibot']);
+  });
+
+  it("fails each first-pass page whose start loads Vite's preload helper from a chunk of its own, not from host, as the tip's did (#35 slice 4b-2, P1)", () => {
+    assert.deepEqual(
+      run(layoutBudgets(), layoutFixture({ helperChunk: true })),
+      ['newtab', 'popup', 'sidepanel'].map(page => layout(page, "its start loads Vite's preload helper from assets/preload-helper.js, not from the host chunk every page's start shares")),
+    );
+  });
+
+  it("fails Popup's start that loads the adapter chunk (#35 slice 4b-2, P2)", () => {
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ popupAdapter: true })), [
+      layout('popup', 'its start loads the adapter chunk (assets/adapter.js), which only the starts of newtab and sidepanel load'),
+    ]);
+  });
+
+  it("fails valibot on Popup's start, which its row allows lazy only (#35 slice 4b-2, P3, Q8)", () => {
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ popupValibot: true })), [
+      'budget/dependency popup: its start holds valibot, which its row allows lazy only',
+    ]);
+  });
+
+  it("fails the new tab's or Side Panel's start without the adapter chunk (#35 slice 4b-2, P4)", () => {
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ sidePanelAdapter: false })), [
+      layout('sidepanel', "its start doesn't load the adapter chunk, which the starts of newtab and sidepanel load"),
+    ]);
+  });
+
+  it("fails recovery's start that loads a chunk the first page pass's groups name, so its own pass took them (#35 slice 4b-2, P5)", () => {
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ recoveryAdapter: true })), [
+      layout('recovery', "its start loads adapter (assets/recovery-adapter.js), a chunk only the first page pass's groups name, so recovery's own pass took them"),
+    ]);
+  });
+
   it("fails a package its row doesn't allow, and an allowed one its graph no longer holds", () => {
     const newtab = budgetsFor().entries.newtab;
     assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, dependencies: ['chart.js', 'fuse.js', 'jszip', 'valibot', 'left-pad', '@xenova/transformers'] } })), [
@@ -389,15 +504,21 @@ describe('the budget gate', () => {
 
   it('refuses a budget file it can\'t read as one', () => {
     assert.deepEqual(fileProblems({}).map(({ message }) => message), ['has no entries']);
-    const bad = budgetsFor({ popup: { page: 'popup.html', reason: '', start: { js: { raw: 1.5, gzip: 2 }, jss: { raw: 1, gzip: 1 } }, forbidden: ['nothing'], startChunks: 'workspace' } });
+    const bad = budgetsFor({ popup: { page: 'popup.html', reason: '', start: { js: { raw: 1.5, gzip: 2 }, jss: { raw: 1, gzip: 1 } }, forbidden: ['nothing'], startChunks: 'workspace', lazyDependencies: 'valibot' } });
     bad.forbidden.trust = { about: 'the trust code', paths: 'js/trust/**' };
     assert.deepEqual(fileProblems(bad).map(({ message }) => message), [
       "forbidden category trust's paths isn't a list of paths",
       "entry popup's startChunks isn't a list of names",
+      "entry popup's lazyDependencies isn't a list of names",
       'entry popup has no reason',
       "entry popup forbids nothing, which isn't a category",
       "entry popup's js row isn't whole numbers of bytes, raw and gzip",
       "entry popup's start has a jss row, which isn't one of html, js, css, fonts",
+    ]);
+    // A package allowed lazy only is allowed nowhere else
+    const popup = budgetsFor().entries.popup;
+    assert.deepEqual(fileProblems(budgetsFor({ popup: { ...popup, dependencies: ['valibot'], lazyDependencies: ['valibot'] } })).map(({ message }) => message), [
+      'entry popup allows valibot both anywhere and lazy only',
     ]);
   });
 });
@@ -446,7 +567,9 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
     assert.deepEqual(entries.background.dependencies, ['valibot']);
-    assert.deepEqual(entries.popup.start.js, { raw: 115 * KIB, gzip: 40 * KIB });
+    // Popup: 93,235 / 31,405 bytes in CI's strict build of fd6dc2c9, once #35 slice 4b-2 moved it,
+    // plus 5%, rounded up (2026-11-06)
+    assert.deepEqual(entries.popup.start.js, { raw: 97900, gzip: 33000 });
     assert.deepEqual(entries.sidepanel.start.js, { raw: 112 * KIB, gzip: 40 * KIB });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles

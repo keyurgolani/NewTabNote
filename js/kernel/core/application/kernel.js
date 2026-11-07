@@ -113,7 +113,10 @@ export const TURN_EXCEEDED = 'turn-exceeded';
 /**
  * How a command runs (#35 slice 4b-1). `live` is what the coordinator's queue gives each turn: it
  * answers false once the queue has cut that turn, and the command commits nothing from then on.
- * @typedef {{live?: () => boolean}} ExecuteOptions
+ * `surface` names the page that sent a command over the port, for the worker's client, which runs
+ * it on that page's kernel (#35 slice 4b-2, rule 5). A kernel runs as its own caller, and reads
+ * only `live`.
+ * @typedef {{live?: () => boolean, surface?: import('../contracts/surfaces.js').Surface}} ExecuteOptions
  */
 
 /**

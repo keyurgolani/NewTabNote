@@ -25,7 +25,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { reachGraph } from './import-graph.mjs';
+import { dynamicImportsIn, importGraph, reachGraph } from './import-graph.mjs';
 
 // Not named `require`, so the kernel's typecheck doesn't follow it into the build's scripts
 const requireCommonJs = createRequire(import.meta.url);
@@ -229,7 +229,7 @@ const planted = plants => (/** @type {string} */ file) => {
 };
 
 describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
-  it('finds nothing wrong in the tree: the worker commits, four pages move in their slices, and each page write is one the list names', () => {
+  it('finds nothing wrong in the tree: the worker commits, three pages move in their slices, and each page write is one the list names', () => {
     assert.deepEqual(problemsOf(), []);
   });
 
@@ -263,7 +263,7 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
-  it("checks a root the build gains with no edit here: a planted Moment page whose script reaches Popup's root fails (rule 1)", () => {
+  it("checks a root the build gains with no edit here: a planted Moment page whose script reaches Popup's root fails on the reader's open, which the list reads on popup alone (rule 2, #35 slice 4b-2)", () => {
     const problems = problemsOf({
       pages: { ...PAGES, moment: 'moment.html' },
       readFile: planted({
@@ -271,9 +271,11 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
         'js/moment-planted.js': () => "import './kernel/composition/popup.js';\n",
       }),
     });
-    assert.ok(
-      problems.some(problem => problem.startsWith('moment reaches js/kernel/adapters/indexeddb/adapter.js')),
-      problems.join('\n'),
+    assert.deepEqual(
+      problems.filter(problem => problem.startsWith('moment ')),
+      [
+        "moment writes in js/kernel/adapters/indexeddb/connection.js (indexedDB.open(…)), which the list doesn't name (rule 2)",
+      ],
     );
   });
 
@@ -381,6 +383,22 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
+  it("reaches #17's reader alone from Popup's start, with its untilMoved row gone: no writer, and no write but the reader's open, which the list reads on popup (#35 slice 4b-2)", () => {
+    const connection = 'js/kernel/adapters/indexeddb/connection.js';
+    const list = {
+      ...LIST,
+      untilMoved: LIST.untilMoved.filter(/** @param {{root: string}} row */ row => row.root !== 'popup'),
+      reads: [
+        ...LIST.reads.filter(/** @param {{file: string}} row */ row => row.file !== connection),
+        { file: connection, roots: ['popup'], why: "the reader's open, in existing mode", owner: 35 },
+      ],
+    };
+    assert.deepEqual(
+      problemsOf({ list }).filter(problem => problem.startsWith('popup ')),
+      [],
+    );
+  });
+
   it('fails an untilMoved row whose page no longer reaches the adapter, and a page that joins the list (rule 3)', () => {
     const list = {
       ...LIST,
@@ -431,5 +449,17 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
       ),
       computed.join('\n'),
     );
+  });
+});
+
+describe("the worker's applier (#35 slice 4b-2, rule 6)", () => {
+  it("holds the close-time drafts' applier in the worker's graph by static imports alone, with no import() anywhere in that graph, since a service worker can't import() (#35 slice 4b-2, rule 6)", () => {
+    const manifest = JSON.parse(defaultRead(path.join(ROOT, 'manifest.json')));
+    const graph = importGraph(path.join(ROOT, manifest.background.service_worker));
+    assert.ok(
+      [...graph].map(relative).includes('js/kernel/core/application/close-drafts.js'),
+      "the worker's graph holds the applier Popup's applyCloseDraft runs on",
+    );
+    assert.deepEqual(dynamicImportsIn(graph).map(relative), []);
   });
 });

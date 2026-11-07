@@ -61,6 +61,7 @@
  */
 
 import { TURN_EXCEEDED } from '../core/application/kernel.js';
+import { WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
 import { TURN_LIMIT_MS } from '../core/contracts/limits.js';
 import { HELD_NOTES_NAMED } from '../core/contracts/operations/system-coordinator-health.js';
 import { failed, ready, unavailable } from '../core/contracts/outcomes.js';
@@ -92,6 +93,7 @@ import { hostTimers, randomIds } from './messaging.js';
  *   oldestOrphanedEntryAt(): number | null,
  *   held?: () => Array<{noteId: string, code: string}>,
  *   stuck?: () => {code: string, count?: number} | null,
+ *   ownerGone?: (sessionId: string) => Promise<unknown>,
  * }} CoordinatorJournal
  */
 
@@ -120,10 +122,11 @@ import { hostTimers, randomIds } from './messaging.js';
  * @property {() => CoordinatorHealth} health - what system.coordinatorHealth answers with
  * @property {() => Client} client
  *   The kernel the drain runs on, which counts each outcome by kind, with each command on the queue
- * @property {(command: Command, dispatch?: {begin?: () => boolean}) => Promise<Outcome | BulkOutcome | null>} enqueue
+ * @property {(command: Command, dispatch?: {begin?: () => boolean, surface?: import('../core/contracts/surfaces.js').Surface}) => Promise<Outcome | BulkOutcome | null>} enqueue
  *   Runs `command` on the queue for a router's handler, starting the coordinator first. With the
  *   router's `begin`, it runs only if the request is still waited on at its turn, and answers
- *   null when it isn't, since the router answered it then. A coordinator that can't serve answers
+ *   null when it isn't, since the router answered it then. With a page's `surface`, it runs on the
+ *   worker's kernel of that surface (#35 slice 4b-2, rule 5). A coordinator that can't serve answers
  *   as client() does.
  * @property {(reason: unknown) => Promise<void>} installed
  *   Starts it for an onInstalled event, and after an install or an update runs the read-only
@@ -132,6 +135,10 @@ import { hostTimers, randomIds } from './messaging.js';
  * @property {() => Promise<unknown>} drain
  *   Starts it, and once it's ready drains the journal, answering what the drain did; null when
  *   it isn't ready, since it drains once it is. It never rejects.
+ * @property {(session: import('../core/messaging/router.js').Session) => Promise<unknown>} closed
+ *   What the router tells it of a connection that closed: once the page that owns the session's
+ *   entries is gone, it drains, so what that page journaled and sent just before it went lands then,
+ *   not at the next start (#35 slice 4b-2, rule 7). It never rejects.
  */
 
 /** The reason a welcome gives, and the code every command answers, when the kernel can't be built */
@@ -351,6 +358,21 @@ export function coordinatorHandlers(current, clock = systemClock) {
 }
 
 /**
+ * The router's handlers for the commands a page sends over the port (#35 slice 4b-2, rule 5): each
+ * waits its turn on the queue of whichever coordinator `current` gives, with its request's `begin`,
+ * so it runs only if it's still waited on then, and on the worker's kernel of the surface the router
+ * verified, which checks that surface again
+ * @param {() => Coordinator} current
+ * @returns {Readonly<Record<string, Handler>>}
+ */
+export function pageCommandHandlers(current) {
+  /** @type {Handler} */
+  const onQueue = (payload, { caller, begin }) =>
+    current().enqueue(/** @type {Command} */ (payload), { begin, surface: caller.surface });
+  return Object.freeze(Object.fromEntries(Object.keys(WORKER_PAGE_HANDLERS.commands).map(type => [type, onQueue])));
+}
+
+/**
  * A coordinator that can't serve: what js/background.js keeps when building the real one
  * threw, and what it answers with until that's done
  * @param {string} instanceId
@@ -376,6 +398,7 @@ export function unavailableCoordinator(instanceId) {
     enqueue: command => client.execute(command),
     installed: start,
     drain: () => Promise.resolve(null),
+    closed: () => Promise.resolve(null),
   });
 }
 
@@ -474,13 +497,15 @@ export function createCoordinator({
 
   /**
    * `command` run on `built` in its turn on the queue, `begin` deciding at its turn whether it
-   * still runs, and its turn's `live` going with it to the kernel's commit
+   * still runs, and its turn's `live` going with it to the kernel's commit, with the `surface` of
+   * the page that sent it, whose kernel it runs on (#35 slice 4b-2, rule 5)
    * @param {Client} built
    * @param {Command} command
    * @param {() => boolean} [begin]
+   * @param {import('../core/contracts/surfaces.js').Surface} [surface]
    */
-  const inTurn = (built, command, begin) =>
-    queue.run(live => built.execute(command, { live }), begin, /** @type {string} */ (command?.type));
+  const inTurn = (built, command, begin, surface) =>
+    queue.run(live => built.execute(command, { live, surface }), begin, /** @type {string} */ (command?.type));
 
   /**
    * `built`, with each command it runs waiting its turn on the queue
@@ -682,6 +707,13 @@ export function createCoordinator({
     return { status: 'degraded', reason: state === 'idle' || state === 'starting' ? 'starting' : reason };
   };
 
+  /** @returns {Promise<unknown>} what a drain once it's ready did, and null while it isn't ready */
+  const drain = async () => {
+    await start();
+    if (state !== 'ready' || !queued) return null;
+    return drainOn(queued);
+  };
+
   return Object.freeze({
     instanceId,
     start,
@@ -701,11 +733,11 @@ export function createCoordinator({
       ...turnNow(),
     }),
     client: () => queued || unbuilt,
-    enqueue(command, { begin } = {}) {
+    enqueue(command, { begin, surface } = {}) {
       start();
       const built = kernel;
       if (!built) return unbuilt.execute(command);
-      return inTurn(built, command, begin);
+      return inTurn(built, command, begin, surface);
     },
     async installed(installReason) {
       await start();
@@ -717,10 +749,13 @@ export function createCoordinator({
       // While the upgrade is blocked, the check runs once the run's end lets the kernel open
       if (state === 'degraded' && reason === MIGRATING) checkWhenReady = true;
     },
-    async drain() {
-      await start();
-      if (state !== 'ready' || !queued) return null;
-      return drainOn(queued);
+    drain,
+    closed(session) {
+      if (!entries || typeof entries.ownerGone !== 'function') return Promise.resolve(null);
+      const owner = entries.ownerGone;
+      return Promise.resolve()
+        .then(() => owner(session.sessionId))
+        .then(drain, () => null);
     },
   });
 }

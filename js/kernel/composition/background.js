@@ -33,10 +33,14 @@ import { LATEST_STRUCTURAL, pendingStructural } from '../adapters/indexeddb/regi
 import { runTransforms } from '../adapters/indexeddb/transforms.js';
 import { WORKER_TASKS } from '../adapters/indexeddb/worker-tasks.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
-import { WORKER_HANDLERS } from '../core/application/handlers-worker.js';
+import { WORKER_HANDLERS, WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
 import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
-import { unavailable } from '../core/contracts/outcomes.js';
+import { COMMANDS } from '../core/contracts/commands.js';
+import * as applyCloseDraftOperation from '../core/contracts/operations/apply-close-draft.js';
+import * as createNoteOperation from '../core/contracts/operations/create-note.js';
+import { UnavailableError, unavailable } from '../core/contracts/outcomes.js';
 import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
+import { createLookup, operationOf } from '../core/messaging/operations.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
@@ -55,6 +59,13 @@ import { hostTimers, randomIds } from './messaging.js';
 /** @typedef {import('../core/messaging/router.js').Router} Router */
 /** @typedef {import('../core/ports/runtime.js').Logger} Logger */
 /** @typedef {import('../core/contracts/outcomes.js').Unavailable} Unavailable */
+/** @typedef {import('../core/contracts/surfaces.js').Surface} Surface */
+
+/**
+ * The worker's kernel on one adapter, with a kernel of each page's surface beside it on the same
+ * adapter, for the commands a page sends over the port (#35 slice 4b-2, rule 5)
+ * @typedef {Client & {forSurface: (surface: Surface) => Client}} SurfaceKernels
+ */
 
 /**
  * What the router installs on: chrome.runtime's port listener, and the manifest's version
@@ -752,10 +763,12 @@ export function createWorkerClient(host = workerHost()) {
    * The kernel on the database `outcome` left: versioned at this build's version, as it is
    * otherwise. An outcome
    * kept from a standing record changes nothing, so `keep`, the client before it, stays. Any
-   * other closes the adapter it replaces, so the worker holds one connection (review R79).
+   * other closes the adapter it replaces, so the worker holds one connection (review R79). A page
+   * that sends over the port gets a kernel of its surface on the same adapter at its first command,
+   * so the kernel's own check judges that page, as the router's did (#35 slice 4b-2, rule 5).
    * @param {Promise<MigrationOutcome>} outcome
-   * @param {Promise<Client> | null} [keep]
-   * @returns {Promise<Client>}
+   * @param {Promise<SurfaceKernels> | null} [keep]
+   * @returns {Promise<SurfaceKernels>}
    */
   const build = (outcome, keep = null) =>
     outcome.then(ended => {
@@ -790,7 +803,27 @@ export function createWorkerClient(host = workerHost()) {
         requestCatchUp(adapter, built);
         requestPurge();
       }
-      return built;
+      const opened = adapter;
+      /** @type {Map<Surface, Client>} */
+      const pages = new Map();
+      /** @param {Surface} surface */
+      const forSurface = surface => {
+        let page = pages.get(surface);
+        if (!page) {
+          page = kernelClient({
+            adapter: opened,
+            surface,
+            handlers: WORKER_PAGE_HANDLERS,
+            // Not before the worker's own kernel is ready, its startup maintenance in, and failing as it fails
+            ready: built.whenReady().then(failure => {
+              if (failure) throw new UnavailableError(failure.cause, failure.code, false);
+            }),
+          });
+          pages.set(surface, page);
+        }
+        return page;
+      };
+      return Object.freeze({ ...built, forSurface });
     });
 
   let done = attempt();
@@ -859,15 +892,25 @@ export function createWorkerClient(host = workerHost()) {
     });
   };
 
+  /**
+   * The kernel `options.surface` names on `ready`'s adapter: a page's, or with none the worker's own
+   * (#35 slice 4b-2, rule 5)
+   * @param {SurfaceKernels} ready
+   * @param {{surface?: Surface}} [options]
+   * @returns {Client}
+   */
+  const kernelOf = (ready, options) =>
+    options?.surface === undefined || options.surface === 'worker-internal' ? ready : ready.forSurface(options.surface);
+
   // A turn's `live` on the coordinator's queue goes with the command to each kernel it runs on, so
-  // a cut turn commits on neither (#35 slice 4b-1)
+  // a cut turn commits on neither (#35 slice 4b-1), and its `surface` names a page's kernel
   /** @type {WorkerClient['execute']} */
   const execute = /** @type {any} */ (
     async (/** @type {any} */ command, /** @type {any} */ options) => {
       const ready = await unlessBlocked(client);
       if (ready === null) return blockedUpgrade();
       if (ready === undefined) return notOpened();
-      const outcome = await ready.execute(command, options);
+      const outcome = await kernelOf(ready, options).execute(command, options);
       if (outcome.kind !== 'unavailable' || !RETRIED_CODES.includes(outcome.code)) return outcome;
       // The connection went before this command's transaction began, or the open found an older
       // database than the run left, so nothing of it committed. The database may have been
@@ -877,7 +920,7 @@ export function createWorkerClient(host = workerHost()) {
       const next = await unlessBlocked(client);
       if (next === null) return blockedUpgrade();
       if (next === undefined) return notOpened();
-      return next.execute(command, options);
+      return kernelOf(next, options).execute(command, options);
     }
   );
 
@@ -1008,10 +1051,22 @@ const messagingLogger = Object.freeze({
 const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
 
 /**
+ * The commands a page sends the worker over the port, as its router finds them (#35 slice 4b-2,
+ * rule 5): Popup's two, on the shared catalog's entries, with the schemas their modules export,
+ * imported here since an MV3 worker can't import() (messaging/operations.js). The router knows
+ * the coordinator's own queries besides, and no other operation.
+ */
+const PAGE_LOOKUP = createLookup({
+  createNote: operationOf(COMMANDS.createNote, createNoteOperation),
+  applyCloseDraft: operationOf(COMMANDS.applyCloseDraft, applyCloseDraftOperation),
+});
+
+/**
  * #13's router, on `runtime`'s port listener, so each port one of this extension's pages
  * opens by PORT_NAME reaches it (adapters/messaging/runtime-port.js). It serves the handshake,
- * system.messagingHealth and system.coordinatorHealth, and no page opens a port yet, since no
- * client moves to it before #35's later slices. js/background.js calls this at its top level, synchronously, so the
+ * system.messagingHealth and system.coordinatorHealth, and the commands a page sends over the port,
+ * on the coordinator's queue (./coordinator.js, pageCommandHandlers), Popup's first (#35 slice
+ * 4b-2). js/background.js calls this at its top level, synchronously, so the
  * listener is there before Chrome hands over the port that woke the worker. It never throws,
  * since a throw there would stop every listener the worker registers: `report` hears why a
  * router couldn't be installed, and what a port's listener threw.
@@ -1051,6 +1106,7 @@ export function installWorkerRouter({
       status,
       settled,
       sessions,
+      lookup: PAGE_LOOKUP,
       handlers,
       logger: messagingLogger,
     });

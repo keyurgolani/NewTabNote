@@ -1,0 +1,26 @@
+{
+  "rule": "Popup's root imports the quick note's schema statically and hands it out on its client, so its start holds valibot, which its row allows lazy only (#35 slice 4b-2, P3, Q8). The send chunk stays lazy, so the journal's chunk stays a chunk of its own, and the fixture raises Popup's row, so only valibot's place breaks a rule",
+  "expect": [
+    "budget/dependency"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "js/kernel/composition/popup.js",
+      "replace": "import { kernelClient, pageHost } from './host.js';\n",
+      "with": "import { kernelClient, pageHost } from './host.js';\nimport { payload as quickNotePayload } from '../core/contracts/operations/create-note.js';\n"
+    },
+    {
+      "file": "js/kernel/composition/popup.js",
+      "replace": "  return Object.freeze({ ...client, whenReady });\n",
+      "with": "  return Object.freeze({ ...client, whenReady, quickNotePayload });\n"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 97900, \"gzip\": 33000 }",
+      "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
+    }
+  ]
+}

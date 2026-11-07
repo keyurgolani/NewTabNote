@@ -9,7 +9,7 @@
 | New tab | start JS, raw / gzip | 700 / 200 KiB | 629.3 / 171.4 KiB (70.7 / 28.6) |
 | New tab | start CSS, raw / gzip | 105 / 19 KiB | 102.0 / 16.4 KiB (3.0 / 2.6) |
 | New tab | start HTML, raw / gzip | 72 / 12 KiB | 65.9 / 10.3 KiB (6.1 / 1.7) |
-| Popup | start JS, raw / gzip | 115 / 40 KiB | 108.4 / 30.8 KiB (6.6 / 9.2) |
+| Popup | start JS, raw / gzip | 97,900 / 33,000 bytes | 93,235 / 31,405 bytes on #35 slice 4b-2 (4,665 / 1,595) |
 | Side Panel | start JS, raw / gzip | 112 / 40 KiB | 106.9 / 30.6 KiB (5.1 / 9.4) |
 | Offscreen | start JS, raw / gzip | 29 / 9 KiB | 27.5 / 8.6 KiB (1.5 / 0.4) |
 | Offscreen | start HTML, raw / gzip | 1 / 1 KiB | 230 / 174 bytes (794 / 850 bytes) |
@@ -25,6 +25,7 @@
 - Every other byte row is `null`: no approved number yet. That covers the Popup's and Side Panel's CSS and HTML, every page's fonts, and the service worker. Offscreen loads no stylesheet, so its CSS row is `null` too.
 - Offscreen's rows are today's size plus about 5%, set on 2026-11-01 from `7489d7b3`: start JS 28,150 / 8,818 bytes (the page's module and `js/network-guard.js`), and HTML 230 / 174. Its HTML row is 1 KiB, the smallest round row, since 5% of 230 bytes is 12. The workspace coordinator decided them for the owner, who can reverse it. The service worker's start is the whole of its one self-contained module, and its cold-start time is #35's.
 - The new tab's CSS row was first 100 KiB raw, sized from CSS CleanCSS minified, before #99 moved the build to lightningcss, which doesn't merge rules that aren't next to each other: the same sources minify about 5 KiB larger raw, while gzip went down. On 2026-10-31 the raw row went to 105 KiB, today's size plus about 5%, the rule the owner set for these rows: 102,274 bytes on `next` (126 under the old row), 103,744 with #27 slice 3b's failure and status states, and about 103,860 with #20 slice 4b's Settings section. The gzip row stays 19 KiB (16,672 bytes with 3b). The workspace coordinator decided it for the owner, who can reverse it. CSS beyond the row still needs the owner's call first.
+- Popup's JS row was 115 / 40 KiB until #35 slice 4b-2 moved its reads to #17's reader and its writes to the worker. On 2026-11-06 it went to that start plus 5%, rounded up, by the same rule: 93,235 / 31,405 bytes in CI's strict build of `fd6dc2c9`, run 42333740202. It was confirmed for the owner, who can reverse it.
 - `recovery.html`'s rows (#20 slice 4b) were set on 2026-11-01 by the same rule, today's size plus about 5%, from #115's strict build on `next` at `7489d7b`: start JS 384,641 / 120,126 bytes, start CSS 21,644 / 4,409, and start HTML 1,498 / 638. HTML takes the smallest round rows, since 5% of 1,498 bytes is 75. The workspace coordinator decided them for the owner, who can reverse it.
 
 ## The forbidden list
@@ -61,10 +62,11 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 
 | Entry | Allowed |
 | --- | --- |
-| New tab | `@xenova/transformers`, `chart.js`, `fuse.js`, `jszip` (lazy, through the loader), `valibot` (lazy, in the trust chunk) |
+| New tab | `@xenova/transformers`, `chart.js`, `fuse.js`, `jszip` (lazy, through the loader), `valibot` (lazy, in the validate chunk the trust chunk imports) |
 | Service worker | `valibot` |
 | `recovery.html` | `valibot` |
-| Popup, Side Panel, offscreen, Moment | none |
+| Popup | `valibot`, lazy only (`lazyDependencies`), in the validate chunk its send chunk imports |
+| Side Panel, offscreen, Moment | none |
 
 ## How each gate runs
 
@@ -76,11 +78,12 @@ Each entry lists the third-party packages its whole graph may hold: start, lazy 
 | `budget/forbidden` | a module or file a gated category names is on an entry's start path |
 | `budget/worker-only` | a module only the service worker runs (`WORKER_ONLY_MODULES` in `scripts/build/budgets.js`) is on a page's start. The list is the code #35 slice 3c moved off the pages' start, where a run-time filter had kept it in the bundle |
 | `budget/lazy-only` | a module that loads only at its first use (`LAZY_ONLY_MODULES` in `scripts/build/budgets.js`) is on a page's start. The list is the block menus' roles and keys, which #14 slice 4 loads at a menu's first open |
-| `budget/dependency` | an entry's graph holds a package its row doesn't allow, or its row allows one the graph no longer holds |
+| `budget/dependency` | an entry's graph holds a package its row doesn't allow, its row allows one the graph no longer holds, or its start holds one its row allows only in its lazy chunks and workers (`lazyDependencies`, as Popup's `valibot` is, in its send chunk alone) |
+| `budget/layout` | the pages pass's two named chunks (`scripts/build/page-chunks.js`, #35 slice 4b-2) are out of place: a page of that pass loads Vite's preload helper from another chunk than `host`, the new tab's or Side Panel's start doesn't load the `adapter` chunk while a start of that pass holds a module of the `adapter` list, another page of that pass loads it (Popup reads through #17's reader), or recovery.html's start loads a chunk named `host` or `adapter`, which only the pages pass writes |
 | `budget/entry` | a page or the service worker the build has with no row, a row for an entry it doesn't have that isn't `planned`, a `planned` row for one it has, a `startChunks` or `lazyChunks` name the build has no loader chunk for or the page's start doesn't `import()`, or a chunk the page's start `import()`s that its row names in neither |
 | `budget/file` | `build/budgets.json` is missing, doesn't parse, or doesn't read as a budget file: an entry or forbidden category of the wrong shape, a `start` row that isn't `html`, `js`, `css` or `fonts`, or a limit that isn't whole bytes |
 
-`npm run verify:fixtures` breaks each rule on purpose and checks that the build fails with its code (`test/build-fixtures/budget-*`). `budget-start-chunk` sets the new tab's JS row to 20 KiB, over the root and under the tab, and the build fails: the workspace chunk is counted. `budget-start-missing` points `startChunks` at a chunk that isn't built, and `budget-start-empty` empties it. `budget-library-classic` puts Fuse.js back on the new tab's start as a classic script, and `budget-background-dependency` bundles an unlisted package into the service worker. `budget-worker-only` puts the records' catch-up back on the new tab's start. `budget-lazy-only` imports the block menus' keys statically in place of the loader's load, which puts them on the new tab's start. A static import beside the loader's `import()` doesn't get that far: the bundler warns that the `import()` can't make a chunk, and the build fails with `build/bundler-warning`.
+`npm run verify:fixtures` breaks each rule on purpose and checks that the build fails with its code (`test/build-fixtures/budget-*`). `budget-start-chunk` sets the new tab's JS row to 20 KiB, over the root and under the tab, and the build fails: the workspace chunk is counted. `budget-start-missing` points `startChunks` at a chunk that isn't built, and `budget-start-empty` empties it. Both fail `budget/layout` too, since the new tab's start then holds no `adapter` chunk. `budget-library-classic` puts Fuse.js back on the new tab's start as a classic script, and `budget-background-dependency` bundles an unlisted package into the service worker. `budget-worker-only` puts the records' catch-up back on the new tab's start. `budget-lazy-only` imports the block menus' keys statically in place of the loader's load, which puts them on the new tab's start. `budget-layout-helper` leaves Vite's preload helper out of the `host` group, `budget-layout-adapter` drops the `adapter` group, `budget-layout-recovery` gives recovery.html's pass both groups, `budget-layout-popup` puts Popup's root back on #17's full adapter, and `budget-dependency-popup` imports the quick note's schema on Popup's start. A static import beside the loader's `import()` doesn't get that far: the bundler warns that the `import()` can't make a chunk, and the build fails with `build/bundler-warning`.
 
 **Timing and heap** run in CI's `perf` workflow (`.github/workflows/perf.yml`), on every PR push and every push to `next`. It's its own workflow, not part of `pr-gate`, so it never blocks a merge.
 

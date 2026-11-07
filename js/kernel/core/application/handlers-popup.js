@@ -1,16 +1,14 @@
 /**
- * Popup's table (handlers.js): what js/popup.js sends, its quick note, its list of recent
- * notes, and whether to show the day's summary, and what its root sends as it starts when the
- * page holds a closing tab's edit, that edit's apply (#33), whose handler loads at its first use
+ * Popup's table (handlers.js): what js/popup.js reads, its list of recent notes and whether to show
+ * the day's summary. Its writes, the quick note and the apply of a closing tab's edit, go to the
+ * worker over #13's port (#35 slice 4b-2, composition/popup.js), so it holds no command.
  */
 
-import { applyCloseDraftOnDemand } from './close-drafts-on-demand.js';
 import { handlerTable } from './handlers.js';
-import { noteCommands, noteQueries } from './notes.js';
+import { noteQueries } from './notes.js';
 import { preferenceQueries } from './preferences.js';
 
 export const POPUP_HANDLERS = handlerTable({
-  commands: { createNote: noteCommands.createNote, applyCloseDraft: applyCloseDraftOnDemand },
   queries: {
     listNotes: noteQueries.listNotes,
     getPopupInsightsEnabled: preferenceQueries.getPopupInsightsEnabled,

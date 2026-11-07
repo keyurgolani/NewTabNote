@@ -64,16 +64,17 @@
     },
     "popup": {
       "page": "popup.html",
-      "lazyChunks": ["close-drafts-applier", "close-drafts-chunk", "journal-chunk"],
-      "reason": "The Popup's start JS. Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #4's ready mark.",
+      "lazyChunks": ["close-drafts-applier", "popup-send-chunk"],
+      "reason": "The Popup's start JS: its start once #35 slice 4b-2 moved its reads to #17's reader and its writes to the worker, 93,235 / 31,405 bytes in CI's strict build of fd6dc2c9, plus 5%, rounded up (2026-11-06; it was 115 / 40 KiB). Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #4's ready mark.",
       "start": {
-        "js": { "raw": 117760, "gzip": 40960 },
+        "js": { "raw": 97900, "gzip": 33000 },
         "css": null,
         "html": null,
         "fonts": null
       },
       "forbidden": ["chart-library", "search-library", "zip-library", "model-runtime", "trust", "charting-analytics", "graph-view", "search-indexing", "import-export", "archive-trash", "settings", "sync", "remote-ai", "recipes", "embeddings", "ai-policy", "onboarding-walkthrough", "workspace"],
-      "dependencies": []
+      "dependencies": [],
+      "lazyDependencies": ["valibot"]
     },
     "sidepanel": {
       "page": "sidepanel.html",

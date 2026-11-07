@@ -29,6 +29,7 @@ import {
   coordinatorInstanceId,
   createCoordinator,
   journal,
+  pageCommandHandlers,
   unavailableCoordinator,
 } from './kernel/composition/coordinator.js';
 import { DRAIN_MESSAGE, createWorkerJournal } from './kernel/composition/journal.js';
@@ -88,13 +89,16 @@ let failureEvents = { event() {} };
  * here at the top level, synchronously, so Chrome finds its listener when a port wakes the
  * worker. A page's hello starts the coordinator, and while it's starting the welcome waits for
  * the start, WELCOME_WAIT_MS at most. Each welcome says what the coordinator can do then, and
- * system.coordinatorHealth asks it. It never throws.
+ * system.coordinatorHealth asks it. The commands a page sends over the port wait their turn on the
+ * coordinator's queue, Popup's from #35 slice 4b-2, and a session whose port closes is drained once
+ * its page is gone. It never throws.
  */
 installWorkerRouter({
   coordinatorId: instanceId,
   status: () => coordinator.status(),
   settled: () => coordinator.start(),
-  handlers: coordinatorHandlers(() => coordinator),
+  sessions: { closed: session => coordinator.closed(session) },
+  handlers: { ...coordinatorHandlers(() => coordinator), ...pageCommandHandlers(() => coordinator) },
 });
 
 /**

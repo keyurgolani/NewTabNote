@@ -20,8 +20,9 @@
  *    - a note's creation, an append, and a capture as written; a capture lands in the Daily Note
  *      of the day it was made (its `at`), and a block already stored is refused;
  *    - an editor's save is the pages': they apply the close-time draft its entry holds, by #33's
- *      rules, under `<opId>-apply` (slice 3b, the lead's call on #182), so the worker carries
- *      none of the applier. The drain leaves it, and still sweeps it after a delete for good. A
+ *      rules, under `<opId>-apply` (slice 3b, the lead's call on #182). The worker carries the
+ *      applier only for Popup's own apply over the port (#35 slice 4b-2, rule 6), so the drain
+ *      leaves the save, and still sweeps it after a delete for good. A
  *      save with no draft can't be replayed safely by anyone, so it's kept as a conflict record.
  *      One a newer build wrote, or one under a tombstone the sweep keeps for, is held, and its
  *      incident raised (the lead's answer to Q6): the code on its mark is what the pages leave it

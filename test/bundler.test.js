@@ -148,10 +148,11 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     // reaches the core, through its workspace chunk, which keeps it as it did before #115, so the
     // new tab's start pays for no split (#27). In a pass of one page the core's chunk takes its
     // dependencies too, or it would import them from the page's own entry chunk, which imports
-    // it: a cycle the page's preloads walk back into its own entry
+    // it: a cycle the page's preloads walk back into its own entry. The host and adapter chunks
+    // are the pages pass's alone (#35 slice 4b-2, scripts/build/page-chunks.js)
     const groupNames = (/** @type {any} */ pass) =>
       pass.build.rolldownOptions.output.codeSplitting.groups.map((/** @type {any} */ group) => (typeof group.name === 'function' ? group.debugName : group.name));
-    assert.deepEqual([groupNames(pages), groupNames(recovery)], [['loader'], ['loader', 'blocks']]);
+    assert.deepEqual([groupNames(pages), groupNames(recovery)], [['loader', 'host', 'adapter'], ['loader', 'blocks']]);
     const [, recoveryBlocks] = recovery.build.rolldownOptions.output.codeSplitting.groups;
     assert.equal(recoveryBlocks.includeDependenciesRecursively, true);
     // Otherwise the pages pass's settings but its input: the names, the minifiers, the loader's
@@ -817,8 +818,9 @@ describe("the loader's chunk (#27 slice 3: scripts/build/vite-config.js, scripts
   it('puts the loader alone in a chunk the pages pass writes at its own path, and every other chunk under assets/, hashed', () => {
     const { output } = config.pagesConfig(passOptions()).build.rolldownOptions;
     const [group] = output.codeSplitting.groups;
-    // The loader's group alone: the block core's is recovery.html's pass's (below)
-    assert.equal(output.codeSplitting.groups.length, 1);
+    // The loader's group first, then the host and adapter chunks' (test/page-chunks.test.js): the
+    // block core's is recovery.html's pass's (below)
+    assert.equal(output.codeSplitting.groups.length, 3);
     assert.equal(group.test(LOADER_ID), true);
     assert.equal(group.test('/repo/js/main.js'), false);
     const named = (moduleIds) => output.chunkFileNames({ name: 'x', isEntry: false, isDynamicEntry: false, facadeModuleId: null, moduleIds, exports: [] });

@@ -744,7 +744,48 @@ describe('the client: two resumes at once', { timeout: 10_000 }, () => {
       requests.map(request => request.payload.commandId),
       ['c-n1'],
     );
+    // The worker commits it, then answers
+    spy.inner.record(pin('n1'), pinned);
     coordinator.last.send({ frame: 'response', requestId: requests[0].requestId, result: pinned });
+    assert.deepEqual(await both, [[{ commandId: 'c-n1', outcome: pinned }], [{ commandId: 'c-n1', outcome: pinned }]]);
+    assert.deepEqual(
+      coordinator.last.requests().map(request => request.payload.commandId),
+      ['c-n1'],
+    );
+  });
+
+  it("sends it once when one resume's read of its record answers from before the other's commit, since each runs once the one before it has ended", async () => {
+    // A ledger that answers each read as of when it was asked, as an IndexedDB read transaction
+    // does, and holds back the answer to the fourth: the second resume's read just before it
+    // would send, were the two to run at the same time
+    const inner = createMemoryLedger();
+    /** @type {Array<() => void>} */
+    const held = [];
+    let asked = 0;
+    const ledger = /** @type {IdempotencyLedger} */ ({
+      read: command => {
+        const answer = inner.read(command);
+        asked += 1;
+        return asked === 4
+          ? /** @type {Promise<LedgerRead>} */ (new Promise(resolve => held.push(() => resolve(answer))))
+          : answer;
+      },
+      status: commandId => inner.status(commandId),
+    });
+    const { coordinator, client } = resuming([{ v: 1, command: pin('n1') }], { ledger });
+    const both = Promise.all([client.resume(), client.resume()]);
+    await welcomeNext(coordinator, 1);
+    for (let tries = 0; coordinator.last.requests().length === 0 && tries < 50; tries += 1) await settle();
+    const [request] = coordinator.last.requests();
+    inner.record(pin('n1'), pinned);
+    coordinator.last.send({ frame: 'response', requestId: request.requestId, result: pinned });
+    await settle();
+    for (const go of held.splice(0)) go();
+    for (let tries = 0; tries < 5; tries += 1) await settle();
+    assert.deepEqual(
+      coordinator.last.requests().map(sent => sent.payload.commandId),
+      ['c-n1'],
+    );
     assert.deepEqual(await both, [[{ commandId: 'c-n1', outcome: pinned }], [{ commandId: 'c-n1', outcome: pinned }]]);
   });
 });

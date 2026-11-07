@@ -554,3 +554,36 @@ describe("the worker's journal (#35 slice 3)", () => {
     assert.equal(w.events.length, 3);
   });
 });
+
+/** A few macrotask turns, so what's settled has settled */
+const turns = async () => {
+  for (let turn = 0; turn < 4; turn++) await new Promise(resolve => setImmediate(resolve));
+};
+
+describe("a closed port's session (#35 slice 4b-2, rule 7)", () => {
+  it("waits for the session's owner: ownerGone resolves once the page lets its owner lock go, not before, and at once when no page holds it (#35 slice 4b-2, rule 7)", async () => {
+    const w = worker();
+    const journal = /** @type {any} */ (w.journal);
+    assert.equal(typeof journal.ownerGone, 'function', "the journal waits for a closed session's owner");
+    // No page holds popup-1's owner lock, so its owner is gone already
+    await journal.ownerGone('popup-1');
+    // The page that wrote popup-2's entries holds its owner lock for as long as it lives
+    /** @type {() => void} */
+    let release = () => {};
+    const lives = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    void w.manager.request('journal.owner.popup-2', { mode: 'exclusive' }, () => lives);
+    let gone = false;
+    const waiting = journal.ownerGone('popup-2').then(() => {
+      gone = true;
+    });
+    await turns();
+    assert.equal(gone, false, 'not while the page holds its owner lock');
+    release();
+    await waiting;
+    assert.equal(gone, true);
+    // And it lets the lock go at once, so the page's next start can take it
+    assert.deepEqual((await w.manager.query()).held, []);
+  });
+});

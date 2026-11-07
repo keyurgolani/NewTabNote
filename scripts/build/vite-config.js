@@ -5,8 +5,9 @@
  * mode only, never as a dev server, in four passes into the same staging directory:
  *   pages       the new tab, Popup, Side Panel and offscreen pages, each an HTML entry. Their
  *               module scripts and stylesheets become content-hashed chunks and CSS under assets/,
- *               and a module worker one of them starts with `new Worker(new URL('…',
- *               import.meta.url), {type: 'module'})` becomes an entry of its own.
+ *               what the first three share at their start in two named chunks, host and adapter
+ *               (scripts/build/page-chunks.js), and a module worker one of them starts with `new
+ *               Worker(new URL('…', import.meta.url), {type: 'module'})` becomes an entry of its own.
  *   recovery    recovery.html, with the pages pass's settings, in a pass of its own
  *               (OWN_PASS_PAGES), so it splits no chunk the other pages share.
  *   background  js/background.js, the manifest's module service worker, as one self-contained ES
@@ -28,6 +29,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { pageChunkGroups } = require('./page-chunks.js');
 
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).InlineConfig} InlineConfig */
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).Plugin} Plugin */
@@ -439,12 +441,12 @@ function preloadsFor(filename, deps) {
 }
 
 /**
- * The pages pass: every page but OWN_PASS_PAGES'
+ * The pages pass: every page but OWN_PASS_PAGES', with the host and adapter chunks
  * @param {PassOptions} options
  * @returns {InlineConfig}
  */
 function pagesConfig(options) {
-  return pagePassConfig(options, Object.keys(PAGES).filter((page) => !OWN_PASS_PAGES.includes(page)));
+  return pagePassConfig(options, Object.keys(PAGES).filter((page) => !OWN_PASS_PAGES.includes(page)), { pageChunks: true });
 }
 
 /**
@@ -465,11 +467,12 @@ function recoveryConfig(options) {
  * the pages'
  * @param {PassOptions} options
  * @param {readonly string[]} pages - PAGES' names
- * @param {{blockChunk?: boolean}} [chunks] - `blockChunk`: whether the pass writes the block
- *   core's chunk, with its modules' dependencies
+ * @param {{blockChunk?: boolean, pageChunks?: boolean}} [chunks] - `blockChunk`: whether the pass
+ *   writes the block core's chunk, with its modules' dependencies; `pageChunks`: whether it writes
+ *   the host and adapter chunks (scripts/build/page-chunks.js)
  * @returns {InlineConfig}
  */
-function pagePassConfig(options, pages, { blockChunk = false } = {}) {
+function pagePassConfig(options, pages, { blockChunk = false, pageChunks = false } = {}) {
   const { root, mode, report, onLog } = options;
   const names = {
     entryFileNames: `${ASSETS_DIR}/[name]-[hash].js`,
@@ -489,12 +492,13 @@ function pagePassConfig(options, pages, { blockChunk = false } = {}) {
         output: {
           ...names,
           chunkFileNames: chunkFileName(root),
-          // The loader alone in a chunk, whichever chunks import it (#27 slice 3), and in
-          // recovery.html's pass the block core in one of its own, named for what it is (#115's
-          // review)
+          // The loader alone in a chunk, whichever chunks import it (#27 slice 3), in the pages
+          // pass the host and adapter chunks (#35 slice 4b-2), and in recovery.html's pass the
+          // block core in one of its own, named for what it is (#115's review)
           codeSplitting: {
             groups: [
               { name: 'loader', test: (id) => loader.has(id) },
+              ...(pageChunks ? pageChunkGroups(root) : []),
               ...(blockChunk ? [{ name: blockCoreChunk(root), debugName: 'blocks', includeDependenciesRecursively: true }] : []),
             ],
           },

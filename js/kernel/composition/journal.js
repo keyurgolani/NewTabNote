@@ -74,6 +74,10 @@ export { DRAIN_MESSAGE };
  * @property {() => number | null} oldestOrphanedEntryAt - what the last drain left, for system.coordinatorHealth
  * @property {() => DrainResult['held']} held - the notes the last drain held back, for system.coordinatorHealth (slice 3b)
  * @property {() => DrainResult['stuck']} stuck - the last stop the last drain made at an entry, for system.coordinatorHealth (#35 slice 4b-1)
+ * @property {(sessionId: string) => Promise<void>} ownerGone
+ *   Resolves once the page that owns `sessionId`'s entries is gone: its owner lock, which that page
+ *   holds for as long as it lives, is let go. It takes the lock then and lets it go at once, so
+ *   another start can take it (#35 slice 4b-2, rule 7). At once with no lock manager. Never rejects.
  */
 
 /**
@@ -385,5 +389,15 @@ export function createWorkerJournal({
     oldestOrphanedEntryAt: () => oldest,
     held: () => lastHeld.map(note => ({ ...note })),
     stuck: () => (lastStuck ? { ...lastStuck } : null),
+    ownerGone(sessionId) {
+      const manager = lockManager();
+      if (!manager) return Promise.resolve();
+      return Promise.resolve()
+        .then(() => manager.request(ownerLock(sessionId), { mode: 'exclusive' }, async () => {}))
+        .then(
+          () => undefined,
+          () => undefined,
+        );
+    },
   });
 }

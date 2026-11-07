@@ -7,8 +7,10 @@
  * - When that tab closed instead, before its closing save's answer, its close-time draft holds
  *   the save's edit and what was typed after it, and the next page's apply of the draft takes the
  *   save's entry, so the older text makes no recovered note (#6).
- * - A Popup quick note sent while its note couldn't land yet, then closed, is in the next new
- *   tab, which wakes the worker's drain for it.
+ * - A Popup quick note the worker has begun lands once Popup closes, made once: the worker's turn
+ *   runs to its outcome (#35 slice 4b-2).
+ * - One the worker was stopped in the middle of lands at the worker's next start, made once, from
+ *   the journal entry Popup left, which that start's drain replays.
  * - A capture the worker was stopped in the middle of lands at the worker's next start, in
  *   today's Daily Note.
  * In each, another page holds the stores the command writes in a readwrite transaction, so the
@@ -269,7 +271,7 @@ test("an editor's save that its new tab closed before its closing save's answer 
   await expectNoUncaught(extension, next);
 });
 
-test("a Popup quick note sent while its note couldn't land yet, then closed, is in the next new tab", async ({ extension }) => {
+test('a begun quick note lands once Popup closes, made once', async ({ extension }) => {
   await extension.seedOnboarded();
   await driver.seedNotes(extension, [{ name: 'Already here', blocks: [{ type: 'text', content: 'An older note' }] }]);
   const popup = await extension.openSurface('popup');
@@ -284,7 +286,41 @@ test("a Popup quick note sent while its note couldn't land yet, then closed, is 
   await expect.poll(() => journalEntries(holder), { message: 'the quick note is journaled' }).toEqual(['createNote']);
   await popup.close();
 
-  // The next new tab wakes the worker's drain, which makes the note once
+  // The worker's turn has begun, so it runs to its outcome once the hold ends: the next new tab
+  // finds the note, made once
+  const page = await driver.openNewTab(extension);
+  await expect.poll(async () => (await profileStore(page).getAllNotes(true)).map(note => note.name).sort(), {
+    message: 'the quick note, made once',
+    timeout: 10_000,
+  }).toEqual(['Already here', 'Call the plumber']);
+  await expect.poll(() => journalEntries(page), { message: 'its entry is gone' }).toEqual([]);
+  await expectNoUncaught(extension, page);
+});
+
+test("a Popup quick note the worker was stopped in the middle of lands at the worker's next start, from its journal entry, made once", async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Already here', blocks: [{ type: 'text', content: 'An older note' }] }]);
+  const popup = await extension.openSurface('popup');
+  await expect.poll(() => journalIn(popup), { message: "Popup's journal is in" }).toBe(true);
+  const holder = await extension.openSurface('sidepanel');
+  await holdStores(holder, ['canvases'], HOLD_MS);
+
+  // Sent: it waits behind the hold, and its entry is in the journal. Popup closes, so its client
+  // can't send it again, and the worker it waits in is stopped before it lands
+  const input = popup.locator('#quick-note-input');
+  await input.fill('Call the plumber');
+  await input.press('Enter');
+  await expect.poll(() => journalEntries(holder), { message: 'the quick note is journaled' }).toEqual(['createNote']);
+  await popup.close();
+  const blank = await extension.context.newPage();
+  const cdp = await extension.context.newCDPSession(blank);
+  await cdp.send('ServiceWorker.enable');
+  await cdp.send('ServiceWorker.stopAllWorkers');
+  await cdp.detach();
+  await blank.close();
+
+  // The worker's next start drains the journal once its coordinator is ready, and its replay of
+  // the entry Popup left makes the note once
   const page = await driver.openNewTab(extension);
   await expect.poll(async () => (await profileStore(page).getAllNotes(true)).map(note => note.name).sort(), {
     message: 'the quick note, made once',

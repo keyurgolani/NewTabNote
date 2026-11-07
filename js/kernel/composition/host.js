@@ -232,9 +232,10 @@ export function kernelClient({ adapter, surface, handlers, maintainOnOpen = fals
 const JOURNAL_IDLE_CAP_MS = 2000;
 
 /**
- * `client` with its journal (#35 slice 3b): the shim every page's root hands out. The journal's
- * chunk loads on the page's first journaled command, or at idle once its first read is in, with a
- * 2 s cap, whichever comes first, so no page's start holds it. No command waits for it: until it's
+ * `client` with its journal (#35 slice 3b): the shim the new tab's and Side Panel's roots hand out,
+ * while Popup's root journals through its send chunk (#35 slice 4b-2). The journal's chunk loads on
+ * the page's first journaled command, or at idle once its first read is in, with a 2 s cap,
+ * whichever comes first, so neither page's start holds it. No command waits for it: until it's
  * in, a command goes as it did before slice 3, unjournaled, which the close-time draft covers for
  * an editor's save, since a command held for it could go out after one sent later and write older
  * text over it (the lead's addition to 3b's plan). Once it's in, each command goes through the

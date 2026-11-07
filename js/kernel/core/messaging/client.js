@@ -167,7 +167,8 @@ import { silentLogger } from '../ports/runtime.js';
  *   major version, and one whose record doesn't come within LEDGER_READ_TIMEOUT_MS. close()
  *   stops a running resume, and what it hadn't resolved is unavailable. A command still open
  *   in this client is waited on, not sent again. Without a journal and a ledger, or when the
- *   journal can't be read, it resolves nothing.
+ *   journal can't be read, it resolves nothing. Each call runs once the one before it has ended,
+ *   so no record it reads is from before a resend that one made.
  * @property {() => void} close - settles every call and refuses any after
  */
 
@@ -250,6 +251,8 @@ export function createClient({
   const listeners = new Set();
   /** @type {ConnectionState} */
   let told = 'idle';
+  /** @type {Promise<unknown>} the last resume() called, which the next one runs after */
+  let resumed = Promise.resolve();
 
   /**
    * Tells the logger, whose own failure changes no answer
@@ -876,6 +879,38 @@ export function createClient({
     );
   };
 
+  /**
+   * One resume(), once the one before it has ended
+   * @returns {Promise<Array<{commandId: string, outcome: Outcome | BulkOutcome}>>}
+   */
+  const resumeNow = async () => {
+    if (!journal || !ledger) return [];
+    // A resume running when the client closes stops: what it hasn't read is unavailable. One
+    // that starts closed still reads each record, which answers whatever the client's state.
+    const closedFirst = phase === 'closed';
+    /** @type {unknown} */
+    let entries;
+    try {
+      entries = await journal.inFlight();
+    } catch (error) {
+      warn('client-journal-read-failed', { error });
+      return [];
+    }
+    if (!Array.isArray(entries)) return [];
+    // Every record first, in the journal's order, then each resend once the one before it
+    // answered, so a save never goes before the createNote it follows
+    /** @type {ReadEntry[]} */
+    const reads = [];
+    for (const entry of entries) {
+      if (!closedFirst && phase === 'closed') reads.push(unavailableEntry(entry));
+      else reads.push(await readEntry(entry));
+    }
+    /** @type {Array<{commandId: string, outcome: Outcome | BulkOutcome}>} */
+    const resolved = [];
+    for (const read of reads) resolved.push({ commandId: read.commandId, outcome: await resendEntry(read) });
+    return resolved;
+  };
+
   return Object.freeze({
     sessionId,
     execute: (command, options) =>
@@ -906,32 +941,12 @@ export function createClient({
       return ![...waiting, ...sent.values(), ...verifying].some(call => call.kind === 'command');
     },
     coordinator: () => (coordinator ? { ...coordinator } : null),
-    async resume() {
-      if (!journal || !ledger) return [];
-      // A resume running when the client closes stops: what it hasn't read is unavailable. One
-      // that starts closed still reads each record, which answers whatever the client's state.
-      const closedFirst = phase === 'closed';
-      /** @type {unknown} */
-      let entries;
-      try {
-        entries = await journal.inFlight();
-      } catch (error) {
-        warn('client-journal-read-failed', { error });
-        return [];
-      }
-      if (!Array.isArray(entries)) return [];
-      // Every record first, in the journal's order, then each resend once the one before it
-      // answered, so a save never goes before the createNote it follows
-      /** @type {ReadEntry[]} */
-      const reads = [];
-      for (const entry of entries) {
-        if (!closedFirst && phase === 'closed') reads.push(unavailableEntry(entry));
-        else reads.push(await readEntry(entry));
-      }
-      /** @type {Array<{commandId: string, outcome: Outcome | BulkOutcome}>} */
-      const resolved = [];
-      for (const read of reads) resolved.push({ commandId: read.commandId, outcome: await resendEntry(read) });
-      return resolved;
+    resume() {
+      // Run at the same time, one could read a record from before the other's resend committed,
+      // and send the command again
+      const run = resumed.then(resumeNow);
+      resumed = run.catch(() => {});
+      return run;
     },
     close() {
       if (phase === 'closed') return;

@@ -367,7 +367,7 @@ async function build(argv = process.argv.slice(2)) {
       const read = readBudgets(ROOT_DIR);
       const files = fromDirectory(staging, 'the build');
       graph = read.budgets ? analyze({ chunks: bundled.report, files, loaderChunks: bundled.chunks, budgets: read.budgets, root: ROOT_DIR }) : null;
-      const over = read.budgets && graph ? checkBudgets(graph, read.budgets, { loaderChunks: bundled.chunks, files }) : read.problems;
+      const over = read.budgets && graph ? checkBudgets(graph, read.budgets, { loaderChunks: bundled.chunks, files, chunks: bundled.report }) : read.problems;
       if (over.length > 0) {
         over.forEach(report);
         removeOutput(staging);
