@@ -14,8 +14,8 @@
     },
     {
       "file": "js/kernel/composition/popup.js",
-      "replace": "  return Object.freeze({ ...client, whenReady });\n",
-      "with": "  return Object.freeze({ ...client, whenReady, quickNotePayload });\n"
+      "replace": "  return Object.freeze({ ...client, whenReady, writesReady });\n",
+      "with": "  return Object.freeze({ ...client, whenReady, writesReady, quickNotePayload });\n"
     },
     {
       "file": "build/budgets.json",
