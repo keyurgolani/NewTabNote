@@ -26,6 +26,7 @@ import { isId, isRecord } from '../contracts/checks.js';
 import { clone } from '../contracts/clone.js';
 import { COMMANDS } from '../contracts/commands.js';
 import {
+  TURN_EXCEEDED,
   UnavailableError,
   failed,
   failedFrom,
@@ -78,11 +79,9 @@ import { createCommitFeed } from './feed.js';
 /** The code a command or query answers when the policy allows it and the context's table doesn't hold it */
 export const NOT_REGISTERED = 'not-registered';
 
-/**
- * The code a command answers, `unavailable` and retryable, when the coordinator's queue cut its turn
- * before it committed (#35 slice 4b-1): nothing of it landed, so it can be sent again
- */
-export const TURN_EXCEEDED = 'turn-exceeded';
+// The code a command answers when the coordinator's queue cut its turn, from the contracts, where
+// an adapter reads it too (#247)
+export { TURN_EXCEEDED };
 
 /**
  * @typedef {object} KernelOptions
