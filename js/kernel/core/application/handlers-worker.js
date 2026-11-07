@@ -42,8 +42,9 @@ export const WORKER_HANDLERS = handlerTable(
 /**
  * What the worker runs for a page that sends over the port (#35 slice 4b-2, rules 5 and 6): Popup's
  * quick note, and Popup's and Side Panel's applies of a close-time draft (#35 slice 4c), on the
- * shared catalog, so each page's kernel in the worker allows only what that page may send. The applier is imported, not loaded at its first
- * use as a page's is (close-drafts-on-demand.js), since a service worker can't import()
+ * shared catalog, so each page's kernel in the worker allows only what that page may send. The
+ * applier is imported, not loaded at its first use as a page's is (close-drafts-on-demand.js),
+ * since a service worker can't import()
  */
 export const WORKER_PAGE_HANDLERS = handlerTable({
   commands: { createNote: noteCommands.createNote, applyCloseDraft: closeDraftCommands.applyCloseDraft },
