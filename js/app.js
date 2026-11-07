@@ -263,6 +263,20 @@ class App {
   }
 
   /**
+   * A measurement for #20 slice 4c, not for merging: the new tab's status line chunk, loaded at
+   * idle after interaction-ready through the page loader, which opens, reads and summarizes the
+   * trust records and holds them, with nothing drawn. Without the loader, nothing.
+   */
+  loadTrustStatus() {
+    const { loader } = this;
+    if (!loader) return;
+    loader
+      .loadChunk('trust-status', () => import('./kernel/composition/trust-status.js'))
+      .then((result) => (result.status === 'loaded' ? result.module.startTrustStatus() : null))
+      .catch((error) => this.logger.error('App', 'Trust status failed', error));
+  }
+
+  /**
    * The page loader's load of the block menus' roles and keys (js/ui/menu-keys.js, #14 slice 4),
    * a chunk the editors load at a menu's first open, by key or by click. Null without the loader,
    * when the menus are the pointer's, as before.
@@ -491,6 +505,8 @@ class App {
 
       // Defer non-critical initialization until after first render (Req 27.1)
       const deferWork = async () => {
+        // A measurement for #20 slice 4c, not for merging: the status line's chunk at idle
+        this.loadTrustStatus();
         await this.initAnalyticsController();
         await this.initGraphView();
         await this.initSyncService();
