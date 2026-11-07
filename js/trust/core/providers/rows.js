@@ -3,7 +3,9 @@
  * and where it runs. A status page groups the records' receipts and incidents by these rows
  * (summary.js) and never imports catalog.js, whose descriptors load each check with import(), so
  * a page that only shows status puts no check in its graph. catalog.js builds its descriptors
- * from these rows, so the two can't differ.
+ * from these rows, so the two can't differ. What summarize takes for a host is rowsOn(host), the
+ * rows of the providers that run there, as that host's registry resolves them: a summary over
+ * every row would count a provider the host doesn't run.
  *
  * In the catalog's order, which in each group is its rank order, the order the registry browses
  * a group in (resolve.js), so a page that reads the rows breaks a tie in a group as
@@ -62,3 +64,12 @@ export const PROVIDER_ROWS = Object.freeze([
   row('contributions', 'platform'),
   row('block-types', 'platform'),
 ]);
+
+/**
+ * The rows of the providers that run on `host`, in the rows' order: what summarize takes for a
+ * page there, as its root's registry resolves the catalog on that host. The new tab runs every
+ * provider; recovery.html runs all but the coordinator.
+ * @param {'workspace' | 'recovery'} host
+ * @returns {readonly Readonly<ProviderRow>[]}
+ */
+export const rowsOn = host => PROVIDER_ROWS.filter(row => row.hosts.includes(host));

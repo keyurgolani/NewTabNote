@@ -43,7 +43,8 @@ import { HEALTH_GROUPS, SEVERITIES, STATUS_ORDER } from './vocabulary.js';
  * them (rows.js keeps it), each provider's latest receipt, every incident the records list, and
  * whether the read reached the store and the settings copy
  * @typedef {object} SummaryInput
- * @property {readonly SummaryProvider[]} providers
+ * @property {readonly SummaryProvider[]} providers - a host's own, rowsOn(host) for a page that
+ *   reads the rows, as a root's registry resolves them on its host
  * @property {readonly HealthReceipt[]} receipts - the latest per provider (records.latestReceipts)
  * @property {readonly Incident[]} incidents - resolved ones included (records.incidentsRead)
  * @property {boolean} copyRead
