@@ -399,6 +399,22 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
+  it("reaches #17's reader alone from Side Panel's start too, with its untilMoved row gone, and the list reads the reader's open on popup and sidepanel (#35 slice 4c)", () => {
+    const connection = 'js/kernel/adapters/indexeddb/connection.js';
+    const list = {
+      ...LIST,
+      untilMoved: LIST.untilMoved.filter(/** @param {{root: string}} row */ row => row.root !== 'sidepanel'),
+      reads: [
+        ...LIST.reads.filter(/** @param {{file: string}} row */ row => row.file !== connection),
+        { file: connection, roots: ['popup', 'sidepanel'], why: "the reader's open, in existing mode", owner: 35 },
+      ],
+    };
+    assert.deepEqual(
+      problemsOf({ list }).filter(problem => problem.startsWith('sidepanel ')),
+      [],
+    );
+  });
+
   it('fails an untilMoved row whose page no longer reaches the adapter, and a page that joins the list (rule 3)', () => {
     const list = {
       ...LIST,

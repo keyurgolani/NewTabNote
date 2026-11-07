@@ -306,18 +306,18 @@ describe('the budget gate', () => {
     }
   });
 
-  // #35 slice 4b-2's chunk layout. The first page pass has two named groups: host, which every
-  // page's start shares and which holds Vite's preload helper, and adapter, the half of #17's
-  // adapter only the new tab's and Side Panel's starts load. Recovery's own pass takes neither.
+  // #35 slice 4b-2's chunk layout, as 4c leaves it. The first page pass has two named groups:
+  // host, which every page's start shares and which holds Vite's preload helper, and adapter, the
+  // half of #17's adapter only the new tab's start loads. Recovery's own pass takes neither.
   const HELPER = '\0vite/preload-helper.js';
   /**
-   * The pages after 4b-2, with `changes` applied: the new tab boots the workspace chunk, which
-   * imports host and adapter; Popup imports host and loads its send chunk, which holds valibot,
-   * with import(); Side Panel imports host and adapter; recovery has its own entry and its own
-   * copy of the helper
-   * @param {{helperChunk?: boolean, popupAdapter?: boolean, popupValibot?: boolean, sidePanelAdapter?: boolean, recoveryAdapter?: boolean}} [changes]
+   * The pages after 4c, with `changes` applied: the new tab boots the workspace chunk, which
+   * imports host and adapter, or with `newTabAdapterInline` holds the adapter's module itself;
+   * Popup imports host and loads its send chunk, which holds valibot, with import(); Side Panel
+   * imports host; recovery has its own entry and its own copy of the helper
+   * @param {{helperChunk?: boolean, newTabAdapterInline?: boolean, popupAdapter?: boolean, popupValibot?: boolean, sidePanelAdapter?: boolean, recoveryAdapter?: boolean}} [changes]
    */
-  function layoutFixture({ helperChunk = false, popupAdapter = false, popupValibot = false, sidePanelAdapter = true, recoveryAdapter = false } = {}) {
+  function layoutFixture({ helperChunk = false, newTabAdapterInline = false, popupAdapter = false, popupValibot = false, sidePanelAdapter = false, recoveryAdapter = false } = {}) {
     const helperFile = helperChunk ? ['assets/preload-helper.js'] : [];
     const files = new Map([
       ['newtab.html', Buffer.from('<link rel="modulepreload" href="/js/runtime/lazy.js"><script type="module" src="/assets/newtab.js"></script>')],
@@ -341,7 +341,12 @@ describe('the budget gate', () => {
     const chunks = [
       chunk({ fileName: 'assets/newtab.js', isEntry: true, imports: ['js/runtime/lazy.js', ...helperFile], dynamicImports: ['assets/workspace.js'], moduleIds: [id('js/entries/newtab.js')] }),
       chunk({ fileName: 'js/runtime/lazy.js', moduleIds: [id('js/runtime/lazy.js')] }),
-      chunk({ fileName: 'assets/workspace.js', isDynamicEntry: true, imports: ['assets/host.js', 'assets/adapter.js'], moduleIds: [id('js/workspace.js')] }),
+      chunk({
+        fileName: 'assets/workspace.js',
+        isDynamicEntry: true,
+        imports: ['assets/host.js', ...(newTabAdapterInline ? [] : ['assets/adapter.js'])],
+        moduleIds: [id('js/workspace.js'), ...(newTabAdapterInline ? [id('js/kernel/adapters/indexeddb/adapter.js')] : [])],
+      }),
       chunk({ fileName: 'assets/host.js', moduleIds: helperChunk ? kernel : [...kernel, HELPER] }),
       chunk({ fileName: 'assets/adapter.js', moduleIds: [id('js/kernel/adapters/indexeddb/adapter.js')] }),
       chunk({ fileName: 'assets/preload-helper.js', moduleIds: [HELPER] }),
@@ -377,7 +382,7 @@ describe('the budget gate', () => {
   };
   const layout = (/** @type {string} */ page, /** @type {string} */ message) => `budget/layout ${page}: ${message}`;
 
-  it("passes the pages' layout: Vite's preload helper in host, the adapter chunk on the new tab's and Side Panel's starts alone, and valibot in Popup's send chunk (#35 slice 4b-2)", () => {
+  it("passes the pages' layout: Vite's preload helper in host, the adapter chunk on the new tab's start alone, and valibot in Popup's send chunk (#35 slices 4b-2 and 4c)", () => {
     assert.deepEqual(run(layoutBudgets(), layoutFixture()), []);
     // The chunk graph names the helper on each start that holds it
     const graphs = analyze({ ...layoutFixture(), budgets: layoutBudgets() });
@@ -399,7 +404,13 @@ describe('the budget gate', () => {
 
   it("fails Popup's start that loads the adapter chunk (#35 slice 4b-2, P2)", () => {
     assert.deepEqual(run(layoutBudgets(), layoutFixture({ popupAdapter: true })), [
-      layout('popup', 'its start loads the adapter chunk (assets/adapter.js), which only the starts of newtab and sidepanel load'),
+      layout('popup', 'its start loads the adapter chunk (assets/adapter.js), which only the starts of newtab load'),
+    ]);
+  });
+
+  it("fails Side Panel's start that loads the adapter chunk, as Popup's (#35 slice 4c, P2)", () => {
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ sidePanelAdapter: true })), [
+      layout('sidepanel', 'its start loads the adapter chunk (assets/adapter.js), which only the starts of newtab load'),
     ]);
   });
 
@@ -409,9 +420,9 @@ describe('the budget gate', () => {
     ]);
   });
 
-  it("fails the new tab's or Side Panel's start without the adapter chunk (#35 slice 4b-2, P4)", () => {
-    assert.deepEqual(run(layoutBudgets(), layoutFixture({ sidePanelAdapter: false })), [
-      layout('sidepanel', "its start doesn't load the adapter chunk, which the starts of newtab and sidepanel load"),
+  it("fails the new tab's start without the adapter chunk while it holds the adapter's modules (#35 slices 4b-2 and 4c, P4)", () => {
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ newTabAdapterInline: true })), [
+      layout('newtab', "its start doesn't load the adapter chunk, which the starts of newtab load"),
     ]);
   });
 

@@ -51,6 +51,11 @@ describe('the pages pass\'s host and adapter chunks (scripts/build/page-chunks.j
     assert.deepEqual(ADAPTER_MODULES.filter((file) => popup.has(file)), []);
   });
 
+  it("keeps Side Panel's start off the adapter's list too, since it reads through #17's reader (#35 slice 4c)", async () => {
+    const [, , sidepanel] = await starts();
+    assert.deepEqual(ADAPTER_MODULES.filter((file) => sidepanel.has(file)), []);
+  });
+
   it("lists in host only what the new tab's start and Popup's reach share, its start and what it loads with import()", async () => {
     const [newtab] = await starts();
     const popup = await reachOf(['js/popup.js']);
