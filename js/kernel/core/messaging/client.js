@@ -23,6 +23,10 @@
  *   A command still without a record then stays unknown, and so does one whose ledger can't be
  *   read. A cancel after its reply was lost changes nothing. A command that was never sent is
  *   definitely unavailable.
+ * - While such a command is read from the ledger, every call asked after it waits, and its resend
+ *   keeps its place in the order the calls were asked. So no later call passes it, and an older
+ *   save sent again never lands over a newer one, which a live save's lack of an expected
+ *   revision would let it (NTN-254).
  * - resume() resolves what a page had in flight when it went, from its journal: each journaled
  *   command by its key the same way, and one that isn't journaled by reading the ledger only,
  *   never sending it again, since its outcome comes from reading the projection (#13, AC3).
@@ -181,6 +185,7 @@ import { silentLogger } from '../ports/runtime.js';
  * @property {Record<string, unknown>} payload
  * @property {string} commandId
  * @property {string} requestId
+ * @property {number} seq - its place in the order calls were asked, which a resend keeps
  * @property {boolean} visible - the user waits on it
  * @property {number} since - when it was made
  * @property {boolean} sent
@@ -237,11 +242,16 @@ export function createClient({
   let retryTimer;
   /** @type {unknown} */
   let showTimer = null;
-  /** @type {Call[]} calls waiting for the welcome, oldest first */
+  /**
+   * @type {Call[]} calls waiting to be sent, for the welcome or behind a command being verified,
+   *   in the order they were asked
+   */
   let waiting = [];
+  /** How many calls have been asked, which numbers their order */
+  let asked = 0;
   /** @type {Map<string, Call>} calls sent, by requestId */
   const sent = new Map();
-  /** @type {Set<Call>} commands whose reply was lost, while the ledger is read */
+  /** @type {Set<Call>} commands whose reply was lost, while the ledger is read, which later calls wait behind */
   const verifying = new Set();
   /** @type {Map<string, Promise<unknown>>} each command still open, by commandId */
   const open = new Map();
@@ -309,9 +319,11 @@ export function createClient({
     timers.clear(call.timer);
     sent.delete(call.requestId);
     waiting = waiting.filter(other => other !== call);
-    verifying.delete(call);
+    const verified = verifying.delete(call);
     call.unlisten();
     call.resolve(answer);
+    // The calls asked after it no longer wait for it
+    if (verified && phase === 'open') flush();
   };
 
   /**
@@ -413,7 +425,6 @@ export function createClient({
     verifying.add(call);
     void readLedger(call.operation, call.payload).then(read => {
       if (call.settled) return;
-      verifying.delete(call);
       if (read?.status === 'committed' || read?.status === 'conflict') return settle(call, read.outcome);
       if (read?.status === 'key-reuse') return settle(call, rejected('validation', 'idempotency-key-reuse'));
       if (read?.status === 'absent' && !call.resent && phase !== 'closed' && phase !== 'unsupported') {
@@ -424,18 +435,29 @@ export function createClient({
   };
 
   /**
-   * Sends a command the ledger has no record of once more, with the same key, as a new request
+   * Sends a command the ledger has no record of once more, with the same key, as a new request,
+   * ahead of every call asked after it
    * @param {Call} call
    */
   const resend = call => {
+    verifying.delete(call);
     call.resent = true;
     call.requestId = ids.next();
     call.since = clock.now();
-    waiting.push(call);
+    const later = waiting.findIndex(other => other.seq > call.seq);
+    if (later === -1) waiting.push(call);
+    else waiting.splice(later, 0, call);
     if (phase === 'open') flush();
     else begin();
     watch();
   };
+
+  /**
+   * Whether `call` waits behind a command asked before it whose reply was lost, which goes again
+   * first if the ledger has no record of it
+   * @param {Call} call
+   */
+  const heldBack = call => [...verifying].some(other => other.seq < call.seq);
 
   /**
    * Ends every call still waiting to be sent, which definitely never started, unless it's a
@@ -518,9 +540,13 @@ export function createClient({
     return true;
   };
 
-  /** Sends every call that was waiting for the welcome, in order, each with its deadline from now */
+  /**
+   * Sends every call that was waiting, in order, each with its deadline from now, up to the first
+   * one asked after a command still being verified
+   */
   const flush = () => {
     while (waiting.length > 0 && phase === 'open') {
+      if (heldBack(waiting[0])) return;
       const call = /** @type {Call} */ (waiting.shift());
       if (!transmit(call)) {
         waiting.unshift(call);
@@ -710,6 +736,7 @@ export function createClient({
         payload: /** @type {Record<string, unknown>} */ (input),
         commandId: typeof input?.commandId === 'string' ? input.commandId : '',
         requestId: '',
+        seq: (asked += 1),
         visible: userVisible,
         since: clock.now(),
         sent: false,
@@ -746,7 +773,7 @@ export function createClient({
       // A call keeps the payload as it was called, as kernel.execute() copies a command, so
       // nothing its caller changes after reaches the coordinator, a resend, or the ledger
       call.payload = /** @type {{payload: Record<string, unknown>}} */ (decode(text)).payload;
-      if (phase === 'open' && transmit(call, text)) return;
+      if (phase === 'open' && !heldBack(call) && transmit(call, text)) return;
       waiting.push(call);
       begin();
       watch();
