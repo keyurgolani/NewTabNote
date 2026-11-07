@@ -1,25 +1,30 @@
 /**
  * trust.summary from what the records read (#20 slice 4c): each provider's status from its latest
  * receipt, the incidents, and what they add up to. It takes each provider as its static row
- * (providers/rows.js), so a page that only shows status computes the summary beside the records,
- * with no registry, checks module, Valibot or payload schema in its graph. The use cases'
- * trust.summary is this, over the providers their registry root resolved.
+ * (providers/rows.js), so a page that only shows status computes the summary beside the records.
+ * This module reaches no registry, checks module, Valibot or payload schema, but a page that
+ * reads the records loads Valibot with them (trust-records.js). The use cases' trust.summary is
+ * this, over the providers their registry root resolved.
  *
  * Status is always aggregated from receipts, never from settings: a provider with no receipt
  * reads `unverified`, a receipt past its window or dated in the future reads `stale`, and the
  * worst core status counts `unverified` and `stale` as worse than `verified`, so no summary is
- * healthy until a real check passed (approved AC3).
+ * healthy until a real check passed (approved AC3). While an update waits, storage's receipt
+ * reads `degraded`, so `worstCore` does too, though the wait needs no action: whether anything
+ * needs the user is `actionRequired`'s to say, not `worstCore`'s.
  *
  * Dismissed incidents stay listed but leave Needs action, and so does an update that's waiting
  * (updates.js, the design review's change 9), which needs no one: the Trust Center reads it by the
- * same rule. Capture risk stays strict: capture reads `safe` only on a fresh core receipt verified
- * after the latest sighting of every open capture-risk incident, dismissed ones included (the
- * records time a capture-risk sighting after the newest core receipt, whatever the clock), so a
- * dismissed one reads `unknown` until a later probe passes, never `safe`, and a new failure ends
- * its dismissal (incidents.js).
+ * same rule. That rule decides which problems count, not how many: this counts incidents, and the
+ * Recovery Center counts problems, merging incidents that share a title. Capture risk stays
+ * strict: capture reads `safe` only on a fresh core receipt verified after the latest sighting of
+ * every open capture-risk incident, dismissed ones included (the records time a capture-risk
+ * sighting after the newest core receipt, whatever the clock), so a dismissed one reads `unknown`
+ * until a later probe passes, never `safe`, and a new failure ends its dismissal (incidents.js).
  *
- * A cause carries only a registered error code: records a newer build wrote can hold one this
- * build has no words for, and trust.summary's schema takes none other.
+ * A cause carries only a registered error code, and never names a problem whose fault or
+ * severity isn't registered: records a newer build wrote can hold what this build has no words
+ * for, and trust.summary's schema takes none of it.
  */
 
 import { ERROR_CODES, FAULT_CODES } from './codes.js';
