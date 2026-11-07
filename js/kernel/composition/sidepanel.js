@@ -8,7 +8,7 @@ import { SIDEPANEL_HANDLERS } from '../core/application/handlers-sidepanel.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { applyingCloseDrafts, pageDrafts } from './close-drafts.js';
 import { journalingClient, pageHost } from './host.js';
-import { PAGE_TIMERS, readsKernel, within } from './page-reads.js';
+import { PAGE_TIMERS, failingFast, readsKernel, within } from './page-reads.js';
 
 /** @typedef {import('./host.js').PageHost} PageHost */
 /** @typedef {import('./host.js').Client} Client */
@@ -69,27 +69,6 @@ function heldSends(load, options) {
       client => /** @type {Promise<Outcome>} */ (client.execute(command)),
       () => unavailable('coordinator', 'reload-required', false),
     );
-  };
-}
-
-/**
- * One run of `send`'s commands, the start's apply or the journal's (Q5's b). Once one of them
- * answers that the worker didn't take it, unavailable from the coordinator, or unknown since its
- * answer didn't come in time, each later one answers at once, unsent: as the first did when it
- * was unavailable, and after an unknown one, unavailable with its code, since nothing went. What
- * each carried stays for the next start, and the run holds the drafts' lock one wait at most.
- * @param {(command: Command) => Promise<Outcome>} send
- * @returns {(command: Command) => Promise<Outcome>}
- */
-function failingFast(send) {
-  /** @type {Outcome | null} */
-  let stopped = null;
-  return async command => {
-    if (stopped) return stopped;
-    const outcome = await send(command);
-    if (outcome.kind === 'unknown') stopped = unavailable('coordinator', outcome.code, true);
-    else if (outcome.kind === 'unavailable' && outcome.cause === 'coordinator') stopped = outcome;
-    return outcome;
   };
 }
 

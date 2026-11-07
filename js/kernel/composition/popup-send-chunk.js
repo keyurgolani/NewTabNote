@@ -35,6 +35,7 @@ import { hostTimers, randomIds } from './messaging.js';
 /** @typedef {import('../core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../core/contracts/outcomes.js').BulkOutcome} BulkOutcome */
 /** @typedef {import('./host.js').Client} PageClient */
+/** @typedef {typeof import('./page-reads.js').failingFast} FailingFast */
 
 /**
  * The chrome.runtime Popup's writes take: its port, and the message that wakes the worker's drain
@@ -91,14 +92,18 @@ export function popupSender({ runtime, extensionVersion, ledger }) {
  *   ledger?: IdempotencyLedger,
  *   locks: JournalingLocks | null,
  *   storage?: DraftStorage,
+ *   failingFast: FailingFast,
  * }} options - `reads`: Popup's kernel, in whose shape the journal's apply of the editor saves
- *   closed pages left sends through the client. `ledger`: the reader's.
+ *   closed pages left sends through the client. `ledger`: the reader's. `failingFast`: the roots'
+ *   run that stops sending once the worker didn't take one of its commands (page-reads.js), which
+ *   that apply sends through, as a run of its own (#246). The root hands it in, so this chunk
+ *   imports nothing more of the start's.
  */
-export function popupWrites({ reads, runtime, extensionVersion, indexedDB, ledger, locks, storage }) {
+export function popupWrites({ reads, runtime, extensionVersion, indexedDB, ledger, locks, storage, failingFast }) {
   const client = popupSender({ runtime, extensionVersion, ledger });
-  const sender = /** @type {PageClient} */ (
-    /** @type {unknown} */ (Object.freeze({ ...reads, execute: client.execute }))
-  );
+  // The journal's apply sends applyCloseDraft alone, which answers an Outcome
+  const run = failingFast(/** @type {(command: Command) => Promise<Outcome>} */ (client.execute));
+  const sender = /** @type {PageClient} */ (/** @type {unknown} */ (Object.freeze({ ...reads, execute: run })));
   const journal = startPageJournal(sender, client.sessionId, 'popup', {
     stores: inContextStores({ indexedDB }),
     locks,
@@ -109,6 +114,6 @@ export function popupWrites({ reads, runtime, extensionVersion, indexedDB, ledge
     client,
     ready: journal.ready,
     /** @type {(command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>} */
-    execute: (command, options) => journal.execute(command, sender.execute, options),
+    execute: (command, options) => journal.execute(command, client.execute, options),
   });
 }

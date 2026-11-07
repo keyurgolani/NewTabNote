@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 
 import { installRuntimePort } from '../../js/kernel/adapters/messaging/runtime-port.js';
 import { hostTimers } from '../../js/kernel/composition/messaging.js';
+import { failingFast } from '../../js/kernel/composition/page-reads.js';
 import { POPUP_SENDS, popupSender, popupWrites } from '../../js/kernel/composition/popup-send-chunk.js';
 import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { committed, rejected } from '../../js/kernel/core/contracts/outcomes.js';
@@ -102,6 +103,7 @@ describe("Popup's send chunk (composition/popup-send-chunk.js)", () => {
       // A profile with no journal, so its start opens nothing
       indexedDB: /** @type {any} */ ({ databases: async () => [] }),
       locks: /** @type {any} */ (locks),
+      failingFast,
     });
     assert.equal(await writes.ready, true);
     assert.deepEqual(requested, [ownerLock(writes.client.sessionId)]);
@@ -125,6 +127,7 @@ describe("Popup's send chunk (composition/popup-send-chunk.js)", () => {
       // A profile with no journal, so its start opens nothing
       indexedDB: /** @type {any} */ ({ databases: async () => [] }),
       locks: /** @type {any} */ (locks),
+      failingFast,
     });
     let ready = false;
     writes.ready.then(() => {
