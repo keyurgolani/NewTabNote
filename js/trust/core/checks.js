@@ -201,15 +201,3 @@ export function exceptionOf(error) {
   const name = /** @type {{name?: unknown}} */ (error).name;
   return typeof name === 'string' && EXCEPTION_NAMES.includes(name) ? name : null;
 }
-
-/**
- * A receipt's status as it reads at `now`: `stale` once it's past its window or dated in the
- * future, otherwise what it stored
- * @param {{status: string, verifiedAt: number, freshnessMs: number}} receipt
- * @param {number} now
- * @returns {import('./vocabulary.js').ProviderStatus}
- */
-export function effectiveStatus(receipt, now) {
-  if (receipt.verifiedAt > now || now - receipt.verifiedAt > receipt.freshnessMs) return 'stale';
-  return /** @type {import('./vocabulary.js').ProviderStatus} */ (receipt.status);
-}

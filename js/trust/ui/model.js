@@ -33,6 +33,7 @@ import {
 import { EVENT_CODES } from '../core/event-codes.js';
 import { PROVIDERS } from '../core/providers/catalog.js';
 import { OPEN_FAILED_KEY, WRITE_FAILED_KEY } from '../core/trust-records.js';
+import { WAITING, updateKeyOf, updateOf, waits, whyOf } from '../core/updates.js';
 
 /** @typedef {import('../core/operations/trust-report.js').TrustReport} TrustReport */
 /** @typedef {import('../core/operations/trust-summary.js').TrustSummary} TrustSummary */
@@ -229,50 +230,6 @@ export function consequenceOf(providerId, receipt, now) {
 }
 
 // ───────── An update to how notes are stored (the director's change 9) ─────────
-
-/**
- * The update state storage's fault `faultCode` stands for, as the consequence its words are
- * under, or null for any other fault. `evidence` says why: a blocked update is a wait for free
- * space when the run said so (`space-short`), and any other wait, such as an upgrade waiting on
- * another connection, reads as waiting (#20 slice 4d says what to do about that one). With
- * nothing that says why (null), as after a later check's receipt took the update's place, a
- * blocked update reads as the wait for free space, which needs the user (#115's high review)
- * @param {string} faultCode
- * @param {Readonly<Record<string, unknown>> | null} evidence - whyOf's
- * @returns {string | null}
- */
-export function updateKeyOf(faultCode, evidence) {
-  if (faultCode === 'migration-blocked') return evidence && evidence.errorCode !== 'space-short' ? 'storage.migration-pending' : 'storage.migration-blocked';
-  if (faultCode === 'migration-pending' || faultCode === 'migration-failed') return `storage.${faultCode}`;
-  return null;
-}
-
-/**
- * The update state a storage receipt reports, or null
- * @param {HealthReceipt | null} receipt
- */
-function updateOf(receipt) {
-  const key = receipt && receipt.consequenceKey;
-  if (!key || !key.startsWith('storage.migration-')) return null;
-  return updateKeyOf(key.slice('storage.'.length), /** @type {Record<string, unknown>} */ (receipt.evidence || {}));
-}
-
-/**
- * What says why storage's update is where it is: its latest receipt's evidence when that receipt
- * reports the update, with the incident's own over it, or null when neither says anything. A
- * check's incidents carry no evidence of their own (checks.js), and a later check's receipt that
- * isn't the update's, such as one that timed out, says nothing about it
- * @param {HealthReceipt | null | undefined} receipt
- * @param {Readonly<Record<string, unknown>>} [own] - the incident's
- * @returns {Record<string, unknown> | null}
- */
-function whyOf(receipt, own = {}) {
-  if (receipt && updateOf(receipt) !== null) return { ...(receipt.evidence || {}), ...own };
-  return Object.keys(own).length > 0 ? { ...own } : null;
-}
-
-/** An update that's waiting needs no one, as the worker finishes it on its own: it counts as attention nowhere */
-const WAITING = Object.freeze(['storage.migration-pending']);
 
 /**
  * An update's words: its consequence, and that notes save normally when the check saved its test
@@ -478,10 +435,8 @@ export function trustSections(report, { now, checking = new Set() }) {
     // Storage's update state, when its check reported one: its own words and shape, and a wait
     // that needs no one (change 9)
     const update = rowId === 'storage' && status === 'degraded' ? updateOf(entries[0].receipt) : null;
-    const waits = (/** @type {Incident} */ incident) =>
-      incident.providerId === 'storage' && WAITING.includes(String(updateKeyOf(incident.faultCode, whyOf(entries[0].receipt, incident.evidence))));
     const waiting = update !== null && WAITING.includes(update);
-    const counted = open.filter(incident => !waits(incident));
+    const counted = open.filter(incident => !waits(incident, entries[0].receipt));
     const attention = counted.length > 0 || (ATTENTION.includes(status) && !waiting);
     const showsTime = !['not-configured', 'off', 'unsupported', 'checking', 'unverified'].includes(status);
     const verifiedTimes = entries
