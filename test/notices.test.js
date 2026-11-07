@@ -27,11 +27,12 @@ const VALIBOT = 'function $(e){return e["~standard"]={version:1,vendor:"valibot"
 // tab's workspace chunk and the block core's chunk recovery.html's own pass writes carry
 const ENTITIES = 'const k=["ClockwiseContourIntegral:1,CounterClockwiseContourIntegral:1"].join(",");';
 /**
- * The chunks the bundler folds Valibot into, the pages' shared trust chunk, recovery.html's own
- * chunk, which its own pass bundles, and the service worker, and the two that hold #14's table:
+ * The chunks the bundler folds Valibot into, the validate chunk, which the trust chunk and
+ * Popup's send chunk import (#35 slice 4b-2), recovery.html's own chunk, which its own pass
+ * bundles, and the service worker, and the two that hold #14's table:
  * the new tab's workspace chunk, and the block core's chunk recovery.html's pass writes
  */
-const CHUNKS = { 'assets/trust-YdWbqFjr.js': `${VALIBOT}export{$ as t};`, 'assets/recovery-Rk8vB2xQ.js': `${VALIBOT}import"./blocks-Hc4tWq2A.js";export{};`, 'js/background.js': `${VALIBOT}self.ntn=1;`, 'assets/newtab-D3k5NAfy.js': 'import"./trust-YdWbqFjr.js";', 'assets/workspace-Q7bL2xVe.js': `${ENTITIES}export{};`, 'assets/blocks-Hc4tWq2A.js': ENTITIES };
+const CHUNKS = { 'assets/validate-Ns4qWb7e.js': `${VALIBOT}export{$ as t};`, 'assets/recovery-Rk8vB2xQ.js': `${VALIBOT}import"./blocks-Hc4tWq2A.js";export{};`, 'js/background.js': `${VALIBOT}self.ntn=1;`, 'assets/newtab-D3k5NAfy.js': 'import"./validate-Ns4qWb7e.js";', 'assets/workspace-Q7bL2xVe.js': `${ENTITIES}export{};`, 'assets/blocks-Hc4tWq2A.js': ENTITIES };
 
 /** A zip laid out like the package, built from the repository files and CHUNKS. */
 async function packageZip({ omit = [], replace = {} } = {}) {
@@ -179,10 +180,10 @@ describe('license notices (AC8)', () => {
     // #99's review: the Valibot entry still said js/lib/valibot/index.mjs, unmodified, and no
     // entry covered emoji-regex-xs, whose regex Valibot's build holds
     const notices = read('THIRD_PARTY_NOTICES');
-    assert.match(notices, /^In: {8}assets\/trust-\*\.js, assets\/recovery-\*\.js and js\/background\.js: dist\/index\.mjs from the valibot package, bundled and minified/m);
-    // #99's delta: trust-* is the trust chunk, which the pages load for their failure events;
-    // the pages' shared chunk is host-*
-    assert.match(notices, /^In: .*bundled and minified into the chunks that import it: the trust chunk, which a page loads only for its failure events \(\* is its content hash\), recovery\.html's own chunk, which its own pass bundles, and the service worker\./m);
+    assert.match(notices, /^In: {8}assets\/validate-\*\.js, assets\/recovery-\*\.js and js\/background\.js: dist\/index\.mjs from the valibot package, bundled and minified/m);
+    // #35 slice 4b-2: validate-* is the validate chunk, which the trust chunk and Popup's send
+    // chunk import; #99's delta: the pages' shared chunk is host-*
+    assert.match(notices, /^In: .*bundled and minified into the chunks that import it: the validate chunk, which the trust chunk and Popup's send chunk import \(\* is its content hash\), recovery\.html's own chunk, which its own pass bundles, and the service worker\./m);
     assert.doesNotMatch(notices, /shared chunk/);
     assert.match(notices, /^ {2}20\. emoji-regex-xs 1\.0\.0 \(MIT\)$/m);
     assert.match(notices, /^Copyright: Copyright \(c\) 2024 Steven Levithan$/m);
@@ -200,8 +201,8 @@ describe('license notices (AC8)', () => {
     ]);
     // A schema uses Valibot's emoji action, so its regex ships
     const regex = 'const r=/^(?:[\\u{1F1E6}-\\u{1F1FF}]{2}|\\u{1F3F4}[\\u{E0061}-\\u{E007A}]{2}[\\u{E0030}-\\u{E0039}\\u{E0061}-\\u{E007A}]{1,3}\\u{E007F})+$/u;';
-    assert.deepEqual(checkBundledNotices(filesOf({ ...CHUNKS, 'assets/trust-YdWbqFjr.js': `${VALIBOT}${regex}` })), [
-      `assets/trust-YdWbqFjr.js carries ${emoji}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
+    assert.deepEqual(checkBundledNotices(filesOf({ ...CHUNKS, 'assets/validate-Ns4qWb7e.js': `${VALIBOT}${regex}` })), [
+      `assets/validate-Ns4qWb7e.js carries ${emoji}'s code, and the In: line of its THIRD_PARTY_NOTICES entry doesn't name it`,
     ]);
     // Unminified, as a development build writes it, with every export and the regex
     assert.deepEqual(checkBundledNotices(filesOf({ ...CHUNKS, 'assets/sidepanel-DgtwzUbD.js': read('js/lib/valibot/index.mjs') })), [
@@ -225,7 +226,7 @@ describe('license notices (AC8)', () => {
     );
     // No entry at all
     assert.deepEqual(checkBundledNotices(filesOf(CHUNKS, read('THIRD_PARTY_NOTICES').replace(/^19\. Valibot 1\.5\.0$/m, '19. Valibot'))), [
-      `THIRD_PARTY_NOTICES has no "${valibot}" entry with an In: line, and assets/recovery-Rk8vB2xQ.js, assets/trust-YdWbqFjr.js, and js/background.js carry its code`,
+      `THIRD_PARTY_NOTICES has no "${valibot}" entry with an In: line, and assets/recovery-Rk8vB2xQ.js, assets/validate-Ns4qWb7e.js, and js/background.js carry its code`,
     ]);
   });
 
@@ -257,7 +258,7 @@ describe('npm run check:notices (AC8, AC9)', () => {
       const passed = run(good);
       assert.equal(passed.status, 0, passed.stderr);
       assert.match(passed.stdout, /^check:notices passed: /);
-      assert.match(passed.stdout, /Valibot 1\.5\.0 in assets\/recovery-Rk8vB2xQ\.js, assets\/trust-YdWbqFjr\.js, and js\/background\.js/);
+      assert.match(passed.stdout, /Valibot 1\.5\.0 in assets\/recovery-Rk8vB2xQ\.js, assets\/validate-Ns4qWb7e\.js, and js\/background\.js/);
 
       const failed = run(bad);
       assert.equal(failed.status, 1);
