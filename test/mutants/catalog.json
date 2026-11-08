@@ -366,7 +366,7 @@
       "behavior": "auth checks",
       "protects": "The router refuses a request before the hello.",
       "file": "js/kernel/core/messaging/router.js",
-      "find": "    if (peer.phase === 'new') return refuse(peer, requestId, 'unauthorized-sender');\n",
+      "find": "    if (peer.phase === 'new' || peer.phase === 'greeting') return refuse(peer, requestId, 'unauthorized-sender');\n",
       "replace": "",
       "test": "test/kernel/router.test.mjs",
       "name": "refuses a request before the hello, and closes a connection that says hello twice"
@@ -385,9 +385,9 @@
       "id": "auth-router-policy-not-strict",
       "behavior": "auth checks",
       "protects": "The router allows only a policy answer of allowed: true.",
-      "file": "js/kernel/core/messaging/router.js",
-      "find": "        if (allowed === true) return null;",
-      "replace": "        if (allowed !== false) return null;",
+      "file": "js/kernel/core/messaging/denials.js",
+      "find": "      if (allowed === true) return null;",
+      "replace": "      if (allowed !== false) return null;",
       "test": "test/kernel/router.test.mjs",
       "name": "asks the policy with the caller it verified, the transport's surface and the hello's session, and maps its denials"
     },
@@ -446,8 +446,8 @@
       "behavior": "auth checks",
       "protects": "checkRequest holds a request to its operation's maxBytes.",
       "file": "js/kernel/core/contracts/validate.js",
-      "find": "  if (bytes > operation.entry.maxBytes) return",
-      "replace": "  if (bytes > Infinity) return",
+      "find": "  if (capped && bytes > operation.entry.maxBytes) return",
+      "replace": "  if (capped && bytes > Infinity) return",
       "test": "test/kernel/envelope.test.mjs",
       "name": "holds a request to its operation's maxBytes, counted as the port sends it, before its schema, the limit itself included (#259)"
     },
@@ -456,10 +456,10 @@
       "behavior": "auth checks",
       "protects": "The baseline policy allows a request only from the surfaces its catalog entry lists.",
       "file": "js/kernel/core/ports/policy.js",
-      "find": "      return surfaces.includes(caller.surface) ? ALLOW : deny('not-on-surface');",
-      "replace": "      return ALLOW;",
+      "find": "      if (surfaces) return surfaces.includes(caller.surface) ? ALLOW : deny('not-on-surface');",
+      "replace": "      if (surfaces) return ALLOW;",
       "test": "test/kernel/policy.test.mjs",
-      "name": "allows each surface exactly today's commands and reads"
+      "name": "allows each page exactly today's commands and reads, on the shared catalog, which doesn't know the worker's own"
     },
     {
       "id": "auth-kernel-policy-not-strict",
@@ -506,7 +506,7 @@
       "behavior": "conflict branches",
       "protects": "The idempotency ledger answers key-reuse for a key it holds for another command.",
       "file": "js/kernel/core/memory/ledger.js",
-      "find": "    if (kept.fingerprint !== digestOf(command)) return { status: 'key-reuse' };\n",
+      "find": "    if (kept && kept.fingerprint !== digestOf(command)) return { status: 'key-reuse' };\n",
       "replace": "",
       "test": "test/kernel/idempotency-ledger.test.mjs",
       "name": "answers key reuse for the same key with another command, by its canonical form, not its key order"
@@ -576,8 +576,8 @@
       "behavior": "#33 save fixes",
       "protects": "A save of a note deleted since the editor loaded it writes nothing.",
       "file": "js/kernel/core/application/notes.js",
-      "find": "        if (!note) return noteNotFound();\n        const stale = versionConflict(tx, noteId, { expectedRevision });",
-      "replace": "        if (!note) { tx.put('notes', { id: noteId, updatedAt: now }); return undefined; }\n        const stale = versionConflict(tx, noteId, { expectedRevision });",
+      "find": "        // A note deleted since the editor loaded it stays deleted, blocks included\n        if (!note) return noteNotFound();\n        const stale = versionConflict(tx, noteId, { expectedRevision });",
+      "replace": "        // A note deleted since the editor loaded it stays deleted, blocks included\n        if (!note) { tx.put('notes', { id: noteId, updatedAt: now }); return undefined; }\n        const stale = versionConflict(tx, noteId, { expectedRevision });",
       "test": "test/kernel/memory.test.mjs",
       "name": "for a note deleted since the editor loaded it writes nothing, blocks included"
     },
