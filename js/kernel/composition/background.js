@@ -36,7 +36,7 @@ import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { WORKER_HANDLERS, WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
 import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
 import { TURN_EXCEEDED, UnavailableError, unavailable } from '../core/contracts/outcomes.js';
-import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
+import { WORKER_COMMANDS, WORKER_ONLY_COMMANDS, WORKER_ONLY_QUERIES } from '../core/contracts/worker-catalog.js';
 import { createLookup } from '../core/messaging/operations.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
@@ -1099,9 +1099,25 @@ const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
  * rule 5): page-operations.js's, every one the new tab sends but its session's write and startup
  * maintenance (#35 slice 4d), Popup's two and Side Panel's one among them, on the shared catalog's
  * entries, with the schemas their modules export, which only the worker loads. The router knows
- * the coordinator's own queries besides, and no other operation.
+ * the coordinator's own queries besides, and what a root adds (installWorkerRouter's
+ * `operations`), and no other.
  */
 const PAGE_LOOKUP = createLookup(PAGE_OPERATIONS);
+
+/**
+ * `rows` without one for a type only the worker runs (contracts/worker-catalog.js), so no row a
+ * root passes takes a page to one, whatever operations it passes too (the catalog split's sixth
+ * rule): the policy denies a type it has no entry or row for
+ * @param {Readonly<Record<string, import('../core/ports/policy.js').PolicyRow>>} rows
+ * @returns {Record<string, import('../core/ports/policy.js').PolicyRow>}
+ */
+function pageRows(rows) {
+  return Object.fromEntries(
+    Object.entries(rows).filter(
+      ([type]) => !Object.hasOwn(WORKER_ONLY_COMMANDS, type) && !Object.hasOwn(WORKER_ONLY_QUERIES, type),
+    ),
+  );
+}
 
 /**
  * #13's router, on `runtime`'s port listener, so each port one of this extension's pages
@@ -1125,7 +1141,14 @@ const PAGE_LOOKUP = createLookup(PAGE_OPERATIONS);
  *   settled?: () => unknown,
  *   sessions?: import('../core/messaging/router.js').SessionHooks,
  *   handlers?: Readonly<Record<string, import('../core/messaging/router.js').Handler>>,
- * }} [options] - `runtime` is chrome.runtime unless a test passes another
+ *   operations?: Readonly<Record<string, import('../core/contracts/validate.js').Operation>>,
+ *   rows?: Readonly<Record<string, import('../core/ports/policy.js').PolicyRow>>,
+ * }} [options] - `runtime` is chrome.runtime unless a test passes another. `operations` and
+ *   `rows`: what the router serves beyond the shared catalog's entries, each by the row a
+ *   page's surface is taken by, so an operation outside this module's graph can come from the
+ *   root that installs it, as the status pages' reads may once #20 slice 4d brings #13's client
+ *   to the new tab. js/background.js passes none today. Neither takes a page to a type only the
+ *   worker runs
  * @returns {Router | null} the router, or null when it couldn't be installed
  */
 export function installWorkerRouter({
@@ -1136,11 +1159,14 @@ export function installWorkerRouter({
   settled,
   sessions,
   handlers,
+  operations = {},
+  rows = {},
 } = {}) {
   try {
     const worker = /** @type {WorkerRuntime} */ (runtime);
     const router = createRouter({
-      policy: createBaselinePolicy(),
+      // The shared catalog's entries, and what `rows` takes beyond them
+      policy: createBaselinePolicy(undefined, { rows: pageRows(rows) }),
       clock: systemClock,
       timers: hostTimers,
       coordinatorId: coordinatorId ?? randomIds.next(),
@@ -1148,7 +1174,7 @@ export function installWorkerRouter({
       status,
       settled,
       sessions,
-      lookup: PAGE_LOOKUP,
+      lookup: Object.keys(operations).length > 0 ? createLookup({ ...PAGE_OPERATIONS, ...operations }) : PAGE_LOOKUP,
       handlers,
       logger: messagingLogger,
     });
