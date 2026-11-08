@@ -20,6 +20,8 @@ import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
+import { operationOf } from '../../js/kernel/core/messaging/operations.js';
+import * as v from '../../js/lib/valibot/index.mjs';
 import { WORKER_ONLY_COMMANDS, WORKER_ONLY_QUERIES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { PAGE_FILES, createChromeFake } from './chrome-fake.mjs';
 import { COMMAND_SAMPLES } from './command-samples.mjs';
@@ -441,8 +443,15 @@ describe('the worker\'s router (#13, "Topology")', () => {
     assert.deepEqual(after && [after.frame, after.code], ['error', 'deadline-exceeded'], JSON.stringify(after));
   });
 
-  it("serves no page what only the worker runs, even with a handler for each (the catalog split's sixth rule)", async () => {
+  it("serves no page what only the worker runs, even with a handler, a row and an operation for each (the catalog split's sixth rule)", async () => {
     const workerOnly = [...Object.keys(WORKER_ONLY_COMMANDS), ...Object.keys(WORKER_ONLY_QUERIES)];
+    // What a root could pass beyond the shared catalog (#20 slice 4c): a row that takes each from
+    // every page, and an operation whose schemas take anything
+    const entries = /** @type {Record<string, any>} */ ({ ...WORKER_ONLY_COMMANDS, ...WORKER_ONLY_QUERIES });
+    const rows = Object.fromEntries(workerOnly.map(type => [type, { surfaces: Object.keys(PAGE_FILES) }]));
+    const operations = Object.fromEntries(
+      workerOnly.map(type => [type, operationOf(entries[type], { payload: v.any(), result: v.any() })]),
+    );
     /** @type {string[]} */
     const ran = [];
     const handlers = Object.fromEntries(
@@ -457,7 +466,12 @@ describe('the worker\'s router (#13, "Topology")', () => {
     for (const surface of /** @type {PageSurface[]} */ (Object.keys(PAGE_FILES))) {
       const fake = createChromeFake();
       fake.worker.install(chrome => {
-        installWorkerRouter({ runtime: chrome.runtime, handlers: /** @type {any} */ (handlers) });
+        installWorkerRouter({
+          runtime: chrome.runtime,
+          handlers: /** @type {any} */ (handlers),
+          rows: /** @type {any} */ (rows),
+          operations,
+        });
       });
       const port = fake.page(surface).chrome.runtime.connect({ name: PORT_NAME });
       /** @type {Array<Record<string, any>>} */
@@ -479,7 +493,48 @@ describe('the worker\'s router (#13, "Topology")', () => {
     assert.deepEqual(ran, []);
   });
 
-  it("builds its router's policy on the shared catalog alone, which a page's grants come from once slice 4 serves commands over the port (the catalog split's sixth rule)", () => {
+  it('serves an operation its root passes beyond the shared catalog to the pages its row takes, and refuses the others', async () => {
+    // A query no catalog of the router's lists, with schemas that take anything, from Popup alone
+    const entry = /** @type {any} */ ({
+      ...WORKER_ONLY_QUERIES.findTombstones,
+      type: 'test.echo',
+      surfaces: ['popup'],
+    });
+    /** @type {string[]} */
+    const ran = [];
+    for (const surface of /** @type {PageSurface[]} */ (['popup', 'sidepanel'])) {
+      const fake = createChromeFake();
+      fake.worker.install(chrome => {
+        installWorkerRouter({
+          runtime: chrome.runtime,
+          handlers: /** @type {any} */ ({
+            'test.echo': async () => {
+              ran.push(surface);
+              return { kind: 'ready', asOf: 0, data: { echoed: true } };
+            },
+          }),
+          operations: { 'test.echo': operationOf(entry, { payload: v.any(), result: v.any() }) },
+          rows: { 'test.echo': { surfaces: ['popup'] } },
+        });
+      });
+      const port = fake.page(surface).chrome.runtime.connect({ name: PORT_NAME });
+      /** @type {Array<Record<string, any>>} */
+      const frames = [];
+      port.onMessage.addListener((/** @type {string} */ text) => {
+        frames.push(/** @type {Record<string, any>} */ (decode(text)));
+      });
+      port.postMessage(encode(hello(surface, `${surface}-1`)));
+      port.postMessage(encode(request('r1', { type: 'test.echo' }, soon())));
+      await settle();
+      await settle();
+      const answer = /** @type {Record<string, any>} */ (frames.find(frame => frame.requestId === 'r1'));
+      if (surface === 'popup') assert.deepEqual([answer.frame, answer.result.kind], ['response', 'ready'], surface);
+      else assert.deepEqual([answer.frame, answer.code], ['error', 'forbidden-for-surface'], surface);
+    }
+    assert.deepEqual(ran, ['popup']);
+  });
+
+  it("builds its router's policy on the shared catalog, and on its root's rows for no type only the worker runs, which a page's grants come from once slice 4 serves commands over the port (the catalog split's sixth rule)", () => {
     const file = path.join(import.meta.dirname, '..', '..', 'js', 'kernel', 'composition', 'background.js');
     const source = ts.createSourceFile(
       file,
@@ -509,8 +564,10 @@ describe('the worker\'s router (#13, "Topology")', () => {
       ts.forEachChild(node, walk);
     };
     walk(source);
-    // The baseline policy with no catalog given is the shared catalog's (ports/policy.js)
-    assert.deepEqual(policies, ['createBaselinePolicy()']);
+    // The baseline policy with no catalog given is the shared catalog's (ports/policy.js), and the
+    // rows js/background.js passes beyond it are the status pages' trust.summary (#20 slice 4c),
+    // never one for a type only the worker runs
+    assert.deepEqual(policies, ['createBaselinePolicy(undefined, { rows: pageRows(rows) })']);
   });
 
   it("never throws, where the runtime can't take its listener, and reports why", () => {
