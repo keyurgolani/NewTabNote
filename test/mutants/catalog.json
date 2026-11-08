@@ -840,6 +840,96 @@
       "replace": "  createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], {\n    entityTypes: [],\n  }),\n",
       "test": "test/kernel/catalog.test.mjs",
       "name": "gives an import and an automatic backup the 120 s deadline startup maintenance has, and every other page command 30 s (#35 slice 4d, N7, R27)"
+    },
+    {
+      "id": "newtab-writes-on-page-kernel",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's commands, an editor's save among them, go to the worker over the port and commit there, not on the page's kernel.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "    /** @type {Promise<Outcome | BulkOutcome>} */ (client.execute(command)).then(outcome => {\n",
+      "replace": "    /** @type {Promise<Outcome | BulkOutcome>} */ (reads.execute(command)).then(outcome => {\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends an editor's save, a 2 MiB file block's among them, and a pop-out editor's, to the worker as newtab, journaled first, on a ready welcome, and its note list reads the note again (R1)"
+    },
+    {
+      "id": "newtab-hello-as-popup",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's client says hello as newtab, so the worker's router runs its commands as the new tab's.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "    surface: 'newtab',\n",
+      "replace": "    surface: 'popup',\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends an editor's save, a 2 MiB file block's among them, and a pop-out editor's, to the worker as newtab, journaled first, on a ready welcome, and its note list reads the note again (R1)"
+    },
+    {
+      "id": "newtab-reply-not-published",
+      "behavior": "#35 port commands",
+      "protects": "Each committed reply from the worker feeds the new tab's commit feed, so its note list reads the note again.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "      published(command, outcome);\n",
+      "replace": "",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends an editor's save, a 2 MiB file block's among them, and a pop-out editor's, to the worker as newtab, journaled first, on a ready welcome, and its note list reads the note again (R1)"
+    },
+    {
+      "id": "newtab-send-left-out",
+      "behavior": "#35 port commands",
+      "protects": "Every command the worker serves the new tab is in its send lookup, so none is refused before it goes.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "const KEPT = Object.freeze(['saveWorkspaceSession', 'runStartupMaintenance']);\n",
+      "replace": "const KEPT = Object.freeze(['saveWorkspaceSession', 'runStartupMaintenance', 'setPinned']);\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends each of the 46 commands the worker serves the new tab as newtab, and commits its session in the page, with no frame (R2)"
+    },
+    {
+      "id": "newtab-journal-own-session",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's journal holds its owner lock and writes its entries under the session its hello names, so the worker's drain waits on this page.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "  const journal = startPageJournal(sender, client.sessionId, 'newtab', {\n",
+      "replace": "  const journal = startPageJournal(sender, randomIds.next(), 'newtab', {\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "names the journal's owner lock and each entry for the session its hello says (rule 3, R8)"
+    },
+    {
+      "id": "newtab-sender-without-ledger",
+      "behavior": "#35 port commands",
+      "protects": "A command whose reply was lost on the way back from the worker resolves by its key, from the ledger the new tab's reader reads.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "    ...(ledger ? { ledger } : {}),\n",
+      "replace": "",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "resolves a restore whose reply was lost by its key, from the ledger the reader reads (rule 3, R9)"
+    },
+    {
+      "id": "newtab-connects-at-start",
+      "behavior": "#35 port commands",
+      "protects": "The new tab opens no port to the worker before its first command, though its send chunk loads at idle.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "  const client = newTabSender({ runtime, extensionVersion, ledger });\n",
+      "replace": "  const client = newTabSender({ runtime, extensionVersion, ledger });\n  client.retry();\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "opens no port before its first command, though its first read loads the send chunk at idle (Q6 a, G1)"
+    },
+    {
+      "id": "newtab-sends-queries",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's send lookup holds commands alone, so its reads stay on its reader.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "import { COMMANDS } from '../core/contracts/commands.js';\n",
+      "replace": "import { COMMANDS as COMMAND_ENTRIES } from '../core/contracts/commands.js';\nimport { QUERIES } from '../core/contracts/queries.js';\n\nconst COMMANDS = Object.freeze({ ...COMMAND_ENTRIES, ...QUERIES });\n",
+      "test": "test/kernel/handlers.test.mjs",
+      "name": "the new tab's sends to the worker hold commands alone, so its reads stay on its reader (#35 slice 4d, G3)"
+    },
+    {
+      "id": "newtab-send-result-schema",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's send lookup checks each answer against the worker's result schema for its command, a bulk action's against the bulk one.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "result: entry.bulk ? bulkResultSchema : outcomeSchema",
+      "replace": "result: outcomeSchema",
+      "test": "test/kernel/handlers.test.mjs",
+      "name": "the new tab's send lookup holds, for each command the worker's lookup holds for the new tab, the catalog's entry and the worker's result schema, and no payload schema (#35 slice 4d, S4, R23)"
     }
   ]
 }

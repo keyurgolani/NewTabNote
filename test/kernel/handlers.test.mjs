@@ -454,6 +454,14 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     }
   });
 
+  it("the new tab's sends to the worker hold commands alone, so its reads stay on its reader (#35 slice 4d, G3)", async () => {
+    const { NEWTAB_SENDS } = await import('../../js/kernel/composition/newtab-send-chunk.js');
+    assert.deepEqual(
+      [...WORKER_QUERY_TYPES].filter(type => NEWTAB_SENDS(type)),
+      [],
+    );
+  });
+
   it('the scan reads a send wherever its object is built, and says what it cannot read', () => {
     const page = [
       "const command = { type: 'createNote', commandId: 'c1' };",
