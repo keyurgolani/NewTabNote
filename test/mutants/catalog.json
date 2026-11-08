@@ -1060,6 +1060,16 @@
       "replace": "import { createIndexedDbAdapter as createIndexedDbReader } from '../adapters/indexeddb/adapter.js';\n",
       "test": "test/kernel/one-committer.test.mjs",
       "name": "reaches #17's reader from the new tab's start, with its untilMoved row gone: no writer but recovery-points.js, which its reads row names, and no write but the reader's open, which the list reads on the new tab too (#35 slice 4d, R12)"
+    },
+    {
+      "id": "newtab-send-chunk-preloaded",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's send chunk preloads nothing, so #13's client and Valibot load only at idle or at its first command.",
+      "file": "scripts/build/vite-config.js",
+      "find": "  /(?:^|\\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk|sidepanel-send-chunk|newtab-send-chunk)-[A-Za-z0-9_-]+\\.js$/;\n",
+      "replace": "  /(?:^|\\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk|sidepanel-send-chunk)-[A-Za-z0-9_-]+\\.js$/;\n",
+      "test": "test/bundler.test.js",
+      "name": "preloads nothing beside close-drafts-applier, which the pages import on a start that finds a draft, or close-drafts-chunk under it, or beside journal-chunk, which they import on their first journaled command or at idle, or beside Side Panel's or the new tab's send chunk, which each imports at its first command, the new tab's at idle too, and every other import's own list (#33, the lead's trim 2; #35 slices 3b, 4c and 4d; #6)"
     }
   ]
 }

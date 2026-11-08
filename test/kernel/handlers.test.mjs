@@ -630,7 +630,8 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       'js/kernel/core/domain/close-draft.js',
       'js/kernel/core/domain/recovered-note.js',
     ]);
-    // And the new tab still loads all five, at its first apply (close-drafts-on-demand.js)
+    // And the new tab still loads all five, for its start's apply, which reads the drafts and
+    // sends each to the worker (close-drafts-applier.js)
     const newtab = pageModules(['js/entries/newtab.js']).map(file => path.relative(ROOT, file));
     assert.equal(newtab.filter(file => APPLIER_MODULES.test(file)).length, 5);
   });

@@ -181,7 +181,7 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     assert.equal(pages.build.modulePreload.polyfill, false);
   });
 
-  it("preloads nothing beside close-drafts-applier, which the pages import on a start that finds a draft, or close-drafts-chunk under it, or beside journal-chunk, which they import on their first journaled command or at idle, or beside Side Panel's send chunk, which it imports at its first command, and every other import's own list (#33, the lead's trim 2; #35 slices 3b and 4c; #6)", () => {
+  it("preloads nothing beside close-drafts-applier, which the pages import on a start that finds a draft, or close-drafts-chunk under it, or beside journal-chunk, which they import on their first journaled command or at idle, or beside Side Panel's or the new tab's send chunk, which each imports at its first command, the new tab's at idle too, and every other import's own list (#33, the lead's trim 2; #35 slices 3b, 4c and 4d; #6)", () => {
     const { resolveDependencies } = config.pagesConfig(passOptions()).build.modulePreload;
     const deps = ['assets/close-drafts-BkxcNLcj.js', 'assets/checks-RYHEq65f.js', 'assets/host-Bn7ueUNG.js'];
     assert.deepEqual(
@@ -189,10 +189,15 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
       [],
       "Side Panel's send chunk",
     );
+    assert.deepEqual(
+      resolveDependencies('assets/newtab-send-chunk-Kp2wR7sN.js', [...deps], { hostId: 'assets/workspace-6rz5AjPO.js', hostType: 'js' }),
+      [],
+      "the new tab's send chunk",
+    );
     for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/workspace-6rz5AjPO.js']) {
       assert.deepEqual(resolveDependencies('assets/close-drafts-applier-C1e7RqXa.js', [...deps], { hostId, hostType: 'js' }), [], hostId);
     }
-    for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/close-drafts-on-demand-q82KhsV5.js']) {
+    for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/close-drafts-applier-C1e7RqXa.js']) {
       assert.deepEqual(resolveDependencies('assets/close-drafts-chunk-B9pzC2hb.js', [...deps], { hostId, hostType: 'js' }), [], hostId);
     }
     for (const hostId of ['assets/popup-P0aul8Io.js', 'assets/workspace-6rz5AjPO.js']) {
