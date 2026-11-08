@@ -500,4 +500,97 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       ["NewTabNote can't confirm your notes are saving", [], ['credentials']],
     );
   });
+
+  /**
+   * The row of `providerId`, whose check passed, holding a finding of its own, which its check
+   * covers, after `also`
+   * @param {string} providerId
+   * @param {string} group
+   * @param {string} faultCode
+   * @param {string} severity
+   * @param {string[]} affected
+   * @param {any[]} [also]
+   */
+  const findingOver = (providerId, group, faultCode, severity, affected, also = []) => {
+    const finding = /** @type {any} */ ({
+      ...START_FAILED,
+      id: '00000000-0000-4000-8000-0000000000e8',
+      ref: '0000e8',
+      key: `${providerId}/${faultCode}`,
+      providerId,
+      faultCode,
+      severity,
+      affected,
+      preserved: [],
+    });
+    const own = REPORT.providers.some((/** @type {any} */ item) => item.providerId === providerId);
+    const providers = own ? REPORT.providers : [...REPORT.providers, entry(providerId, group)];
+    const rows = trustSections(/** @type {any} */ ({ ...REPORT, providers, incidents: [...also, finding] }), {
+      now: AT,
+    }).flatMap(section => section.rows);
+    return /** @type {any} */ (rows.find(row => row.id === providerId));
+  };
+  /** @param {any} item */
+  const shownEvidence = item => [item.title, item.statusText, item.tone, Boolean(item.problem)];
+
+  it("leads a row's evidence with every problem that makes it worse than its check found, one its own check covers as well as one no check here covers: a page capture that wasn't saved, after the worker's failed start, over a write check that passed (round 4b)", () => {
+    const earlier = { ...START_FAILED, firstSeenAt: AT - 120_000, lastSeenAt: AT - 60_000 };
+    const capture = findingOver('capture', 'storage', 'capture-failed', 'capture-risk', ['capture'], [earlier]);
+    assert.deepEqual(
+      [capture.evidence.map(shownEvidence), capture.evidence[0].facts.map((/** @type {any} */ fact) => fact.label)],
+      [
+        [
+          ["A page capture wasn't saved", 'Not working', 'failed', true],
+          ["The background worker couldn't start", 'Not working', 'failed', true],
+          ['Saving new notes', 'Verified', 'ok', false],
+        ],
+        [PAGE.firstSeen, PAGE.lastSeen, PAGE.timesSeen, PAGE.ref],
+      ],
+    );
+  });
+
+  it("gives Search, its check passed, a degraded finding's Partly working, and leads its evidence with the finding (round 4b)", () => {
+    const index = findingOver('index', 'indexing', 'indexer-start-failed', 'degraded', []);
+    assert.deepEqual(
+      [index.status, index.statusText, index.evidence.map(shownEvidence)],
+      [
+        'degraded',
+        'Partly working',
+        [
+          ["Search indexing didn't start", 'Partly working', 'partial', true],
+          ['Search', 'Verified', 'ok', false],
+        ],
+      ],
+    );
+  });
+
+  it("gives Backups, its check passed, a data-risk finding's Needs action, and leads its evidence with the finding (round 4b)", () => {
+    const backup = findingOver('backup', 'backup', 'auto-backup-failed', 'data-risk', []);
+    assert.deepEqual(
+      [backup.status, backup.statusText, backup.evidence.map(shownEvidence)],
+      [
+        'action-required',
+        'Needs action',
+        [
+          ["An automatic backup didn't finish", 'Needs action', 'action', true],
+          ['Backups', 'Verified', 'ok', false],
+        ],
+      ],
+    );
+  });
+
+  it("gives Saving new notes, its check passed, a capture-risk finding's Not working, and leads its evidence with the finding (round 4b)", () => {
+    const capture = findingOver('capture', 'storage', 'capture-failed', 'capture-risk', ['capture']);
+    assert.deepEqual(
+      [capture.status, capture.statusText, capture.evidence.map(shownEvidence)],
+      [
+        'failed',
+        'Not working',
+        [
+          ["A page capture wasn't saved", 'Not working', 'failed', true],
+          ['Saving new notes', 'Verified', 'ok', false],
+        ],
+      ],
+    );
+  });
 });
