@@ -122,6 +122,10 @@ export const EVENT_CODES = Object.freeze({
   // lead's ruling): the cut heals itself, since a journaled command replays at the next drain, and
   // system.coordinatorHealth's `running` and `cutTurns` show it, so nothing asks the user to act.
   'coordinator.turn-stuck': Object.freeze({ fields: Object.freeze(['commandType', 'ageMs']) }),
+  // #247: a cut turn's command that committed anyway, since IndexedDB had begun its commit before
+  // the cut, by its type and its turn's age when it landed. No incident (the lead's ruling): the
+  // journal and the cut's own event say what happened.
+  'coordinator.turn-landed-late': Object.freeze({ fields: Object.freeze(['commandType', 'ageMs']) }),
   // The successes at those sites, each resolving its site's incident
   'capture.committed': Object.freeze({ fields: Object.freeze(['surface', 'commandId']), resolves: 'capture.failed' }),
   'backup.auto-succeeded': Object.freeze({ fields: Object.freeze([]), resolves: 'backup.auto-failed' }),
