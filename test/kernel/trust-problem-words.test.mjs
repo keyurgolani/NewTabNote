@@ -613,6 +613,41 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     );
   });
 
+  it("leaves a row's own check to speak for it when its finding is no worse than what the check found, and still leads with a problem no check here covers: Backups' check and finding both Needs action, and Saving new notes' check Not working beside the worker's failed start (round 4b)", () => {
+    /** A provider's entry whose check found `status` */
+    const found = (/** @type {string} */ providerId, /** @type {string} */ group, /** @type {string} */ status) =>
+      entry(providerId, group, { status, receipt: { ...entry(providerId, group).receipt, status } });
+    const backupFailed = /** @type {any} */ ({
+      ...START_FAILED,
+      id: '00000000-0000-4000-8000-0000000000e9',
+      ref: '0000e9',
+      key: 'backup/auto-backup-failed',
+      providerId: 'backup',
+      faultCode: 'auto-backup-failed',
+      severity: 'data-risk',
+      affected: [],
+      preserved: [],
+    });
+    const others = REPORT.providers.filter((/** @type {any} */ item) => item.providerId !== 'capture');
+    const report = /** @type {any} */ ({
+      ...REPORT,
+      providers: [found('capture', 'storage', 'failed'), ...others, found('backup', 'backup', 'action-required')],
+      incidents: [START_FAILED, backupFailed],
+    });
+    const rows = trustSections(report, { now: AT }).flatMap(section => section.rows);
+    const row = (/** @type {string} */ id) => /** @type {any} */ (rows.find(item => item.id === id));
+    assert.deepEqual(
+      [row('backup').evidence.map(shownEvidence), row('capture').evidence.map(shownEvidence)],
+      [
+        [['Backups', 'Needs action', 'action', false]],
+        [
+          ["The background worker couldn't start", 'Not working', 'failed', true],
+          ['Saving new notes', 'Not working', 'failed', false],
+        ],
+      ],
+    );
+  });
+
   it("leads a row's evidence with a finding only where a check has read the row, besides the worker's own problem: Recovery points and Local model, unchecked, keep their finding's status and no evidence (round 4b)", () => {
     const LOAD_FAILED = /** @type {any} */ ({
       ...START_FAILED,
