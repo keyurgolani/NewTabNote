@@ -19,6 +19,9 @@
  * nothing about bounds or keys beyond the layout below, which js/trust/core/memory-store.js
  * repeats and test/kernel/trust-store.test.mjs holds equal. The service worker's and the new
  * tab's failure events (js/kernel/composition/trust.js) open it on their first failure.
+ *
+ * readOnlyTrustStore is it for a context that only reads it, as the worker's status read does
+ * (#20 slice 4c): it makes no database where there's none yet, and takes no write.
  */
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
@@ -97,10 +100,12 @@ function createStores(db, upgrade) {
  *   indexedDB: IDBFactory,
  *   keyRange?: {upperBound(bound: unknown, open?: boolean): IDBKeyRange},
  *   openWithinMs?: number,
- * }} options - `keyRange` is IDBKeyRange unless given
+ *   create?: boolean,
+ * }} options - `keyRange` is IDBKeyRange unless given. `create: false`: an open that would make
+ *   the database, or its stores, aborts that upgrade instead, so it makes nothing and fails
  * @returns {TrustStore & {state: () => string}}
  */
-export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_OPEN_WITHIN_MS }) {
+export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_OPEN_WITHIN_MS, create = true }) {
   // `lost`: Chrome closed the connection (onclose, or onversionchange for a deleted database),
   // which the next open() connects again; `gone`: close() was called, which nothing reopens
   /** @type {'closed' | 'opening' | 'open' | 'lost' | 'gone' | 'failed'} */
@@ -137,7 +142,10 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
         fail(openFailureOf(error));
         return;
       }
-      request.onupgradeneeded = () => createStores(request.result, request.transaction);
+      request.onupgradeneeded = () => {
+        if (create) createStores(request.result, request.transaction);
+        else if (request.transaction) request.transaction.abort();
+      };
       request.onsuccess = () => {
         const database = request.result;
         if (state === 'gone') {
@@ -295,4 +303,78 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
 
     state: () => state,
   };
+}
+
+/**
+ * Whether NewTabNoteTrust exists yet, by indexedDB.databases(): one listed at this build's
+ * version or past it. One listed below it, as Chrome may list it once an open that would have
+ * made it aborted its upgrade, is none. True where the factory can't say, so a reader asks the
+ * database itself then, which readOnlyTrustStore's makes no database for.
+ * @param {IDBFactory} indexedDB
+ * @returns {Promise<boolean>}
+ */
+export async function trustDatabaseExists(indexedDB) {
+  try {
+    if (typeof indexedDB.databases !== 'function') return true;
+    return (await indexedDB.databases()).some(
+      database => database.name === TRUST_DB_NAME && /** @type {number} */ (database.version) >= TRUST_DB_VERSION,
+    );
+  } catch {
+    return true;
+  }
+}
+
+/** @param {...unknown} _ */
+const refused = (..._) => {
+  throw new UnavailableError('adapter', 'write-in-readonly-transaction', false);
+};
+
+/** What a read finds where there's no NewTabNoteTrust yet: every store empty */
+const NO_DATABASE = /** @type {TrustTx} */ (
+  Object.freeze({
+    get: async () => undefined,
+    getAll: async () => [],
+    getAllByIndex: async () => [],
+    count: async () => 0,
+    keys: async () => [],
+    put: refused,
+    append: async () => refused(),
+    delete: refused,
+  })
+);
+
+/**
+ * NewTabNoteTrust for a context that only reads it (#20 slice 4c, the worker's status read). A
+ * read where there's no database yet finds every store empty and makes none, the database it
+ * opens, once one is there, never makes one or its stores (`create: false`), and a write is
+ * refused before any transaction begins.
+ * @param {{
+ *   indexedDB: IDBFactory,
+ *   keyRange?: {upperBound(bound: unknown, open?: boolean): IDBKeyRange},
+ *   openWithinMs?: number,
+ * }} options
+ * @returns {TrustStore}
+ */
+export function readOnlyTrustStore({ indexedDB, keyRange, openWithinMs }) {
+  const database = createTrustDatabase({ indexedDB, keyRange, openWithinMs, create: false });
+  return Object.freeze({
+    async open() {
+      if (await trustDatabaseExists(indexedDB)) await database.open();
+    },
+    /**
+     * @template T
+     * @param {readonly TrustStoreName[]} stores
+     * @param {'readonly' | 'readwrite'} mode
+     * @param {(tx: TrustTx) => Promise<T>} unit
+     * @returns {Promise<T>}
+     */
+    async run(stores, mode, unit) {
+      if (mode !== 'readonly') return refused();
+      if (!(await trustDatabaseExists(indexedDB))) return unit(NO_DATABASE);
+      // One made since the last open, by a context that writes it
+      if (database.state() !== 'open') await database.open();
+      return database.run(stores, mode, unit);
+    },
+    close: () => database.close(),
+  });
 }

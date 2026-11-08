@@ -259,14 +259,26 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     'js/trust/core/vocabulary.js',
   ];
 
-  it('is reached statically only from the service worker, through its failure events, and from no page', () => {
+  /**
+   * What the worker loads: the failure events' graph, and the status read it answers the status
+   * pages from its records (#20 slice 4c, composition/trust-status-read.js)
+   */
+  const WORKER_GRAPH = [
+    ...FAILURE_EVENTS_GRAPH,
+    'js/trust/core/providers/rows.js',
+    'js/trust/core/status-message.js',
+    'js/trust/core/summary.js',
+    'js/trust/core/updates.js',
+  ].sort();
+
+  it("is reached statically only from the service worker, through its failure events and the status pages' status read, and from no page", () => {
     const pages = ['offscreen.html'].filter(page => fs.existsSync(path.join(ROOT, page)));
     const graph = readScriptGraph(ROOT, { pages });
     const pageLoaded = [...[...graph.pageModules.values()].flat().map(({ file }) => file), ...graph.classic];
     assert.ok(pageLoaded.length > 20, 'the script graph found too little to mean anything');
     assert.ok(graph.pageModules.has('newtab.html') && graph.pageModules.has('sidepanel.html'));
     assert.deepEqual(pageLoaded.filter(isTrust), []);
-    assert.deepEqual([...graph.workerFiles].filter(isTrust).sort(), FAILURE_EVENTS_GRAPH);
+    assert.deepEqual([...graph.workerFiles].filter(isTrust).sort(), WORKER_GRAPH);
     const events = path.join(ROOT, 'js', 'kernel', 'composition', 'trust.js');
     assert.deepEqual(
       [...importGraph(events)]
@@ -303,7 +315,7 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     assert.deepEqual([...graph.classic].filter(isTrust), []);
   });
 
-  it('reaches the new tab only through import(), after its first failure', () => {
+  it('reaches the new tab only through import(): after its first failure, and as its status lines once an answer could put one in the sidebar or Settings opens (#20 slice 4c)', () => {
     const graph = readScriptGraph(ROOT, { pages: [] });
     // What the tab starts with: the boot root's own graph, and the workspace chunk's, which the
     // root loads at once through the loader (#27 slice 3)
@@ -314,16 +326,21 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     assert.ok(newtab.includes('js/kernel/composition/lazy-failure-events.js'));
     assert.deepEqual(newtab.filter(isTrust), []);
     assert.ok(!newtab.includes('js/kernel/composition/trust.js'));
+    // Nor does it hold the status read's ask, which App loads first in its deferred work (#20 slice 4c)
+    assert.ok(!newtab.includes('js/kernel/composition/trust-status-ask.js'));
+    assert.ok(!newtab.includes('js/kernel/composition/trust-status.js'));
     // The tab's import()s: the root's of the workspace chunk, the loader's retry, the failure
     // events' own, of ./trust.js, the close-time drafts' two: the start's of
     // close-drafts-applier.js, when localStorage gives it work, and applyCloseDraft's wrapper's
     // of close-drafts-chunk.js, at first use (#33, option 1), the root's of the journal's chunk,
-    // on the first journaled command or at idle (#35 slice 3b), and App's of the block menus'
-    // keys, at a menu's first open (#14 slice 4)
+    // on the first journaled command or at idle (#35 slice 3b), and App's two: the status read's
+    // ask, first in its deferred work (#20 slice 4c), and the block menus' keys, at a menu's first
+    // open (#14 slice 4)
     const dynamic = dynamicImportsIn(newtab.map(file => path.join(ROOT, file)))
       .map(at => path.relative(ROOT, at).split(path.sep).join('/').replace(/:\d+:\d+$/, ''))
       .sort();
     assert.deepEqual(dynamic, [
+      'js/app.js',
       'js/app.js',
       'js/entries/newtab.js',
       'js/kernel/composition/lazy-failure-events.js',
@@ -342,11 +359,37 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
       ['js/kernel/core/application/close-drafts-on-demand.js', ['./close-drafts-chunk.js']],
       // The forget beside the applier loads the journal's chunk, for a draft that names its pane (#6)
       ['js/kernel/composition/close-drafts-applier.js', ['./journal-chunk.js']],
-      ['js/app.js', ['./ui/menu-keys.js']],
+      ['js/app.js', ['./kernel/composition/trust-status-ask.js', './ui/menu-keys.js']],
+      // The ask loads the status lines' chunk, once an answer could put a line in the sidebar or
+      // Settings opens
+      ['js/kernel/composition/trust-status-ask.js', ['./trust-status.js']],
     ])) {
       const loads = loadsOf(fs.readFileSync(path.join(ROOT, file), 'utf8')).dynamicLoads.map(load => load.specifier);
       assert.deepEqual(loads, specifiers, file);
     }
+    // The ask's chunk is the ask alone: its message, its wait and its check of the answer, with no
+    // trust code, so a tab with nothing to show loads no more (#20 slice 4c)
+    const ask = path.join(ROOT, 'js', 'kernel', 'composition', 'trust-status-ask.js');
+    assert.deepEqual(
+      [...importGraph(ask)].map(file => path.relative(ROOT, file).split(path.sep).join('/')),
+      ['js/kernel/composition/trust-status-ask.js'],
+    );
+    // The status lines' chunk holds the full check of the status read's answer, and the lines'
+    // words and shapes, and nothing else: no records, NewTabNoteTrust adapter, use case, catalog
+    // or check, since the worker reads the records, and neither Valibot nor #13's client, since
+    // the read is one of the worker's own messages (#20 slice 4c)
+    const status = reachGraph([path.join(ROOT, 'js', 'kernel', 'composition', 'trust-status.js')]);
+    assert.deepEqual([...status.modules].map(file => path.relative(ROOT, file).split(path.sep).join('/')).sort(), [
+      'js/kernel/composition/trust-status.js',
+      'js/trust/core/codes.js',
+      'js/trust/core/status-message.js',
+      'js/trust/core/vocabulary.js',
+      'js/trust/ui/glyphs.js',
+      'js/trust/ui/status-copy.js',
+      'js/trust/ui/status.js',
+      'js/trust/ui/when.js',
+    ]);
+    assert.deepEqual(status.computed, []);
     // The block menus' keys import nothing, so their chunk is that file alone
     const menuKeys = reachGraph([path.join(ROOT, 'js', 'ui', 'menu-keys.js')]);
     assert.deepEqual([...menuKeys.modules].map(file => path.relative(ROOT, file).split(path.sep).join('/')), ['js/ui/menu-keys.js']);

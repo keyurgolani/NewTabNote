@@ -76,9 +76,13 @@ const WORKER_ONLY_MODULES = Object.freeze([
 ]);
 /**
  * These load only at their first use, through the page's loader, so no page's start holds one: the
- * block menus' roles and keys, at a menu's first open (#14 slice 4)
+ * block menus' roles and keys, at a menu's first open (#14 slice 4), and the new tab's status read's
+ * ask, first in its deferred work, and its status lines, once an answer could put a line in the
+ * sidebar or Settings opens (#20 slice 4c)
  */
 const LAZY_ONLY_MODULES = Object.freeze([
+  'js/kernel/composition/trust-status-ask.js',
+  'js/kernel/composition/trust-status.js',
   'js/ui/menu-keys.js',
 ]);
 

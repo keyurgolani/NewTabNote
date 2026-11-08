@@ -369,8 +369,11 @@ export function mountRecoveryPage({
   /** @param {Row} row */
   function evidenceBody(row) {
     const parts = [];
-    if (row.id === 'platform') {
-      for (const evidence of row.evidence) {
+    // The folded row's parts, and a row a problem leads: each by its title and status, and under
+    // "Also checked" the row's checks that passed, which a problem that leads sets apart (round 5)
+    if (row.id === 'platform' || row.evidence.some(evidence => evidence.problem)) {
+      for (const [index, evidence] of row.evidence.entries()) {
+        if (evidence.also && !(index > 0 && row.evidence[index - 1].also)) parts.push(h('p', { class: 'trust-also' }, PAGE.alsoChecked));
         parts.push(
           h(
             'div',
@@ -452,6 +455,10 @@ export function mountRecoveryPage({
       h('div', { class: 'trust-row-head' }, label, h('p', { class: 'trust-row-status-line' }, status)),
       row.text ? h('p', { class: 'trust-row-text' }, row.text) : null,
       row.attention ? keeps(row.stillWorks, row.notWorking, 'trust-row-keeps') : null,
+      // Each problem it's counted for that its line doesn't name, as "Not working:" names what stopped (round 5)
+      row.attention
+        ? row.problemLines.map(line => h('p', { class: 'trust-row-keeps' }, h('strong', {}, `${line.status}:`), ` ${line.what}.`))
+        : null,
       row.destinations ? destinations(row) : null,
       h(
         'div',
@@ -479,7 +486,7 @@ export function mountRecoveryPage({
         ? h(
             'p',
             { class: 'trust-attention-line' },
-            attentionLine(model.attention),
+            attentionLine(model.attention, model.openRecovery),
           )
         : null;
     return [
@@ -507,11 +514,13 @@ export function mountRecoveryPage({
   }
 
   /**
-   * "2 things need your attention: Saved keys and Permissions.", each name a link to its row
+   * "2 things need your attention: Saved keys and Permissions.", each name a link to its row,
+   * and "other" under a headline a problem leads (round 4)
    * @param {Array<{id: string, label: string}>} rows
+   * @param {boolean} other
    */
-  function attentionLine(rows) {
-    const text = attentionText(rows);
+  function attentionLine(rows, other) {
+    const text = attentionText(rows, other);
     const parts = [];
     let rest = text;
     for (const row of rows) {

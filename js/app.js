@@ -153,6 +153,8 @@ class App {
     this.startIndexer = startIndexer;
     this.loader = loader;
     this.preUpdateCopy = preUpdateCopy;
+    // The status read's ask, once its chunk is loading (askTrustStatus, #20 slice 4c)
+    this.trustStatusAsk = null;
     this.editor = null;
     this.secondaryEditor = null;
     // Removals whose panes are still moving, which hold the empty state (holdEmptyState)
@@ -260,6 +262,52 @@ class App {
   libraryLoader() {
     const { loader } = this;
     return loader ? (name) => loader.loadLibrary(name) : null;
+  }
+
+  /**
+   * The new tab's status lines (#20 slice 4c): the status read's ask, a chunk the page loader
+   * loads once (js/kernel/composition/trust-status-ask.js), first in the deferred work. It asks
+   * the worker, and loads the lines' own chunk only when the answer could put a line in the
+   * sidebar, or when Settings opens (settingsOpened). Without the loader nothing is asked or
+   * drawn, and an ask whose chunk didn't load loads again at the next call.
+   * @returns {Promise<any>} the ask, or null
+   */
+  askTrustStatus() {
+    const { loader } = this;
+    if (!loader) return Promise.resolve(null);
+    if (!this.trustStatusAsk) {
+      this.trustStatusAsk = loader
+        .loadChunk('trust-status-ask', () => import('./kernel/composition/trust-status-ask.js'))
+        .then((result) => {
+          if (result.status === 'loaded') return result.module.startStatusAsk({ loader });
+          this.trustStatusAsk = null;
+          return null;
+        })
+        .catch((error) => {
+          this.trustStatusAsk = null;
+          this.logger.error('App', 'The status lines did not start', error);
+          return null;
+        });
+    }
+    return this.trustStatusAsk;
+  }
+
+  /**
+   * What opening Settings sets off: the pre-update copy's section reads its state again (#17 PR
+   * 1b), and the status read's ask has the lines read for Settings' Trust Center lines, loading
+   * their chunk the first time (#20 slice 4c), which Settings doesn't wait for. An ask that throws
+   * goes to the log, and the section reads all the same.
+   * @returns {Promise<void>}
+   */
+  settingsOpened() {
+    try {
+      this.askTrustStatus()
+        .then((ask) => ask && ask.settingsOpened())
+        .catch((error) => this.logger.error('App', 'The status lines did not read', error));
+    } catch (error) {
+      this.logger.error('App', 'The status lines did not start', error);
+    }
+    return this.preUpdateCopySection ? this.preUpdateCopySection.refresh() : Promise.resolve();
   }
 
   /**
@@ -491,6 +539,12 @@ class App {
 
       // Defer non-critical initialization until after first render (Req 27.1)
       const deferWork = async () => {
+        // The status read's ask first, without holding up the rest, which goes on when it throws (#20 slice 4c)
+        try {
+          this.askTrustStatus();
+        } catch (error) {
+          this.logger.error('App', 'The status lines did not start', error);
+        }
         await this.initAnalyticsController();
         await this.initGraphView();
         await this.initSyncService();
@@ -908,7 +962,7 @@ class App {
       validateBackup: this.validateBackup,
       domRefs: this.domRefs,
       logger: this.logger,
-      onOpened: this.preUpdateCopySection ? () => this.preUpdateCopySection.refresh() : null,
+      onOpened: () => this.settingsOpened(),
       // Settings > AI shows the settings in effect each time it opens, with no request and no write (NTN-21)
       showAISettings: () => this.aiChatController.updateLLMSettingsUI(),
       // JSZip loads at the first Markdown export (#27 slice 3), and its section says when an

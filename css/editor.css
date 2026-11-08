@@ -41,6 +41,11 @@
   --spacing-xl: 24px;
   --spacing-2xl: 32px;
   --spacing-3xl: 48px;
+
+  /* The status lines' shapes (#20 slice 4c): sage where saving is checked, clay where something
+     needs the user, as recovery.html draws them */
+  --trust-ok: #526f69;
+  --trust-action: #604c34;
 }
 
 /* Accessibility: Global Focus Styles */
@@ -105,6 +110,9 @@
   --code-bg: #2a2a2a;
   --selection-bg: rgba(35, 131, 226, 0.25);
   --modal-bg: rgba(0, 0, 0, 0.6);
+  /* The status lines' shapes in the text's color, as recovery.html draws them dark until #16 */
+  --trust-ok: var(--text-primary);
+  --trust-action: var(--text-primary);
 }
 
 [data-font="serif"] {
@@ -1680,6 +1688,78 @@ a.setting-link {
   text-decoration: none;
 }
 
+/* The new tab's status lines (#20 slice 4c, js/kernel/composition/trust-status.js): the
+   sidebar's line just above its footer, and Settings' Trust Center lines over the section's lead.
+   Their hairline, hover and capture-risk tone share the sidebar's and the menus' declarations */
+.trust-sidebar-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 16px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+  text-wrap: balance;
+  flex-shrink: 0;
+}
+
+.trust-sidebar-go {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.trust-settings-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+/* A status shape: a 1rem box its SVG fills, in the labels' gray unless its tone says otherwise */
+.trust-glyph {
+  display: inline-flex;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-secondary);
+}
+
+.trust-settings-status .trust-glyph {
+  margin-top: 0.1875rem;
+}
+
+.trust-glyph svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* The shape where saving is checked, and where something needs the user */
+.trust-glyph.trust-tone-ok {
+  color: var(--trust-ok);
+}
+
+.trust-glyph.trust-tone-action {
+  color: var(--trust-action);
+}
+
+/* The page's ring sits outside the line, which the sidebar clips: it goes inside, as the block
+   menus' full-width items' does */
+.trust-sidebar-line:focus-visible {
+  outline-offset: -2px;
+}
+
+/* While notes are selected, the bulk bar owns the sidebar's bottom edge: the line keeps its space
+   and steps aside, out of the Tab order, until the selection ends */
+.sidebar:has(.sidebar-bulk-actions.visible) .trust-sidebar-line {
+  visibility: hidden;
+}
+
 /* API Key Security (Req 38) */
 .api-key-input-group {
   display: flex;
@@ -2904,9 +2984,14 @@ a.setting-link {
   align-items: center;
   gap: 4px;
   padding: 8px 12px;
-  border-top: 1px solid var(--border-color);
   margin-top: auto;
   flex-shrink: 0;
+}
+
+/* The footer's hairline, and the status line's just above it (#20 slice 4c) */
+.sidebar-footer,
+.trust-sidebar-line {
+  border-top: 1px solid var(--border-color);
 }
 
 .sidebar-footer-btn {
@@ -3043,7 +3128,8 @@ a.setting-link {
   position: relative;
 }
 
-.sidebar-note-item:hover {
+.sidebar-note-item:hover,
+.trust-sidebar-line:hover {
   background: var(--bg-hover);
 }
 
@@ -3218,7 +3304,9 @@ a.setting-link {
   background: var(--bg-hover);
 }
 
-.context-menu-item.danger {
+/* The danger tone: a menu item that deletes, and the status lines' shape at capture risk (#20 slice 4c) */
+.context-menu-item.danger,
+.trust-glyph.trust-tone-failed {
   color: var(--danger-color);
 }
 
@@ -5565,6 +5653,9 @@ kbd {
   font-weight: bold;
 }
 
+/* While nothing is selected the bar has slid below the sidebar's edge, and once it has, it's
+   hidden, so its buttons leave the Tab order and the accessibility tree: focus on them scrolled
+   the sidebar, which clips, with no way back by the wheel (#20 slice 4c) */
 .sidebar-bulk-actions {
   position: absolute;
   bottom: 0;
@@ -5577,12 +5668,15 @@ kbd {
   justify-content: space-between;
   align-items: center;
   z-index: 50;
+  visibility: hidden;
   transform: translateY(100%);
-  transition: transform 0.3s ease;
+  transition: transform 0.3s ease, visibility 0s linear 0.3s;
 }
 
 .sidebar-bulk-actions.visible {
+  visibility: visible;
   transform: translateY(0);
+  transition: transform 0.3s ease, visibility 0s;
 }
 
 .bulk-actions-count {

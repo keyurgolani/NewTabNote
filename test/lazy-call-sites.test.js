@@ -565,6 +565,88 @@ describe("the pop-out's <html>: the page's, while the pop-out is open (#198)", (
   });
 });
 
+describe("the new tab's status lines: the status read's ask, first in the deferred work (#20 slice 4c)", () => {
+  /** A loader whose chunks come back as `answers` say, in turn, with the names it was asked for */
+  const chunkLoader = (...answers) => {
+    const asked = [];
+    return {
+      ...loadingLoader({}),
+      asked,
+      loadChunk: async (name) => {
+        asked.push(name);
+        return answers.shift();
+      },
+    };
+  };
+  /** The ask's chunk, which counts its starts and its Settings, and the loader it was given */
+  const askChunk = () => {
+    const seen = { starts: 0, settings: 0, loader: null };
+    const module = {
+      startStatusAsk({ loader }) {
+        seen.starts += 1;
+        seen.loader = loader;
+        return { asked: Promise.resolve(), settingsOpened: async () => { seen.settings += 1; } };
+      },
+    };
+    return { seen, module };
+  };
+
+  it("App loads the ask's chunk through the loader once, with its literal import(), and starts it with the loader; a chunk that didn't load is loaded again at the next ask, and without the loader nothing is asked", async () => {
+    const { env, App } = await page();
+    const { seen, module } = askChunk();
+    const loader = chunkLoader(
+      { status: 'failed', reason: 'chunk-missing', retry: async () => ({}) },
+      { status: 'loaded', module },
+    );
+    const app = appOf(env, App, { loader });
+    assert.equal(await app.askTrustStatus(), null, "a chunk that didn't load starts nothing");
+    const ask = await app.askTrustStatus();
+    assert.ok(ask && seen.starts === 1 && seen.loader === loader, 'loaded at the next, and started with the loader');
+    assert.equal(await app.askTrustStatus(), ask, 'once');
+    assert.deepEqual(loader.asked, ['trust-status-ask', 'trust-status-ask']);
+    assert.equal(await appOf(env, App, {}).askTrustStatus(), null, 'without the loader, nothing');
+    assert.match(read('js/app.js'), /loader\n {8}\.loadChunk\('trust-status-ask', \(\) => import\('\.\/kernel\/composition\/trust-status-ask\.js'\)\)/);
+  });
+
+  it('the ask is the first of the deferred work, which goes on without waiting for it, and past it when it throws', () => {
+    assert.match(read('js/app.js'), /const deferWork = async \(\) => \{\n {8}\/\/ The status read's ask first, without holding up the rest, which goes on when it throws \(#20 slice 4c\)\n {8}try \{\n {10}this\.askTrustStatus\(\);\n {8}\} catch \(error\) \{\n {10}this\.logger\.error\('App', 'The status lines did not start', error\);\n {8}\}\n {8}await this\.initAnalyticsController\(\);/);
+  });
+
+  it("opening Settings reads the pre-update copy's section again when the ask throws, with nothing unhandled", async () => {
+    const { env, App } = await page();
+    // A loader whose loadChunk throws as it's called, as one without chunks would
+    const app = appOf(env, App, { loader: { ...loadingLoader({}), loadChunk: () => { throw new TypeError('no chunks here'); } } });
+    let refreshed = 0;
+    app.preUpdateCopySection = { refresh: async () => { refreshed += 1; } };
+    await noUnhandled(async () => {
+      await app.settingsOpened();
+    });
+    assert.equal(refreshed, 1);
+  });
+
+  it("opening Settings has the ask load the lines for Settings' Trust Center lines, without Settings waiting for them, and reads the pre-update copy's section again", async () => {
+    const { env, App } = await page();
+    const { seen, module } = askChunk();
+    const app = appOf(env, App, { loader: chunkLoader({ status: 'loaded', module }) });
+    let refreshed = 0;
+    app.preUpdateCopySection = { refresh: async () => { refreshed += 1; } };
+    await app.settingsOpened();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual([seen.starts, seen.settings, refreshed], [1, 1, 1]);
+    // With the ask's chunk still loading, Settings has opened all the same
+    let release;
+    const slow = appOf(env, App, { loader: { ...loadingLoader({}), loadChunk: () => new Promise((resolve) => { release = resolve; }) } });
+    let opened = false;
+    slow.settingsOpened().then(() => { opened = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(opened, true, "Settings doesn't wait for the ask");
+    release({ status: 'loaded', module });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual([seen.starts, seen.settings], [2, 2]);
+    assert.match(read('js/app.js'), /new SettingsController\(\{[^}]*\n {6}onOpened: \(\) => this\.settingsOpened\(\),\n/);
+  });
+});
+
 describe("the block menus' roles and keys: their chunk at a menu's first open (#14 slice 4)", () => {
   it("App's port loads the menu-keys chunk through the loader, with its literal import(), and is none without the loader", async () => {
     const { env, App } = await page();

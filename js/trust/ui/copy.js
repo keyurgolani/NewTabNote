@@ -6,6 +6,8 @@
  * The house style for a failure is "Failed to X: reason."
  */
 
+import { CAPTURE_CONSEQUENCE, GROUP, ROW_LABEL } from './status-copy.js';
+
 /** What a capability is called in "Still works:" and "Not working:" lines */
 export const CAPABILITY = Object.freeze({
   capture: 'saving new notes',
@@ -22,7 +24,10 @@ export const CAPABILITY = Object.freeze({
   'side-panel': 'the side panel',
 });
 
-/** Each row, in the user's words: its label, and what it is, shown when nothing else is */
+/**
+ * Each row, in the user's words: its label, and what it is, shown when nothing else is. The labels
+ * the status lines name too are status-copy.js's, so both pages read one list (round 2)
+ */
 export const PROVIDER = Object.freeze({
   capture: { label: 'Saving new notes', about: 'New notes, quick notes, and captured pages.' },
   storage: { label: 'Notes database', about: 'Everything you write, kept in this browser profile on this device.' },
@@ -31,14 +36,33 @@ export const PROVIDER = Object.freeze({
   sync: { label: 'Sync', about: 'Copies of your notes kept on a service you choose.' },
   credentials: { label: 'Saved keys', about: 'API keys and sync passwords NewTabNote keeps for you.' },
   permissions: { label: 'Permissions', about: 'What Chrome lets NewTabNote do, and every place it can connect to.' },
-  'ai-scope-grants': { label: 'AI access to notes', about: 'Which AI features may read which notes.' },
-  'remote-ai': { label: 'Cloud AI', about: 'An AI provider you set up, such as OpenAI or Anthropic.' },
-  'local-inference': { label: 'Local model', about: 'The model semantic search runs on this device.' },
+  'ai-scope-grants': { label: ROW_LABEL['ai-scope-grants'], about: 'Which AI features may read which notes.' },
+  'remote-ai': { label: ROW_LABEL['remote-ai'], about: 'An AI provider you set up, such as OpenAI or Anthropic.' },
+  'local-inference': { label: ROW_LABEL['local-inference'], about: 'The model semantic search runs on this device.' },
   index: { label: 'Search', about: 'What makes your notes searchable.' },
   platform: { label: "NewTabNote's own parts", about: 'Its background worker, built-in features, and block types.' },
-  messaging: { label: 'Background worker', about: "Passes saves and captures between NewTabNote's pages." },
+  // The worker's connections, which its router answers for whether or not its kernel was built,
+  // so not the part that saves (signed as round 5)
+  messaging: { label: 'Connections to the background worker', about: "Passes saves and captures between NewTabNote's pages." },
   contributions: { label: 'Built-in features', about: 'The parts of NewTabNote that load when it starts.' },
   'block-types': { label: 'Block types', about: 'Text, to-dos, headings, and the other blocks a note holds.' },
+});
+
+/**
+ * What a row's own check tested, from the check's own sentence: its title among the checks a
+ * problem that leads a row's evidence sets apart, so a row that isn't working never reads its own
+ * name beside a check that passed (signed as round 5, and round 5's check titles). Each row here
+ * is its check's provider, so its label is the row's name. These are the rows that can reach that:
+ * a check that can pass under a problem it doesn't look for, or under the worker's, which no check
+ * on recovery.html covers. Any other row that comes to reach it takes a title here first
+ * (test/kernel/trust-problem-words.test.mjs holds it). NewTabNote's own parts' checks are named
+ * by their parts already
+ */
+export const TESTED = Object.freeze({
+  capture: 'Test save',
+  storage: 'Test read and write',
+  'recovery-readiness': 'Newest recovery point',
+  index: 'Search index up to date',
 });
 
 /** A receipt's verification operation, in plain words: the sentence in "How this was checked" */
@@ -99,10 +123,8 @@ export const UPDATE_SAVES = 'They save normally.';
 
 /** A receipt's consequence: a row's second line when it isn't fine, by provider/key or key */
 export const CONSEQUENCE = Object.freeze({
-  'storage.capture-at-risk': "NewTabNote couldn't save a test entry, so new notes and captures may not be saved.",
-  'storage.quota': "This device is out of space for NewTabNote, so new notes and changes can't be saved.",
-  'storage.version-too-new': "A newer version of NewTabNote changed your notes database, so this version won't write to it.",
-  'storage.unavailable': "NewTabNote couldn't open your notes database, so notes can't be read or saved here.",
+  // Capture at risk, by its cause, as the status pages say it too (status-copy.js)
+  ...CAPTURE_CONSEQUENCE,
   'storage.trust-records-unavailable':
     "Notes save normally, but NewTabNote can't keep its own health records right now, so this page may miss recent problems.",
   // The director's change 9: an update waiting, waiting for free space for its copy, or that
@@ -189,6 +211,12 @@ export const INCIDENT = Object.freeze({
   'permissions/grant-missing': 'Site access is limited',
   'permissions/permission-changed': 'Chrome grants NewTabNote more than it asks for',
   'recovery-readiness/point-unverified': 'A recovery point failed its check',
+  // A purge that stopped at a point (#17 PR 2b), and the background worker's own two (#117), as
+  // signed for #20 slice 4c. Its failed start says what failed, saving, apart from its connections
+  // (round 5)
+  'recovery-readiness/purge-stopped': 'Something you deleted is still in a recovery point',
+  'coordinator/start-failed': "The background worker couldn't start saving",
+  'coordinator/entry-unreplayable': "A change NewTabNote kept isn't in your notes yet",
   'messaging/unreachable': "The background worker didn't answer",
   'contributions/contribution-unavailable': "Part of NewTabNote didn't load",
   'block-types/contribution-unavailable': "A block type didn't load",
@@ -220,6 +248,9 @@ export const RESOLVED = Object.freeze({
   'permissions/grant-missing': 'Site access is back',
   'permissions/permission-changed': 'Chrome grants NewTabNote only what it asks for',
   'recovery-readiness/point-unverified': 'Every recovery point passes its check',
+  'recovery-readiness/purge-stopped': 'What you deleted is out of every recovery point',
+  'coordinator/start-failed': 'The background worker saves again',
+  'coordinator/entry-unreplayable': 'Every kept change is in your notes',
   'messaging/unreachable': 'The background worker answers again',
   'contributions/contribution-unavailable': 'Every part of NewTabNote loads again',
   'block-types/contribution-unavailable': 'Every block type loads again',
@@ -231,6 +262,11 @@ export const INCIDENT_TEXT = Object.freeze({
   'index/lagging': 'Recent changes may not show up in search.',
   'index/stalled': 'It has to start over, so recent notes may not show up in search until it does.',
   'index/indexer-start-failed': 'Search may miss notes you changed until indexing starts again.',
+  'recovery-readiness/purge-stopped':
+    "When you delete something for good, NewTabNote also removes it from its recovery points. One recovery point didn't pass its check, so what you deleted is still in it. Nothing else changed.",
+  // What has to start is saving: the worker may still answer its connections (signed as round 6)
+  'coordinator/start-failed': 'New notes and changes may not be saved until it starts saving.',
+  'coordinator/entry-unreplayable': "NewTabNote kept it, so nothing is lost, but it couldn't add it to your notes as it was written.",
   'credentials/legacy-secret':
     "Other software on this computer, or anyone with a copy of this browser profile, could read it. It's kept in {count} places:",
 });
@@ -352,18 +388,8 @@ export const TARGET = Object.freeze({
   vectors: 'Semantic search data',
 });
 
-/** The groups trust.summary names, as every status page says them (change 6) */
-export const GROUP = Object.freeze({
-  storage: 'Notes database',
-  vault: 'Saved keys',
-  backup: 'Backups',
-  sync: 'Sync',
-  indexing: 'Search',
-  inference: 'AI',
-  permissions: 'Permissions',
-  recovery: 'Recovery points',
-  platform: "NewTabNote's own parts",
-});
+/** The groups trust.summary names, as every status page says them (change 6, status-copy.js) */
+export { GROUP };
 
 /** The page's own words: its views, headlines, and states */
 export const PAGE = Object.freeze({
@@ -393,6 +419,9 @@ export const PAGE = Object.freeze({
   partOfDatabase: 'Part of your notes database needs a look.',
   attention: '{count} need your attention: {names}.',
   attentionOne: '1 thing needs your attention: {names}.',
+  // Under a headline a problem leads, the rest are other, as the header's badge counts them all (round 4)
+  attentionOther: '{count} other things need your attention: {names}.',
+  attentionOtherOne: '1 other thing needs your attention: {names}.',
   // Past two, the first row and how many more (the design review's answer 7)
   attentionMore: '{first} and {count} more need your attention.',
   openRecovery: 'Open Recovery Center',
@@ -401,6 +430,10 @@ export const PAGE = Object.freeze({
   siteAccessHow: 'Chrome opens its extensions page. Choose Details under NewTabNote, then Site access.',
   howChecked: 'How this was checked',
   howCheckedAll: 'How these were checked',
+  // Under a problem that leads a row's evidence, the row's checks that passed, set apart, each as
+  // "{what it tested}: Passed" (signed as round 5)
+  alsoChecked: 'Also checked',
+  passed: 'Passed',
   connect: 'Where NewTabNote can connect',
   connectLead: 'Places NewTabNote can reach without asking Chrome for a permission:',
   connectNote:

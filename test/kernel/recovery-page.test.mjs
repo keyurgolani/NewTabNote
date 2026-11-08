@@ -723,6 +723,20 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       control(page.doc, PAGE.dismiss, card()).click();
       await until(() => text(card()).includes(PAGE.dismissed), 'the dismissal');
       assert.notEqual(badge(), before);
+      // Undo is a button in its sentence and the link to its row an <a> alone in the card's
+      // actions, the boxes their padding is sized for (the fix check's ruling on R4-3)
+      const undo = control(page.doc, PAGE.undo, card());
+      const actions = card().querySelector('.trust-incident-actions');
+      assert.deepEqual(
+        [
+          undo.tagName,
+          Boolean(undo.closest('.trust-notice')),
+          [...actions.querySelectorAll('a'), ...actions.querySelectorAll('button')].map(
+            (/** @type {any} */ element) => `${element.tagName} ${element.className}`,
+          ),
+        ],
+        ['BUTTON', true, ['A trust-linkbtn trust-crosslink']],
+      );
       control(page.doc, PAGE.undo, card()).click();
       await until(() => !text(card()).includes(PAGE.dismissed) && badge() === before, 'Undo');
       assert.ok(page.calls.includes('recovery.dismiss') && page.calls.includes('recovery.undismiss'));
@@ -1804,6 +1818,23 @@ describe("recovery.html while its health records can't be saved (#115's review)"
       })
     );
 
+  it("draws no attention line under can't confirm for the records' own problem, which the headline names (round 4b)", async () => {
+    const tab = legacyContext();
+    assert.equal(await newTabOn(tab).whenReady(), null);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context, { indexedDB: trustStoreDown(context.env.indexedDB) }) });
+    const page = openPage(root);
+    try {
+      await page.ready;
+      control(page.doc, PAGE.trust).click();
+      await until(() => headline(page.doc) === `${PAGE.trust}: ${PAGE.cantConfirm}`, 'the Trust Center');
+      same(page.doc.querySelector('.trust-attention-line'), null, "no line counts the records' own problem as other");
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
   it("shows what this visit's checks found, the storage row in its provider's words, and no promise over the cards", async () => {
     const tab = legacyContext();
     assert.equal(await newTabOn(tab).whenReady(), null);
@@ -1821,11 +1852,185 @@ describe("recovery.html while its health records can't be saved (#115's review)"
       // The open check ran, so its rows say what it found, not that nothing ever checked them
       const storage = page.doc.getElementById('row-storage');
       assert.equal(text(storage.querySelector('.trust-row-text')), CONSEQUENCE['storage.trust-records-unavailable']);
+      // That line is about the health records themselves, so the row adds no line for their own
+      // two: it can't keep them, and so some weren't saved (the code review's R7-1)
+      assert.deepEqual(
+        storage
+          .querySelectorAll('.trust-row-keeps')
+          .map(text)
+          .filter((/** @type {string} */ line) => /health records/.test(line)),
+        [],
+      );
       assert.match(text(page.doc.getElementById('row-capture')), /Verified/);
       for (const id of ['capture', 'storage', 'permissions']) assert.doesNotMatch(text(page.doc.getElementById(`row-${id}`)), new RegExp(escape(PAGE.neverChecked)), id);
     } finally {
       root.close();
       closeAll([tab, context]);
+    }
+  });
+});
+
+describe("recovery.html with the background worker's failed start, which no check there covers (#20 slice 4c)", () => {
+  /** The worker's failed start, as its event raises it */
+  const failedStart = (/** @type {number} */ at) => ({
+    id: '00000000-0000-4000-8000-0000000000e1',
+    ref: '0000e1',
+    key: 'coordinator/start-failed',
+    providerId: 'coordinator',
+    faultCode: 'start-failed',
+    subjectId: null,
+    severity: 'capture-risk',
+    state: 'open',
+    dismissed: false,
+    dismissChangedAt: null,
+    firstSeenAt: at,
+    lastSeenAt: at,
+    resolvedAt: null,
+    occurrences: 1,
+    affected: ['capture'],
+    preserved: ['editing', 'reading'],
+    evidence: {},
+    appliedOps: [],
+  });
+
+  /** A change the journal kept and couldn't replay, a data risk the worker raises too */
+  const keptEntry = (/** @type {number} */ at) => ({
+    ...failedStart(at),
+    id: '00000000-0000-4000-8000-0000000000e2',
+    ref: '0000e2',
+    key: 'coordinator/entry-unreplayable',
+    faultCode: 'entry-unreplayable',
+    severity: 'data-risk',
+    affected: [],
+    preserved: ['capture', 'editing', 'reading'],
+  });
+
+  /**
+   * The page on a root whose report and problems hold the worker's failed start, which only the
+   * worker raises, and `more` of the worker's problems after it, and whose summary has capture
+   * at risk from it, as the worker's own would
+   * @param {Array<(at: number) => any>} [more]
+   */
+  async function withFailedStart(more = []) {
+    const tab = legacyContext();
+    assert.equal(await newTabOn(tab).whenReady(), null);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context) });
+    const at = Date.now();
+    const raised = [failedStart(at), ...more.map(make => make(at))];
+    /** @param {(answer: any) => any} change */
+    const each = change =>
+      Array.from({ length: 40 }, () => (/** @type {() => Promise<any>} */ call) => call().then(change));
+    /** @param {any} answer */
+    const withIt = answer =>
+      answer && answer.data
+        ? { ...answer, data: { ...answer.data, incidents: [...answer.data.incidents, ...raised] } }
+        : answer;
+    const page = openPage(root, {
+      hash: '#trust',
+      answers: {
+        'trust.report': each(withIt),
+        'recovery.incidents': each(withIt),
+        'trust.summary': each(answer =>
+          answer && answer.data
+            ? { ...answer, data: { ...answer.data, capture: 'at-risk', route: 'recovery' } }
+            : answer,
+        ),
+      },
+    });
+    return {
+      page,
+      close: () => {
+        root.close();
+        closeAll([tab, context]);
+      },
+    };
+  }
+
+  it("names the worker's failed start as Saving new notes' evidence, and its own passing check after it, apart under Also checked, as the test save it ran and passed, and gives the failed start one sentence there, on NewTabNote's own parts and on its card: what may not be saved until saving starts (round 4, round 5 and round 6)", async () => {
+    const { page, close } = await withFailedStart();
+    try {
+      await page.ready;
+      /** The titles of Saving new notes' evidence, as drawn */
+      const subs = () => {
+        const row = page.doc.getElementById('row-capture');
+        return row
+          ? row.querySelectorAll('.trust-sub').map((/** @type {any} */ sub) => text(sub.querySelector('h4')))
+          : [];
+      };
+      await until(() => subs().length === 2, "Saving new notes' two checks");
+      assert.deepEqual(subs(), ["The background worker couldn't start saving: Not working", 'Test save: Passed']);
+      // The label sits between the problem and the check it sets apart, and the check keeps its sentence
+      const body = page.doc.getElementById('row-capture').querySelector('.trust-evidence-body');
+      assert.deepEqual(
+        body.children.map((/** @type {any} */ child) =>
+          child.matches('.trust-also') ? ['label', text(child)] : ['check', text(child.querySelector('h4'))],
+        ),
+        [
+          ['check', "The background worker couldn't start saving: Not working"],
+          ['label', PAGE.alsoChecked],
+          ['check', 'Test save: Passed'],
+        ],
+      );
+      assert.equal(PAGE.alsoChecked, 'Also checked');
+      assert.equal(
+        text(body.children[2].querySelector('p')),
+        'Saved a test entry where new notes go, read it back, and removed it.',
+      );
+      // The failed start's sentence says saving is what has to start, beside a worker that
+      // answers its connections, the same here, on own parts and on its card (round 6)
+      const SENTENCE = 'New notes and changes may not be saved until it starts saving.';
+      assert.equal(text(body.children[0].querySelector('p')), SENTENCE);
+      const own = page.doc.getElementById('row-platform').querySelector('.trust-evidence-body');
+      assert.equal(text(own.children[0].querySelector('p')), SENTENCE);
+      page.hashTo('#recovery');
+      const card = () =>
+        page.doc
+          .querySelectorAll('li.trust-incident')
+          .find(
+            (/** @type {any} */ li) => text(li.querySelector('h3')) === "The background worker couldn't start saving",
+          );
+      await until(() => card(), "the failed start's card");
+      assert.equal(text(card().querySelector('.trust-incident-text')), SENTENCE);
+    } finally {
+      close();
+    }
+  });
+
+  it("draws no attention line under the headline the worker's failed start leads alone: NewTabNote's own parts holds only that problem (round 4b)", async () => {
+    const { page, close } = await withFailedStart();
+    try {
+      await page.ready;
+      // Settled: the open check has answered, so Saving new notes draws its own check after the failed start
+      await until(
+        () => page.doc.getElementById('row-capture')?.querySelectorAll('.trust-sub').length === 2,
+        "Saving new notes' two checks",
+      );
+      assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.atRisk}`);
+      assert.equal(page.doc.getElementById('row-platform').getAttribute('data-attention'), 'true');
+      same(page.doc.querySelector('.trust-attention-line'), null, "no line counts the headline's own problem as other");
+    } finally {
+      close();
+    }
+  });
+
+  it("counts NewTabNote's own parts as other once it holds a problem besides the failed start the headline leads with: a change the journal kept, which the row names on its visible lines (round 4b, and round 5)", async () => {
+    const { page, close } = await withFailedStart([keptEntry]);
+    try {
+      await page.ready;
+      await until(() => page.doc.querySelector('.trust-attention-line') !== null, 'the attention line');
+      assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.atRisk}`);
+      assert.equal(
+        text(page.doc.querySelector('.trust-attention-line')),
+        "1 other thing needs your attention: NewTabNote's own parts.",
+      );
+      // The row the link lands on names the change it was counted for, under its status word
+      // (signed as round 5)
+      const lines = page.doc.getElementById('row-platform').querySelectorAll('.trust-row-keeps').map(text);
+      assert.equal(lines[lines.length - 1], "Needs action: a change NewTabNote kept isn't in your notes yet.");
+      assert.equal(lines.filter((/** @type {string} */ line) => line.includes('a change NewTabNote kept')).length, 1);
+    } finally {
+      close();
     }
   });
 });

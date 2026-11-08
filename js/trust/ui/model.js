@@ -27,6 +27,7 @@ import {
   STATUS_BY_PROVIDER,
   STEP,
   SUBJECT,
+  TESTED,
   UPDATE_SAVES,
   UPDATE_STATUS,
 } from './copy.js';
@@ -34,6 +35,7 @@ import { EVENT_CODES } from '../core/event-codes.js';
 import { PROVIDERS } from '../core/providers/catalog.js';
 import { OPEN_FAILED_KEY, WRITE_FAILED_KEY } from '../core/trust-records.js';
 import { WAITING, updateKeyOf, updateOf, waits, whyOf } from '../core/updates.js';
+import { DAY_MS, clockFormat as clock, dayFormat as day, dayOf, whenText } from './when.js';
 
 /** @typedef {import('../core/operations/trust-report.js').TrustReport} TrustReport */
 /** @typedef {import('../core/operations/trust-summary.js').TrustSummary} TrustSummary */
@@ -64,6 +66,12 @@ export const SEVERITY_TONE = Object.freeze({ 'capture-risk': 'failed', 'data-ris
 /** The severities, worst first */
 export const SEVERITY_ORDER = Object.freeze(['capture-risk', 'data-risk', 'degraded']);
 
+/**
+ * The status a problem's severity reads as on a row that holds it, whose shape is the severity's
+ * (SEVERITY_TONE): a row with a finding never reads as its check alone does (round 4)
+ */
+const SEVERITY_STATUS = Object.freeze({ 'capture-risk': 'failed', 'data-risk': 'action-required', degraded: 'degraded' });
+
 /** The statuses, worst first (vocabulary.js's STATUS_ORDER) */
 const STATUS_ORDER = Object.freeze([
   'failed',
@@ -85,8 +93,11 @@ const ATTENTION = Object.freeze(['action-required', 'degraded', 'failed', 'locke
 /** The statuses a compact row folds to one line for, its reason not needed in sight (change 8) */
 const FOLDED = Object.freeze(['verified', 'not-configured', 'off', 'unsupported']);
 
-/** The providers the "NewTabNote's own parts" row folds into one */
-export const PLATFORM = Object.freeze(['messaging', 'contributions', 'block-types']);
+/**
+ * The providers the "NewTabNote's own parts" row folds into one: the background worker's own
+ * problems (#117) fold there too, with its row's words (Q4, #20 slice 4c)
+ */
+export const PLATFORM = Object.freeze(['coordinator', 'messaging', 'contributions', 'block-types']);
 
 /** The interim providers, which read only legacy facts and never record `verified` (legacy.js) */
 const INTERIM = Object.freeze(['backup', 'sync', 'remote-ai', 'ai-scope-grants']);
@@ -127,8 +138,6 @@ const capitalize = text => text.charAt(0).toUpperCase() + text.slice(1);
 
 // ───────── Times ─────────
 
-const clock = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' });
-const day = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
 const full = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -137,11 +146,6 @@ const full = new Intl.DateTimeFormat('en-US', {
   minute: '2-digit',
   second: '2-digit',
 });
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** @param {number} at */
-const dayOf = at => new Date(at).toDateString();
 
 /**
  * The time column: 10:42 AM today, Yesterday, 7:02 PM, Oct 28
@@ -154,16 +158,8 @@ export function timeLabel(at, now) {
   return day.format(at);
 }
 
-/**
- * Inside a sentence: at 10:42 AM, yesterday at 7:02 PM, on Oct 28
- * @param {number} at
- * @param {number} now
- */
-export function whenText(at, now) {
-  if (dayOf(at) === dayOf(now)) return `at ${clock.format(at)}`;
-  if (dayOf(at) === dayOf(now - DAY_MS)) return `yesterday at ${clock.format(at)}`;
-  return `on ${day.format(at)}`;
-}
+// Inside a sentence (when.js), as every trust surface says a time
+export { whenText };
 
 /**
  * A fact's time: 10:42 AM today, else Oct 28 at 10:42 AM
@@ -254,11 +250,16 @@ function updateText(key, receipt) {
 
 /**
  * @typedef {object} Evidence
- * @property {string} title - the provider's label, for a folded row's sub-checks
+ * @property {string} title - the provider's label, for a folded row's sub-checks, or a problem's title
  * @property {string} statusText
  * @property {string} tone
- * @property {string} sentence - what the check did
+ * @property {string} sentence - what the check did, or what the problem means
  * @property {Fact[]} facts
+ * @property {boolean} [problem] - a problem that makes a row a check has read worse than its
+ *   checks found, or that no check on the page covers, which leads the row's evidence, its own
+ *   checks after it as they read (round 4, and the code review's R4-2)
+ * @property {boolean} [also] - a check of the row's that passed, under a problem that leads its
+ *   evidence: set apart after the rest, as what it tested and Passed (signed as round 5)
  */
 
 /**
@@ -281,7 +282,12 @@ function updateText(key, receipt) {
  * @property {boolean} folded - one line, its evidence a disclosure
  * @property {string[]} stillWorks
  * @property {string[]} notWorking
+ * @property {Array<{status: string, what: string}>} problemLines - each problem it's counted for
+ *   that its line doesn't name, by its status word and its title, as "Not working:" names what
+ *   stopped (signed as round 5, and round 5's check titles)
  * @property {Incident[]} open - its open problems that aren't dismissed
+ * @property {Incident[]} counted - those that need the user: an update that's waiting doesn't
+ *   (change 9)
  * @property {RowAction | null} action
  * @property {Evidence[]} evidence
  * @property {boolean} destinations - the permissions row, which lists where NewTabNote can connect
@@ -347,40 +353,121 @@ function evidenceOf(entry, now) {
   };
 }
 
+/** The names a problem's title can start with, which keep their capital mid-sentence */
+const NAMES = Object.freeze(['Chrome', 'NewTabNote']);
+
+/**
+ * A title as the rest of a sentence: its first letter lower case, unless its first word is a name,
+ * as Chrome is, or has capitals of its own, as NewTabNote has
+ * @param {string} title
+ */
+const lowerFirst = title => {
+  const [first] = title.split(/[\s']/);
+  return NAMES.includes(first) || !/^[A-Z][^A-Z]*$/.test(first) ? title : `${title[0].toLowerCase()}${title.slice(1)}`;
+};
+
+/** The capability a row is itself, which its own Not working list doesn't repeat (round 4) */
+const ROW_IS = Object.freeze(/** @type {Record<string, string>} */ ({ capture: 'capture' }));
+
+/**
+ * A problem that leads a row's evidence, one that makes a row a check has read worse than its
+ * checks found, or that no check on the page covers: its title, its severity's status and shape,
+ * what it means, and when it was seen
+ * @param {Problem} problem
+ * @param {number} now
+ * @returns {Evidence}
+ */
+function problemEvidence(problem, now) {
+  const status = /** @type {Record<string, string>} */ (SEVERITY_STATUS)[problem.severity];
+  return {
+    title: problem.title,
+    statusText: /** @type {Record<string, string>} */ (STATUS)[status] || status,
+    tone: /** @type {Record<string, string>} */ (TONE)[status] || 'unknown',
+    sentence: problem.text,
+    facts: problemFacts(problem, now),
+    problem: true,
+  };
+}
+
+/**
+ * The faults each line states, by the consequence key its words are under (CONSEQUENCE's, or an
+ * update's): provider/fault/subject, or provider/fault for any subject. A problem counts as said
+ * by its row's line only when its fault is here and the line is its own check's, so a problem the
+ * line's words don't state gets a line of its own, though the row's check looks for it, as an
+ * older finding of the check's own does beside a failing answer, which looks at nothing (the code
+ * review's R8-1, ruled as this table). A capture-risk line states the causes Settings' line gives
+ * its words to (status.js), the health records' line their own two (R7-1), and every other line
+ * what its own words say.
+ */
+export const STATED = Object.freeze({
+  // The probes' failures, by their causes' words: a test save that failed, the device out of
+  // space, a newer NewTabNote's database, and a database that won't open
+  'storage.capture-at-risk': Object.freeze(['capture/probe-failed']),
+  'storage.quota': Object.freeze(['capture/quota', 'storage/quota']),
+  'storage.version-too-new': Object.freeze(['capture/version-too-new', 'storage/version-too-new']),
+  'storage.unavailable': Object.freeze(['storage/open-failed/CanvasTabDB', 'storage/probe-failed']),
+  'storage.trust-records-unavailable': Object.freeze([OPEN_FAILED_KEY, WRITE_FAILED_KEY]),
+  'storage.migration-pending': Object.freeze(['storage/migration-pending']),
+  'storage.migration-blocked': Object.freeze(['storage/migration-blocked']),
+  'storage.migration-failed': Object.freeze(['storage/migration-failed']),
+  'recovery.point-unverified': Object.freeze(['recovery-readiness/point-unverified']),
+  'vault.legacy-secret': Object.freeze(['credentials/legacy-secret']),
+  // Permissions that changed: a grant missing, or one Chrome gives beyond what's asked for
+  'permissions.changed': Object.freeze(['permissions/grant-missing', 'permissions/permission-changed']),
+  'permissions.site-access-limited': Object.freeze(['permissions/grant-missing']),
+  'inference.load-failed': Object.freeze(['local-inference/load-failed']),
+  'indexing.lagging': Object.freeze(['index/lagging']),
+  // Search that has to start over is behind as well, which the index's answer reports beside it
+  'indexing.resync-required': Object.freeze(['index/stalled', 'index/lagging']),
+  'platform.coordinator-unreachable': Object.freeze(['messaging/unreachable']),
+  'platform.contribution-unavailable': Object.freeze(['contributions/contribution-unavailable', 'block-types/contribution-unavailable']),
+  // What nothing has checked yet, as an interim check, a model that has loaded before, or
+  // recovery points none of which is checked, states no problem
+  'backup.not-verified': Object.freeze([]),
+  'sync.not-verified': Object.freeze([]),
+  'inference.not-verified': Object.freeze([]),
+  'recovery.no-verified-point': Object.freeze([]),
+});
+
 /**
  * A row's second line: a provider that isn't fine says what that means for you, one that's
- * fine or not set up what it found, and anything else what it is
+ * fine or not set up what it found, and anything else what it is. Where its words are a check's
+ * finding, the consequence key they're under and whose check it is, for what it states (STATED)
  * @param {string} rowId
  * @param {string} status
  * @param {ProviderEntry[]} entries
  * @param {number} now
+ * @returns {{text: string, key: string | null, providerId: string | null}}
  */
-function rowText(rowId, status, entries, now) {
+function rowLine(rowId, status, entries, now) {
   const notes = /** @type {Record<string, string>} */ (NOTE);
   const about = /** @type {Record<string, {about: string}>} */ (PROVIDER)[rowId].about;
+  /** @param {string} text */
+  const plain = text => ({ text, key: null, providerId: null });
   if (rowId === 'platform') {
     const bad = entries.find(entry => ATTENTION.includes(entry.status));
-    if (bad) return consequenceOf(bad.providerId, bad.receipt, now) || about;
-    return status === 'verified' ? notes['platform/verified'] : about;
+    const consequence = bad ? consequenceOf(bad.providerId, bad.receipt, now) : '';
+    if (bad && consequence) return { text: consequence, key: /** @type {HealthReceipt} */ (bad.receipt).consequenceKey, providerId: bad.providerId };
+    return plain(bad || status !== 'verified' ? about : notes['platform/verified']);
   }
   const [entry] = entries;
-  if (status === 'checking') return about;
+  if (status === 'checking') return plain(about);
   const receipt = entry.receipt;
   // No receipt: nothing on this device has checked it yet, which is its reason (change 8). A
   // check that hasn't run can't say more, such as whether the local model has loaded before
-  if (!receipt) return PAGE.neverChecked;
+  if (!receipt) return plain(PAGE.neverChecked);
   const update = rowId === 'storage' ? updateOf(receipt) : null;
-  if (update) return updateText(update, receipt);
+  if (update) return { text: updateText(update, receipt), key: update, providerId: entry.providerId };
   const evidence = /** @type {Record<string, any>} */ ((receipt && receipt.evidence) || {});
   const legacy = rowId === 'recovery-readiness' && evidence.records ? ` ${fill(notes['recovery-readiness/legacy'], { records: evidence.records })}` : '';
   const consequence = consequenceOf(rowId, receipt, now);
-  if (consequence) return `${consequence}${legacy}`;
+  if (consequence) return { text: `${consequence}${legacy}`, key: receipt.consequenceKey, providerId: entry.providerId };
   const note = notes[`${rowId}/${status}`];
   if (note) {
     const verifiedAt = typeof evidence.verifiedAt === 'number' ? stampText(evidence.verifiedAt, now) : '';
-    return `${fill(note, { count: evidence.count, verifiedAt })}${legacy}`;
+    return plain(`${fill(note, { count: evidence.count, verifiedAt })}${legacy}`);
   }
-  return about;
+  return plain(about);
 }
 
 /**
@@ -409,6 +496,17 @@ function rowAction(rowId, entries, counted) {
 }
 
 /**
+ * What the unfixed problems among `incidents` list as not working. No Still works list on a page
+ * that shows them claims any of it, so no card or row there says a capability works while
+ * another problem says it doesn't (the design review's round 2, S2). Dismissing a problem
+ * doesn't fix it, so a dismissed one counts too.
+ * @param {readonly Incident[]} incidents
+ * @returns {Set<string>}
+ */
+const notWorkingOn = incidents =>
+  new Set(incidents.filter(incident => incident.state !== 'resolved').flatMap(incident => incident.affected));
+
+/**
  * The Trust Center's rows, in its four groups' order. `checking` names the providers whose
  * checks are running now, which read as checking until they answer.
  * @param {TrustReport} report
@@ -418,6 +516,14 @@ function rowAction(rowId, entries, counted) {
 export function trustSections(report, { now, checking = new Set() }) {
   /** @param {string} id */
   const entryOf = id => report.providers.find(entry => entry.providerId === id);
+  // The rows keep the cards' rule, so both views keep one list (change 6)
+  const down = notWorkingOn(report.incidents);
+  /**
+   * A problem no check on this page covers, such as the background worker's on recovery.html,
+   * whose host doesn't run the worker's check
+   * @param {Incident} incident
+   */
+  const uncovered = incident => !entryOf(incident.providerId);
   /**
    * @param {string} rowId
    * @returns {Row | null}
@@ -429,21 +535,83 @@ export function trustSections(report, { now, checking = new Set() }) {
     const statuses = entries.map(entry => (checking.has(entry.providerId) ? 'checking' : entry.status));
     // The folded row reads as the worst of its parts that say anything
     const meaningful = rowId === 'platform' ? statuses.filter(status => status !== 'not-configured') : statuses;
-    const status = worstOf(meaningful.length > 0 ? meaningful : statuses);
-    const incidents = report.incidents.filter(incident => ids.includes(incident.providerId) && incident.state !== 'resolved');
+    // What the row's own checks found
+    const checked = worstOf(meaningful.length > 0 ? meaningful : statuses);
+    // Its own problems, and Saving new notes holds an uncovered one that stops saving new notes
+    // (decided at the Design gate, signed as round 3)
+    const incidents = report.incidents.filter(
+      incident =>
+        incident.state !== 'resolved' &&
+        (ids.includes(incident.providerId) || (rowId === 'capture' && uncovered(incident) && incident.affected.includes('capture'))),
+    );
     const open = incidents.filter(incident => !incident.dismissed);
+    const counted = open.filter(incident => !waits(incident, entries[0].receipt));
+    // A problem that needs the user gives the row its shape and words where they're worse than
+    // its checks', which can't speak for it: Recovery points with something deleted still in a
+    // point is Partly working, not Not verified yet (the design review's round 2, S3, and round 4)
+    const status = worstOf([checked, ...counted.map(incident => /** @type {Record<string, string>} */ (SEVERITY_STATUS)[incident.severity])]);
     // Storage's update state, when its check reported one: its own words and shape, and a wait
     // that needs no one (change 9)
     const update = rowId === 'storage' && status === 'degraded' ? updateOf(entries[0].receipt) : null;
     const waiting = update !== null && WAITING.includes(update);
-    const counted = open.filter(incident => !waits(incident, entries[0].receipt));
     const attention = counted.length > 0 || (ATTENTION.includes(status) && !waiting);
+    // A row that needs the user because of a problem, its checks finding nothing to ask, says
+    // which by its title, in place of its check's sentence (round 2, S3)
+    const [named] = counted.length > 0 && !ATTENTION.includes(checked) ? problemsOf(counted, new Map(), id => entryOf(id) || null) : [];
+    // Each row names each problem it's counted for that its line doesn't: the line names its
+    // first problem, or is what a check that found something found, which states only the
+    // faults its words state (STATED), whatever else that check looks for. So the headline's
+    // link lands on what it counted, on any row, and no line repeats the row's (the Design
+    // gate's review of round 4's shots, signed as round 5, and the code review's R5-2, R6-1,
+    // R7-1 and R8-1)
+    const line = named ? null : rowLine(rowId, checked, entries, now);
+    const stated = /** @type {Record<string, readonly string[]>} */ (STATED)[(line && line.key) || ''] || [];
+    /** @param {Incident} incident */
+    const said = incident =>
+      line !== null &&
+      incident.providerId === line.providerId &&
+      (stated.includes(`${incident.providerId}/${incident.faultCode}/${incident.subjectId || '-'}`) ||
+        stated.includes(`${incident.providerId}/${incident.faultCode}`));
+    const problemLines = problemsOf(counted, new Map(), id => entryOf(id) || null)
+      .filter(problem => (named ? problem.title !== named.title : !problem.incidents.every(said)))
+      .map(problem => ({
+        status: /** @type {Record<string, string>} */ (STATUS)[/** @type {Record<string, string>} */ (SEVERITY_STATUS)[problem.severity]],
+        what: lowerFirst(problem.title),
+      }));
     const showsTime = !['not-configured', 'off', 'unsupported', 'checking', 'unverified'].includes(status);
     const verifiedTimes = entries
       .filter(entry => entry.receipt && (rowId !== 'platform' || entry.status === 'verified'))
       .map(entry => /** @type {HealthReceipt} */ (entry.receipt).verifiedAt);
     const stillWorks = [...new Set(entries.flatMap(entry => (attention ? entry.stillWorks : [])))];
-    const notWorking = [...new Set(open.flatMap(incident => incident.affected))];
+    // Saving new notes doesn't list saving new notes, which its name and status already say (round 4)
+    const notWorking = [...new Set(open.flatMap(incident => incident.affected))].filter(capability => ROW_IS[rowId] !== capability);
+    // A problem that makes the row worse than its checks found leads the row's evidence where a
+    // check has read the row, and one no check here covers leads it anywhere, so a row it fails
+    // never offers a check that passed as its evidence: those come after it, as they read. A row
+    // no check has read has no check to correct, so its finding stays its line and its card
+    // (round 4, and the code review's R4-2 and its fix check)
+    const read = entries.some(entry => entry.receipt);
+    /** @param {Incident} incident */
+    const leads = incident =>
+      uncovered(incident) ||
+      (read && worstOf([checked, /** @type {Record<string, string>} */ (SEVERITY_STATUS)[incident.severity]]) !== checked);
+    const problemsFirst = counted.some(leads)
+      ? problemsOf(counted.filter(leads), new Map(), id => entryOf(id) || null).map(problem => problemEvidence(problem, now))
+      : [];
+    const checks = entries.filter(entry => entry.receipt);
+    // Under a problem that leads, the row's checks that passed come last, set apart, each as what
+    // it tested and Passed, so Saving new notes never reads beside Verified while it isn't
+    // working. A check that didn't pass reads where it did, and with no problem leading each
+    // reads as it does (the Design gate's review of round 4's shots, signed as round 5)
+    const apart = problemsFirst.length > 0 ? checks.filter(entry => entry.status === 'verified') : [];
+    const tested = /** @type {Record<string, string>} */ (TESTED);
+    const ownEvidence = [
+      ...checks.filter(entry => !apart.includes(entry)).map(entry => /** @type {Evidence} */ (evidenceOf(entry, now))),
+      ...apart.map(entry => {
+        const evidence = /** @type {Evidence} */ (evidenceOf(entry, now));
+        return { ...evidence, title: tested[entry.providerId] || evidence.title, statusText: PAGE.passed, also: true };
+      }),
+    ];
     return {
       id: rowId,
       label: /** @type {Record<string, {label: string}>} */ (PROVIDER)[rowId].label,
@@ -454,8 +622,9 @@ export function trustSections(report, { now, checking = new Set() }) {
           ? /** @type {Record<string, string>} */ (STATUS)[status]
           : statusWords(rowId, status),
       tone: update ? /** @type {Record<string, {tone: string}>} */ (UPDATE_STATUS)[update].tone : /** @type {Record<string, string>} */ (TONE)[status] || 'unknown',
-      time: showsTime && verifiedTimes.length > 0 ? Math.max(...verifiedTimes) : null,
-      text: rowText(rowId, status, entries, now),
+      // A check's time, never beside the shape of a problem no check here covers
+      time: status === checked && showsTime && verifiedTimes.length > 0 ? Math.max(...verifiedTimes) : null,
+      text: named ? `${named.title}.` : /** @type {{text: string}} */ (line).text,
       attention,
       // A row whose status gives its reason, or that asks for nothing, folds; a row reading
       // "Not verified yet" or "Not checked recently" keeps its reason in sight, and so does a
@@ -464,11 +633,13 @@ export function trustSections(report, { now, checking = new Set() }) {
       folded:
         !attention &&
         (status === 'checking' || (FOLDED.includes(status) && !(rowId === 'remote-ai' && status !== 'not-configured'))),
-      stillWorks: stillWorks.filter(capability => !notWorking.includes(capability)),
+      stillWorks: stillWorks.filter(capability => !down.has(capability)),
       notWorking,
+      problemLines,
       open,
+      counted,
       action: rowAction(rowId, entries, counted),
-      evidence: /** @type {Evidence[]} */ (entries.map(entry => evidenceOf(entry, now)).filter(Boolean)),
+      evidence: [...problemsFirst, ...ownEvidence],
       destinations: rowId === 'permissions',
       pending:
         rowId === 'permissions' && entries[0].receipt && typeof entries[0].receipt.evidence.pending === 'number'
@@ -502,20 +673,40 @@ export function trustSections(report, { now, checking = new Set() }) {
 export function trustHeadline(summary, rows, { now, checking }) {
   const core = rows.filter(row => row.id === 'capture' || row.id === 'storage');
   const atRisk = summary.capture === 'at-risk';
-  const attention = rows
-    .filter(row => row.attention && !(atRisk && (row.id === 'capture' || row.id === 'storage')))
-    .map(row => ({ id: row.id, label: row.label }));
+  /**
+   * The rows that need the user, each its link. Under a headline a problem leads, a row counts
+   * only if it holds a problem that needs the user besides the leading ones, which the headline
+   * names, so the line never counts one as other (the code review's R4-1)
+   * @param {(incident: Incident) => boolean} [leads]
+   */
+  const needing = leads =>
+    rows
+      .filter(row => row.attention && (!leads || row.counted.some(incident => !leads(incident))))
+      .map(row => ({ id: row.id, label: row.label }));
+  const attention = needing();
   const verified = core.filter(row => row.status === 'verified' && row.time !== null).map(row => /** @type {number} */ (row.time));
   if (atRisk) {
+    // At the background worker's risk, Saving new notes follows its problem, so the proof names
+    // it by its title, with no check's time (#20 slice 4c). The capture-risk problems Saving new
+    // notes and Notes database hold lead it
     const worst = core.find(row => row.id === 'storage' && row.attention) || core.find(row => row.attention) || core[0];
     const checkedAt = worst && worst.time !== null ? ` Checked ${whenText(worst.time, now)}.` : '';
-    return { tone: 'failed', title: PAGE.atRisk, proof: `${worst ? worst.text : ''}${checkedAt}`.trim(), openRecovery: true, attention };
+    const leading = new Set(core.flatMap(row => row.counted).filter(incident => incident.severity === 'capture-risk').map(incident => incident.id));
+    return {
+      tone: 'failed',
+      title: PAGE.atRisk,
+      proof: `${worst ? worst.text : ''}${checkedAt}`.trim(),
+      openRecovery: true,
+      attention: needing(incident => leading.has(incident.id)),
+    };
   }
   if (checking && verified.length === 0) {
     return { tone: 'checking', title: PAGE.checkingNotes, proof: PAGE.checkingProof, openRecovery: false, attention };
   }
   if (summary.records === 'fallback') {
-    return { tone: 'action', title: PAGE.cantConfirm, proof: PAGE.cantConfirmProof, openRecovery: true, attention };
+    // The records' own two problems lead it
+    const records = needing(incident => incident.key === OPEN_FAILED_KEY || incident.key === WRITE_FAILED_KEY);
+    return { tone: 'action', title: PAGE.cantConfirm, proof: PAGE.cantConfirmProof, openRecovery: true, attention: records };
   }
   if (summary.worstCore === 'stale' || summary.worstCore === 'unverified' || verified.length === 0) {
     const last = core.map(row => row.time).filter(time => time !== null);
@@ -546,12 +737,16 @@ export function trustHeadline(summary, rows, { now, checking }) {
 
 /**
  * The headline's attention line: "2 things need your attention: Saved keys and Permissions.",
- * and past two, "Saved keys and 2 more need your attention."
+ * and past two, "Saved keys and 2 more need your attention." Under a headline a problem leads,
+ * at capture risk and at can't confirm, the rest are other: "2 other things need your
+ * attention: ...", as the header's badge counts them all (round 4)
  * @param {readonly {label: string}[]} rows
+ * @param {boolean} [other] - a problem leads the headline
  */
-export function attentionText(rows) {
+export function attentionText(rows, other = false) {
   if (rows.length > 2) return fill(PAGE.attentionMore, { first: rows[0].label, count: rows.length - 1 });
   const names = joinList(rows.map(row => row.label));
+  if (other) return rows.length === 1 ? fill(PAGE.attentionOtherOne, { names }) : fill(PAGE.attentionOther, { count: rows.length, names });
   return rows.length === 1 ? fill(PAGE.attentionOne, { names }) : fill(PAGE.attention, { count: `${rows.length} things`, names });
 }
 
@@ -610,7 +805,8 @@ export function incidentTitle(incident, evidence = {}, why = { ...evidence, ...(
  * The problems `incidents` make, worst first and then most recently seen. `next` is each open
  * incident's card action from recovery.incidents, so no view picks its own. `providerOf` is a
  * provider's row in trust.report: its latest receipt's evidence holds the counts a check's
- * incidents don't, and its `stillWorks` is the one Still works list both views show (change 6).
+ * incidents don't, and its `stillWorks` is the one Still works list both views show (change 6),
+ * less what an unfixed problem among `incidents` lists as not working.
  * @param {readonly Incident[]} incidents
  * @param {ReadonlyMap<string, {kind: string, remediationId?: string} | null>} [next]
  * @param {(providerId: string) => ProviderEntry | null} [providerOf]
@@ -627,6 +823,8 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
     const entry = providerOf(incident.providerId);
     return whyOf(entry ? entry.receipt : null, incident.evidence || {});
   };
+  // What any unfixed problem here lists as not working, which no card's Still works claims
+  const down = notWorkingOn(incidents);
   /** @type {Map<string, Incident[]>} */
   const byTitle = new Map();
   for (const incident of incidents) {
@@ -646,10 +844,11 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
     const subjectKey = `${key}/${first.subjectId}`;
     const severity = SEVERITY_ORDER.find(name => list.some(incident => incident.severity === name)) || first.severity;
     const affected = [...new Set(list.flatMap(incident => incident.affected))];
-    // The provider row's own list where the report has one, else what these incidents preserve
+    // The provider row's own list where the report has one, else what these incidents preserve,
+    // less what they or any other unfixed problem here affects
     const entry = providerOf(first.providerId);
     const preserved = (entry && Array.isArray(entry.stillWorks) ? [...entry.stillWorks] : [...new Set(list.flatMap(incident => incident.preserved))]).filter(
-      name => !affected.includes(name),
+      name => !affected.includes(name) && !down.has(name),
     );
     const evidence = /** @type {Record<string, any>} */ ({ ...evidenceOf(first.providerId), ...(first.evidence || {}) });
     const action = list.map(incident => next.get(incident.id)).find(Boolean) || null;

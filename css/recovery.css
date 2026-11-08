@@ -344,6 +344,13 @@ html {
 
 .trust-attention-line {
   margin: var(--space-control) 0 0;
+  text-wrap: balance;
+}
+
+/* A link in it wraps whole, so a balanced line never splits one into what reads as two, as
+   "Recovery / points" did (#20 slice 4c) */
+.trust-attention-line .trust-link {
+  white-space: nowrap;
 }
 
 .trust-headline-actions {
@@ -405,6 +412,12 @@ html {
   color: var(--text-secondary);
 }
 
+/* The status's words give it its baseline, its shape beside them still centered, so in a row with
+   a line under it the status sits on its label's first baseline, not 2px above it (#20 slice 4c) */
+.trust-row-status > :not(.trust-glyph) {
+  align-self: baseline;
+}
+
 .trust-row-text,
 .trust-row-keeps,
 .trust-keeps,
@@ -419,6 +432,11 @@ html {
   justify-content: space-between;
   gap: var(--space-compact) var(--space-region);
   margin-top: var(--space-compact);
+}
+
+/* A row's one action at its far end, with its evidence before it or none (#20 slice 4c) */
+.trust-row-actions {
+  margin-left: auto;
 }
 
 .trust-row-actions,
@@ -540,6 +558,7 @@ html {
 
 .trust-facts dd {
   margin: 0;
+  text-wrap: pretty;
 }
 
 .trust-main code {
@@ -555,6 +574,19 @@ html {
   display: flex;
   align-items: center;
   gap: var(--space-compact);
+}
+
+/* Under a problem that leads a row's evidence, the row's checks that passed sit apart, after a
+   seam, under "Also checked" (#20 slice 4c) */
+.trust-also {
+  margin: var(--space-control) 0 0;
+  padding-top: var(--space-control);
+  border-top: 1px solid var(--seam);
+  color: var(--text-secondary);
+}
+
+.trust-also + .trust-sub {
+  margin-top: var(--space-compact);
 }
 
 .trust-dest {
@@ -614,6 +646,7 @@ html {
 
 .trust-incident-body {
   padding-left: calc(1rem + var(--space-control));
+  text-wrap: pretty;
 }
 
 .trust-fixed-line {
@@ -646,9 +679,30 @@ html {
   margin-top: var(--space-control);
 }
 
-/* The way to the problem's row sits at the card's far end, as the mockup has it */
+/* The way to the problem's row sits at the card's far end, as the mockup has it, reaching the 4px
+   of room beside its words past that end, so they stay where they were (#20 slice 4c) */
 .trust-crosslink {
   margin-left: auto;
+  margin-inline-end: -4px;
+}
+
+/* With no Dismiss beside it, the link alone sits on a line of text at the card's far end, with no
+   button-high band: inline on its baseline, with half of 44px less 1em above and below its text's
+   own box, which makes its target 44px tall at least without making its line taller, and its
+   line 16px below the card's facts, so its focus ring clears them, with 3px more below it, so
+   the ring keeps 4px from the card's border (#20 slice 4c) */
+.trust-incident-actions:has(> .trust-crosslink:only-child) {
+  display: block;
+  margin-top: var(--space-region);
+  padding-bottom: 3px;
+  text-align: end;
+}
+
+.trust-incident-actions > .trust-crosslink:only-child {
+  display: inline;
+  min-height: 0;
+  padding-block: calc((var(--target-min) - 1em) / 2);
+  vertical-align: baseline;
 }
 
 .trust-places {
@@ -661,16 +715,26 @@ html {
   color: var(--text-secondary);
 }
 
-/* Undo sits in its sentence, on its baseline, its target still 44px tall */
+/* Undo sits in its sentence, on its baseline, its target still 44px tall, 4px further from the
+   sentence than a space, so its focus ring keeps 4px from the words before it */
 .trust-notice {
   margin: var(--space-compact) 0 0;
 }
 
 .trust-notice .trust-linkbtn {
   display: inline;
+  margin-inline-start: 4px;
   min-height: 0;
-  padding: 0.7rem 0;
+  padding-block: 0.7rem;
   vertical-align: baseline;
+}
+
+/* The Recovery Center's text actions, the "See ... in Trust Center" links and Undo: 4px of room
+   beside their words, so a focus ring keeps 4px from them, the inner ring in dark too
+   (#20 slice 4c) */
+.trust-crosslink,
+.trust-notice .trust-linkbtn {
+  padding-inline: 4px;
 }
 
 /* A repair's panel: inside its problem's card, after a seam, never a card of its own */

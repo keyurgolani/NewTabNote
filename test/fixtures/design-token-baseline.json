@@ -18,7 +18,7 @@
   },
   "files": {
     "css/editor.css": {
-      "color-literal": 134,
+      "color-literal": 136,
       "theme-branching": 7,
       "undefined-var": 8,
       "hard-shadow": 1,
