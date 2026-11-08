@@ -818,6 +818,32 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual(lines([KEPT])[1], ['platform', "A change NewTabNote kept isn't in your notes yet.", []]);
   });
 
+  it("names each problem on NewTabNote's own parts' lines by its own status word, and nothing more on another row: a part that didn't load reads Partly working, and Saving new notes, with a page capture beside the worker's failed start, names neither again (round 5)", () => {
+    /** A part of NewTabNote that didn't load, as its event raises it */
+    const part = /** @type {any} */ ({
+      ...START_FAILED,
+      id: '00000000-0000-4000-8000-0000000000eb',
+      ref: '0000eb',
+      key: 'contributions/contribution-unavailable',
+      providerId: 'contributions',
+      faultCode: 'contribution-unavailable',
+      severity: 'degraded',
+      affected: [],
+      preserved: [],
+    });
+    const rows = trustSections(/** @type {any} */ ({ ...REPORT, incidents: [START_FAILED, KEPT, part] }), {
+      now: AT,
+    }).flatMap(section => section.rows);
+    assert.deepEqual(/** @type {any} */ (rows.find(row => row.id === 'platform')).problemLines, [
+      { status: 'Needs action', what: "a change NewTabNote kept isn't in your notes yet" },
+      { status: 'Partly working', what: "part of NewTabNote didn't load" },
+    ]);
+    // Only NewTabNote's own parts names more, as signed: Saving new notes holds two and names none
+    const earlier = { ...START_FAILED, firstSeenAt: AT - 120_000, lastSeenAt: AT - 60_000 };
+    const capture = findingOver('capture', 'storage', 'capture-failed', 'capture-risk', ['capture'], [earlier]);
+    assert.deepEqual([capture.counted.length, capture.problemLines], [2, []]);
+  });
+
   it("leaves out of the line under a problem that leads a row the user needs only by its check's status, as the header's badge counts no such row, and keeps it under a headline no problem leads: Saved keys, its key dismissed while its check still asks (round 4b)", () => {
     const passed = entry('credentials', 'vault');
     const asks = entry('credentials', 'vault', {
