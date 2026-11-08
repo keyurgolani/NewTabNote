@@ -6,7 +6,8 @@
   --bg-active: #e8e8e8;
   --text-primary: #1a1a1a;
   --text-secondary: #6b6b6b;
-  --text-muted: #9b9b9b;
+  /* Muted text at 4.5:1 on bg-primary (4.88) and bg-secondary (4.56) (#267) */
+  --text-muted: #717171;
   --text-placeholder: #c4c4c4;
   --border-color: #e5e5e5;
   /* The accent is two blues (#268): the ink, for text, icons, rings and marks, 4.5:1 on each of
@@ -18,6 +19,10 @@
   --accent-fill: #1a6fc4;
   /* The tint under accent text: as strong as the ink keeps 4.5:1 on it over the sidebar */
   --accent-tint: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  /* An active row's tint, opaque over the sidebar and light enough to hold secondary text at
+     4.5:1 (#267). The selection keeps --selection-bg */
+  --row-active-share: 7%;
+  --row-active-bg: color-mix(in srgb, var(--accent-color) var(--row-active-share), var(--bg-secondary));
   --danger-color: #e03e3e;
   --code-bg: #f4f4f4;
   --selection-bg: rgba(24, 105, 186, 0.15);
@@ -110,7 +115,7 @@
   --bg-active: #3a3a3a;
   --text-primary: #e0e0e0;
   --text-secondary: #9b9b9b;
-  --text-muted: #6b6b6b;
+  --text-muted: #8c8c8c;
   --text-placeholder: #4a4a4a;
   --border-color: #333;
   --code-bg: #2a2a2a;
@@ -120,6 +125,7 @@
   --accent-rgb: 100, 168, 235;
   --accent-hover: #1d74cb;
   --accent-tint: color-mix(in srgb, var(--accent-color) 15%, transparent);
+  --row-active-share: 11.5%;
   --selection-bg: rgba(100, 168, 235, 0.25);
   --modal-bg: rgba(0, 0, 0, 0.6);
   /* The status lines' shapes in the text's color, as recovery.html draws them dark until #16 */
@@ -476,7 +482,7 @@ body.focus-mode .block:focus-within {
 
 .sidebar-notes-list.cards-view .sidebar-note-item.active {
   border-color: var(--accent-color);
-  background: var(--selection-bg);
+  background: var(--row-active-bg);
 }
 
 .sidebar-notes-list.cards-view .sidebar-note-content {
@@ -531,7 +537,7 @@ body.focus-mode .block:focus-within {
 }
 
 .sidebar-note-item.active {
-  background: var(--selection-bg);
+  background: var(--row-active-bg);
 }
 
 .sidebar-note-name {
@@ -586,7 +592,7 @@ body.focus-mode .block:focus-within {
 .sidebar-note-item.sidebar-drop-target {
   outline: 2px solid var(--accent-color);
   outline-offset: -2px;
-  background: var(--selection-bg);
+  background: var(--row-active-bg);
 }
 
 /* Main Content */
@@ -1638,7 +1644,7 @@ body.focus-mode .block:focus-within {
 .settings-section h3 {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   margin-bottom: 16px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1851,6 +1857,8 @@ a.setting-link {
   border: 1px solid var(--border-color);
   border-radius: 10px;
   background: var(--bg-primary);
+  /* On the card, the buttons keep their own rest */
+  --button-rest: initial;
 }
 
 .ai-prompt-template-main {
@@ -1875,7 +1883,7 @@ a.setting-link {
   padding: 2px 6px;
   border-radius: 999px;
   background: var(--bg-hover);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1913,6 +1921,7 @@ a.setting-link {
   border: 1px solid var(--border-color);
   border-radius: 10px;
   background: var(--bg-primary);
+  --button-rest: initial;
 }
 
 .ai-prompt-template-textarea-row {
@@ -1995,11 +2004,19 @@ a.setting-link {
   transform: translateX(20px);
 }
 
+/* A section's secondary buttons, and Open Settings on the AI sidebar's panel, rest on the page's
+   surface, as the sections' cards draw them, so none is flat on the bg-secondary under it. A card
+   in a section resets it (#267) */
+.settings-section,
+.ai-not-configured-sidebar {
+  --button-rest: var(--bg-primary);
+}
+
 .secondary-btn {
   padding: 8px 16px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  background: var(--bg-secondary);
+  background: var(--button-rest, var(--bg-secondary));
   color: var(--text-primary);
   font-size: 14px;
   font-family: inherit;
@@ -2050,7 +2067,7 @@ a.setting-link {
 }
 
 .page-item.active {
-  background: var(--selection-bg);
+  background: var(--row-active-bg);
 }
 
 .page-item-name {
@@ -3017,7 +3034,7 @@ a.setting-link {
   height: 32px;
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   border-radius: 6px;
   cursor: pointer;
   transition: all var(--transition);
@@ -3148,7 +3165,7 @@ a.setting-link {
 }
 
 .sidebar-note-item.active {
-  background: var(--selection-bg);
+  background: var(--row-active-bg);
 }
 
 .sidebar-note-item.archived {
@@ -3184,8 +3201,8 @@ a.setting-link {
   text-overflow: ellipsis;
 }
 
-/* On the selection's tint the secondary gray falls under 4.5:1, so the preview takes the gray
-   halfway to the text's (#268) */
+/* On --row-active-bg, the active rows' tint (#267), the secondary gray only just holds 4.5:1 (4.52
+   in light, 4.53 in dark), so the preview takes the gray halfway to the text's (#268): 8.46 and 6.74 */
 .sidebar-note-item.active .sidebar-note-preview,
 .sidebar-note-item.sidebar-drop-target .sidebar-note-preview {
   color: color-mix(in srgb, var(--text-primary) 50%, var(--text-secondary));
@@ -3211,7 +3228,8 @@ a.setting-link {
   text-overflow: ellipsis;
 }
 
-/* Opaque on the sidebar, so a hovered or active row under it can't take its ink under 4.5:1 (#268) */
+/* Opaque on the sidebar, so a hovered or active row's tint doesn't stack under it and can't take
+   its ink under 4.5:1 (#268, #267) */
 .sidebar-note-progress {
   background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-secondary));
   color: var(--accent-color);
@@ -3282,6 +3300,26 @@ a.setting-link {
 
 .sidebar-note-pin.pinned {
   color: var(--accent-color);
+}
+
+/* Muted text where its row is hovered, active or selected takes the secondary gray, since muted
+   can't hold 4.5:1 there (#267). A pinned or hovered pin keeps its own color */
+.sidebar-note-item:hover .sidebar-note-time,
+.sidebar-note-item.active .sidebar-note-time,
+.sidebar-note-item.sidebar-drop-target .sidebar-note-time,
+.sidebar-note-item.active .sidebar-note-pin:not(.pinned):not(:hover),
+.sidebar-note-item.sidebar-drop-target .sidebar-note-pin:not(.pinned):not(:hover),
+.slash-menu-item:hover .slash-menu-item-desc,
+.slash-menu-item.active .slash-menu-item-desc,
+.slash-menu-item[aria-selected="true"] .slash-menu-item-desc,
+.calendar-day.other-month:hover:not(.selected):not(.today),
+.version-history-item:hover .version-history-item-time,
+.block[data-type="file"] .file-card:hover .file-size,
+.page-item:hover .page-item-date,
+.page-item.active .page-item-date,
+.block.block-selected[data-type="todo"].checked .block-content,
+.block.block-selected[data-type="bookmark"] .bookmark-url {
+  color: var(--text-secondary);
 }
 
 /* Context Menu, and the Block Action Menu ("Turn into..."), which looks the same */
@@ -5034,7 +5072,7 @@ a.setting-link {
 
 .deadline-date {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: var(--bg-hover);
   padding: 1px 6px;
   border-radius: 3px;
@@ -5114,7 +5152,7 @@ a.setting-link {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  background: var(--bg-hover);
+  background: var(--button-rest, var(--bg-hover));
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
   border-radius: 4px;
