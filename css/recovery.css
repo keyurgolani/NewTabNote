@@ -658,10 +658,13 @@ html {
   margin-left: auto;
 }
 
-/* With no Dismiss beside it, the link alone sits on a line of text at the card's far end, the
-   Undo link's way: no button-high band, and its target 44px tall at least (#20 slice 4c) */
+/* With no Dismiss beside it, the link alone sits on a line of text at the card's far end, with no
+   button-high band: inline on its baseline, with half of 44px less 1em above and below its text's
+   own box, which makes its target 44px tall at least without making its line taller, and its
+   line 16px below the card's facts, so its focus ring clears them (#20 slice 4c) */
 .trust-incident-actions:has(> .trust-crosslink:only-child) {
   display: block;
+  margin-top: var(--space-region);
   text-align: end;
 }
 
@@ -682,8 +685,7 @@ html {
   color: var(--text-secondary);
 }
 
-/* Undo sits in its sentence, on its baseline, its target 44px tall at least: half of 44px less
-   1em above and below the text's own box, which is 1em tall or more (#20 slice 4c) */
+/* Undo sits in its sentence, on its baseline, its target still 44px tall */
 .trust-notice {
   margin: var(--space-compact) 0 0;
 }
@@ -691,7 +693,7 @@ html {
 .trust-notice .trust-linkbtn {
   display: inline;
   min-height: 0;
-  padding: calc((var(--target-min) - 1em) / 2) 0;
+  padding: 0.7rem 0;
   vertical-align: baseline;
 }
 
