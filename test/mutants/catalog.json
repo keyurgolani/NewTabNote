@@ -780,6 +780,16 @@
       "replace": "      if (running.ended || (running.isCommand && (running.begun || peer.phase === 'closed'))) return;\n",
       "test": "test/background-coordinator.test.js",
       "name": "holds a command it received before its port closed until its deadline, behind a turn of over 30 s, ends it unrun there, and commits nothing of it when that turn ends (#35 slice 4d, rule 17)"
+    },
+    {
+      "id": "router-deadline-ignores-migration",
+      "behavior": "#35 port commands",
+      "protects": "A command still waiting at its deadline while the coordinator migrates answers migrating, retryable, not deadline-exceeded.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "    return now.status === 'degraded' && now.reason === MIGRATING;\n",
+      "replace": "    return false;\n",
+      "test": "test/kernel/worker-router.test.mjs",
+      "name": "answers a command still waiting at its deadline while the coordinator migrates as unavailable, coordinator, migrating, retryable, and one outside a migration deadline-exceeded, as before (#35 slice 4d, rule 18)"
     }
   ]
 }
