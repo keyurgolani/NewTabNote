@@ -261,8 +261,8 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
       });
       assert.deepEqual(lines.settings, {
         first: { text: 'New notes may not be saved.', cause: sentence, tone: 'failed' },
-        // The other groups, not the one at risk
-        second: '1 thing needs your attention: Saved keys.',
+        // The other groups, not the one at risk, counted as other after the line that leads (round 4)
+        second: '1 other thing needs your attention: Saved keys.',
         riskLine: 'The Recovery Center shows what went wrong and can save a copy of everything that can still be read.',
         action: { label: 'Open Recovery Center', href: 'recovery.html#recovery', primary: true },
       });
@@ -291,7 +291,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
       [lines.settings.first, lines.settings.second],
       [
         { text: 'New notes may not be saved.', cause: null, tone: 'failed' },
-        '1 thing needs your attention: Notes database.',
+        '1 other thing needs your attention: Notes database.',
       ],
     );
   });
@@ -315,6 +315,46 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
         action: { label: 'Open Recovery Center', href: 'recovery.html#recovery', primary: false },
       });
     }
+  });
+
+  it("count the rest as other after a first line that leads with a problem, at capture risk and at can't confirm, and as signed without one (round 4)", async () => {
+    const riskCause = cause({ faultCode: 'quota', errorCode: 'quota', severity: 'capture-risk' });
+    /** @param {Record<string, unknown>} fields @param {string[]} needing */
+    const second = async (fields, needing) =>
+      (
+        await linesOf(
+          summary({
+            ...fields,
+            groups: [
+              group('storage', fields.capture === 'at-risk' ? { needsAction: 1, cause: riskCause } : {}),
+              ...needing.map(name => group(name, { needsAction: 1 })),
+            ],
+          }),
+        )
+      ).settings.second;
+    const atRisk = { capture: 'at-risk', route: 'recovery' };
+    const unsure = { capture: 'unknown', route: 'recovery' };
+    assert.deepEqual(
+      [
+        await second(atRisk, ['vault']),
+        await second(atRisk, ['vault', 'permissions']),
+        await second(unsure, ['vault']),
+        await second(unsure, ['vault', 'permissions']),
+        await second({}, ['vault']),
+        await second({}, ['vault', 'permissions']),
+        await second(atRisk, ['vault', 'permissions', 'backup']),
+      ],
+      [
+        '1 other thing needs your attention: Saved keys.',
+        '2 other things need your attention: Saved keys and Permissions.',
+        '1 other thing needs your attention: Saved keys.',
+        '2 other things need your attention: Saved keys and Permissions.',
+        '1 thing needs your attention: Saved keys.',
+        '2 things need your attention: Saved keys and Permissions.',
+        // Past two, as signed: no count of things to call other
+        'Saved keys and 2 more need your attention.',
+      ],
+    );
   });
 
   it('say saving is not verified yet before any check, and not checked recently once the last check is old', async () => {

@@ -1909,4 +1909,16 @@ describe("recovery.html with the background worker's failed start, which no chec
       close();
     }
   });
+
+  it('counts the rest as other under the headline the failed start leads (round 4)', async () => {
+    const { page, close } = await withFailedStart();
+    try {
+      await page.ready;
+      const line = () => text(page.doc.querySelector('.trust-attention-line'));
+      await until(() => /NewTabNote's own parts/.test(line()), "the headline's attention line");
+      assert.match(line(), /^(1 other thing needs|\d other things need) your attention: /);
+    } finally {
+      close();
+    }
+  });
 });

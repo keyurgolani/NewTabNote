@@ -15,7 +15,7 @@ import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
 import { rowsOn } from '../../js/trust/core/providers/rows.js';
 import { summarize } from '../../js/trust/core/summary.js';
 import { INCIDENT, INCIDENT_TEXT, PAGE, RESOLVED } from '../../js/trust/ui/copy.js';
-import { problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
+import { attentionText, problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
 
 const AT = new Date(2026, 10, 7, 18, 42).getTime();
 
@@ -408,5 +408,39 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     );
     // Saving new notes' name and status say saving new notes isn't working; its own parts list it
     assert.deepEqual([row('capture').notWorking, row('platform').notWorking], [[], ['capture']]);
+  });
+
+  it("counts the rest as other under a headline a problem leads, to match the header's badge, and as signed under one it doesn't (round 4)", () => {
+    // r2-12: the worker's failed start leads; Recovery points and NewTabNote's own parts follow
+    const report = /** @type {any} */ ({
+      ...REPORT,
+      providers: [
+        ...REPORT.providers,
+        entry('recovery-readiness', 'recovery', { status: 'unverified', receipt: null, stillWorks: [] }),
+      ],
+      incidents: [START_FAILED, KEPT, PURGE],
+    });
+    const rows = trustSections(report, { now: AT }).flatMap(section => section.rows);
+    const head = trustHeadline(SUMMARY, rows, { now: AT, checking: false });
+    assert.equal(
+      attentionText(head.attention, head.openRecovery),
+      "2 other things need your attention: Recovery points and NewTabNote's own parts.",
+    );
+    const keys = { id: 'credentials', label: 'Saved keys' };
+    const access = { id: 'permissions', label: 'Permissions' };
+    assert.deepEqual(
+      [
+        attentionText([keys], true),
+        attentionText([keys]),
+        attentionText([keys, access]),
+        attentionText([keys, access, { id: 'backup', label: 'Backups' }], true),
+      ],
+      [
+        '1 other thing needs your attention: Saved keys.',
+        '1 thing needs your attention: Saved keys.',
+        '2 things need your attention: Saved keys and Permissions.',
+        'Saved keys and 2 more need your attention.',
+      ],
+    );
   });
 });
