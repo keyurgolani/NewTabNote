@@ -158,6 +158,20 @@ export function statusOf(summary, { now, spaceNotice = false }) {
   // The group capture is at risk in: the one whose cause is a capture risk, else storage
   const risky = atRisk ? summary.groups.find(group => group.cause && group.cause.severity === 'capture-risk') || storage : null;
   const needing = summary.groups.filter(group => group.needsAction > 0 && group !== risky);
+  // Under a first line that leads with a problem, a group counts as other only if it holds a
+  // problem that needs the user besides the leading ones (the code review's R4-1): at capture
+  // risk the one the group at risk carries, or any group whose cause is a capture risk, and at
+  // can't confirm the records' own two, NewTabNoteTrust not opening and its writes failing, which
+  // its cause names. The summary counts a group's problems and names one, so a group the leading
+  // problem is in counts once it holds another
+  /** @param {Group} group */
+  const leadsIn = group => {
+    const named = group.cause;
+    if (atRisk) return group === risky || (named && named.severity === 'capture-risk') ? 1 : 0;
+    const own = named !== null && named.providerId === 'storage' && (named.faultCode === 'write-failed' || (named.faultCode === 'open-failed' && named.severity !== 'capture-risk'));
+    return unsure && own ? 1 : 0;
+  };
+  const others = summary.groups.filter(group => group.needsAction > leadsIn(group));
 
   /** @type {SidebarLine | null} */
   let sidebar = null;
@@ -186,7 +200,7 @@ export function statusOf(summary, { now, spaceNotice = false }) {
     settings: {
       first,
       // After a first line that leads with a problem, the rest are other (round 4)
-      second: settingsWords(needing.map(nameOf), atRisk || unsure),
+      second: settingsWords((atRisk || unsure ? others : needing).map(nameOf), atRisk || unsure),
       riskLine: toRecovery ? STATUS.recoveryShows : null,
       action: {
         label: toRecovery ? STATUS.openRecovery : STATUS.openTrust,

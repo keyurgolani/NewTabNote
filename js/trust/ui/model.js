@@ -279,6 +279,8 @@ function updateText(key, receipt) {
  * @property {string[]} stillWorks
  * @property {string[]} notWorking
  * @property {Incident[]} open - its open problems that aren't dismissed
+ * @property {Incident[]} counted - those that need the user: an update that's waiting doesn't
+ *   (change 9)
  * @property {RowAction | null} action
  * @property {Evidence[]} evidence
  * @property {boolean} destinations - the permissions row, which lists where NewTabNote can connect
@@ -526,6 +528,7 @@ export function trustSections(report, { now, checking = new Set() }) {
       stillWorks: stillWorks.filter(capability => !down.has(capability)),
       notWorking,
       open,
+      counted,
       action: rowAction(rowId, entries, counted),
       evidence: [...problemsFirst, .../** @type {Evidence[]} */ (entries.map(entry => evidenceOf(entry, now)).filter(Boolean))],
       destinations: rowId === 'permissions',
@@ -561,22 +564,40 @@ export function trustSections(report, { now, checking = new Set() }) {
 export function trustHeadline(summary, rows, { now, checking }) {
   const core = rows.filter(row => row.id === 'capture' || row.id === 'storage');
   const atRisk = summary.capture === 'at-risk';
-  const attention = rows
-    .filter(row => row.attention && !(atRisk && (row.id === 'capture' || row.id === 'storage')))
-    .map(row => ({ id: row.id, label: row.label }));
+  /**
+   * The rows that need the user, each its link. Under a headline a problem leads, a row counts
+   * only if it holds a problem that needs the user besides the leading ones, which the headline
+   * names, so the line never counts one as other (the code review's R4-1)
+   * @param {(incident: Incident) => boolean} [leads]
+   */
+  const needing = leads =>
+    rows
+      .filter(row => row.attention && (!leads || row.counted.some(incident => !leads(incident))))
+      .map(row => ({ id: row.id, label: row.label }));
+  const attention = needing();
   const verified = core.filter(row => row.status === 'verified' && row.time !== null).map(row => /** @type {number} */ (row.time));
   if (atRisk) {
     // At the background worker's risk, Saving new notes follows its problem, so the proof names
-    // it by its title, with no check's time (#20 slice 4c)
+    // it by its title, with no check's time (#20 slice 4c). The capture-risk problems Saving new
+    // notes and Notes database hold lead it
     const worst = core.find(row => row.id === 'storage' && row.attention) || core.find(row => row.attention) || core[0];
     const checkedAt = worst && worst.time !== null ? ` Checked ${whenText(worst.time, now)}.` : '';
-    return { tone: 'failed', title: PAGE.atRisk, proof: `${worst ? worst.text : ''}${checkedAt}`.trim(), openRecovery: true, attention };
+    const leading = new Set(core.flatMap(row => row.counted).filter(incident => incident.severity === 'capture-risk').map(incident => incident.id));
+    return {
+      tone: 'failed',
+      title: PAGE.atRisk,
+      proof: `${worst ? worst.text : ''}${checkedAt}`.trim(),
+      openRecovery: true,
+      attention: needing(incident => leading.has(incident.id)),
+    };
   }
   if (checking && verified.length === 0) {
     return { tone: 'checking', title: PAGE.checkingNotes, proof: PAGE.checkingProof, openRecovery: false, attention };
   }
   if (summary.records === 'fallback') {
-    return { tone: 'action', title: PAGE.cantConfirm, proof: PAGE.cantConfirmProof, openRecovery: true, attention };
+    // The records' own two problems lead it
+    const records = needing(incident => incident.key === OPEN_FAILED_KEY || incident.key === WRITE_FAILED_KEY);
+    return { tone: 'action', title: PAGE.cantConfirm, proof: PAGE.cantConfirmProof, openRecovery: true, attention: records };
   }
   if (summary.worstCore === 'stale' || summary.worstCore === 'unverified' || verified.length === 0) {
     const last = core.map(row => row.time).filter(time => time !== null);
