@@ -1692,3 +1692,34 @@ describe("the new tab's whole search index on the worker's queue (#262)", () => 
     assert.deepEqual(indexed.sort(), [...notes.map((record) => record.id), 'n-during-index'].sort());
   });
 });
+
+describe("the new tab's commands over the port, in the worker (#35 slice 4d)", () => {
+  it("commits the new tab's commands in the worker, its import and its automatic backup among them: each over the port answers committed, and what it wrote is in CanvasTabDB and chrome.storage.local (#35 slice 4d, rule 10)", async () => {
+    const worker = await loadBackground();
+    const page = pagePort('newtab');
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('newtab-commands');
+    requestOn(page, 'folder', { type: 'createFolder', commandId: 'c-folder', folderId: 'f-tab', name: 'From the tab', parentId: null });
+    requestOn(page, 'import', {
+      type: 'importBackup',
+      commandId: 'c-import',
+      mode: 'merge',
+      backup: { version: 1, exportedAt: 1, canvases: [{ id: 'n-imported', name: 'Imported' }], elements: [] },
+    });
+    requestOn(page, 'backup', { type: 'createAutoBackup', commandId: 'c-backup' });
+    await worker.drain();
+    assert.deepEqual(
+      ['folder', 'import', 'backup'].map((id) => {
+        const frame = page.received.find((received) => received.requestId === id);
+        return frame && [frame.frame, frame.result && frame.result.kind];
+      }),
+      [['response', 'committed'], ['response', 'committed'], ['response', 'committed']],
+      JSON.stringify(page.received),
+    );
+    const dump = await dumpDatabase(worker.indexedDB);
+    assert.ok(Object.values(recordsOf(dump, 'folders')).some((record) => record.id === 'f-tab'), 'the folder');
+    // The import gives the note it adds an id of its own
+    assert.equal(Object.values(recordsOf(dump, 'canvases')).filter((record) => record.name === 'Imported').length, 1, "the import's note");
+    assert.ok(Object.keys(plain(worker.env.chrome.local)).some((key) => key.startsWith('auto_backup_')), 'the automatic backup');
+  });
+});

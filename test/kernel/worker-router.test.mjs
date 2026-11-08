@@ -17,10 +17,12 @@ import { installWorkerRouter } from '../../js/kernel/composition/background.js';
 import { coordinatorHandlers } from '../../js/kernel/composition/coordinator.js';
 import * as coordination from '../../js/kernel/composition/coordinator.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
+import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
 import { WORKER_ONLY_COMMANDS, WORKER_ONLY_QUERIES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { PAGE_FILES, createChromeFake } from './chrome-fake.mjs';
+import { COMMAND_SAMPLES } from './command-samples.mjs';
 import { hello, request, settle } from './messaging-support.mjs';
 
 /** @typedef {keyof typeof import('./chrome-fake.mjs').PAGE_FILES} PageSurface */
@@ -280,6 +282,50 @@ describe('the worker\'s router (#13, "Topology")', () => {
     assert.deepEqual(
       begins.map(begin => begin()),
       [false, false],
+    );
+  });
+
+  it("hands every command the new tab sends to the coordinator's queue as the new tab, each with its request's own begin, but its session's write and startup maintenance, which the router doesn't know (#35 slice 4d, rule 10)", async () => {
+    // The catalog's, not the worker's tables', so a lookup that drops one is caught
+    const stayOff = ['saveWorkspaceSession', 'runStartupMaintenance'];
+    const sends = Object.keys(COMMANDS).filter(
+      type =>
+        COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].surfaces.includes('newtab') && !stayOff.includes(type),
+    );
+    assert.equal(sends.length, 46);
+    /** @type {Array<[unknown, unknown, unknown]>} */
+    const queued = [];
+    const coordinator = {
+      /** @param {any} command @param {any} [dispatch] */
+      enqueue: async (command, dispatch = {}) => {
+        queued.push([command.type, dispatch.surface, typeof dispatch.begin === 'function' && dispatch.begin()]);
+        return committed('note-created', []);
+      },
+    };
+    const handlers = /** @type {any} */ (coordination).pageCommandHandlers?.(() => coordinator) ?? {};
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, handlers });
+    });
+    const port = fake.page('newtab').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    port.postMessage(encode(hello('newtab', 's1')));
+    for (const type of [...sends, ...stayOff]) {
+      const fields = COMMAND_SAMPLES[/** @type {keyof typeof COMMAND_SAMPLES} */ (type)];
+      port.postMessage(encode(request(`r-${type}`, { ...fields, type, commandId: `c-${type}` }, soon())));
+    }
+    for (let round = 0; round < 10; round++) await settle();
+    assert.deepEqual(
+      frames.filter(frame => frame.frame === 'error').map(frame => [frame.requestId, frame.code]),
+      stayOff.map(type => [`r-${type}`, 'unknown-operation']),
+    );
+    assert.deepEqual(
+      [...queued].sort(([a], [b]) => String(a).localeCompare(String(b))),
+      sends.map(type => [type, 'newtab', true]).sort(([a], [b]) => String(a).localeCompare(String(b))),
     );
   });
 
