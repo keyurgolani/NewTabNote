@@ -17,9 +17,11 @@ describe("App's sync indicator (#13)", () => {
     await createDatabase(env.indexedDB, {});
     env.load(...FILES);
     const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+    // The in-page kernel the tests build, as the root built it before #35 slice 4d
+    const { newTabTestAdapter, newTabTestClient } = await loadPageModule(env, 'test/helpers/newtab-kernel.mjs');
     const host = root.newTabHost();
-    const adapter = root.createNewTabAdapter(host);
-    const kernel = root.createNewTabClient(adapter);
+    const adapter = newTabTestAdapter(host);
+    const kernel = newTabTestClient(adapter);
     assert.equal(await kernel.whenReady(), null);
     const shown = [];
     const app = {

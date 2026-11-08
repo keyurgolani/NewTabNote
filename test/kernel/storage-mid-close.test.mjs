@@ -28,7 +28,7 @@ import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapt
 import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { WORKER_TASKS } from '../../js/kernel/adapters/indexeddb/worker-tasks.js';
 import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
-import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
+import { newTabTestAdapter } from '../helpers/newtab-kernel.mjs';
 import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { dump, legacyEnv, newProfile, profileWith, recordsIn, run, synthesized } from './migration-support.mjs';
@@ -50,7 +50,7 @@ const clock = { now: () => Date.UTC(2026, 9, 31, 12), zone: () => 'UTC' };
 async function newTab() {
   const of = await profileWith(/** @type {any} */ (synthesized().get('v8.basic')));
   assert.equal((await run(of)).status, 'migrated');
-  const adapter = createNewTabAdapter({
+  const adapter = newTabTestAdapter({
     indexedDB: of.real,
     settings: of.chrome.api.storage.local,
     awaitUpgrade: async () => {},
@@ -368,7 +368,7 @@ describe("#17's adapter, as the new tab's root opens it, when its connection goe
 
   it("another context's upgrade lands while a command commits at 8, with no ledger to answer a resend: the command runs once and answers committed", { timeout: 10_000 }, async () => {
     const of = await profileWith(/** @type {any} */ (synthesized().get('v8.basic')));
-    const adapter = createNewTabAdapter({
+    const adapter = newTabTestAdapter({
       indexedDB: of.real,
       settings: of.chrome.api.storage.local,
       awaitUpgrade: async () => {},

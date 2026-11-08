@@ -225,6 +225,8 @@ export const COMPOSERS = Object.freeze({
   // lazy-failure-events.js, the new tab's, only imports this one and composes nothing itself)
   'js/kernel/composition/trust.js': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },
   'test/kernel/storage-fixture.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
+  // #35 slice 4d: the in-page kernel the tests build, #17's adapter as the new tab's root opened it before
+  'test/helpers/newtab-kernel.mjs': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
   'test/kernel/trust-support.mjs': { port: 'trust-store', of: ['js/kernel/adapters/indexeddb/trust.js'] },
 });
 

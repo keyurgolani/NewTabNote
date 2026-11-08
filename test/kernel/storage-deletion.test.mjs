@@ -22,7 +22,7 @@ import {
   verifyPoint,
   DEFAULT_LIMITS,
 } from '../../js/kernel/adapters/indexeddb/recovery-points.js';
-import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
+import { newTabTestAdapter } from '../helpers/newtab-kernel.mjs';
 import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import {
@@ -161,7 +161,7 @@ async function onIndexedDb(of) {
  * @param {Profile} of
  */
 async function onNewTab(of) {
-  const adapter = createNewTabAdapter({
+  const adapter = newTabTestAdapter({
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     awaitUpgrade: async () => {},

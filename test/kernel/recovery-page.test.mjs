@@ -13,7 +13,7 @@ import path from 'node:path';
 import { webcrypto } from 'node:crypto';
 
 import { waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
-import { createNewTabAdapter, createNewTabClient } from '../../js/kernel/composition/newtab.js';
+import { newTabTestAdapter, newTabTestClient } from '../helpers/newtab-kernel.mjs';
 import { createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
 import { CONSEQUENCE, INCIDENT, PAGE, REASON, REBUILD, RESOLVED, UPDATE_SAVES, UPDATE_STATUS } from '../../js/trust/ui/copy.js';
 import {
@@ -83,14 +83,14 @@ const opened = new Map();
  * @param {LegacyContext} context
  */
 function newTabOn(context) {
-  const adapter = createNewTabAdapter({
+  const adapter = newTabTestAdapter({
     indexedDB: context.env.indexedDB,
     settings: context.env.chrome.api.storage.local,
     awaitUpgrade: () => waitForWorkerUpgrade({ runtime: context.env.chrome.api.runtime }),
     locks: context.env.global.navigator.locks || null,
   });
   opened.set(context, [...(opened.get(context) || []), adapter]);
-  return createNewTabClient(adapter);
+  return newTabTestClient(adapter);
 }
 
 /**

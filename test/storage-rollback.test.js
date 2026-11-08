@@ -103,16 +103,18 @@ async function capture(worker) {
 }
 
 /**
- * The new tab on `worker`'s profile, as its root opens it since #17 PR 4a: #17's adapter, its one
+ * The new tab on `worker`'s profile, as its root opened it from #17 PR 4a to #35 slice 4d, the
+ * in-page kernel the tests build (test/helpers/newtab-kernel.mjs): #17's adapter, its one
  * connection since #17 PR 4b, once it's ready
  */
 async function newTab(worker) {
   const page = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.chrome });
   page.load('js/utils.js', 'js/core/storage-error.js', 'js/storage.js');
   const root = await loadPageModule(page, 'js/kernel/composition/newtab.js');
+  const { newTabTestAdapter, newTabTestClient } = await loadPageModule(page, 'test/helpers/newtab-kernel.mjs');
   const host = root.newTabHost();
-  const adapter = root.createNewTabAdapter(host);
-  const client = root.createNewTabClient(adapter);
+  const adapter = newTabTestAdapter(host);
+  const client = newTabTestClient(adapter);
   const failure = await runUntil(page, client.whenReady());
   assert.equal(failure, null, JSON.stringify(plain(failure)));
   /** Closes the tab's connection, as closing the tab does */
