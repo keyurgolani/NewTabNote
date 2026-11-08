@@ -39,7 +39,10 @@ import { HEALTH_GROUPS, SEVERITIES } from './vocabulary.js';
  * @property {Array<{group: string, needsAction: number, checkedAt: number | null, cause: StatusCause | null}>} groups
  */
 
-/** The message's type, which no other message of the worker's takes */
+/**
+ * The message's type, which no other message of the worker's takes. The new tab's ask repeats it
+ * (js/kernel/composition/trust-status-ask.js), since its chunk loads no trust code.
+ */
 export const TRUST_STATUS_MESSAGE = 'trust.status';
 
 const CAPTURES = Object.freeze(['safe', 'at-risk', 'unknown']);

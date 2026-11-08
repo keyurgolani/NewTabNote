@@ -1680,6 +1680,56 @@ a.setting-link {
   text-decoration: none;
 }
 
+/* The new tab's status lines (#20 slice 4c, js/kernel/composition/trust-status.js): the
+   sidebar's line just above its footer, and Settings' Trust Center lines over the section's lead.
+   Their hairline, hover and capture-risk tone share the sidebar's and the menus' declarations */
+.trust-sidebar-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.trust-sidebar-go {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.trust-settings-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+/* A status shape: a 1rem box its SVG fills, in the labels' gray unless its tone says otherwise */
+.trust-glyph {
+  display: inline-flex;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-secondary);
+}
+
+.trust-settings-status .trust-glyph {
+  margin-top: 0.1875rem;
+}
+
+.trust-glyph svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
 /* API Key Security (Req 38) */
 .api-key-input-group {
   display: flex;
@@ -2904,9 +2954,14 @@ a.setting-link {
   align-items: center;
   gap: 4px;
   padding: 8px 12px;
-  border-top: 1px solid var(--border-color);
   margin-top: auto;
   flex-shrink: 0;
+}
+
+/* The footer's hairline, and the status line's just above it (#20 slice 4c) */
+.sidebar-footer,
+.trust-sidebar-line {
+  border-top: 1px solid var(--border-color);
 }
 
 .sidebar-footer-btn {
@@ -3043,7 +3098,8 @@ a.setting-link {
   position: relative;
 }
 
-.sidebar-note-item:hover {
+.sidebar-note-item:hover,
+.trust-sidebar-line:hover {
   background: var(--bg-hover);
 }
 
@@ -3218,7 +3274,9 @@ a.setting-link {
   background: var(--bg-hover);
 }
 
-.context-menu-item.danger {
+/* The danger tone: a menu item that deletes, and the status lines' shape at capture risk (#20 slice 4c) */
+.context-menu-item.danger,
+.trust-glyph.trust-tone-failed {
   color: var(--danger-color);
 }
 
