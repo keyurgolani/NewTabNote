@@ -337,5 +337,31 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       [probed.attention, probed.text],
       [true, "NewTabNote couldn't save a test entry, so new notes and captures may not be saved."],
     );
+    // A problem a check here covers stays on its own row, though it stops saving new notes too:
+    // Notes database holds the database that won't open, and Saving new notes reads as its check
+    // found it
+    const unopened = /** @type {any} */ ({
+      ...REPORT,
+      incidents: [
+        {
+          ...START_FAILED,
+          id: '00000000-0000-4000-8000-0000000000e6',
+          ref: '0000e6',
+          key: 'storage/open-failed/CanvasTabDB',
+          providerId: 'storage',
+          faultCode: 'open-failed',
+          subjectId: 'CanvasTabDB',
+          affected: ['capture', 'editing', 'reading'],
+          preserved: [],
+        },
+      ],
+    });
+    assert.deepEqual(
+      trustSections(unopened, { now: AT })
+        .flatMap(section => section.rows)
+        .filter(row => row.attention)
+        .map(row => row.id),
+      ['storage'],
+    );
   });
 });
