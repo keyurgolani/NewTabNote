@@ -85,10 +85,12 @@
   ],
   "indexeddb": {
     "adapter.js": "writer",
+    "backup-file.js": "shared",
     "backups.js": "writer",
     "changes.js": "writer",
     "conflicts.js": "shared",
     "connection.js": "shared",
+    "copy-reads.js": "shared",
     "daily-answer.js": "shared",
     "data-urls.js": "shared",
     "deletion.js": "writer",
