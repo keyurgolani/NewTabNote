@@ -59,7 +59,14 @@ function tabDocument() {
  * @param {string} group
  * @param {Record<string, unknown>} [fields]
  */
-const group = (group, fields = {}) => ({ group, needsAction: 0, checkedAt: CHECKED, cause: null, ...fields });
+const group = (group, fields = {}) => ({
+  group,
+  needsAction: 0,
+  leading: 0,
+  checkedAt: CHECKED,
+  cause: null,
+  ...fields,
+});
 
 /** @param {Record<string, unknown>} [fields] */
 const status = (fields = {}) => ({
@@ -77,6 +84,7 @@ const AT_RISK = status({
   groups: [
     group('storage', {
       needsAction: 1,
+      leading: 1,
       cause: {
         from: 'incident',
         providerId: 'storage',

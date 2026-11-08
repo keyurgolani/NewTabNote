@@ -42,11 +42,24 @@ const page = (/** @type {string} */ file, /** @type {Record<string, unknown>} */
 
 const READ = Object.freeze({ type: 'trust.status' });
 
+/** The problems seeded() raises unless given others: three groups, one a capture risk from the worker */
+const SEEDED = /** @type {const} */ ([
+  ['storage', 'scan-findings', 'degraded', 'CanvasTabDB'],
+  ['credentials', 'legacy-secret', 'data-risk', 'setting_llmApiKey'],
+  ['coordinator', 'start-failed', 'capture-risk', null],
+]);
+
+/** The seeded problems that lead: the worker's failed start, at capture risk, in NewTabNote's own parts */
+const SEEDED_LEADING = new Map([['platform', 1]]);
+
 /**
- * Records with problems in three groups, one of them dismissed and one a capture risk from the
- * background worker, and the use cases a workspace root runs over the whole catalog on them
+ * Records with `problems`, by default problems in three groups, one of them dismissed and one a
+ * capture risk from the background worker, and the use cases a workspace root runs over the
+ * whole catalog on them
+ * @param {ReadonlyArray<readonly [string, string, string, string | null]>} [problems]
+ * @param {number | null} [dismiss] - the index of the problem dismissed, or null for none
  */
-async function seeded() {
+async function seeded(problems = SEEDED, dismiss = 1) {
   const clock = manualClock();
   const store = createMemoryTrustStore();
   const settings = settingsArea();
@@ -68,16 +81,12 @@ async function seeded() {
   });
   /** @type {string[]} */
   const ids = [];
-  for (const [providerId, faultCode, severity, subjectId] of /** @type {const} */ ([
-    ['storage', 'scan-findings', 'degraded', 'CanvasTabDB'],
-    ['credentials', 'legacy-secret', 'data-risk', 'setting_llmApiKey'],
-    ['coordinator', 'start-failed', 'capture-risk', null],
-  ])) {
+  for (const [providerId, faultCode, severity, subjectId] of problems) {
     clock.advance(1000);
     const raised = /** @type {any} */ (
       await trust.raise({
         type: 'recovery.raise',
-        commandId: `c-${faultCode}`,
+        commandId: `c-${providerId}-${faultCode}`,
         providerId,
         faultCode,
         severity,
@@ -87,10 +96,17 @@ async function seeded() {
     assert.equal(raised.kind, 'committed', JSON.stringify(raised));
     ids.push(raised.changedIds[0]);
   }
-  const dismissed = /** @type {any} */ (
-    await trust.dismiss({ type: 'recovery.dismiss', commandId: 'c-dismiss', incidentId: ids[1], occurrences: 1 })
-  );
-  assert.equal(dismissed.kind, 'committed', JSON.stringify(dismissed));
+  if (dismiss !== null) {
+    const dismissed = /** @type {any} */ (
+      await trust.dismiss({
+        type: 'recovery.dismiss',
+        commandId: 'c-dismiss',
+        incidentId: ids[dismiss],
+        occurrences: 1,
+      })
+    );
+    assert.equal(dismissed.kind, 'committed', JSON.stringify(dismissed));
+  }
   return { clock, store, settings, trust };
 }
 
@@ -160,7 +176,8 @@ describe("the worker's status read (#20 slice 4c)", () => {
     });
     const summary = /** @type {any} */ (await trust.summary());
     assert.equal(summary.kind, 'ready');
-    const expected = narrowStatus(summary.data);
+    // With each group's count of the problems that lead (the code review's F1)
+    const expected = narrowStatus(summary.data, SEEDED_LEADING);
     for (let ask = 0; ask < 2; ask++) {
       assert.deepEqual(await read(READ, page('newtab.html')), expected, `ask ${ask + 1}`);
     }
@@ -171,9 +188,76 @@ describe("the worker's status read (#20 slice 4c)", () => {
       ['at-risk', ['storage', 'platform']],
     );
     assert.deepEqual(
+      /** @type {any} */ (await read(READ, page('newtab.html'))).groups
+        .filter((/** @type {any} */ group) => group.needsAction > 0)
+        .map((/** @type {any} */ group) => [group.group, group.needsAction, group.leading]),
+      [
+        ['storage', 1, 0],
+        ['platform', 1, 1],
+      ],
+    );
+    assert.deepEqual(
       STATUS_ROWS.map(row => row.id),
       PROVIDERS.map(descriptor => descriptor.id),
       "the new tab's rows: every provider runs there",
+    );
+  });
+
+  it("carries each group's count of the problems that lead its first line: at capture risk both probes out of space, and otherwise the records' own two, NewTabNoteTrust not opening and its writes failing (the code review's F1)", async () => {
+    const { workerStatusRead } = await import('../../js/kernel/composition/trust-status-read.js');
+    const key = /** @type {const} */ (['credentials', 'legacy-secret', 'data-risk', 'setting_llmApiKey']);
+    /** @param {ReadonlyArray<readonly [string, string, string, string | null]>} problems */
+    const answered = async problems => {
+      const { clock, store, settings } = await seeded(problems, null);
+      const { store: makeStore, build } = watchedRecords(store, settings, clock);
+      const read = workerStatusRead({
+        store: makeStore,
+        records: /** @type {any} */ (build),
+        clock,
+        extensionId: () => EXT,
+      });
+      const answer = /** @type {any} */ (await read(READ, page('newtab.html')));
+      return [
+        answer.capture,
+        answer.route,
+        answer.groups
+          .filter((/** @type {any} */ group) => group.needsAction > 0)
+          .map((/** @type {any} */ group) => [group.group, group.needsAction, group.leading]),
+      ];
+    };
+    assert.deepEqual(
+      [
+        // Both probes out of space, in the storage group, and a saved key beside them
+        await answered([
+          ['capture', 'quota', 'capture-risk', 'CanvasTabDB'],
+          ['storage', 'quota', 'capture-risk', 'CanvasTabDB'],
+          key,
+        ]),
+        // NewTabNoteTrust not opening and its writes failing, together, and a saved key beside them
+        await answered([
+          ['storage', 'open-failed', 'data-risk', 'NewTabNoteTrust'],
+          ['storage', 'write-failed', 'data-risk', null],
+          key,
+        ]),
+      ],
+      [
+        [
+          'at-risk',
+          'recovery',
+          [
+            ['storage', 2, 2],
+            ['vault', 1, 0],
+          ],
+        ],
+        [
+          'unknown',
+          'recovery',
+          [
+            ['storage', 2, 2],
+            ['vault', 1, 0],
+          ],
+        ],
+      ],
     );
   });
 
@@ -223,7 +307,7 @@ describe("the worker's status read (#20 slice 4c)", () => {
       clock,
       extensionId: () => EXT,
     });
-    const expected = narrowStatus(/** @type {any} */ (await trust.summary()).data);
+    const expected = narrowStatus(/** @type {any} */ (await trust.summary()).data, SEEDED_LEADING);
     // Two tabs opened at a cold start, or a tab and Popup: neither waits for the other
     const asks = [read(READ, page('newtab.html')), read(READ, page('popup.html'))];
     await new Promise(resolve => setImmediate(resolve));
@@ -265,7 +349,7 @@ describe("the worker's status read (#20 slice 4c)", () => {
     // Past the wait before records try an open that was still connecting again, so only a state
     // that outlives its ask could hold the next one blind
     clock.advance(PENDING_RETRY_MS + 1);
-    const expected = narrowStatus(/** @type {any} */ (await trust.summary()).data);
+    const expected = narrowStatus(/** @type {any} */ (await trust.summary()).data, SEEDED_LEADING);
     assert.deepEqual(await read(READ, page('newtab.html')), expected, 'the next ask opens the store and reads it');
     assert.equal(opens, 2);
   });

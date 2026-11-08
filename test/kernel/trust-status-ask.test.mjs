@@ -28,7 +28,14 @@ const CHECKED = NOW - 5 * 60 * 1000;
  * @param {string} group
  * @param {Record<string, unknown>} [fields]
  */
-const group = (group, fields = {}) => ({ group, needsAction: 0, checkedAt: CHECKED, cause: null, ...fields });
+const group = (group, fields = {}) => ({
+  group,
+  needsAction: 0,
+  leading: 0,
+  checkedAt: CHECKED,
+  cause: null,
+  ...fields,
+});
 
 /** @param {Record<string, unknown>} [fields] */
 const status = (fields = {}) => ({
@@ -99,13 +106,17 @@ const GROUP_LISTS = /** @type {Array<[string, unknown[]]>} */ ([
   ],
   [
     'storage at capture risk',
-    [group('storage', { needsAction: 1, cause: incident('storage', 'open-failed', 'capture-risk') })],
+    [group('storage', { needsAction: 1, leading: 1, cause: incident('storage', 'open-failed', 'capture-risk') })],
   ],
   [
     'the worker at capture risk',
     [
       group('storage'),
-      group('platform', { needsAction: 1, cause: incident('coordinator', 'start-failed', 'capture-risk') }),
+      group('platform', {
+        needsAction: 1,
+        leading: 1,
+        cause: incident('coordinator', 'start-failed', 'capture-risk'),
+      }),
     ],
   ],
   [
@@ -163,13 +174,16 @@ function malformed() {
     ['a group twice', { ...clear, groups: [group('storage'), group('storage')] }],
     ['more groups than there are', { ...clear, groups: Array.from({ length: 10 }, () => group('vault')) }],
     ['a group that is no object', { ...clear, groups: [null] }],
-    ['a group as a list', { ...clear, groups: [['storage', 0, CHECKED, null]] }],
+    ['a group as a list', { ...clear, groups: [['storage', 0, 0, CHECKED, null]] }],
     ["a group's providers", edited(answer => (answer.groups[0].providers = 2))],
     ['a group with no cause', edited(answer => delete answer.groups[0].cause)],
     ['a count of needs below zero', edited(answer => (answer.groups[0].needsAction = -1))],
     ['a count of needs that is no whole number', edited(answer => (answer.groups[0].needsAction = 0.5))],
     ['a count of needs as text', edited(answer => (answer.groups[0].needsAction = '0'))],
     ['a count of needs that is no number', edited(answer => (answer.groups[0].needsAction = Number.NaN))],
+    ['a group with no count of the problems that lead', edited(answer => delete answer.groups[0].leading)],
+    ['a count of the problems that lead below zero', edited(answer => (answer.groups[0].leading = -1))],
+    ['problems that lead with nothing needing action', edited(answer => (answer.groups[0].leading = 1))],
     ['a time as text', edited(answer => (answer.groups[0].checkedAt = 'yesterday'))],
     ['a time before 1970', edited(answer => (answer.groups[0].checkedAt = -5))],
     ['a time that is no number', edited(answer => (answer.groups[0].checkedAt = Number.NaN))],

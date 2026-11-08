@@ -119,7 +119,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
   });
 
   it('read an update that waits as saving normally, and show no line for it', async () => {
-    const { summarize } = await import('../../js/trust/core/summary.js');
+    const { leadingOf, summarize } = await import('../../js/trust/core/summary.js');
     const { narrowStatus } = await import('../../js/trust/core/status-message.js');
     const { rowsOn } = await import('../../js/trust/core/providers/rows.js');
     /**
@@ -165,30 +165,31 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
       evidence: {},
       appliedOps: [],
     };
-    const waiting = narrowStatus(
-      summarize({
-        providers: rowsOn('workspace'),
-        receipts: /** @type {any} */ ([
-          receipt('capture'),
-          receipt('storage', {
-            status: 'degraded',
-            consequenceKey: 'storage.migration-pending',
-            evidence: { subjectId: 'CanvasTabDB' },
-          }),
-        ]),
-        incidents: /** @type {any} */ ([update]),
-        copyRead: true,
-        recordsRead: true,
-        recordsState: 'open',
-        now: NOW,
-      }),
-    );
+    /** @type {import('../../js/trust/core/summary.js').SummaryInput} */
+    const input = {
+      providers: rowsOn('workspace'),
+      receipts: /** @type {any} */ ([
+        receipt('capture'),
+        receipt('storage', {
+          status: 'degraded',
+          consequenceKey: 'storage.migration-pending',
+          evidence: { subjectId: 'CanvasTabDB' },
+        }),
+      ]),
+      incidents: /** @type {any} */ ([update]),
+      copyRead: true,
+      recordsRead: true,
+      recordsState: 'open',
+      now: NOW,
+    };
+    const waiting = narrowStatus(summarize(input), leadingOf(input));
     // The update is open, and it waits, so the storage group needs nothing for it
     assert.deepEqual(
       waiting.groups.find(item => item.group === 'storage'),
       {
         group: 'storage',
         needsAction: 0,
+        leading: 0,
         checkedAt: CHECKED,
         cause: null,
       },
