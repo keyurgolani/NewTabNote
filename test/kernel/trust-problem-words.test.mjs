@@ -884,7 +884,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual(lines([KEPT])[1], ['platform', "A change NewTabNote kept isn't in your notes yet.", []]);
   });
 
-  it("names each problem on NewTabNote's own parts' lines by its own status word, and nothing more on another row: a part that didn't load reads Partly working, and Saving new notes, with a page capture beside the worker's failed start, names neither again (round 5)", () => {
+  it("names each problem on a row's lines by its own status word: a part that didn't load reads Partly working on NewTabNote's own parts, and Saving new notes, with a page capture beside the worker's failed start, names the one its line doesn't (round 5, and the code review's R5-2)", () => {
     /** A part of NewTabNote that didn't load, as its event raises it */
     const part = /** @type {any} */ ({
       ...START_FAILED,
@@ -904,10 +904,92 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       { status: 'Needs action', what: "a change NewTabNote kept isn't in your notes yet" },
       { status: 'Partly working', what: "part of NewTabNote didn't load" },
     ]);
-    // Only NewTabNote's own parts names more, as signed: Saving new notes holds two and names none
+    // Every row names more, as signed in round 5's check titles: Saving new notes holds two, its
+    // line names the page capture, seen last, and the worker's failed start comes after it
     const earlier = { ...START_FAILED, firstSeenAt: AT - 120_000, lastSeenAt: AT - 60_000 };
     const capture = findingOver('capture', 'storage', 'capture-failed', 'capture-risk', ['capture'], [earlier]);
-    assert.deepEqual([capture.counted.length, capture.problemLines], [2, []]);
+    assert.deepEqual(
+      [capture.text, capture.problemLines],
+      [
+        "A page capture wasn't saved.",
+        [{ status: 'Not working', what: "the background worker couldn't start saving" }],
+      ],
+    );
+  });
+
+  it("names on every row's visible lines each problem it's counted for that its line doesn't, not only on NewTabNote's own parts: Notes database out of space names its scan finding too, and a title that starts with a name keeps it, as Chrome (the code review's R5-2, signed as round 5's check titles)", () => {
+    /** A problem of `providerId`'s, as its producer raises it */
+    const raised = (/** @type {string} */ n, /** @type {Record<string, unknown>} */ fields) =>
+      /** @type {any} */ ({
+        ...START_FAILED,
+        id: `00000000-0000-4000-8000-0000000000${n}`,
+        ref: `0000${n}`,
+        affected: [],
+        preserved: [],
+        ...fields,
+      });
+    const quota = (/** @type {string} */ providerId, /** @type {string} */ n) =>
+      raised(n, {
+        key: `${providerId}/quota/CanvasTabDB`,
+        providerId,
+        faultCode: 'quota',
+        subjectId: 'CanvasTabDB',
+        severity: 'capture-risk',
+        affected: ['capture'],
+      });
+    const scan = raised('d1', {
+      key: 'storage/scan-findings/CanvasTabDB',
+      providerId: 'storage',
+      faultCode: 'scan-findings',
+      subjectId: 'CanvasTabDB',
+      severity: 'degraded',
+      evidence: { count: 3 },
+    });
+    const rowsOf = (/** @type {any[]} */ providers, /** @type {any[]} */ incidents) =>
+      trustSections(/** @type {any} */ ({ ...REPORT, providers, incidents }), { now: AT }).flatMap(
+        section => section.rows,
+      );
+    // Both probes out of space, and a scan finding: the headline counts Notes database as other
+    // for the finding, and its line names the space it's out of, so the finding comes after it
+    const space = rowsOf(REPORT.providers, [quota('capture', 'd2'), quota('storage', 'd3'), scan]);
+    assert.deepEqual(
+      space
+        .filter(row => row.id === 'capture' || row.id === 'storage')
+        .map(row => [row.id, row.text, /** @type {any} */ (row).problemLines]),
+      [
+        ['capture', 'This device is out of space for NewTabNote.', []],
+        [
+          'storage',
+          'This device is out of space for NewTabNote.',
+          [{ status: 'Partly working', what: "3 blocks aren't in any note" }],
+        ],
+      ],
+    );
+    // A title as the rest of a sentence keeps a name it starts with
+    const access = rowsOf(
+      [...REPORT.providers, entry('permissions', 'permissions')],
+      [
+        raised('d4', {
+          key: 'permissions/grant-missing',
+          providerId: 'permissions',
+          faultCode: 'grant-missing',
+          severity: 'data-risk',
+        }),
+        raised('d5', {
+          key: 'permissions/permission-changed',
+          providerId: 'permissions',
+          faultCode: 'permission-changed',
+          severity: 'degraded',
+        }),
+      ],
+    ).find(row => row.id === 'permissions');
+    assert.deepEqual(
+      [/** @type {any} */ (access).text, /** @type {any} */ (access).problemLines],
+      [
+        'Site access is limited.',
+        [{ status: 'Partly working', what: 'Chrome grants NewTabNote more than it asks for' }],
+      ],
+    );
   });
 
   it("leaves out of the line under a problem that leads a row the user needs only by its check's status, as the header's badge counts no such row, and keeps it under a headline no problem leads: Saved keys, its key dismissed while its check still asks (round 4b)", () => {
