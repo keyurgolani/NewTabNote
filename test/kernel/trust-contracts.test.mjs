@@ -259,14 +259,26 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     'js/trust/core/vocabulary.js',
   ];
 
-  it('is reached statically only from the service worker, through its failure events, and from no page', () => {
+  /**
+   * What the worker loads: the failure events' graph, and the status read it answers the status
+   * pages from its records (#20 slice 4c, composition/trust-status-read.js)
+   */
+  const WORKER_GRAPH = [
+    ...FAILURE_EVENTS_GRAPH,
+    'js/trust/core/providers/rows.js',
+    'js/trust/core/status-message.js',
+    'js/trust/core/summary.js',
+    'js/trust/core/updates.js',
+  ].sort();
+
+  it("is reached statically only from the service worker, through its failure events and the status pages' status read, and from no page", () => {
     const pages = ['offscreen.html'].filter(page => fs.existsSync(path.join(ROOT, page)));
     const graph = readScriptGraph(ROOT, { pages });
     const pageLoaded = [...[...graph.pageModules.values()].flat().map(({ file }) => file), ...graph.classic];
     assert.ok(pageLoaded.length > 20, 'the script graph found too little to mean anything');
     assert.ok(graph.pageModules.has('newtab.html') && graph.pageModules.has('sidepanel.html'));
     assert.deepEqual(pageLoaded.filter(isTrust), []);
-    assert.deepEqual([...graph.workerFiles].filter(isTrust).sort(), FAILURE_EVENTS_GRAPH);
+    assert.deepEqual([...graph.workerFiles].filter(isTrust).sort(), WORKER_GRAPH);
     const events = path.join(ROOT, 'js', 'kernel', 'composition', 'trust.js');
     assert.deepEqual(
       [...importGraph(events)]

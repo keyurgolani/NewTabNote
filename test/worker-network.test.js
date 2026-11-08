@@ -102,11 +102,12 @@ describe('js/background.js installs it, and handles none of its messages itself'
     assert.equal(code.match(/\binstallWorkerNetwork\(/g)?.length, 1);
     // With the guard, the journal, and the worker's own handlers (#17 PR 1b: a page's wait on
     // the migration; #17 PR 2b: a page's purge after a delete for good; #35 slice 3: a page's
-    // wake to drain the journal), and nothing else
+    // wake to drain the journal; #20 slice 4c: a status page's status read), and nothing else
     assert.match(
       code,
-      /\binstallWorkerNetwork\(\{ guard: contextGuard, events: failureEvents, ownHandlers: \{ \[MIGRATE_MESSAGE\]: migrationStatus, \[PURGE_MESSAGE\]: purgeStatus, \[DRAIN_MESSAGE\]: drainStatus \} \}\);/,
+      /\binstallWorkerNetwork\(\{ guard: contextGuard, events: failureEvents, ownHandlers: \{ \[MIGRATE_MESSAGE\]: migrationStatus, \[PURGE_MESSAGE\]: purgeStatus, \[DRAIN_MESSAGE\]: drainStatus, \[TRUST_STATUS_MESSAGE\]: statusRead \} \}\);/,
     );
+    assert.match(code, /\bconst statusRead = workerStatusRead\(\);/);
     assert.match(code, /import \{[^}]*\binstallWorkerNetwork\b[^}]*\} from '\.\/kernel\/composition\/worker-network\.js';/);
     for (const pattern of [/onMessage\s*\.\s*addListener/, /\bonMessage\b/, /API_REQUEST/, /NETWORK_REFUSED|REFUSAL_MESSAGE/, /createDocument/, /\bcheckRequest\b/, /\bsend\(/, /api-request\.js/, /network-refusals\.js/, /\brefuseAll\b/, /\bonRefused\b/]) {
       assert.doesNotMatch(code, pattern);
