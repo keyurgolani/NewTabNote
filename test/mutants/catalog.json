@@ -1070,6 +1070,56 @@
       "replace": "  /(?:^|\\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk|sidepanel-send-chunk)-[A-Za-z0-9_-]+\\.js$/;\n",
       "test": "test/bundler.test.js",
       "name": "preloads nothing beside close-drafts-applier, which the pages import on a start that finds a draft, or close-drafts-chunk under it, or beside journal-chunk, which they import on their first journaled command or at idle, or beside Side Panel's or the new tab's send chunk, which each imports at its first command, the new tab's at idle too, and every other import's own list (#33, the lead's trim 2; #35 slices 3b, 4c and 4d; #6)"
+    },
+    {
+      "id": "editor-reload-taken-as-stored",
+      "behavior": "#35 port commands",
+      "protects": "A save answered reload-required shows the reload notice, never Saved, since over the port nothing was stored.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return 'reload';\n",
+      "replace": "      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return typeof this.documentClient.connectionOpen !== 'function' || this.documentClient.connectionOpen() ? 'stored' : 'reload';\n",
+      "test": "test/editor-save.test.js",
+      "name": "a save answered reload-required is never taken as stored, though the connection was open as it began: the editor shows the reload notice, not Saved, since over the port nothing went (#35 slice 4d, rule 12, R6)"
+    },
+    {
+      "id": "editor-unknown-revert-unsettled",
+      "behavior": "#35 port commands",
+      "protects": "A revert whose answer stays unknown reads the note as stored, and says Reverted to snapshot when it holds the snapshot's blocks.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'unknown') {\n        const stored = await this._storedRevert(noteId, snap.blocks || []);\n",
+      "replace": "      if (false) {\n        const stored = await this._storedRevert(noteId, snap.blocks || []);\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "shows the snapshot and says Reverted to snapshot when the note as stored holds its blocks"
+    },
+    {
+      "id": "editor-unread-revert-releases-saves",
+      "behavior": "#35 port commands",
+      "protects": "A revert that neither its answer nor the note as stored settles keeps saves held, so no save lands on a note it may have restored.",
+      "file": "js/editor.js",
+      "find": "      if (holding && !keepHeld) this.releaseSaves();\n",
+      "replace": "      if (holding) this.releaseSaves();\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "keeps saves held and shows the reload notice when the note as stored can't be read either, so no save lands on a note the revert may have restored"
+    },
+    {
+      "id": "editor-migrating-as-failure",
+      "behavior": "#35 port commands",
+      "protects": "A save the worker answered migrating waits calmly and goes again, never shown as a failure.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'unavailable' && outcome.code === 'migrating') return 'migrating';\n",
+      "replace": "",
+      "test": "test/editor-save.test.js",
+      "name": "waits calmly on a save answered migrating, with no toast or notice, and goes again every few seconds until it commits (rule 18, S7, R22)"
+    },
+    {
+      "id": "editor-too-large-retried",
+      "behavior": "#35 port commands",
+      "protects": "A save over the ceiling says so in its notice's words and keeps its text on screen, and nothing retries it.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'rejected' && outcome.code === 'payload-too-large') return 'too-large';\n",
+      "replace": "",
+      "test": "test/editor-save.test.js",
+      "name": "refuses a change too large to save with the notice's words, keeps its block on screen, retries nothing, and saves the note again once the change is smaller (#259, rule 20, R26)"
     }
   ]
 }

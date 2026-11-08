@@ -216,6 +216,9 @@ function nextRevision(base, committedAt) {
 /** How long an "insights are being extracted" mark is trusted before the editor clears it */
 const INSIGHTS_PENDING_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** How often a save the worker answered `migrating` goes again, while NewTabNote upgrades its storage (#35 slice 4d) */
+const MIGRATING_RETRY_MS = 3000;
+
 /**
  * What one save writes. The note is captured when the save starts, so a later
  * note switch can't change which note it writes. The blocks are taken right
@@ -537,6 +540,7 @@ class BlockEditor {
     }
 
     this._clearNoteGone();
+    this._clearTooLarge();
     // A title still unsaved belongs to the note it was set on, whose failed save keeps it
     this._unsavedTitle = null;
     this.noteId = noteId;
@@ -4425,6 +4429,8 @@ class BlockEditor {
     this._writtenSeq = new Map();
     /** @type {Map<string, number>} Per note, the newest capture whose save failed and that no later save stored */
     this._failedSeq = new Map();
+    /** @type {HTMLElement|null} The notice for a change too large to save (#259), until a save of the note commits */
+    this._tooLargeNotice = null;
     /** @type {string|null} The note a revert is replacing the blocks of, while it commits */
     this._revertingNoteId = null;
     /** A flush during the revert kept what was on screen as a snapshot */
@@ -4699,8 +4705,8 @@ class BlockEditor {
    * A save of `state` committed: what it sent is what's stored now, as far as this editor knows.
    * Each block it sent takes the digest and order it sent, and the revision stays known only
    * when the save committed right after the base's, so nothing else did in between
-   * (nextRevision). One the connection's close cut short (`'stored'`) has no revision, so a
-   * draft goes by its digests. A block it only moved and that's stored in a shape the editor
+   * (nextRevision). One with no revision to say leaves it unknown, so a draft goes by its
+   * digests. A block it only moved and that's stored in a shape the editor
    * doesn't write keeps its stored digest, which the move changed in a way the editor can't
    * tell, and its own serialization's moves. Only a newer save than the base moves it.
    * @param {EditorSaveState} state
@@ -5280,13 +5286,14 @@ class BlockEditor {
    * the links follow in the same command, as 1.4.x's save updated them after the note.
    * @param {EditorSaveState} state
    * @param {{preview: string, todoProgress: Object|null, text: string}} meta
-   * @returns {Promise<'saved'|'title-kept'|'stored'|'gone'|'reload'>} 'title-kept' when it saved
+   * @returns {Promise<'saved'|'title-kept'|'gone'|'reload'|'migrating'|'too-large'>} 'title-kept' when it saved
    *   everything but a generated title, which a title set by hand kept out; 'gone' when the note no longer exists and
-   *   nothing was written; 'reload' when the page had lost its connection to the database, so
-   *   nothing was written; 'stored' when the connection closed while the save ran: its
-   *   note-and-blocks transaction had opened, and a closing connection lets it finish, but the
-   *   search entry and links that follow it couldn't be written. Rejects when the save failed
-   *   otherwise.
+   *   nothing was written; 'reload' when the page has to reload, so nothing was written: its
+   *   connection to the database went, or its writes can't reach the worker, which commits them
+   *   (#35 slice 4d, rule 12); 'migrating' when the worker answered it while NewTabNote upgrades
+   *   its storage, so it waits and goes again (rule 18); 'too-large' when it was over the
+   *   ceiling, refused before it went, which no resend fixes (#259, rule 20). Rejects when the
+   *   save failed otherwise.
    * @param {boolean} [closing] - the page's own close: the save takes the id of the close-time
    *   draft its editor wrote for the same edit as its commandId (#33)
    */
@@ -5329,17 +5336,16 @@ class BlockEditor {
     const closingId = closing ? this._closingIds.get(state.noteId) : undefined;
     if (closingId) this._closingIds.delete(state.noteId);
     const options = this._journalOptions(state, meta, closingId);
-    // Open now, the command's first transaction opens before this returns
-    const openAtStart = typeof this.documentClient.connectionOpen === 'function'
-      ? this.documentClient.connectionOpen()
-      : true;
     return this.documentClient.saveContent(save, options).then((outcome) => {
       if (outcome.kind === 'committed') state.committedRevision = typeof outcome.revision === 'number' ? outcome.revision : null;
       // The note had a title set by hand by the time it committed, so the generated one it carried was dropped
       if (outcome.kind === 'committed' && outcome.code === 'content-saved-title-kept') return 'title-kept';
       if (outcome.kind === 'committed') return 'saved';
       if (outcome.kind === 'rejected' && outcome.code === 'note-not-found') return 'gone';
-      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return openAtStart ? 'stored' : 'reload';
+      // Nothing was stored: the worker commits a save, so a reload-required one never went
+      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return 'reload';
+      if (outcome.kind === 'unavailable' && outcome.code === 'migrating') return 'migrating';
+      if (outcome.kind === 'rejected' && outcome.code === 'payload-too-large') return 'too-large';
       // Its kind and code, never the note's content
       throw new Error(`The save was not stored (${outcome.kind}: ${outcome.code})`);
     });
@@ -5347,23 +5353,31 @@ class BlockEditor {
 
   /**
    * What follows a save's answer: "Saved", and search indexing and the sidebar's preview
-   * catching up; or the notice for a deleted note, or for a page that has to reload.
+   * catching up; the calm wait while NewTabNote upgrades its storage; or the notice for a deleted
+   * note, a change too large to save, or a page that has to reload.
    * @param {EditorSaveState} state
-   * @param {'saved'|'title-kept'|'stored'|'gone'|'reload'} result
+   * @param {'saved'|'title-kept'|'gone'|'reload'|'migrating'|'too-large'} result
    * @returns {void}
    */
   _afterSaveWrite(state, result) {
+    if (result === 'migrating') {
+      this._onMigrating(state);
+      return;
+    }
+    if (result === 'too-large') {
+      this._onTooLarge(state);
+      return;
+    }
     // A save that stored the note's text clears an older one's failure
     if (result !== 'gone' && result !== 'reload' && (this._failedSeq.get(state.noteId) || 0) <= state.seq) {
       this._failedSeq.delete(state.noteId);
     }
-    // What it sent is the note's close-time draft base now (#33). A save the connection's close
-    // cut short stored its text with no revision to say, and one whose generated title was kept
-    // out leaves the stored name unknown here.
+    // What it sent is the note's close-time draft base now (#33), and one whose generated title
+    // was kept out leaves the stored name unknown here. A change too large to save is moot once
+    // a save of the note commits.
     if (result === 'saved' || result === 'title-kept') {
       this._sawCommit(state, state.committedRevision ?? null, { nameKnown: result === 'saved' });
-    } else if (result === 'stored') {
-      this._sawCommit(state, null);
+      if (state.noteId === this.noteId) this._clearTooLarge();
     }
     // The page's commits of its blocks before this one are moot now. A save with no revision to
     // say keeps its place as one in flight.
@@ -5374,14 +5388,6 @@ class BlockEditor {
     if (result === 'title-kept') this._showStoredTitle(state.noteId);
     if (result === 'gone') {
       this._onNoteGone(state);
-      return;
-    }
-    if (result === 'stored') {
-      // The note, its blocks, and its title are stored. The search entry is rebuilt at the next
-      // start and the links on the note's next save. The page can't read or write anything
-      // more, so the next edit gets the reload notice.
-      if (state.title && this._unsavedTitle === state.title) this._unsavedTitle = null;
-      if (!this.reloadRequired) this.updateSaveStatus('Saved');
       return;
     }
     if (result === 'reload') {
@@ -5656,14 +5662,73 @@ class BlockEditor {
   }
 
   /**
+   * A save the worker answered `migrating`: it waits while NewTabNote upgrades its storage, and
+   * isn't a failure (#35 slice 4d, rule 18, S7). The editor keeps it as its retry, says so calmly,
+   * with no toast and no notice, and tries again every few seconds until one commits or the page
+   * closes, its journal entry and its close-time draft holding the edit meanwhile.
+   * @param {EditorSaveState} state
+   * @returns {void}
+   */
+  _onMigrating(state) {
+    if ((this._failedSeq.get(state.noteId) || 0) < state.seq) this._failedSeq.set(state.noteId, state.seq);
+    // A newer write of this note has opened since, and it holds this edit too
+    if (this._isSuperseded(state)) return;
+    const kept = this._retryCopies.get(state.noteId);
+    if (!kept || kept.seq < state.seq) this._retryCopies.set(state.noteId, state);
+    this._retryPending = true;
+    this.updateSaveStatus('Saving after update...');
+    if (this.saveTimeout === null && !this._heldSaveDue) this._armSaveTimer(MIGRATING_RETRY_MS);
+  }
+
+  /**
+   * A save over the ceiling (#259): refused before it went, and no resend fixes it, so nothing
+   * retries it (#35 slice 4d, rule 20). While the editor shows its note, the text stays on screen
+   * with a notice, in the deleted-note notice's form, with no button, until a later save of the
+   * note commits. A note the editor has left gets a toast, as a deleted one's changes do.
+   * @param {EditorSaveState} state
+   * @returns {void}
+   */
+  _onTooLarge(state) {
+    if ((this._failedSeq.get(state.noteId) || 0) < state.seq) this._failedSeq.set(state.noteId, state.seq);
+    if (state.noteId !== this.noteId) {
+      Utils.showToast("A change to a note you were editing is too large to save, so it isn't saved.", 'error');
+      return;
+    }
+    this.updateSaveStatus('Not saved');
+    if (this._tooLargeNotice) return;
+
+    const notice = this.doc.createElement('div');
+    notice.className = 'note-gone-notice too-large-notice';
+    notice.setAttribute('role', 'alert');
+    const text = this.doc.createElement('p');
+    text.className = 'note-gone-text';
+    // Focusable from script, so a part's Reload can hand over to these words (ownNoticeText)
+    text.setAttribute('tabindex', '-1');
+    text.textContent = 'This change is too large to save. Remove or shrink a large file, image or video, and the note saves again.';
+    notice.appendChild(text);
+    const column = this.root.querySelector('.editor') || this.root;
+    column.insertBefore(notice, column.firstChild);
+    this._tooLargeNotice = notice;
+  }
+
+  /**
+   * @returns {void}
+   */
+  _clearTooLarge() {
+    if (this._tooLargeNotice) this._tooLargeNotice.remove();
+    this._tooLargeNotice = null;
+  }
+
+  /**
    * The words of the notice this editor shows for changes it couldn't save: the reload-required
-   * notice's, or the deleted note's. A part's Reload that a save stopped moves focus there, where
-   * a screen reader reads the sentence, Enter does nothing, and Tab reaches the notice's button,
-   * whose Reload runs no save guards (#27 slice 3b). Null when it shows neither.
+   * notice's, the deleted note's, or a change's too large to save. A part's Reload that a save
+   * stopped moves focus there, where a screen reader reads the sentence, Enter does nothing, and
+   * Tab reaches the notice's button, whose Reload runs no save guards (#27 slice 3b). Null when it
+   * shows none.
    * @returns {HTMLElement | null}
    */
   ownNoticeText() {
-    const notice = this._reloadNotice || this._noteGoneNotice;
+    const notice = this._reloadNotice || this._noteGoneNotice || this._tooLargeNotice;
     return notice ? notice.querySelector('.note-gone-text') : null;
   }
 
@@ -6944,6 +7009,30 @@ class BlockEditor {
   }
 
   /**
+   * Whether a revert whose answer stayed unknown committed, by the note as stored: its blocks, in
+   * their order, are the snapshot's, ids and content. Null when the note can't be read, or isn't
+   * stored any more.
+   * @param {string} noteId
+   * @param {Array<Object>} snapshotBlocks
+   * @returns {Promise<{reverted: boolean, revision: number|null} | null>}
+   */
+  async _storedRevert(noteId, snapshotBlocks) {
+    try {
+      const opened = await this.documentClient.openNote(noteId);
+      if (!opened) return null;
+      const stored = (opened.blocks || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      const reverted = stored.length === snapshotBlocks.length
+        && stored.every((block, index) => block.id === snapshotBlocks[index].id
+          && block.type === snapshotBlocks[index].type
+          && JSON.stringify(block.content) === JSON.stringify(snapshotBlocks[index].content));
+      return { reverted, revision: typeof opened.revision === 'number' ? opened.revision : null };
+    } catch (error) {
+      console.error('Failed to read the reverted note:', error && error.message);
+      return null;
+    }
+  }
+
+  /**
    * After a committed revert whose blocks didn't reach the screen (_runRevert), read the note as
    * stored and show it, while saves are still held. A lost connection shows the reload notice.
    * @param {string} noteId
@@ -7032,6 +7121,9 @@ class BlockEditor {
     this._snapshotDirty = false;
     const holding = !this._savesHeld;
     if (holding) this.holdSaves();
+    // Saves stay held once a revert can't tell whether it committed, so none lands on a note
+    // that may hold the snapshot's blocks already
+    let keepHeld = false;
     try {
       let outcome;
       try {
@@ -7039,6 +7131,21 @@ class BlockEditor {
       } catch (error) {
         outcome = { kind: 'unavailable', code: 'revert-failed' };
         console.error('Failed to revert:', error && error.message);
+      }
+
+      // A restore still unknown once its key's ledger read couldn't settle it, its reply lost on
+      // the way back from the worker: the note as stored says (#35 slice 4d, rule 13, N2)
+      if (outcome.kind === 'unknown') {
+        const stored = await this._storedRevert(noteId, snap.blocks || []);
+        if (stored === null) {
+          keepHeld = true;
+          this._revertingNoteId = null;
+          this._onReloadRequired();
+          return;
+        }
+        outcome = stored.reverted
+          ? { kind: 'committed', revision: stored.revision }
+          : { kind: 'unknown', code: outcome.code };
       }
 
       if (outcome.kind !== 'committed') {
@@ -7085,9 +7192,9 @@ class BlockEditor {
       }
     } finally {
       // Whatever happened above, the hold and the saves waiting on this revert go on, the saves
-      // once the hold has let the loaded note's save start
+      // once the hold has let the loaded note's save start, but for a revert no read could settle
       this._revertingNoteId = null;
-      if (holding) this.releaseSaves();
+      if (holding && !keepHeld) this.releaseSaves();
       endRevert();
     }
 

@@ -144,7 +144,7 @@ describe("the new tab's close-time draft writer", () => {
   it("a draft with no known revision is still a stack draft, read by its digests and saved over the page's own later save (d20)", () => {
     const storage = legacyEnv.createLocalStorage();
     const writer = closeDraftWriter({ storage, newId: idsFrom(['page-1']), now: () => AT });
-    // The page's own save committed after the base, as 'stored', which reports no revision
+    // The page's own save committed after the base, on an adapter that reports no revision
     const own = { ...typed, content: 'saved, its revision unknown' };
     writer.write(fieldsOf({ base: { ...fieldsOf().base, revision: null, blocks: { b1: blockDigest(own, 'n1') } } }));
     const draft = draftsIn(storage)[`${PREFIX}cmd-1`];
