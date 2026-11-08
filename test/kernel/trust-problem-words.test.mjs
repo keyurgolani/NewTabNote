@@ -14,13 +14,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
+import { INTERIM, PROVIDERS } from '../../js/trust/core/providers/catalog.js';
 import { PROVIDER_ROWS, rowsOn } from '../../js/trust/core/providers/rows.js';
 import { narrowStatus } from '../../js/trust/core/status-message.js';
 import { leadingOf, summarize } from '../../js/trust/core/summary.js';
 import { OPEN_FAILED_KEY, WRITE_FAILED_KEY } from '../../js/trust/core/trust-records.js';
 import { HEALTH_GROUPS } from '../../js/trust/core/vocabulary.js';
 import { INCIDENT, INCIDENT_TEXT, PAGE, RESOLVED } from '../../js/trust/ui/copy.js';
-import { attentionText, problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
+import { PLATFORM, attentionText, problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
 import { statusOf } from '../../js/trust/ui/status.js';
 import { GROUP } from '../../js/trust/ui/status-copy.js';
 
@@ -606,7 +607,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         'Partly working',
         [
           ["Search indexing didn't start", 'Partly working', 'partial', true],
-          ['Search', 'Passed', 'ok', false],
+          ['Search index up to date', 'Passed', 'ok', false],
         ],
       ],
     );
@@ -790,6 +791,71 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       ['Built-in features', 'Verified', 'ok', false, false],
       ['Block types', 'Verified', 'ok', false, false],
     ]);
+  });
+
+  it("titles no check set apart under Also checked by its own row's name, on every row that can reach it: a check that can pass under a problem it doesn't look for, or under the worker's, which no check here covers (the code review's R5-1, signed as round 5's check titles)", () => {
+    // The faults each provider's problems can carry: those its events raise, and on Notes
+    // database the health records' own two, which no check looks for
+    /** @type {Map<string, Map<string, string>>} */
+    const holds = new Map();
+    const hold = (/** @type {string} */ providerId, /** @type {string} */ faultCode, /** @type {string} */ severity) =>
+      holds.set(providerId, (holds.get(providerId) || new Map()).set(faultCode, severity));
+    for (const code of Object.values(EVENT_CODES)) {
+      if ('incident' in code && code.incident)
+        hold(code.incident.providerId, code.incident.faultCode, code.incident.severity);
+    }
+    hold('storage', 'write-failed', 'data-risk');
+    hold('storage', 'open-failed', 'data-risk');
+    /** @type {Set<string>} */
+    const reached = new Set();
+    for (const provider of PROVIDERS) {
+      const place = PROVIDER_ROWS.find(row => row.id === provider.id);
+      // An interim check never records verified, so it never passes; and the Trust Center runs
+      // only on recovery.html
+      if (Object.prototype.hasOwnProperty.call(INTERIM, provider.id) || !place || !place.hosts.includes('recovery'))
+        continue;
+      const unlooked = [...(holds.get(provider.id) || new Map())].filter(
+        ([fault]) => !provider.observes.includes(fault),
+      );
+      const problems = unlooked.map(([faultCode, severity]) => ({
+        ...START_FAILED,
+        id: '00000000-0000-4000-8000-0000000000ec',
+        ref: '0000ec',
+        key: `${provider.id}/${faultCode}`,
+        providerId: provider.id,
+        faultCode,
+        severity,
+        affected: [],
+        preserved: [],
+      }));
+      if (provider.id === 'capture' || PLATFORM.includes(provider.id)) problems.push(START_FAILED);
+      const rowId = PLATFORM.includes(provider.id) ? 'platform' : provider.id;
+      const others = REPORT.providers.filter((/** @type {any} */ item) => item.providerId !== provider.id);
+      for (const problem of problems) {
+        const report = /** @type {any} */ ({
+          ...REPORT,
+          providers: [...others, entry(provider.id, place.group)],
+          incidents: [problem],
+        });
+        const row = /** @type {any} */ (
+          trustSections(report, { now: AT })
+            .flatMap(section => section.rows)
+            .find(item => item.id === rowId)
+        );
+        for (const item of row.evidence.filter((/** @type {any} */ evidence) => evidence.also)) {
+          reached.add(rowId);
+          assert.notEqual(
+            item.title,
+            row.label,
+            `${row.label}'s passing check, under ${problem.key}, needs a title of what it tested`,
+          );
+        }
+      }
+    }
+    // The rows that reach it in this build, so the guard isn't empty: each check's title is what
+    // it tested, Test save, Test read and write, Newest recovery point, Search index up to date,
+    // and own parts' parts by their own names
+    assert.deepEqual([...reached].sort(), ['capture', 'index', 'platform', 'recovery-readiness', 'storage']);
   });
 
   it("names on NewTabNote's own parts' visible lines each problem it's counted for that its line doesn't, under the problem's status word, as Not working names what stopped: the change the journal kept, under the worker's failed start (the Design gate's review of round 4's shots, signed as round 5)", () => {
