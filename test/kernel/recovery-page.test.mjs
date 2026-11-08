@@ -1964,7 +1964,10 @@ describe("recovery.html with the background worker's failed start, which no chec
         ],
       );
       assert.equal(PAGE.alsoChecked, 'Also checked');
-      assert.equal(text(body.children[2].querySelector('p')), 'Saved a test entry where new notes go, read it back, and removed it.');
+      assert.equal(
+        text(body.children[2].querySelector('p')),
+        'Saved a test entry where new notes go, read it back, and removed it.',
+      );
     } finally {
       close();
     }
@@ -2001,7 +2004,7 @@ describe("recovery.html with the background worker's failed start, which no chec
       // (signed as round 5)
       const lines = page.doc.getElementById('row-platform').querySelectorAll('.trust-row-keeps').map(text);
       assert.equal(lines[lines.length - 1], "Needs action: a change NewTabNote kept isn't in your notes yet.");
-      assert.equal(lines.filter(line => line.includes('a change NewTabNote kept')).length, 1);
+      assert.equal(lines.filter((/** @type {string} */ line) => line.includes('a change NewTabNote kept')).length, 1);
     } finally {
       close();
     }
