@@ -34,6 +34,7 @@ import { EVENT_CODES } from '../core/event-codes.js';
 import { PROVIDERS } from '../core/providers/catalog.js';
 import { OPEN_FAILED_KEY, WRITE_FAILED_KEY } from '../core/trust-records.js';
 import { WAITING, updateKeyOf, updateOf, waits, whyOf } from '../core/updates.js';
+import { DAY_MS, clockFormat as clock, dayFormat as day, dayOf, whenText } from './when.js';
 
 /** @typedef {import('../core/operations/trust-report.js').TrustReport} TrustReport */
 /** @typedef {import('../core/operations/trust-summary.js').TrustSummary} TrustSummary */
@@ -127,8 +128,6 @@ const capitalize = text => text.charAt(0).toUpperCase() + text.slice(1);
 
 // ───────── Times ─────────
 
-const clock = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' });
-const day = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
 const full = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -137,11 +136,6 @@ const full = new Intl.DateTimeFormat('en-US', {
   minute: '2-digit',
   second: '2-digit',
 });
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** @param {number} at */
-const dayOf = at => new Date(at).toDateString();
 
 /**
  * The time column: 10:42 AM today, Yesterday, 7:02 PM, Oct 28
@@ -154,16 +148,8 @@ export function timeLabel(at, now) {
   return day.format(at);
 }
 
-/**
- * Inside a sentence: at 10:42 AM, yesterday at 7:02 PM, on Oct 28
- * @param {number} at
- * @param {number} now
- */
-export function whenText(at, now) {
-  if (dayOf(at) === dayOf(now)) return `at ${clock.format(at)}`;
-  if (dayOf(at) === dayOf(now - DAY_MS)) return `yesterday at ${clock.format(at)}`;
-  return `on ${day.format(at)}`;
-}
+// Inside a sentence (when.js), as every trust surface says a time
+export { whenText };
 
 /**
  * A fact's time: 10:42 AM today, else Oct 28 at 10:42 AM
