@@ -13,6 +13,8 @@
  *   the journal entry Popup left, which that start's drain replays.
  * - A capture the worker was stopped in the middle of lands at the worker's next start, in
  *   today's Daily Note.
+ * - A new tab's save typed while the worker is stopped is in the journal while it waits, and
+ *   commits once the worker it woke runs it (#35 slice 4d, AC4's new tab half).
  * In each, another page holds the stores the command writes in a readwrite transaction, so the
  * command is sent and waits there. In the last four, the hold lasts until the case ends it, once
  * the command's page has closed or its worker has stopped, and the case checks that it still held
@@ -181,8 +183,9 @@ function ledgerRow(page, opId) {
 
 /**
  * Runs in every page before its scripts: notes when the page asks for its idle with a deadline,
- * on the page's clock, in window.__ntnIdleAsks. The journal's shim makes a page's first such ask
- * once its first read is in (js/kernel/composition/host.js, journalingClient).
+ * on the page's clock, in window.__ntnIdleAsks. The new tab's root makes its first such ask once
+ * its first read is in, for its send chunk, which starts its journal (js/kernel/composition/
+ * newtab.js, #35 slice 4d).
  */
 function recordIdleAsks() {
   const ask = window.requestIdleCallback;
@@ -406,6 +409,37 @@ test("a Popup quick note the worker was stopped in the middle of lands at the wo
     timeout: 10_000,
   }).toEqual(['Already here', 'Call the plumber']);
   await expect.poll(() => journalEntries(page), { message: 'its entry is gone' }).toEqual([]);
+  await expectNoUncaught(extension, page);
+});
+
+test("a new tab's save typed while the worker is stopped is in the journal while it waits, and commits once the worker it woke runs it (#35 slice 4d, AC4's new tab half)", async ({ extension }) => {
+  await extension.seedOnboarded();
+  const [{ id }] = await driver.seedNotes(extension, [{ name: 'Kept', blocks: [{ type: 'text', content: 'Before the stop' }] }]);
+  const page = await driver.openNewTab(extension);
+  await driver.openNote(page, 'Kept');
+  await expect.poll(() => journalIn(page), { message: "the new tab's journal is in" }).toBe(true);
+  const holder = await extension.openSurface('popup');
+  const hold = await holdStoresUntilReleased(holder, ['canvases', 'elements']);
+  await stopWorker(extension);
+
+  // Typed with the worker stopped: its save is journaled as it goes, wakes the worker over the
+  // port, and waits there behind the hold
+  await page.locator('#blocks-container > .block .block-content').first().click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(', and after');
+  await page.evaluate(() => {
+    app.editor.flushSave();
+  });
+  await expect.poll(() => journalEntries(holder), { message: 'the save is journaled' }).toEqual(['saveNoteContent']);
+  expect(await hold.active(), 'the hold holds').toBe(true);
+  expect(await hold.release(), 'the hold, released').toBe('complete');
+
+  // The worker runs it, and its entry goes with its answer
+  await expect.poll(async () => (await profileStore(holder).getElementsByNote(id)).map(element => element.content), {
+    message: 'the save, committed in the worker',
+    timeout: 10_000,
+  }).toEqual(['Before the stop, and after']);
+  await expect.poll(() => journalEntries(holder), { message: 'its entry is gone' }).toEqual([]);
   await expectNoUncaught(extension, page);
 });
 
