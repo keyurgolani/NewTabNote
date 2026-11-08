@@ -1,6 +1,6 @@
 // #20 slice 4c, PR 2: what the new tab's sidebar line and Settings' Trust Center lines say, from
 // the status the worker answers, trust.summary narrowed to what they read (js/trust/ui/status.js),
-// in the words the lead signed on 2026-11-07, with round 2 of 2026-11-08. They name groups by what
+// in the words signed on 2026-11-07, with round 2 of 2026-11-08. They name groups by what
 // needs action, never a number of problems, each name with the verb it takes, and a row with a
 // name of its own when its group's one problem sits there, and read saving from capture and the
 // storage group's last check: the status carries no worstCore. A dismissed problem and an update
@@ -74,7 +74,7 @@ async function linesOf(given, facts = {}) {
 
 const SAVING = `Your notes are saving normally. Checked ${whenText(CHECKED, NOW)}.`;
 
-describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice 4c, the lead's signed words)", () => {
+describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice 4c, the signed words)", () => {
   it('say nothing in the sidebar while nothing needs the user, and that saving works, with when it was checked', async () => {
     const lines = await linesOf(summary());
     assert.equal(lines.sidebar, null);
@@ -391,7 +391,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
       [Object.keys(GROUP).sort(), Object.keys(GROUP_VERB || {}).sort()],
       [[...HEALTH_GROUPS].sort(), [...HEALTH_GROUPS].sort()],
     );
-    // The one-group line as the lead signed it, round 2 (2026-11-08 00:12:20)
+    // The one-group line as signed in round 2 (2026-11-08 00:12:20)
     const signed = {
       storage: 'Notes database needs your attention',
       vault: 'Saved keys need your attention',

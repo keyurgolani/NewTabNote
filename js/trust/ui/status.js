@@ -11,7 +11,7 @@
  * - It reads saving from `capture` and the storage group's last check. The status doesn't carry
  *   `worstCore`, which reads `degraded` while an update waits though nothing needs the user.
  * - It says each group's name with the verb that name takes, and when a group's one problem sits
- *   on a row with a name of its own (ROW_LABEL), it names the row (the lead's round 2).
+ *   on a row with a name of its own (ROW_LABEL), it names the row (round 2 of the words).
  * - At capture risk, for any cause, the line says new notes may not be saved, and Settings adds
  *   the cause's sentence when the summary has one of the four recovery.html words. While the
  *   health records can't be read, so the summary routes to the Recovery Center with capture

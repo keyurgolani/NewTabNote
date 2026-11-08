@@ -338,7 +338,7 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     assert.match(ruleOf('.trust-sidebar-line'), /\n {2}text-wrap: balance;\n/);
   });
 
-  it("takes the bulk bar out of the Tab order and the accessibility tree once it has slid away, so Tab from the last note goes to the line and the sidebar doesn't scroll (the coordinator's look at round 2, finding 1)", () => {
+  it("takes the bulk bar out of the Tab order and the accessibility tree once it has slid away, so Tab from the last note goes to the line and the sidebar doesn't scroll (the Design gate's review of round 2's shots, finding 1)", () => {
     // Hidden only after its slide out, and shown as its slide in starts; e2e/trust-status-line.spec.js
     // tabs from the last note in the packaged extension
     assert.match(

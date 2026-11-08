@@ -1,12 +1,12 @@
-// #20 slice 4c, PR 2 (Q4): recovery.html's words for the problems that had none, as the lead
-// signed them on 2026-11-07: a purge that stopped at a recovery point (#17 PR 2b), and the
+// #20 slice 4c, PR 2 (Q4): recovery.html's words for the problems that had none, as signed on
+// 2026-11-07: a purge that stopped at a recovery point (#17 PR 2b), and the
 // background worker's two (#117), which fold into NewTabNote's own parts. At capture risk from the
 // worker's problem, the Trust Center's headline names it by its title, on recovery.html's own
 // summary too, which leaves the worker's providers out of every group. Read together (the design
 // review's round 2), no Still works list claims what an unfixed problem lists as not working, and
 // a row that needs the user because of a problem says which. No check on recovery.html covers the
 // worker, so the rows that hold its problems take their shape and words, Saving new notes among
-// them while it stops saving new notes (the coordinator's ruling, signed as round 3).
+// them while it stops saving new notes (decided at the Design gate, signed as round 3).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -250,7 +250,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual(kept.stillWorks, ['capture', 'editing', 'reading']);
   });
 
-  it("puts the problem's title on the line of a row that needs the user because of it, and the rows that hold the worker's problem take its shape and words with no time, since no check on recovery.html covers the worker (the design review's round 2, S3, and the coordinator's ruling)", () => {
+  it("puts the problem's title on the line of a row that needs the user because of it, and the rows that hold the worker's problem take its shape and words with no time, since no check on recovery.html covers the worker (the design review's round 2, S3, and the Design gate)", () => {
     // r2-12: the worker's two problems, and the purge stopped at a point no check here has read
     const report = /** @type {any} */ ({
       ...REPORT,

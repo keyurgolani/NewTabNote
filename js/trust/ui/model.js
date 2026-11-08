@@ -470,7 +470,7 @@ export function trustSections(report, { now, checking = new Set() }) {
     // What the row's own checks found
     const checked = worstOf(meaningful.length > 0 ? meaningful : statuses);
     // Its own problems, and Saving new notes holds an uncovered one that stops saving new notes
-    // (the coordinator's ruling, signed as round 3)
+    // (decided at the Design gate, signed as round 3)
     const incidents = report.incidents.filter(
       incident =>
         incident.state !== 'resolved' &&

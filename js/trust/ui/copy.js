@@ -193,7 +193,7 @@ export const INCIDENT = Object.freeze({
   'permissions/permission-changed': 'Chrome grants NewTabNote more than it asks for',
   'recovery-readiness/point-unverified': 'A recovery point failed its check',
   // A purge that stopped at a point (#17 PR 2b), and the background worker's own two (#117), as
-  // the lead signed them for #20 slice 4c
+  // signed for #20 slice 4c
   'recovery-readiness/purge-stopped': 'Something you deleted is still in a recovery point',
   'coordinator/start-failed': "The background worker couldn't start",
   'coordinator/entry-unreplayable': "A change NewTabNote kept isn't in your notes yet",

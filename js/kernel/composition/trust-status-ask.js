@@ -6,7 +6,7 @@
  * answer isn't, since it could put a line in the sidebar, or when Settings opens, for its Trust
  * Center lines. Nothing shows while nothing needs the user, so a tab with nothing to show doesn't
  * load the words. Their rules load at start all the same, in the new tab's stylesheet
- * (css/editor.css), inside the start's CSS row (the lead, 2026-11-07 19:23, option A).
+ * (css/editor.css), inside the start's CSS row (decided on 2026-11-07, option A).
  *
  * The check is conservative. It takes an answer as plainly all clear only with exactly the fields
  * the worker answers, in the worker's order, capture safe or unknown, the Trust Center's route,

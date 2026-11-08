@@ -1,6 +1,6 @@
 /**
  * The status pages' words (#20 slice 4c): the new tab's sidebar line and Settings' Trust Center
- * lines, as the lead signed them on 2026-11-07 and in round 2 on 2026-11-08, and what every
+ * lines, as signed on 2026-11-07 and in round 2 on 2026-11-08, and what every
  * surface says alike with recovery.html, which reads them from here (copy.js): the groups' names
  * (the design review's change 6), the rows' labels the lines name, and the four capture-risk
  * consequences. So each thing keeps one name on every surface. It imports nothing, so a status
