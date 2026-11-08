@@ -35,6 +35,7 @@ import {
 import { DRAIN_MESSAGE, createWorkerJournal } from './kernel/composition/journal.js';
 import { randomIds } from './kernel/composition/messaging.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
+import { TRUST_STATUS_MESSAGE, workerStatusRead } from './kernel/composition/trust-status-read.js';
 import { createWorkerInternalClient, createWorkerInternalRouter } from './kernel/composition/worker-internal.js';
 import { installWorkerNetwork } from './kernel/composition/worker-network.js';
 
@@ -607,13 +608,24 @@ try {
 } catch {
   // The journal is best effort: without it the worker does exactly what it did
 }
+/**
+ * What the new tab hears when it asks for its status lines, and Popup and the Side Panel for
+ * their cards after it (#20 slice 4c, js/trust/core/status-message.js): trust.summary from the
+ * worker's NewTabNoteTrust records, read only, narrowed to what the lines and cards read.
+ * js/kernel/composition/worker-network.js runs it for this extension's own senders only, as it
+ * runs migrationStatus, and it answers only the new tab, Popup and the Side Panel, by their page,
+ * and any other sender `{error: 'request-refused'}`. It starts no coordinator.
+ */
+const statusRead = workerStatusRead();
+
 // The worker's network (#21 slice 1b): its one onMessage listener, the request proxy, and the
 // guard's wiring, which journals what the guard refused into the events above. It never throws.
 // It hands a page's wait on the migration (#17) to migrationStatus, a page's storage.purge
-// after a delete for good (#17 PR 2b) to purgeStatus, and a page's journal.drain (#35 slice 3)
-// to drainStatus, from this extension's own senders only. Every event comes after this file
-// has run, the coordinator's build included.
-installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus, [PURGE_MESSAGE]: purgeStatus, [DRAIN_MESSAGE]: drainStatus } });
+// after a delete for good (#17 PR 2b) to purgeStatus, a page's journal.drain (#35 slice 3)
+// to drainStatus, and a status page's trust.status (#20 slice 4c) to statusRead, from this
+// extension's own senders only. Every event comes after this file has run, the coordinator's
+// build included.
+installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus, [PURGE_MESSAGE]: purgeStatus, [DRAIN_MESSAGE]: drainStatus, [TRUST_STATUS_MESSAGE]: statusRead } });
 try {
   // Building it opens nothing: the first capture opens NewTabNoteJournal, and the first drain
   // reads it only when it's there

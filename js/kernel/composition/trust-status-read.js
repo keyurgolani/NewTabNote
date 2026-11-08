@@ -1,0 +1,118 @@
+/**
+ * The worker's status read (#20 slice 4c): its answer to the new tab's status read, and to
+ * Popup's and the Side Panel's after it (js/trust/core/status-message.js), from the worker's
+ * NewTabNoteTrust records, so no status page loads the records or opens the database. It's one of
+ * js/background.js's own handlers on installWorkerNetwork, which runs it only for this
+ * extension's own senders (isOwnSender), and it takes the new tab, Popup and the Side Panel alone,
+ * by the sender's page and never by its tab: recovery.html, which reads its own summary, and the
+ * offscreen document are refused, as any other sender is.
+ *
+ * It only reads. The records are never opened, so nothing is pruned, raised or resolved; their
+ * store answers no write and makes no NewTabNoteTrust where there's none yet
+ * (readOnlyTrustStore), and their settings copy takes no write either. It runs no check: it reads
+ * the latest receipts and the incidents and summarizes them with the rows of the providers that
+ * run on the new tab (rowsOn('workspace')), the host whose checks write the receipts every
+ * status page shows, narrowed to what the lines and cards read. A records build that fails is
+ * tried again at the next ask, and an ask that fails answers that it's unavailable, with nothing
+ * of why.
+ */
+
+import { readOnlyTrustStore } from '../adapters/indexeddb/trust.js';
+import { principalOf } from '../adapters/messaging/runtime-port.js';
+import { systemClock } from '../core/ports/runtime.js';
+import { rowsOn } from '../../trust/core/providers/rows.js';
+import { TRUST_STATUS_MESSAGE, narrowStatus } from '../../trust/core/status-message.js';
+import { summarize } from '../../trust/core/summary.js';
+import { createTrustRecords } from '../../trust/core/trust-records.js';
+import { browserTrustHost } from './trust.js';
+
+/** @typedef {import('../../trust/core/trust-records.js').TrustRecords} TrustRecords */
+/** @typedef {import('../../trust/core/status-message.js').TrustStatus} TrustStatus */
+/** @typedef {import('../../trust/core/ports.js').Clock} Clock */
+
+export { TRUST_STATUS_MESSAGE };
+
+/** The rows the worker summarizes with: the new tab's, whose checks every status page shows */
+export const STATUS_ROWS = rowsOn('workspace');
+
+/** The pages the status read answers, by #13's names for them */
+export const STATUS_PAGES = Object.freeze(['newtab', 'popup', 'sidepanel']);
+
+/** What a sender that isn't one of them hears, as the worker's network answers another's */
+const REFUSED = Object.freeze({ error: 'request-refused' });
+
+/** What an ask that couldn't read the records hears */
+const UNAVAILABLE = Object.freeze({ error: 'unavailable' });
+
+/**
+ * The worker's handler for the status read. `records` builds the records it reads,
+ * NewTabNoteTrust's on this browser's host, read only, unless a test passes others; `extensionId`
+ * is chrome.runtime.id unless a test passes another.
+ * @param {{records?: () => TrustRecords, clock?: Clock, extensionId?: () => string | undefined}} [options]
+ * @returns {(request: unknown, sender: unknown) => Promise<TrustStatus | {error: string}>}
+ */
+export function workerStatusRead({
+  records: build = browserRecords,
+  clock = systemClock,
+  extensionId = () => globalThis.chrome?.runtime?.id,
+} = {}) {
+  /** @type {Promise<TrustRecords> | null} */
+  let building = null;
+  const built = () => {
+    if (!building) {
+      building = Promise.resolve().then(() => build());
+      // A build that threw is tried again at the next ask
+      building.catch(() => {
+        building = null;
+      });
+    }
+    return building;
+  };
+  return async (request, sender) => {
+    const page = principalOf(sender, extensionId());
+    if (page === null || !STATUS_PAGES.includes(page)) return REFUSED;
+    const now = clock.now();
+    try {
+      const records = await built();
+      const receipts = await records.latestReceipts();
+      const { incidents, copyRead, recordsRead } = await records.incidentsRead();
+      return narrowStatus(
+        summarize({
+          providers: STATUS_ROWS,
+          receipts,
+          incidents,
+          copyRead,
+          recordsRead,
+          // Never opened, so never closed by a failed write: they're open to this read unless
+          // their store couldn't be reached
+          recordsState: records.state() === 'fallback' ? 'fallback' : 'open',
+          now,
+        }),
+      );
+    } catch {
+      return UNAVAILABLE;
+    }
+  };
+}
+
+/** @param {...unknown} _ */
+const noWrite = async (..._) => {
+  throw new Error('The status read writes nothing');
+};
+
+/**
+ * NewTabNoteTrust's records on this browser's host (composition/trust.js), read only: their
+ * store makes no database and takes no write, and their settings copy takes no write
+ * @returns {TrustRecords}
+ */
+function browserRecords() {
+  const { indexedDB, settings, locks, clock, ids, timers = null } = browserTrustHost();
+  return createTrustRecords({
+    store: readOnlyTrustStore({ indexedDB }),
+    settings: { get: settings.get, set: noWrite },
+    clock,
+    ids,
+    locks,
+    timers,
+  });
+}
