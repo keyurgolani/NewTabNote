@@ -107,6 +107,34 @@ function sendOf(answers) {
   };
 }
 
+/** Timers a case runs by hand, which keep how long each was set for */
+function manualTimers() {
+  /** @type {Map<number, {callback: () => void, ms: number}>} */
+  const pending = new Map();
+  let next = 0;
+  return {
+    pending,
+    setTimeout: (/** @type {() => void} */ callback, /** @type {number} */ ms) => {
+      next += 1;
+      pending.set(next, { callback, ms });
+      return next;
+    },
+    clearTimeout: (/** @type {number} */ handle) => {
+      pending.delete(handle);
+    },
+    /** Runs every timer that's set, and lets what they set going settle */
+    fire: async () => {
+      const due = [...pending.values()];
+      pending.clear();
+      for (const { callback } of due) callback();
+      for (let turn = 0; turn < 5; turn++) await new Promise(resolve => setImmediate(resolve));
+    },
+  };
+}
+
+/** Timers that never run, for a case about something else */
+const INERT = Object.freeze({ setTimeout: () => 0, clearTimeout: () => {} });
+
 /** What the tab shows: the sidebar line's words, Settings' lines, the section's sentence, and its button */
 const shown = (/** @type {any} */ doc) => {
   const line = doc.querySelector('.trust-sidebar-line');
@@ -182,6 +210,7 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
         document: /** @type {any} */ (doc),
         send: sendOf([AT_RISK, answer]).send,
         now: () => NOW,
+        timers: INERT,
       });
       await lines.ready;
       assert.ok(doc.querySelector('.trust-sidebar-line'), why);
@@ -250,5 +279,88 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
       assert.ok(doc.querySelector(`.${name}`), `it draws .${name}`);
       assert.match(sheet, new RegExp(`\\.${name}(?![\\w-])[^{}]*\\{`), `css/editor.css has a rule for .${name}`);
     }
+  });
+
+  it('draws only the newest read started, so an older one that gets its answer later, none included, leaves what the newer drew', async () => {
+    const { startTrustStatus } = await import('../../js/kernel/composition/trust-status.js');
+    const doc = tabDocument();
+    // The first read's send waits, as one to a cold worker does, until it's let go with no answer
+    /** @type {() => void} */
+    let letGo = () => {};
+    /** @type {Array<() => Promise<unknown>>} */
+    const sends = [
+      () =>
+        new Promise(resolve => {
+          letGo = () => resolve(undefined);
+        }),
+      async () => AT_RISK,
+    ];
+    const lines = startTrustStatus({
+      document: /** @type {any} */ (doc),
+      send: () => /** @type {() => Promise<unknown>} */ (sends.shift())(),
+      now: () => NOW,
+      timers: INERT,
+    });
+    // Settings opened at Data & Backup while the first read waits: its read answers first
+    const data = doc.querySelector('.settings-nav-item[data-category="data"]');
+    await Promise.all((data.listeners.click || []).map((/** @type {any} */ fn) => fn({ type: 'click' })));
+    assert.deepEqual(shown(doc).sidebar, ['New notes may not be saved›', 'recovery.html#recovery']);
+    letGo();
+    assert.equal(await lines.ready, null, 'the older read draws nothing');
+    assert.deepEqual(shown(doc).sidebar, ['New notes may not be saved›', 'recovery.html#recovery'], 'and wipes nothing');
+  });
+
+  it('asks once more RETRY_MS after a read that got no answer, draws what that one answers, and asks no more after it', async () => {
+    const { startTrustStatus, RETRY_MS } = await import('../../js/kernel/composition/trust-status.js');
+    assert.ok(RETRY_MS >= 1000 && RETRY_MS <= 10_000, 'a few seconds');
+    // A first read with no answer, as when the worker didn't answer in time, then one at risk
+    const doc = tabDocument();
+    const timers = manualTimers();
+    const { sent, send } = sendOf([undefined, AT_RISK]);
+    const lines = startTrustStatus({ document: /** @type {any} */ (doc), send, now: () => NOW, timers });
+    await lines.ready;
+    assert.deepEqual(
+      [sent.count, shown(doc).sidebar, [...timers.pending.values()].map(timer => timer.ms)],
+      [1, null, [RETRY_MS]],
+    );
+    await timers.fire();
+    assert.deepEqual([sent.count, shown(doc).sidebar], [2, ['New notes may not be saved›', 'recovery.html#recovery']]);
+    assert.equal(timers.pending.size, 0, 'nothing more is set');
+    // The one more that gets no answer asks nothing after it
+    const quiet = tabDocument();
+    const again = manualTimers();
+    const silent = sendOf([undefined, undefined]);
+    await startTrustStatus({ document: /** @type {any} */ (quiet), send: silent.send, now: () => NOW, timers: again }).ready;
+    await again.fire();
+    assert.deepEqual([silent.sent.count, again.pending.size], [2, 0]);
+    // A send that failed is no answer too; a read that starts while the one more waits takes its place
+    const shownAgain = tabDocument();
+    const waiting = manualTimers();
+    const failing = sendOf([new Error('Could not establish connection. Receiving end does not exist.'), AT_RISK]);
+    await startTrustStatus({ document: /** @type {any} */ (shownAgain), send: failing.send, now: () => NOW, timers: waiting })
+      .ready;
+    assert.equal(waiting.pending.size, 1);
+    shownAgain.visibilityState = 'visible';
+    await Promise.all(shownAgain.fire('visibilitychange'));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual([failing.sent.count, waiting.pending.size], [2, 0]);
+    assert.deepEqual(shown(shownAgain).sidebar, ['New notes may not be saved›', 'recovery.html#recovery']);
+  });
+
+  it('answers a read whose drawing threw with nothing, so its first read still settles and nothing goes unhandled', async () => {
+    const { startTrustStatus } = await import('../../js/kernel/composition/trust-status.js');
+    const doc = tabDocument();
+    const footer = doc.querySelector('.sidebar-footer');
+    footer.parentNode.insertBefore = () => {
+      throw new Error('no room for it');
+    };
+    const lines = startTrustStatus({
+      document: /** @type {any} */ (doc),
+      send: sendOf([AT_RISK, AT_RISK]).send,
+      now: () => NOW,
+      timers: INERT,
+    });
+    assert.equal(await lines.ready, null);
+    assert.equal(await lines.read(), null, 'and so does every read after it');
   });
 });

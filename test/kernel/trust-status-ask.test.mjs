@@ -389,6 +389,45 @@ describe("the status read's ask (#20 slice 4c, startStatusAsk)", () => {
     assert.deepEqual([seen.loads, seen.starts], [2, 1], 'once');
   });
 
+  it('has the lines read again each time Settings opens once they have loaded, whatever loaded them', async () => {
+    const { startStatusAsk } = await import('../../js/kernel/composition/trust-status-ask.js');
+    const attention = status({ capture: 'at-risk', route: 'recovery' });
+    for (const [why, first] of /** @type {Array<[string, (ask: any) => Promise<void>]>} */ ([
+      ['an answer that could show', async ask => ask.asked],
+      ['Settings', async ask => ask.asked.then(() => ask.settingsOpened())],
+    ])) {
+      const answers = why === 'Settings' ? [status(), status(), status(), status()] : [attention, status(), status()];
+      const { seen, send, load } = asking(answers);
+      const ask = startStatusAsk({ document: /** @type {any} */ (tabDocument()), send, load });
+      await first(ask);
+      const sends = seen.sends;
+      assert.deepEqual([seen.loads, seen.starts], [1, 1], why);
+      await ask.settingsOpened();
+      assert.deepEqual([seen.sends, seen.loads, seen.starts], [sends + 1, 1, 1], `${why}: Settings opened, the lines read again`);
+      await ask.settingsOpened();
+      assert.equal(seen.sends, sends + 2, `${why}: and at the next opening`);
+    }
+  });
+
+  it('keeps lines that started whatever their first read did, so the tab shown again starts no second set', async () => {
+    const { startStatusAsk } = await import('../../js/kernel/composition/trust-status-ask.js');
+    let starts = 0;
+    const load = async () => ({
+      startTrustStatus: (/** @type {{send: () => Promise<unknown>}} */ options) => {
+        starts += 1;
+        const ready = Promise.reject(new Error('its drawing threw'));
+        ready.catch(() => {});
+        return { read: options.send, ready };
+      },
+    });
+    const doc = tabDocument();
+    const ask = startStatusAsk({ document: /** @type {any} */ (doc), send: async () => ({ error: 'unavailable' }), load });
+    await ask.asked;
+    await doc.shown();
+    await ask.settingsOpened();
+    assert.equal(starts, 1);
+  });
+
   it("loads the lines' chunk through the page loader, by its name and its literal import(), and nothing on a failed load", async () => {
     const { startStatusAsk } = await import('../../js/kernel/composition/trust-status-ask.js');
     /** @type {string[]} */

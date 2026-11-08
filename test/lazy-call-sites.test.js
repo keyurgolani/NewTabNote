@@ -608,8 +608,20 @@ describe("the new tab's status lines: the status read's ask, first in the deferr
     assert.match(read('js/app.js'), /loader\n {8}\.loadChunk\('trust-status-ask', \(\) => import\('\.\/kernel\/composition\/trust-status-ask\.js'\)\)/);
   });
 
-  it('the ask is the first of the deferred work, which goes on without waiting for it', () => {
-    assert.match(read('js/app.js'), /const deferWork = async \(\) => \{\n {8}\/\/ The status read's ask first, without holding up the rest \(#20 slice 4c\)\n {8}this\.askTrustStatus\(\);\n {8}await this\.initAnalyticsController\(\);/);
+  it('the ask is the first of the deferred work, which goes on without waiting for it, and past it when it throws', () => {
+    assert.match(read('js/app.js'), /const deferWork = async \(\) => \{\n {8}\/\/ The status read's ask first, without holding up the rest, which goes on when it throws \(#20 slice 4c\)\n {8}try \{\n {10}this\.askTrustStatus\(\);\n {8}\} catch \(error\) \{\n {10}this\.logger\.error\('App', 'The status lines did not start', error\);\n {8}\}\n {8}await this\.initAnalyticsController\(\);/);
+  });
+
+  it("opening Settings reads the pre-update copy's section again when the ask throws, with nothing unhandled", async () => {
+    const { env, App } = await page();
+    // A loader whose loadChunk throws as it's called, as one without chunks would
+    const app = appOf(env, App, { loader: { ...loadingLoader({}), loadChunk: () => { throw new TypeError('no chunks here'); } } });
+    let refreshed = 0;
+    app.preUpdateCopySection = { refresh: async () => { refreshed += 1; } };
+    await noUnhandled(async () => {
+      await app.settingsOpened();
+    });
+    assert.equal(refreshed, 1);
   });
 
   it("opening Settings has the ask load the lines for Settings' Trust Center lines, without Settings waiting for them, and reads the pre-update copy's section again", async () => {
