@@ -1947,7 +1947,7 @@ describe("recovery.html with the background worker's failed start, which no chec
     };
   }
 
-  it("names the worker's failed start as Saving new notes' evidence, and its own passing check after it, apart under Also checked, as the test save it ran and passed (round 4, and round 5)", async () => {
+  it("names the worker's failed start as Saving new notes' evidence, and its own passing check after it, apart under Also checked, as the test save it ran and passed, and gives the failed start one sentence there, on NewTabNote's own parts and on its card: what may not be saved until saving starts (round 4, round 5 and round 6)", async () => {
     const { page, close } = await withFailedStart();
     try {
       await page.ready;
@@ -1977,6 +1977,21 @@ describe("recovery.html with the background worker's failed start, which no chec
         text(body.children[2].querySelector('p')),
         'Saved a test entry where new notes go, read it back, and removed it.',
       );
+      // The failed start's sentence says saving is what has to start, beside a worker that
+      // answers its connections, the same here, on own parts and on its card (round 6)
+      const SENTENCE = 'New notes and changes may not be saved until it starts saving.';
+      assert.equal(text(body.children[0].querySelector('p')), SENTENCE);
+      const own = page.doc.getElementById('row-platform').querySelector('.trust-evidence-body');
+      assert.equal(text(own.children[0].querySelector('p')), SENTENCE);
+      page.hashTo('#recovery');
+      const card = () =>
+        page.doc
+          .querySelectorAll('li.trust-incident')
+          .find(
+            (/** @type {any} */ li) => text(li.querySelector('h3')) === "The background worker couldn't start saving",
+          );
+      await until(() => card(), "the failed start's card");
+      assert.equal(text(card().querySelector('.trust-incident-text')), SENTENCE);
     } finally {
       close();
     }

@@ -165,7 +165,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     }
   });
 
-  it("says them in the signed words, the stopped purge's text as round 3 has it, and the worker's failed start as round 5 names it: what failed is saving", () => {
+  it("says them in the signed words, the stopped purge's text as round 3 has it, and the worker's failed start as rounds 5 and 6 sign it: what failed is saving, and nothing may be saved until saving starts, whatever its connections answer", () => {
     assert.deepEqual(
       ['recovery-readiness/purge-stopped', 'coordinator/start-failed', 'coordinator/entry-unreplayable'].map(key => [
         /** @type {Record<string, string>} */ (INCIDENT)[key],
@@ -180,7 +180,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         ],
         [
           "The background worker couldn't start saving",
-          'New notes and changes may not be saved until it starts.',
+          'New notes and changes may not be saved until it starts saving.',
           'The background worker saves again',
         ],
         [
@@ -391,16 +391,20 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       [shown(failed), failed.sentence, failed.facts.map((/** @type {any} */ fact) => fact.label), shown(own)],
       [
         ["The background worker couldn't start saving", 'Not working', 'failed', true],
-        'New notes and changes may not be saved until it starts.',
+        'New notes and changes may not be saved until it starts saving.',
         [PAGE.firstSeen, PAGE.lastSeen, PAGE.timesSeen, PAGE.ref],
         ['Test save', 'Passed', 'ok', false],
       ],
     );
-    // NewTabNote's own parts the same, before the parts its checks read
+    // NewTabNote's own parts the same, before the parts its checks read, in the same sentence
     assert.deepEqual(row('platform').evidence.map(shown), [
       ["The background worker couldn't start saving", 'Not working', 'failed', true],
       ['Connections to the background worker', 'Passed', 'ok', false],
     ]);
+    assert.equal(
+      row('platform').evidence[0].sentence,
+      'New notes and changes may not be saved until it starts saving.',
+    );
     // A row with a finding takes its status and shape; one with none keeps Not verified yet
     assert.deepEqual(
       ['recovery-readiness', 'local-inference'].map(id => [
