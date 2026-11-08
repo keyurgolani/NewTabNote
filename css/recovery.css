@@ -344,6 +344,7 @@ html {
 
 .trust-attention-line {
   margin: var(--space-control) 0 0;
+  text-wrap: balance;
 }
 
 .trust-headline-actions {
@@ -419,6 +420,11 @@ html {
   justify-content: space-between;
   gap: var(--space-compact) var(--space-region);
   margin-top: var(--space-compact);
+}
+
+/* A row's one action at its far end, with its evidence before it or none (#20 slice 4c) */
+.trust-row-actions {
+  margin-left: auto;
 }
 
 .trust-row-actions,
@@ -614,6 +620,7 @@ html {
 
 .trust-incident-body {
   padding-left: calc(1rem + var(--space-control));
+  text-wrap: pretty;
 }
 
 .trust-fixed-line {
@@ -649,6 +656,11 @@ html {
 /* The way to the problem's row sits at the card's far end, as the mockup has it */
 .trust-crosslink {
   margin-left: auto;
+}
+
+/* With no Dismiss beside it, the link alone keeps its own height, not a button's (#20 slice 4c) */
+.trust-incident-actions > .trust-crosslink:only-child {
+  min-height: 0;
 }
 
 .trust-places {
