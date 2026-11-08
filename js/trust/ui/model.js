@@ -66,8 +66,8 @@ export const SEVERITY_TONE = Object.freeze({ 'capture-risk': 'failed', 'data-ris
 export const SEVERITY_ORDER = Object.freeze(['capture-risk', 'data-risk', 'degraded']);
 
 /**
- * The status a problem's severity reads as on a row whose checks can't speak for it, whose shape
- * is the severity's (SEVERITY_TONE)
+ * The status a problem's severity reads as on a row that holds it, whose shape is the severity's
+ * (SEVERITY_TONE): a row with a finding never reads as its check alone does (round 4)
  */
 const SEVERITY_STATUS = Object.freeze({ 'capture-risk': 'failed', 'data-risk': 'action-required', degraded: 'degraded' });
 
@@ -249,11 +249,13 @@ function updateText(key, receipt) {
 
 /**
  * @typedef {object} Evidence
- * @property {string} title - the provider's label, for a folded row's sub-checks
+ * @property {string} title - the provider's label, for a folded row's sub-checks, or a problem's title
  * @property {string} statusText
  * @property {string} tone
- * @property {string} sentence - what the check did
+ * @property {string} sentence - what the check did, or what the problem means
  * @property {Fact[]} facts
+ * @property {boolean} [problem] - a problem no check on the page covers, which leads the row's
+ *   evidence, its own checks after it as they read (round 4)
  */
 
 /**
@@ -339,6 +341,28 @@ function evidenceOf(entry, now) {
     tone: /** @type {Record<string, string>} */ (TONE)[entry.status] || 'unknown',
     sentence: sentences[entry.receipt.operation] || '',
     facts: factsOf(entry.providerId, entry, entry.receipt, now),
+  };
+}
+
+/** The capability a row is itself, which its own Not working list doesn't repeat (round 4) */
+const ROW_IS = Object.freeze(/** @type {Record<string, string>} */ ({ capture: 'capture' }));
+
+/**
+ * A problem no check on the page covers, as a row's evidence: its title, its severity's status
+ * and shape, what it means, and when it was seen
+ * @param {Problem} problem
+ * @param {number} now
+ * @returns {Evidence}
+ */
+function problemEvidence(problem, now) {
+  const status = /** @type {Record<string, string>} */ (SEVERITY_STATUS)[problem.severity];
+  return {
+    title: problem.title,
+    statusText: /** @type {Record<string, string>} */ (STATUS)[status] || status,
+    tone: /** @type {Record<string, string>} */ (TONE)[status] || 'unknown',
+    sentence: problem.text,
+    facts: problemFacts(problem, now),
+    problem: true,
   };
 }
 
@@ -454,9 +478,10 @@ export function trustSections(report, { now, checking = new Set() }) {
     );
     const open = incidents.filter(incident => !incident.dismissed);
     const counted = open.filter(incident => !waits(incident, entries[0].receipt));
-    // An uncovered problem that needs the user gives the row its shape and words, since the
-    // row's checks can't speak for it (the design review's round 2, S3)
-    const status = worstOf([checked, ...counted.filter(uncovered).map(incident => /** @type {Record<string, string>} */ (SEVERITY_STATUS)[incident.severity])]);
+    // A problem that needs the user gives the row its shape and words where they're worse than
+    // its checks', which can't speak for it: Recovery points with something deleted still in a
+    // point is Partly working, not Not verified yet (the design review's round 2, S3, and round 4)
+    const status = worstOf([checked, ...counted.map(incident => /** @type {Record<string, string>} */ (SEVERITY_STATUS)[incident.severity])]);
     // Storage's update state, when its check reported one: its own words and shape, and a wait
     // that needs no one (change 9)
     const update = rowId === 'storage' && status === 'degraded' ? updateOf(entries[0].receipt) : null;
@@ -470,7 +495,13 @@ export function trustSections(report, { now, checking = new Set() }) {
       .filter(entry => entry.receipt && (rowId !== 'platform' || entry.status === 'verified'))
       .map(entry => /** @type {HealthReceipt} */ (entry.receipt).verifiedAt);
     const stillWorks = [...new Set(entries.flatMap(entry => (attention ? entry.stillWorks : [])))];
-    const notWorking = [...new Set(open.flatMap(incident => incident.affected))];
+    // Saving new notes doesn't list saving new notes, which its name and status already say (round 4)
+    const notWorking = [...new Set(open.flatMap(incident => incident.affected))].filter(capability => ROW_IS[rowId] !== capability);
+    // A problem no check here covers leads the row's evidence, so a row it fails never offers a
+    // check that passed as its evidence: those come after it, as they read (round 4)
+    const problemsFirst = counted.some(uncovered)
+      ? problemsOf(counted.filter(uncovered), new Map(), id => entryOf(id) || null).map(problem => problemEvidence(problem, now))
+      : [];
     return {
       id: rowId,
       label: /** @type {Record<string, {label: string}>} */ (PROVIDER)[rowId].label,
@@ -496,7 +527,7 @@ export function trustSections(report, { now, checking = new Set() }) {
       notWorking,
       open,
       action: rowAction(rowId, entries, counted),
-      evidence: /** @type {Evidence[]} */ (entries.map(entry => evidenceOf(entry, now)).filter(Boolean)),
+      evidence: [...problemsFirst, .../** @type {Evidence[]} */ (entries.map(entry => evidenceOf(entry, now)).filter(Boolean))],
       destinations: rowId === 'permissions',
       pending:
         rowId === 'permissions' && entries[0].receipt && typeof entries[0].receipt.evidence.pending === 'number'
