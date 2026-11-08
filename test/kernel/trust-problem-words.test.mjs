@@ -23,7 +23,7 @@ import { HEALTH_GROUPS } from '../../js/trust/core/vocabulary.js';
 import { INCIDENT, INCIDENT_TEXT, PAGE, RESOLVED } from '../../js/trust/ui/copy.js';
 import { PLATFORM, attentionText, problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
 import { statusOf } from '../../js/trust/ui/status.js';
-import { GROUP } from '../../js/trust/ui/status-copy.js';
+import { CAPTURE_CONSEQUENCE, GROUP } from '../../js/trust/ui/status-copy.js';
 
 const AT = new Date(2026, 10, 7, 18, 42).getTime();
 const ROOT = path.join(import.meta.dirname, '..', '..');
@@ -989,6 +989,90 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         [{ status: 'Partly working', what: 'Chrome grants NewTabNote more than it asks for' }],
       ],
     );
+  });
+
+  it("names on a row's lines each problem its own check doesn't look for, though that check found something and speaks the row's line: out of space, Notes database's probe reports the space, and the health records' own two still get their lines, and Saving new notes' probe the same beside a page capture that wasn't saved (the code review's R6-1)", () => {
+    /** A provider's entry whose probe found the device out of space, as the probe answers */
+    const full = (/** @type {string} */ providerId, /** @type {string} */ operation) =>
+      entry(providerId, 'storage', {
+        status: 'action-required',
+        receipt: {
+          ...entry(providerId, 'storage').receipt,
+          operation,
+          status: 'action-required',
+          capture: 'at-risk',
+          consequenceKey: 'storage.quota',
+          evidence: { subjectId: 'CanvasTabDB' },
+          preserved: ['reading'],
+        },
+        stillWorks: ['reading'],
+      });
+    /** A problem as its producer raises it */
+    const raised = (/** @type {string} */ n, /** @type {Record<string, unknown>} */ fields) =>
+      /** @type {any} */ ({
+        ...START_FAILED,
+        id: `00000000-0000-4000-8000-0000000000${n}`,
+        ref: `0000${n}`,
+        affected: [],
+        preserved: [],
+        ...fields,
+      });
+    const quota = (/** @type {string} */ providerId, /** @type {string} */ n) =>
+      raised(n, {
+        key: `${providerId}/quota/CanvasTabDB`,
+        providerId,
+        faultCode: 'quota',
+        subjectId: 'CanvasTabDB',
+        severity: 'capture-risk',
+        affected: ['capture', 'editing'],
+      });
+    const incidents = [
+      quota('capture', 'b1'),
+      quota('storage', 'b2'),
+      // The health records can't open or take writes either: their own two, which no check looks for
+      raised('b3', {
+        key: OPEN_FAILED_KEY,
+        providerId: 'storage',
+        faultCode: 'open-failed',
+        subjectId: 'NewTabNoteTrust',
+        severity: 'data-risk',
+      }),
+      raised('b4', {
+        key: WRITE_FAILED_KEY,
+        providerId: 'storage',
+        faultCode: 'write-failed',
+        subjectId: null,
+        severity: 'data-risk',
+      }),
+      // And a page capture failed, which the capture probe doesn't look for
+      raised('b5', {
+        key: 'capture/capture-failed',
+        providerId: 'capture',
+        faultCode: 'capture-failed',
+        severity: 'capture-risk',
+        affected: ['capture'],
+      }),
+    ];
+    const others = REPORT.providers.filter(
+      (/** @type {any} */ item) => item.providerId !== 'capture' && item.providerId !== 'storage',
+    );
+    const rows = trustSections(
+      /** @type {any} */ ({
+        ...REPORT,
+        providers: [full('capture', 'capture.probe-commit'), full('storage', 'storage.probe-readwrite'), ...others],
+        incidents,
+      }),
+      { now: AT },
+    ).flatMap(section => section.rows);
+    const row = (/** @type {string} */ id) => /** @type {any} */ (rows.find(item => item.id === id));
+    // Each row's line is its probe's finding, which speaks for the space the probe looks for
+    const space = /** @type {Record<string, string>} */ (CAPTURE_CONSEQUENCE)['storage.quota'];
+    assert.deepEqual([row('capture').text, row('storage').text], [space, space]);
+    assert.deepEqual(row('storage').problemLines, [
+      { status: 'Needs action', what: "NewTabNote can't keep its health records" },
+      { status: 'Needs action', what: "some health records weren't saved" },
+    ]);
+    assert.deepEqual(row('capture').problemLines, [{ status: 'Not working', what: "a page capture wasn't saved" }]);
   });
 
   it("leaves out of the line under a problem that leads a row the user needs only by its check's status, as the header's badge counts no such row, and keeps it under a headline no problem leads: Saved keys, its key dismissed while its check still asks (round 4b)", () => {
