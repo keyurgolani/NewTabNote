@@ -10,8 +10,12 @@
  * (application/indexing.js) differ:
  * - an entry or an embedding for a note deleted since the indexer read it isn't kept, and
  *   saveVector answers false for it, as for a database without the store;
- * - setSearchIndex drops the entry of every note that's gone, and a batch that names a note
- *   twice keeps the last entry, as Storage's puts one after another did;
+ * - setSearchIndex drops the entry of every note that's gone, and of a note it's given twice
+ *   keeps the last entry, as Storage's puts one after another did;
+ * - setSearchIndex sends the whole index in bounded batches, each once the one before it
+ *   answers, and then removes the entries stored as it began that it names none of (#262), so
+ *   once the new tab's writes go to the worker (#35 slice 4d) another page's save gets its turn
+ *   between two batches, and an entry another command writes meanwhile stays;
  * - a write that doesn't commit rejects with a StorageFacadeError, which names the command
  *   and its outcome's kind and code, never what it carried, as Storage rejected when
  *   IndexedDB failed.
@@ -21,6 +25,7 @@
  */
 
 import { STORE_SCHEMAS } from '../adapters/indexeddb/schema.js';
+import { encodedBytes } from '../core/contracts/codec.js';
 
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('../core/contracts/commands.js').Command} Command */
@@ -92,6 +97,13 @@ export class StorageFacadeError extends Error {
 }
 
 /**
+ * The note an entry is for, or undefined for one that isn't an entry
+ * @param {unknown} entry
+ * @returns {unknown}
+ */
+const noteOf = entry => (entry && typeof entry === 'object' ? /** @type {IndexEntry} */ (entry).noteId : undefined);
+
+/**
  * The entries in `entries`, one a note: the last for each note, as Storage's puts one after
  * another left it
  * @param {readonly IndexEntry[]} entries
@@ -100,8 +112,57 @@ export class StorageFacadeError extends Error {
 function lastPerNote(entries) {
   /** @type {Map<unknown, IndexEntry>} */
   const byNote = new Map();
-  for (const entry of entries) byNote.set(entry && typeof entry === 'object' ? entry.noteId : undefined, entry);
+  for (const entry of entries) byNote.set(noteOf(entry), entry);
   return [...byNote.values()];
+}
+
+/**
+ * The most one batch of the whole index holds (#262): 100 entries, and 256 KiB of their JSON as
+ * UTF-8. Chrome's second JSON encoding at most doubles a frame, so a batch stays under the
+ * command's ceiling (#259), and under the 1 MiB cap it had before, unless it's a lone entry that's
+ * larger on its own.
+ */
+const INDEX_BATCH_ENTRIES = 100;
+const INDEX_BATCH_BYTES = 256 * 1024;
+
+/**
+ * The whole index's commands, in order (#262): the entries, then the note ids to remove, in
+ * batches of at most INDEX_BATCH_ENTRIES items and INDEX_BATCH_BYTES of their JSON, each item
+ * counted as the codec encodes it. An item larger than that on its own goes alone. There's always
+ * one batch, so a write of nothing still runs a command, as the one command of the whole index did.
+ * @param {readonly IndexEntry[]} entries
+ * @param {readonly string[]} removed
+ * @returns {Array<{entries: IndexEntry[], removed: string[]}>}
+ */
+function batchesOf(entries, removed) {
+  /** @type {Array<{entries: IndexEntry[], removed: string[]}>} */
+  const batches = [];
+  /** @type {{entries: IndexEntry[], removed: string[]}} */
+  let batch = { entries: [], removed: [] };
+  let count = 0;
+  let bytes = 0;
+  /** @param {unknown} item - the next one, which a full batch leaves to the next */
+  const makeRoom = item => {
+    const size = encodedBytes(JSON.stringify(item) ?? '');
+    if (count > 0 && (count >= INDEX_BATCH_ENTRIES || bytes + size > INDEX_BATCH_BYTES)) {
+      batches.push(batch);
+      batch = { entries: [], removed: [] };
+      count = 0;
+      bytes = 0;
+    }
+    count += 1;
+    bytes += size;
+  };
+  for (const entry of entries) {
+    makeRoom(entry);
+    batch.entries.push(entry);
+  }
+  for (const noteId of removed) {
+    makeRoom(noteId);
+    batch.removed.push(noteId);
+  }
+  batches.push(batch);
+  return batches;
 }
 
 /**
@@ -149,14 +210,43 @@ export function createStorageFacade(client, { openDatabase }) {
     throw new StorageFacadeError(query.type, kind, code, state);
   };
 
+  /**
+   * The note ids of the stored search entries, keys alone, in one read, never paged, so none of
+   * them is an entry another command writes once the whole index's write has begun (#262). Null when
+   * the read fails, an answer over the 1 MiB answer cap among them: that write then removes nothing,
+   * and the next rebuild tries again.
+   * @returns {Promise<string[] | null>}
+   */
+  const storedEntryIds = async () => {
+    try {
+      return await read({ type: 'listSearchEntryIds' }, /** @type {string[]} */ ([]));
+    } catch {
+      return null;
+    }
+  };
+
   return Object.freeze({
     hasStore: (/** @type {string} */ name) =>
       Object.hasOwn(STORE_SCHEMAS, name) &&
       openDatabase.openState === 'open' &&
       !openDatabase.missingStores.includes(name),
 
-    setSearchIndex: (/** @type {readonly IndexEntry[]} */ entries) =>
-      write('updateSearchIndex', { entries: lastPerNote(entries), replaceAll: true }),
+    // The whole index (#262), as bounded batches, none replacing the index: what was stored is read
+    // first, and the batches after the entries remove what it names none of. Each batch goes once
+    // the one before it answers, so on the worker's queue another page's save takes its turn between
+    // two (#35 slice 4d). A batch that doesn't commit ends the write, as the one command did.
+    async setSearchIndex(/** @type {readonly IndexEntry[]} */ entries) {
+      const whole = lastPerNote(entries);
+      const stored = await storedEntryIds();
+      const named = new Set(whole.map(noteOf));
+      const removed = stored === null ? [] : stored.filter(noteId => !named.has(noteId));
+      for (const batch of batchesOf(whole, removed)) {
+        await write(
+          'updateSearchIndex',
+          batch.removed.length > 0 ? { entries: batch.entries, removed: batch.removed } : { entries: batch.entries },
+        );
+      }
+    },
 
     setSearchIndexEntry: (/** @type {IndexEntry} */ entry) => write('updateSearchIndex', { entries: [entry] }),
 

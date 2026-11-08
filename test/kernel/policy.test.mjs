@@ -38,6 +38,7 @@ const TODAY = {
       'getNoteList',
       'getNotesByIds',
       'listSearchEntries',
+      'listSearchEntryIds',
       'getInsightsPending',
       'getJobRuns',
       'listSnapshots',

@@ -84,17 +84,27 @@ function pagePort(surface = 'popup') {
   const onDisconnect = [];
   /** @type {any[]} */
   const received = [];
+  /** @type {Array<(frame: any) => void>} */
+  const hearers = [];
   const port = {
     name: 'ntn-rpc',
     sender: { id: SENDER_ID, url: `chrome-extension://${SENDER_ID}/${surface}.html`, origin: `chrome-extension://${SENDER_ID}` },
     onMessage: { addListener: (listener) => onMessage.push(listener) },
     onDisconnect: { addListener: (listener) => onDisconnect.push(listener) },
-    postMessage: (text) => received.push(JSON.parse(text)),
+    postMessage: (text) => {
+      const frame = JSON.parse(text);
+      received.push(frame);
+      for (const hear of hearers) hear(frame);
+    },
     disconnect: () => {},
   };
   return {
     port,
     received,
+    /** Calls `listener` with each frame the worker sends from now on, as it comes */
+    heard(listener) {
+      hearers.push(listener);
+    },
     /** Send `frame` to the worker, as the page's client would */
     send(frame) {
       for (const listener of onMessage) listener(JSON.stringify(frame));
@@ -1549,5 +1559,136 @@ describe("Side Panel's command over the port, in the worker (#35 slice 4c)", () 
     assert.equal(await holdsNote(worker, 'n-side-quick'), false);
     const elements = Object.values(recordsOf(await dumpDatabase(worker.indexedDB), 'elements'));
     assert.deepEqual(elements.filter((element) => element.id === 'b-side').map((element) => element.content), [content]);
+  });
+});
+
+/**
+ * `source` with `find`, which must be in it exactly once, changed to `replace`, for a rewrite that
+ * adds to a module and so needs each of its edits to land
+ */
+function replaceOnce(source, find, replace) {
+  const at = source.indexOf(find);
+  if (at === -1 || source.indexOf(find, at + 1) !== -1) throw new Error(`test: expected ${JSON.stringify(find)} once`);
+  return source.slice(0, at) + replace + source.slice(at + find.length);
+}
+
+/**
+ * The worker serves the new tab's index command over the port, as #35 slice 4d's worker half will:
+ * its handler on the new tab's kernel in the worker, and its operation in the router's lookup, in
+ * these cases only. The handler waits `perEntryMs` on the worker's fake clock for each entry it's
+ * sent before its unit, so a write holds the queue as long as it's large, as the whole index does on
+ * a large profile: a `rewrite` for loadBackground
+ * @param {number} perEntryMs
+ */
+const indexOnTheWorker = (perEntryMs) => ({
+  'js/kernel/core/application/handlers-worker.js': (source) => replaceOnce(
+    replaceOnce(source, "import { handlerTable } from './handlers.js';\n", "import { handlerTable } from './handlers.js';\nimport { indexCommands } from './indexing.js';\n"),
+    '  commands: { createNote: noteCommands.createNote, applyCloseDraft: closeDraftCommands.applyCloseDraft },\n',
+    [
+      '  commands: {',
+      '    createNote: noteCommands.createNote,',
+      '    applyCloseDraft: closeDraftCommands.applyCloseDraft,',
+      '    updateSearchIndex: async (command, context) => {',
+      `      await new Promise((resolve) => setTimeout(resolve, command.entries.length * ${perEntryMs}));`,
+      '      return indexCommands.updateSearchIndex(command, context);',
+      '    },',
+      '  },',
+      '',
+    ].join('\n'),
+  ),
+  'js/kernel/composition/background.js': (source) => replaceOnce(
+    replaceOnce(
+      source,
+      "import * as createNoteOperation from '../core/contracts/operations/create-note.js';\n",
+      "import * as createNoteOperation from '../core/contracts/operations/create-note.js';\nimport * as updateSearchIndexOperation from '../core/contracts/operations/update-search-index.js';\n",
+    ),
+    '  applyCloseDraft: operationOf(COMMANDS.applyCloseDraft, applyCloseDraftOperation),\n});',
+    '  applyCloseDraft: operationOf(COMMANDS.applyCloseDraft, applyCloseDraftOperation),\n  updateSearchIndex: operationOf(COMMANDS.updateSearchIndex, updateSearchIndexOperation),\n});',
+  ),
+});
+
+/**
+ * The client js/storage.js's facade runs on, as the new tab's will be once its writes go to the
+ * worker (#35 slice 4d): each command a request on `page`'s port as the new tab, with its entry's
+ * deadline, answered by the router's frame for it. Its one read, the stored search entries' note
+ * ids, comes from the worker's database, as the page's reader would read it.
+ */
+function newTabOnThePort(worker, page) {
+  /** @type {Map<string, (frame: any) => void>} */
+  const waiting = new Map();
+  page.heard((frame) => {
+    const answer = waiting.get(frame.requestId);
+    if (!answer) return;
+    waiting.delete(frame.requestId);
+    answer(frame);
+  });
+  let next = 0;
+  return {
+    ids: { next: () => `c-index-${(next += 1)}` },
+    whenReady: async () => null,
+    query: async () => {
+      const noteIds = Object.keys(recordsOf(await dumpDatabase(worker.indexedDB), 'search_index'));
+      return noteIds.length > 0 ? { kind: 'ready', asOf: Date.now(), data: noteIds } : { kind: 'empty', asOf: Date.now() };
+    },
+    execute: (command) => new Promise((resolve) => {
+      const requestId = `r-${command.commandId}`;
+      waiting.set(requestId, (frame) => resolve(
+        frame.frame === 'response' ? frame.result : { kind: 'unavailable', cause: 'coordinator', code: frame.code, retryable: true },
+      ));
+      page.send({ frame: 'request', requestId, operation: command.type, version: 1, deadline: Date.now() + limits.COMMAND_DEADLINE_MS, payload: command });
+    }),
+  };
+}
+
+describe("the new tab's whole search index on the worker's queue (#262)", () => {
+  it("gives a save sent while the whole index is written its turn between two batches, so Popup's quick note commits within its 30 s deadline, and every entry lands", async () => {
+    // At 250 ms an entry, 201 entries as one command hold the queue for over 50 s, and a batch of 100 for 25 s
+    const notes = Array.from({ length: 201 }, (_, index) => note(`n-index-${index}`, { name: `Note ${index}` }));
+    const worker = await loadBackground({
+      setup: (env) => createDatabase(env.indexedDB, { records: { canvases: notes } }),
+      rewrite: indexOnTheWorker(250),
+    });
+    const tab = pagePort('newtab');
+    await worker.dispatch('runtime.onConnect', tab.port);
+    tab.hello('newtab-index');
+    const popup = pagePort('popup');
+    await worker.dispatch('runtime.onConnect', popup.port);
+    popup.hello('popup-during-index');
+    await worker.drain();
+    const { createStorageFacade } = await import('../js/kernel/composition/storage-facade.js');
+    const facade = createStorageFacade(newTabOnThePort(worker, tab), { openDatabase: { openState: 'open', missingStores: [] } });
+    /** @type {unknown} */
+    let written = null;
+    void facade.setSearchIndex(notes.map((record) => ({ noteId: record.id, name: record.name, content: `text of ${record.id}`, tags: [], updatedAt: 1 })))
+      .then(() => { written = 'committed'; }, (error) => { written = error; });
+    // The write's first command now holds the queue, waiting on the worker's fake clock
+    await worker.drain();
+    /** @type {{frame: any, at: number} | null} */
+    let saved = null;
+    popup.heard((frame) => {
+      if (frame.requestId === 'save-during-index') saved = { frame, at: worker.env.clock.now };
+    });
+    const sentAt = worker.env.clock.now;
+    popup.send({
+      frame: 'request',
+      requestId: 'save-during-index',
+      operation: 'createNote',
+      version: 1,
+      deadline: Date.now() + limits.COMMAND_DEADLINE_MS,
+      payload: { ...QUICK_NOTE, commandId: 'c-during-index', noteId: 'n-during-index' },
+    });
+    await worker.drain();
+    for (let step = 0; step < 120 && written === null; step++) {
+      worker.env.clock.tick(1_000);
+      await worker.drain();
+    }
+    assert.equal(written, 'committed');
+    assert.ok(saved, "the quick note's answer came");
+    assert.deepEqual([saved.frame.frame, saved.frame.result && saved.frame.result.kind], ['response', 'committed'], JSON.stringify(saved.frame));
+    assert.ok(saved.at - sentAt < limits.COMMAND_DEADLINE_MS, `answered ${saved.at - sentAt} ms after it was sent`);
+    assert.equal(await holdsNote(worker, 'n-during-index'), true);
+    // Every note's entry, and the one the quick note's own commit wrote during the write
+    const indexed = Object.keys(recordsOf(await dumpDatabase(worker.indexedDB), 'search_index'));
+    assert.deepEqual(indexed.sort(), [...notes.map((record) => record.id), 'n-during-index'].sort());
   });
 });
