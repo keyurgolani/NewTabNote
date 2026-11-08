@@ -162,7 +162,7 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
       'just above its footer',
     );
     assert.deepEqual(shown(doc), {
-      sidebar: ['Saved keys needs your attention›', 'recovery.html#trust'],
+      sidebar: ['Saved keys need your attention›', 'recovery.html#trust'],
       settings: [
         `Your notes are saving normally. Checked ${whenText(CHECKED, NOW)}.`,
         '1 thing needs your attention: Saved keys.',

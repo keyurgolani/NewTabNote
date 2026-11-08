@@ -1,10 +1,11 @@
 // #20 slice 4c, PR 2: what the new tab's sidebar line and Settings' Trust Center lines say, from
 // the status the worker answers, trust.summary narrowed to what they read (js/trust/ui/status.js),
-// in the words the lead signed on 2026-11-07. They name groups by what needs action, never a
-// number of problems, and read saving from capture and the storage group's last check: the
-// status carries no worstCore. A dismissed problem and an update that's waiting never show; a
-// wait for free space shows no sidebar line while 1b's space notice does (the design review's
-// changes 9 and 10).
+// in the words the lead signed on 2026-11-07, with round 2 of 2026-11-08. They name groups by what
+// needs action, never a number of problems, each name with the verb it takes, and a row with a
+// name of its own when its group's one problem sits there, and read saving from capture and the
+// storage group's last check: the status carries no worstCore. A dismissed problem and an update
+// that's waiting never show; a wait for free space shows no sidebar line while 1b's space notice
+// does (the design review's changes 9 and 10).
 //
 // status.js is new in this PR, so it loads inside each case, and on a tree without it each case
 // fails on its own.
@@ -94,7 +95,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
         ),
       });
     for (const [names, sidebar, second] of /** @type {Array<[string[], string, string]>} */ ([
-      [['vault'], 'Saved keys needs your attention', '1 thing needs your attention: Saved keys.'],
+      [['vault'], 'Saved keys need your attention', '1 thing needs your attention: Saved keys.'],
       [
         ['vault', 'permissions'],
         'Saved keys and Permissions need your attention',
@@ -215,7 +216,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
     const both = await linesOf(summary({ ...space, groups: [...space.groups, group('vault', { needsAction: 1 })] }), {
       spaceNotice: true,
     });
-    assert.equal(both.sidebar && both.sidebar.text, 'Saved keys needs your attention');
+    assert.equal(both.sidebar && both.sidebar.text, 'Saved keys need your attention');
   });
 
   it('at capture risk say new notes may not be saved, with the cause the summary has, and point to the Recovery Center', async () => {
@@ -292,7 +293,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
     );
   });
 
-  it("say NewTabNote can't confirm notes are saving while the health records can't be read, and point to the Recovery Center", async () => {
+  it("say NewTabNote can't confirm notes are saving while the health records can't be read, and point to the Recovery Center, change 7's line following the button (round 2)", async () => {
     for (const blind of [
       { records: 'fallback', capture: 'unknown', route: 'recovery' },
       // A store or settings copy the read couldn't reach, with the records open
@@ -307,7 +308,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
       assert.deepEqual(lines.settings, {
         first: { text: "NewTabNote can't confirm your notes are saving.", cause: null, tone: 'action' },
         second: null,
-        riskLine: null,
+        riskLine: 'The Recovery Center shows what went wrong and can save a copy of everything that can still be read.',
         action: { label: 'Open Recovery Center', href: 'recovery.html#recovery', primary: false },
       });
     }
@@ -338,14 +339,85 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
     });
   });
 
-  it('name each group as every surface does (change 6)', async () => {
+  it('name each group as every surface does (change 6), with the verb its name takes, which every group has (round 2)', async () => {
     const { statusOf } = await import('../../js/trust/ui/status.js');
-    for (const [id, name] of Object.entries(GROUP)) {
-      const lines = statusOf(
-        summary({ groups: [group('storage'), group(id === 'storage' ? 'backup' : id, { needsAction: 1 })] }),
-        { now: NOW },
-      );
-      if (id !== 'storage') assert.equal(lines.sidebar && lines.sidebar.text, `${name} needs your attention`, id);
+    const { GROUP_VERB } = await import('../../js/trust/ui/status-copy.js');
+    const { HEALTH_GROUPS } = await import('../../js/trust/core/vocabulary.js');
+    // A name and its verb for each group, so a group added later can't ship without its verb
+    assert.deepEqual([Object.keys(GROUP).sort(), Object.keys(GROUP_VERB || {}).sort()], [
+      [...HEALTH_GROUPS].sort(),
+      [...HEALTH_GROUPS].sort(),
+    ]);
+    // The one-group line as the lead signed it, round 2 (2026-11-08 00:12:20)
+    const signed = {
+      storage: 'Notes database needs your attention',
+      vault: 'Saved keys need your attention',
+      backup: 'Backups need your attention',
+      sync: 'Sync needs your attention',
+      indexing: 'Search needs your attention',
+      inference: 'AI needs your attention',
+      permissions: 'Permissions need your attention',
+      recovery: 'Recovery points need your attention',
+      platform: "NewTabNote's own parts need your attention",
+    };
+    for (const id of HEALTH_GROUPS) {
+      const lines = statusOf(summary({ groups: [group(id, { needsAction: 1 })] }), { now: NOW });
+      assert.equal(lines.sidebar && lines.sidebar.text, /** @type {Record<string, string>} */ (signed)[id], id);
     }
+  });
+
+  it("name a row with a name of its own, in recovery.html's label, when its group's one problem sits on it, and the group past one (round 2)", async () => {
+    const { ROW_LABEL } = await import('../../js/trust/ui/status-copy.js');
+    const { PROVIDER } = await import('../../js/trust/ui/copy.js');
+    // One list, which recovery.html's rows read too
+    const labels = { 'local-inference': 'Local model', 'remote-ai': 'Cloud AI', 'ai-scope-grants': 'AI access to notes' };
+    assert.deepEqual(ROW_LABEL, labels);
+    for (const [id, label] of Object.entries(labels)) {
+      assert.equal(/** @type {Record<string, {label: string}>} */ (PROVIDER)[id].label, label, id);
+    }
+    /**
+     * A status with one group needing action, its cause on `providerId`'s row
+     * @param {string} id
+     * @param {number} needsAction
+     * @param {string} providerId
+     * @param {string} faultCode
+     */
+    const needing = (id, needsAction, providerId, faultCode) =>
+      summary({ groups: [group('storage'), group(id, { needsAction, cause: cause({ providerId, faultCode }) })] });
+    for (const [id, providerId, faultCode, name] of [
+      ['inference', 'local-inference', 'load-failed', 'Local model'],
+      ['inference', 'remote-ai', 'load-failed', 'Cloud AI'],
+      ['permissions', 'ai-scope-grants', 'grant-missing', 'AI access to notes'],
+    ]) {
+      const lines = await linesOf(needing(id, 1, providerId, faultCode));
+      assert.deepEqual(
+        [lines.sidebar && lines.sidebar.text, lines.settings.second],
+        [`${name} needs your attention`, `1 thing needs your attention: ${name}.`],
+        providerId,
+      );
+    }
+    // Two problems in the AI group sit on both its rows: no AI row raises more than one
+    const both = await linesOf(needing('inference', 2, 'local-inference', 'load-failed'));
+    assert.deepEqual(
+      [both.sidebar && both.sidebar.text, both.settings.second],
+      ['AI needs your attention', '1 thing needs your attention: AI.'],
+    );
+    // A row named as its group is, and the group's own row in a group with another
+    const own = await linesOf(needing('permissions', 1, 'permissions', 'grant-missing'));
+    assert.equal(own.sidebar && own.sidebar.text, 'Permissions need your attention');
+    // Beside another group, the row's name in the pair
+    const pair = await linesOf(
+      summary({
+        groups: [
+          group('storage'),
+          group('vault', { needsAction: 1 }),
+          group('inference', { needsAction: 1, cause: cause({ providerId: 'local-inference', faultCode: 'load-failed' }) }),
+        ],
+      }),
+    );
+    assert.deepEqual(
+      [pair.sidebar && pair.sidebar.text, pair.settings.second],
+      ['Saved keys and Local model need your attention', '2 things need your attention: Saved keys and Local model.'],
+    );
   });
 });
