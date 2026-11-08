@@ -578,17 +578,15 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
 
   it('holds the approved rows exactly', () => {
     const { entries } = BUDGETS;
-    assert.deepEqual(entries.newtab.start, { js: { raw: 700 * KIB, gzip: 200 * KIB }, css: { raw: 105 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
+    assert.deepEqual(entries.newtab.start, { js: { raw: 667848, gzip: 188720 }, css: { raw: 105 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
     // The workspace loads at boot, so it's start; nothing the root loads is named lazy
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
     assert.deepEqual(entries.background.dependencies, ['valibot']);
-    // Popup: 93,235 / 31,405 bytes in CI's strict build of fd6dc2c9, once #35 slice 4b-2 moved it,
-    // plus 5%, rounded up (2026-11-06)
-    assert.deepEqual(entries.popup.start.js, { raw: 97900, gzip: 33000 });
-    // Side Panel: 90,066 / 30,643 bytes in CI's strict build of 0fdd7039, once #35 slice 4c moved
-    // it, plus 5%, rounded up (2026-11-07)
-    assert.deepEqual(entries.sidepanel.start.js, { raw: 94600, gzip: 32200 });
+    // Popup's and Side Panel's start JS rows, as the new tab's above: their starts on #35 slice 4d as
+    // build job 128853943289 of PR checks run 42520909498 read them, with no headroom (2026-11-08)
+    assert.deepEqual(entries.popup.start.js, { raw: 76913, gzip: 26638 });
+    assert.deepEqual(entries.sidepanel.start.js, { raw: 73534, gzip: 25555 });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
     assert.equal(BUDGETS.timing.rounds, 12);

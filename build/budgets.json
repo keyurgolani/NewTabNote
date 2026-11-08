@@ -52,9 +52,9 @@
     "newtab": {
       "page": "newtab.html",
       "startChunks": ["workspace"],
-      "reason": "The new tab. Until #2 builds Moment, the workspace chunk is the whole tab and loads at boot, so it counts as start (#27 slice 3). Its forbidden list is what's enforceable today: the four libraries and the trust code, which slice 3 made lazy. The full list waits for the moment row.",
+      "reason": "The new tab. Until #2 builds Moment, the workspace chunk is the whole tab and loads at boot, so it counts as start (#27 slice 3). Its forbidden list is what's enforceable today: the four libraries and the trust code, which slice 3 made lazy. The full list waits for the moment row. Its start JS row is its start once #35 slice 4d moved its reads to #17's reader and its writes to the worker, 667,848 / 188,720 bytes as build job 128853943289 of PR checks run 42520909498 read it, with no headroom (2026-11-08; it was 700 / 200 KiB).",
       "start": {
-        "js": { "raw": 716800, "gzip": 204800 },
+        "js": { "raw": 667848, "gzip": 188720 },
         "css": { "raw": 107520, "gzip": 19456 },
         "html": { "raw": 73728, "gzip": 12288 },
         "fonts": null
@@ -65,9 +65,9 @@
     "popup": {
       "page": "popup.html",
       "lazyChunks": ["close-drafts-applier", "popup-send-chunk"],
-      "reason": "The Popup's start JS: its start once #35 slice 4b-2 moved its reads to #17's reader and its writes to the worker, 93,235 / 31,405 bytes in CI's strict build of fd6dc2c9, plus 5%, rounded up (2026-11-06; it was 115 / 40 KiB). Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #4's ready mark.",
+      "reason": "The Popup's start JS: its start on #35 slice 4d, whose host chunk no longer carries the commands' domain code, 76,913 / 26,638 bytes as build job 128853943289 of PR checks run 42520909498 read it, with no headroom (2026-11-08; it was 97,900 / 33,000 bytes, #35 slice 4b-2's start plus 5%). Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #4's ready mark.",
       "start": {
-        "js": { "raw": 97900, "gzip": 33000 },
+        "js": { "raw": 76913, "gzip": 26638 },
         "css": null,
         "html": null,
         "fonts": null
@@ -79,9 +79,9 @@
     "sidepanel": {
       "page": "sidepanel.html",
       "lazyChunks": ["close-drafts-applier", "journal-chunk", "sidepanel-send-chunk"],
-      "reason": "The Side Panel's start JS: its start once #35 slice 4c moved its reads to #17's reader and its writes to the worker, 90,066 / 30,643 bytes in CI's strict build of 0fdd7039, plus 5%, rounded up (2026-11-07; it was 112 / 40 KiB). Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #5's ready mark.",
+      "reason": "The Side Panel's start JS: its start on #35 slice 4d, whose host chunk no longer carries the commands' domain code, 73,534 / 25,555 bytes as build job 128853943289 of PR checks run 42520909498 read it, with no headroom (2026-11-08; it was 94,600 / 32,200 bytes, #35 slice 4c's start plus 5%). Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #5's ready mark.",
       "start": {
-        "js": { "raw": 94600, "gzip": 32200 },
+        "js": { "raw": 73534, "gzip": 25555 },
         "css": null,
         "html": null,
         "fonts": null
