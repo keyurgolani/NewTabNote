@@ -1701,6 +1701,7 @@ a.setting-link {
   font-size: 0.8125rem;
   font-weight: 500;
   text-decoration: none;
+  text-wrap: balance;
   flex-shrink: 0;
 }
 
@@ -1751,6 +1752,12 @@ a.setting-link {
    menus' full-width items' does */
 .trust-sidebar-line:focus-visible {
   outline-offset: -2px;
+}
+
+/* While notes are selected, the bulk bar owns the sidebar's bottom edge: the line keeps its space
+   and steps aside, out of the Tab order, until the selection ends */
+.sidebar:has(.sidebar-bulk-actions.visible) .trust-sidebar-line {
+  visibility: hidden;
 }
 
 /* API Key Security (Req 38) */
