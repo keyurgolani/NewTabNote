@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
 import { rowsOn } from '../../js/trust/core/providers/rows.js';
 import { summarize } from '../../js/trust/core/summary.js';
-import { INCIDENT, INCIDENT_TEXT, RESOLVED } from '../../js/trust/ui/copy.js';
+import { INCIDENT, INCIDENT_TEXT, PAGE, RESOLVED } from '../../js/trust/ui/copy.js';
 import { problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
 
 const AT = new Date(2026, 10, 7, 18, 42).getTime();
@@ -266,9 +266,9 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         ['capture', 'failed', 'Not working', 'failed', null, worker],
         [
           'recovery-readiness',
-          'unverified',
-          'Not verified yet',
-          'unknown',
+          'degraded',
+          'Partly working',
+          'partial',
           null,
           'Something you deleted is still in a recovery point.',
         ],
@@ -278,11 +278,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     const capture = /** @type {any} */ (rows.find(row => row.id === 'capture'));
     assert.deepEqual(
       [capture.open.map((/** @type {any} */ incident) => incident.id), capture.notWorking, capture.action],
-      [
-        [START_FAILED.id],
-        ['capture'],
-        { kind: 'recovery', label: 'See it in Recovery Center', incidentId: START_FAILED.id },
-      ],
+      [[START_FAILED.id], [], { kind: 'recovery', label: 'See it in Recovery Center', incidentId: START_FAILED.id }],
     );
     // The kept change alone stops nothing: Saving new notes reads as its check found it, and
     // the folded row takes the change's shape and words
@@ -363,5 +359,54 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         .map(row => row.id),
       ['storage'],
     );
+  });
+
+  it("leads the evidence of the rows that hold the worker's failed start with it, their own checks after it as they read, gives a row with a finding its finding's status, and leaves saving new notes out of Saving new notes' own Not working (round 4)", () => {
+    const report = /** @type {any} */ ({
+      ...REPORT,
+      providers: [
+        ...REPORT.providers,
+        entry('recovery-readiness', 'recovery', { status: 'unverified', receipt: null, stillWorks: [] }),
+        entry('local-inference', 'inference', { status: 'unverified', receipt: null, stillWorks: [] }),
+      ],
+      incidents: [START_FAILED, PURGE],
+    });
+    const rows = trustSections(report, { now: AT }).flatMap(section => section.rows);
+    const row = (/** @type {string} */ id) => /** @type {any} */ (rows.find(item => item.id === id));
+    /** @param {any} item */
+    const shown = item => [item.title, item.statusText, item.tone, Boolean(item.problem)];
+    // Saving new notes' "How this was checked" names the worker's failed start as its evidence,
+    // and its own passing write check after it, as passed
+    const [failed, own] = row('capture').evidence;
+    assert.deepEqual(
+      [shown(failed), failed.sentence, failed.facts.map((/** @type {any} */ fact) => fact.label), shown(own)],
+      [
+        ["The background worker couldn't start", 'Not working', 'failed', true],
+        'New notes and changes may not be saved until it starts.',
+        [PAGE.firstSeen, PAGE.lastSeen, PAGE.timesSeen, PAGE.ref],
+        ['Saving new notes', 'Verified', 'ok', false],
+      ],
+    );
+    // NewTabNote's own parts the same, before the parts its checks read
+    assert.deepEqual(row('platform').evidence.map(shown), [
+      ["The background worker couldn't start", 'Not working', 'failed', true],
+      ['Background worker', 'Verified', 'ok', false],
+    ]);
+    // A row with a finding takes its status and shape; one with none keeps Not verified yet
+    assert.deepEqual(
+      ['recovery-readiness', 'local-inference'].map(id => [
+        id,
+        row(id).status,
+        row(id).statusText,
+        row(id).tone,
+        row(id).attention,
+      ]),
+      [
+        ['recovery-readiness', 'degraded', 'Partly working', 'partial', true],
+        ['local-inference', 'unverified', 'Not verified yet', 'unknown', false],
+      ],
+    );
+    // Saving new notes' name and status say saving new notes isn't working; its own parts list it
+    assert.deepEqual([row('capture').notWorking, row('platform').notWorking], [[], ['capture']]);
   });
 });

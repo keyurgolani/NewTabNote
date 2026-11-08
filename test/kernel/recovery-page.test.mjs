@@ -1829,3 +1829,84 @@ describe("recovery.html while its health records can't be saved (#115's review)"
     }
   });
 });
+
+describe("recovery.html with the background worker's failed start, which no check there covers (#20 slice 4c)", () => {
+  /** The worker's failed start, as its event raises it */
+  const failedStart = (/** @type {number} */ at) => ({
+    id: '00000000-0000-4000-8000-0000000000e1',
+    ref: '0000e1',
+    key: 'coordinator/start-failed',
+    providerId: 'coordinator',
+    faultCode: 'start-failed',
+    subjectId: null,
+    severity: 'capture-risk',
+    state: 'open',
+    dismissed: false,
+    dismissChangedAt: null,
+    firstSeenAt: at,
+    lastSeenAt: at,
+    resolvedAt: null,
+    occurrences: 1,
+    affected: ['capture'],
+    preserved: ['editing', 'reading'],
+    evidence: {},
+    appliedOps: [],
+  });
+
+  /**
+   * The page on a root whose report and problems hold the worker's failed start, which only the
+   * worker raises, and whose summary has capture at risk from it, as the worker's own would
+   */
+  async function withFailedStart() {
+    const tab = legacyContext();
+    assert.equal(await newTabOn(tab).whenReady(), null);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context) });
+    const failed = failedStart(Date.now());
+    /** @param {(answer: any) => any} change */
+    const each = change =>
+      Array.from({ length: 40 }, () => (/** @type {() => Promise<any>} */ call) => call().then(change));
+    /** @param {any} answer */
+    const withIt = answer =>
+      answer && answer.data
+        ? { ...answer, data: { ...answer.data, incidents: [...answer.data.incidents, failed] } }
+        : answer;
+    const page = openPage(root, {
+      hash: '#trust',
+      answers: {
+        'trust.report': each(withIt),
+        'recovery.incidents': each(withIt),
+        'trust.summary': each(answer =>
+          answer && answer.data
+            ? { ...answer, data: { ...answer.data, capture: 'at-risk', route: 'recovery' } }
+            : answer,
+        ),
+      },
+    });
+    return {
+      page,
+      close: () => {
+        root.close();
+        closeAll([tab, context]);
+      },
+    };
+  }
+
+  it("names the worker's failed start as Saving new notes' evidence, and its own passing check after it as passed (round 4)", async () => {
+    const { page, close } = await withFailedStart();
+    try {
+      await page.ready;
+      /** The titles of Saving new notes' evidence, as drawn */
+      const subs = () => {
+        const row = page.doc.getElementById('row-capture');
+        return row
+          ? row.querySelectorAll('.trust-sub').map((/** @type {any} */ sub) => text(sub.querySelector('h4')))
+          : [];
+      };
+      await until(() => subs().length === 2, "Saving new notes' two checks");
+      assert.deepEqual(subs(), ["The background worker couldn't start: Not working", 'Saving new notes: Verified']);
+    } finally {
+      close();
+    }
+  });
+});
