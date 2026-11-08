@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { test, expect, expectNoUncaught } = require('./harness');
+const { profileStore } = require('./harness/profile-store');
 const driver = require('./characterization/driver');
 
 const MiB = 1024 * 1024;
@@ -20,24 +21,20 @@ const IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcS
 /** An image's data URL of about `bytes`, a whole number of base64 quads */
 const imageOf = bytes => `${IMAGE}${'A'.repeat(Math.floor(bytes / 4) * 4)}`;
 
-/** The note as the new tab's kernel reads it, its blocks with it */
-function storedNote(page, noteId) {
-  return page.evaluate(async id => {
-    const state = await app.kernel.query({ type: 'getNote', noteId: id });
-    return state.kind === 'ready' ? state.data : null;
-  }, noteId);
-}
-
-/** What each of a note's stored blocks holds, as a length, so a cut shows */
+/**
+ * What each of a note's stored blocks holds, as a length, so a cut shows, in order. Blocks live in
+ * their own store, apart from the note, so they're read there by the note's index.
+ */
 async function storedSizes(page, noteId) {
-  const note = await storedNote(page, noteId);
-  if (!note) return null;
-  return note.blocks.map(block => ({
-    type: block.type,
-    content: (block.content || '').length,
-    image: (block.imageUrl || '').length,
-    file: (block.fileData || '').length,
-  }));
+  const blocks = await profileStore(page).getElementsByNote(noteId);
+  return blocks
+    .sort((a, b) => a.order - b.order)
+    .map(block => ({
+      type: block.type,
+      content: (block.content || '').length,
+      image: (block.imageUrl || '').length,
+      file: (block.fileData || '').length,
+    }));
 }
 
 test('a 2 MiB file block saves through the kernel, and reads back whole after a reload (#259)', async ({ extension }) => {
@@ -102,10 +99,10 @@ test('a snapshot of a note with 3 MiB of images saves, and its restore brings th
     }, noteId);
   await expect.poll(snapshots).toBe(1);
 
-  // The note goes on without its images, then the snapshot is restored
+  // The note goes on without its images, each deleted as the editor deletes a block, which deletes
+  // it as stored too, since a save writes only the blocks it holds. Then the snapshot is restored.
   await page.evaluate(async () => {
-    app.editor.blocks = app.editor.blocks.filter(block => block.type !== 'image');
-    app.editor.scheduleSave();
+    for (const block of app.editor.blocks.filter(block => block.type === 'image')) app.editor.deleteBlock(block.id);
     await app.editor.flushSave();
   });
   const imagesStored = async () => (await storedSizes(page, noteId))?.filter(block => block.type === 'image').map(block => block.image);
@@ -137,10 +134,13 @@ test('an Export JSON backup of 6 MiB imports with Replace all, every note whole 
       await driver.reload(page);
       await driver.showNotes(page);
       await expect.poll(async () => (await driver.listedNoteNames(page)).sort()).toEqual(notes.map(note => note.name).sort());
+      // Replace all gives the notes new ids, so each is found by its name as the import stored it
+      const storedIds = async () =>
+        Object.fromEntries((await profileStore(page).getAllNotes()).map(record => [record.name, record.id]));
+      await expect.poll(async () => Object.keys(await storedIds()).sort()).toEqual(notes.map(note => note.name).sort());
+      const ids = await storedIds();
       for (const note of notes) {
-        await driver.openNote(page, note.name);
-        const noteId = await page.evaluate(() => app.editor.noteId);
-        await expect.poll(async () => (await storedSizes(page, noteId))?.map(block => block.content)).toEqual([2 * MiB]);
+        await expect.poll(async () => (await storedSizes(page, ids[note.name])).map(block => block.content)).toEqual([2 * MiB]);
       }
     });
   } finally {
