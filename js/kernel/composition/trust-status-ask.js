@@ -10,8 +10,8 @@
  *
  * The check is conservative. It takes an answer as plainly all clear only with exactly the fields
  * the worker answers, in the worker's order, capture safe or unknown, the Trust Center's route,
- * open records, and each group once, one the worker names, with nothing needing action and no
- * cause. Anything else loads the lines' chunk, no answer and a malformed one included, and the
+ * open records, and each group once, one the worker names, with nothing needing action, none of
+ * it leading, and no cause. Anything else loads the lines' chunk, no answer and a malformed one included, and the
  * chunk checks it in full (js/trust/core/status-message.js) and draws nothing on what it refuses.
  *
  * Until the lines' chunk has loaded, it asks again when the tab is shown again; from then on the
@@ -89,8 +89,8 @@ const fieldsOf = value =>
 /**
  * Whether `answer`, the worker's to the status read, is plainly all clear: exactly its fields, in
  * the worker's order, capture safe or unknown, the Trust Center's route, open records, and each
- * group once, one the worker names, needing no action and with no cause. The status lines draw no
- * sidebar line for such an answer. False for anything else.
+ * group once, one the worker names, needing no action, none of it leading, and with no cause. The
+ * status lines draw no sidebar line for such an answer. False for anything else.
  * @param {unknown} answer
  * @returns {boolean}
  */
@@ -102,12 +102,12 @@ export function plainlyClear(answer) {
   /** @type {Set<unknown>} */
   const seen = new Set();
   return groups.every(item => {
-    if (fieldsOf(item) !== 'group,needsAction,checkedAt,cause') return false;
-    const { group, needsAction, checkedAt, cause } = item;
+    if (fieldsOf(item) !== 'group,needsAction,leading,checkedAt,cause') return false;
+    const { group, needsAction, leading, checkedAt, cause } = item;
     if (!STATUS_GROUPS.includes(group) || seen.has(group)) return false;
     seen.add(group);
     const time = checkedAt === null || (Number.isSafeInteger(checkedAt) && checkedAt >= 0);
-    return needsAction === 0 && cause === null && time;
+    return needsAction === 0 && leading === 0 && cause === null && time;
   });
 }
 

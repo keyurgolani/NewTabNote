@@ -31,12 +31,19 @@ import { HEALTH_GROUPS, SEVERITIES } from './vocabulary.js';
  */
 
 /**
+ * A group, as a status line or card reads it: its count of the problems that need action, how
+ * many of those lead a first line that leads with a problem (summary.js leadingOf), when it was
+ * last checked, and its cause
+ * @typedef {{group: string, needsAction: number, leading: number, checkedAt: number | null, cause: StatusCause | null}} StatusGroup
+ */
+
+/**
  * What a status line or card reads of trust.summary
  * @typedef {object} TrustStatus
  * @property {'safe' | 'at-risk' | 'unknown'} capture
  * @property {'trust' | 'recovery'} route
  * @property {'closed' | 'open' | 'fallback'} records
- * @property {Array<{group: string, needsAction: number, checkedAt: number | null, cause: StatusCause | null}>} groups
+ * @property {StatusGroup[]} groups
  */
 
 /**
@@ -50,18 +57,20 @@ const ROUTES = Object.freeze(['trust', 'recovery']);
 const RECORDS = Object.freeze(['closed', 'open', 'fallback']);
 const FROM = Object.freeze(['incident', 'receipt']);
 const STATUS_KEYS = Object.freeze(['capture', 'route', 'records', 'groups']);
-const GROUP_KEYS = Object.freeze(['group', 'needsAction', 'checkedAt', 'cause']);
+const GROUP_KEYS = Object.freeze(['group', 'needsAction', 'leading', 'checkedAt', 'cause']);
 const CAUSE_KEYS = Object.freeze(['from', 'providerId', 'faultCode', 'errorCode', 'severity', 'consequenceKey']);
 
 /** A consequence key, `<group>.<code>`, as the records' schema takes one (records.js) */
 const CONSEQUENCE_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /**
- * trust.summary narrowed to what a status line or card reads
+ * trust.summary narrowed to what a status line or card reads, with each group's count of the
+ * problems that lead, as `leading` gives it (summary.js leadingOf), 0 for a group it doesn't name
  * @param {TrustSummary} summary
+ * @param {ReadonlyMap<string, number>} leading
  * @returns {TrustStatus}
  */
-export function narrowStatus(summary) {
+export function narrowStatus(summary, leading) {
   return {
     capture: summary.capture,
     route: summary.route,
@@ -69,6 +78,7 @@ export function narrowStatus(summary) {
     groups: summary.groups.map(({ group, needsAction, checkedAt, cause }) => ({
       group,
       needsAction,
+      leading: leading.get(group) || 0,
       checkedAt,
       cause: cause
         ? {
@@ -149,14 +159,17 @@ export function statusFrom(answer) {
   const read = [];
   for (const item of groups) {
     if (!exactly(item, GROUP_KEYS)) return null;
-    const { group, needsAction, checkedAt } = item;
+    const { group, needsAction, leading, checkedAt } = item;
     if (!oneOf(group, HEALTH_GROUPS) || read.some(seen => seen.group === group)) return null;
     if (!isTime(needsAction) || !(checkedAt === null || isTime(checkedAt))) return null;
+    // Its problems that lead are some of those that need action
+    if (!isTime(leading) || /** @type {number} */ (leading) > /** @type {number} */ (needsAction)) return null;
     const cause = causeFrom(item.cause);
     if (cause === undefined) return null;
     read.push({
       group: /** @type {string} */ (group),
       needsAction: /** @type {number} */ (needsAction),
+      leading: /** @type {number} */ (leading),
       checkedAt: /** @type {number | null} */ (checkedAt),
       cause,
     });

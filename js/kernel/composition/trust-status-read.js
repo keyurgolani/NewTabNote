@@ -24,7 +24,7 @@ import { principalOf } from '../adapters/messaging/runtime-port.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { rowsOn } from '../../trust/core/providers/rows.js';
 import { TRUST_STATUS_MESSAGE, narrowStatus } from '../../trust/core/status-message.js';
-import { summarize } from '../../trust/core/summary.js';
+import { leadingOf, summarize } from '../../trust/core/summary.js';
 import { createTrustRecords } from '../../trust/core/trust-records.js';
 import { browserTrustHost } from './trust.js';
 
@@ -81,19 +81,21 @@ export function workerStatusRead({
       const records = build(store);
       const receipts = await records.latestReceipts();
       const { incidents, copyRead, recordsRead } = await records.incidentsRead();
-      return narrowStatus(
-        summarize({
-          providers: STATUS_ROWS,
-          receipts,
-          incidents,
-          copyRead,
-          recordsRead,
-          // This ask's own records, never opened, so never closed by a failed write: they're
-          // open to it unless its read couldn't reach their store
-          recordsState: records.state() === 'fallback' ? 'fallback' : 'open',
-          now,
-        }),
-      );
+      /** @type {import('../../trust/core/summary.js').SummaryInput} */
+      const input = {
+        providers: STATUS_ROWS,
+        receipts,
+        incidents,
+        copyRead,
+        recordsRead,
+        // This ask's own records, never opened, so never closed by a failed write: they're
+        // open to it unless its read couldn't reach their store
+        recordsState: records.state() === 'fallback' ? 'fallback' : 'open',
+        now,
+      };
+      // Each group's problems that lead beside its count, so a line counts a group as other only
+      // when it holds another (the code review's F1)
+      return narrowStatus(summarize(input), leadingOf(input));
     } catch {
       return UNAVAILABLE;
     }

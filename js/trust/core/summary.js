@@ -203,6 +203,38 @@ function causeOf(members, needs, open, latest) {
 }
 
 /**
+ * Whether `incident` is one of the records' own two problems, NewTabNoteTrust not opening and its
+ * writes failing (trust-records.js OPEN_FAILED_KEY and WRITE_FAILED_KEY), by its fields, since
+ * this module loads no Valibot
+ * @param {Incident} incident
+ */
+const recordsOwn = incident =>
+  incident.providerId === 'storage' &&
+  ((incident.faultCode === 'open-failed' && incident.subjectId === 'NewTabNoteTrust') ||
+    (incident.faultCode === 'write-failed' && !incident.subjectId));
+
+/**
+ * How many of each group's problems that need action lead a status line's first line when it
+ * leads with a problem: at capture risk its capture-risk ones, and otherwise the records' own two.
+ * The status read carries it beside each group's count (status-message.js), so a line counts a
+ * group as other only when it holds a problem besides these (the code review's F1): a group can
+ * hold two that lead, as both probes out of space do. trust.summary's answer carries none of it.
+ * @param {SummaryInput} input
+ * @returns {Map<string, number>} - by group
+ */
+export function leadingOf(input) {
+  const { all, needsAction, atRisk } = assess(input);
+  /** @param {Incident} incident */
+  const leads = incident => (atRisk ? incident.severity === 'capture-risk' : recordsOwn(incident));
+  return new Map(
+    HEALTH_GROUPS.map(group => {
+      const ids = all.filter(({ provider }) => provider.group === group).map(({ provider }) => provider.id);
+      return [group, needsAction.filter(incident => ids.includes(incident.providerId) && leads(incident)).length];
+    }),
+  );
+}
+
+/**
  * trust.summary's answer
  * @param {SummaryInput} input
  * @returns {TrustSummary}
