@@ -10,6 +10,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
 import { rowsOn } from '../../js/trust/core/providers/rows.js';
@@ -18,6 +20,7 @@ import { INCIDENT, INCIDENT_TEXT, PAGE, RESOLVED } from '../../js/trust/ui/copy.
 import { attentionText, problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
 
 const AT = new Date(2026, 10, 7, 18, 42).getTime();
+const ROOT = path.join(import.meta.dirname, '..', '..');
 
 /**
  * A provider's entry in trust.report, verified at AT
@@ -441,6 +444,26 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         '2 things need your attention: Saved keys and Permissions.',
         'Saved keys and 2 more need your attention.',
       ],
+    );
+  });
+
+  it("lays recovery.html's cards and rows out as the Design gate's review of round 3 asked: card text that wraps pretty, a balanced attention line, each row's link at its far end, and a card's lone link at its own height (round 4)", () => {
+    const sheet = fs.readFileSync(path.join(ROOT, 'css', 'recovery.css'), 'utf8');
+    /** The declarations of the first rule whose selector is exactly `selector` */
+    const rule = (/** @type {string} */ selector) => {
+      const start = sheet.indexOf(`\n${selector} {\n`);
+      assert.ok(start >= 0, `css/recovery.css has a ${selector} rule`);
+      return sheet.slice(start, sheet.indexOf('\n}', start));
+    };
+    // "changed." no longer alone on a card's last line, and "NewTabNote's own / parts." no more
+    assert.match(rule('.trust-incident-body'), /\n {2}text-wrap: pretty;/);
+    assert.match(rule('.trust-attention-line'), /\n {2}text-wrap: balance;/);
+    // "See it in Recovery Center" at the row's far end, with evidence before it or none
+    assert.match(rule('.trust-row-actions'), /^\n\.trust-row-actions \{\n {2}margin-left: auto;$/);
+    // A card with no Dismiss: its link alone, at the link's height, so no button-high band
+    assert.match(
+      rule('.trust-incident-actions > .trust-crosslink:only-child'),
+      /^\n\.trust-incident-actions > \.trust-crosslink:only-child \{\n {2}min-height: 0;$/,
     );
   });
 });
