@@ -766,6 +766,32 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     ]);
   });
 
+  it("names on NewTabNote's own parts' visible lines each problem it's counted for that its line doesn't, under the problem's status word, as Not working names what stopped: the change the journal kept, under the worker's failed start (the Design gate's review of round 4's shots, signed as round 5)", () => {
+    const providers = [
+      ...REPORT.providers,
+      entry('recovery-readiness', 'recovery', { status: 'unverified', receipt: null, stillWorks: [] }),
+    ];
+    /** Saving new notes' and NewTabNote's own parts' line, and the problems each names besides it */
+    const lines = (/** @type {any[]} */ incidents) =>
+      trustSections(/** @type {any} */ ({ ...REPORT, providers, incidents }), { now: AT })
+        .flatMap(section => section.rows)
+        .filter(row => row.id === 'capture' || row.id === 'platform')
+        .map(row => [row.id, row.text, /** @type {any} */ (row).problemLines]);
+    const worker = "The background worker couldn't start saving.";
+    // r2-12: the headline counts NewTabNote's own parts as other for the kept change, so its
+    // visible lines say so
+    assert.deepEqual(lines([START_FAILED, KEPT, PURGE]), [
+      ['capture', worker, []],
+      ['platform', worker, [{ status: 'Needs action', what: "a change NewTabNote kept isn't in your notes yet" }]],
+    ]);
+    // A row's line that names its one problem says it all: the failed start alone, or the kept change
+    assert.deepEqual(lines([START_FAILED]), [
+      ['capture', worker, []],
+      ['platform', worker, []],
+    ]);
+    assert.deepEqual(lines([KEPT])[1], ['platform', "A change NewTabNote kept isn't in your notes yet.", []]);
+  });
+
   it("leaves out of the line under a problem that leads a row the user needs only by its check's status, as the header's badge counts no such row, and keeps it under a headline no problem leads: Saved keys, its key dismissed while its check still asks (round 4b)", () => {
     const passed = entry('credentials', 'vault');
     const asks = entry('credentials', 'vault', {

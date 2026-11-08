@@ -1987,7 +1987,7 @@ describe("recovery.html with the background worker's failed start, which no chec
     }
   });
 
-  it("counts NewTabNote's own parts as other once it holds a problem besides the failed start the headline leads with: a change the journal kept (round 4b)", async () => {
+  it("counts NewTabNote's own parts as other once it holds a problem besides the failed start the headline leads with: a change the journal kept, which the row names on its visible lines (round 4b, and round 5)", async () => {
     const { page, close } = await withFailedStart([keptEntry]);
     try {
       await page.ready;
@@ -1997,6 +1997,11 @@ describe("recovery.html with the background worker's failed start, which no chec
         text(page.doc.querySelector('.trust-attention-line')),
         "1 other thing needs your attention: NewTabNote's own parts.",
       );
+      // The row the link lands on names the change it was counted for, under its status word
+      // (signed as round 5)
+      const lines = page.doc.getElementById('row-platform').querySelectorAll('.trust-row-keeps').map(text);
+      assert.equal(lines[lines.length - 1], "Needs action: a change NewTabNote kept isn't in your notes yet.");
+      assert.equal(lines.filter(line => line.includes('a change NewTabNote kept')).length, 1);
     } finally {
       close();
     }
