@@ -689,7 +689,8 @@ html {
 /* With no Dismiss beside it, the link alone sits on a line of text at the card's far end, with no
    button-high band: inline on its baseline, with half of 44px less 1em above and below its text's
    own box, which makes its target 44px tall at least without making its line taller, and its
-   line 16px below the card's facts, so its focus ring clears them (#20 slice 4c) */
+   line 16px below the card's facts, so its focus ring clears them, with 3px more below it, so
+   the ring keeps 4px from the card's border (#20 slice 4c) */
 .trust-incident-actions:has(> .trust-crosslink:only-child) {
   display: block;
   margin-top: var(--space-region);
@@ -729,8 +730,8 @@ html {
 }
 
 /* The Recovery Center's text actions, the "See ... in Trust Center" links and Undo: 4px of room
-   beside their words, so a focus ring keeps 4px from them, the inner ring in dark too, and the
-   card's border 4px from the ring below a lone link (#20 slice 4c) */
+   beside their words, so a focus ring keeps 4px from them, the inner ring in dark too
+   (#20 slice 4c) */
 .trust-crosslink,
 .trust-notice .trust-linkbtn {
   padding-inline: 4px;
