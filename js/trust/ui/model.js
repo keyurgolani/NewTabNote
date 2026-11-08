@@ -65,6 +65,12 @@ export const SEVERITY_TONE = Object.freeze({ 'capture-risk': 'failed', 'data-ris
 /** The severities, worst first */
 export const SEVERITY_ORDER = Object.freeze(['capture-risk', 'data-risk', 'degraded']);
 
+/**
+ * The status a problem's severity reads as on a row whose checks can't speak for it, whose shape
+ * is the severity's (SEVERITY_TONE)
+ */
+const SEVERITY_STATUS = Object.freeze({ 'capture-risk': 'failed', 'data-risk': 'action-required', degraded: 'degraded' });
+
 /** The statuses, worst first (vocabulary.js's STATUS_ORDER) */
 const STATUS_ORDER = Object.freeze([
   'failed',
@@ -421,6 +427,12 @@ export function trustSections(report, { now, checking = new Set() }) {
   // The rows keep the cards' rule, so both views keep one list (change 6)
   const down = notWorkingOn(report.incidents);
   /**
+   * A problem no check on this page covers, such as the background worker's on recovery.html,
+   * whose host doesn't run the worker's check
+   * @param {Incident} incident
+   */
+  const uncovered = incident => !entryOf(incident.providerId);
+  /**
    * @param {string} rowId
    * @returns {Row | null}
    */
@@ -431,15 +443,28 @@ export function trustSections(report, { now, checking = new Set() }) {
     const statuses = entries.map(entry => (checking.has(entry.providerId) ? 'checking' : entry.status));
     // The folded row reads as the worst of its parts that say anything
     const meaningful = rowId === 'platform' ? statuses.filter(status => status !== 'not-configured') : statuses;
-    const status = worstOf(meaningful.length > 0 ? meaningful : statuses);
-    const incidents = report.incidents.filter(incident => ids.includes(incident.providerId) && incident.state !== 'resolved');
+    // What the row's own checks found
+    const checked = worstOf(meaningful.length > 0 ? meaningful : statuses);
+    // Its own problems, and Saving new notes holds an uncovered one that stops saving new notes
+    // (the coordinator's ruling, signed as round 3)
+    const incidents = report.incidents.filter(
+      incident =>
+        incident.state !== 'resolved' &&
+        (ids.includes(incident.providerId) || (rowId === 'capture' && uncovered(incident) && incident.affected.includes('capture'))),
+    );
     const open = incidents.filter(incident => !incident.dismissed);
+    const counted = open.filter(incident => !waits(incident, entries[0].receipt));
+    // An uncovered problem that needs the user gives the row its shape and words, since the
+    // row's checks can't speak for it (the design review's round 2, S3)
+    const status = worstOf([checked, ...counted.filter(uncovered).map(incident => /** @type {Record<string, string>} */ (SEVERITY_STATUS)[incident.severity])]);
     // Storage's update state, when its check reported one: its own words and shape, and a wait
     // that needs no one (change 9)
     const update = rowId === 'storage' && status === 'degraded' ? updateOf(entries[0].receipt) : null;
     const waiting = update !== null && WAITING.includes(update);
-    const counted = open.filter(incident => !waits(incident, entries[0].receipt));
     const attention = counted.length > 0 || (ATTENTION.includes(status) && !waiting);
+    // A row that needs the user because of a problem, its checks finding nothing to ask, says
+    // which by its title, in place of its check's sentence (round 2, S3)
+    const [named] = counted.length > 0 && !ATTENTION.includes(checked) ? problemsOf(counted, new Map(), id => entryOf(id) || null) : [];
     const showsTime = !['not-configured', 'off', 'unsupported', 'checking', 'unverified'].includes(status);
     const verifiedTimes = entries
       .filter(entry => entry.receipt && (rowId !== 'platform' || entry.status === 'verified'))
@@ -456,8 +481,9 @@ export function trustSections(report, { now, checking = new Set() }) {
           ? /** @type {Record<string, string>} */ (STATUS)[status]
           : statusWords(rowId, status),
       tone: update ? /** @type {Record<string, {tone: string}>} */ (UPDATE_STATUS)[update].tone : /** @type {Record<string, string>} */ (TONE)[status] || 'unknown',
-      time: showsTime && verifiedTimes.length > 0 ? Math.max(...verifiedTimes) : null,
-      text: rowText(rowId, status, entries, now),
+      // A check's time, never beside the shape of a problem no check here covers
+      time: status === checked && showsTime && verifiedTimes.length > 0 ? Math.max(...verifiedTimes) : null,
+      text: named ? `${named.title}.` : rowText(rowId, checked, entries, now),
       attention,
       // A row whose status gives its reason, or that asks for nothing, folds; a row reading
       // "Not verified yet" or "Not checked recently" keeps its reason in sight, and so does a
@@ -495,31 +521,6 @@ export function trustSections(report, { now, checking = new Set() }) {
  */
 
 /**
- * The title of the capture-risk problem the summary names as a group's cause, or, when no group's
- * cause names one, of the newest open capture-risk problem a row holds that isn't dismissed:
- * recovery.html's summary leaves out the providers its host doesn't run, the background worker's
- * among them, so no group there names the worker's problem, while NewTabNote's own parts holds it.
- * Null with neither.
- * @param {TrustSummary} summary
- * @param {Row[]} rows
- * @returns {string | null}
- */
-function riskTitle(summary, rows) {
-  /** @param {{providerId: string, faultCode: string | null}} problem */
-  const titleOf = problem =>
-    problem.faultCode === null
-      ? null
-      : /** @type {Record<string, string>} */ (INCIDENT)[`${problem.providerId}/${problem.faultCode}`] || null;
-  const cause = (summary.groups || []).map(group => group.cause).find(item => item && item.severity === 'capture-risk');
-  if (cause) return titleOf(cause);
-  const [newest] = rows
-    .flatMap(row => row.open)
-    .filter(incident => incident.severity === 'capture-risk')
-    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
-  return newest ? titleOf(newest) : null;
-}
-
-/**
  * The Trust Center's headline, from the summary and the two core rows
  * @param {TrustSummary} summary
  * @param {Row[]} rows
@@ -534,14 +535,11 @@ export function trustHeadline(summary, rows, { now, checking }) {
     .map(row => ({ id: row.id, label: row.label }));
   const verified = core.filter(row => row.status === 'verified' && row.time !== null).map(row => /** @type {number} */ (row.time));
   if (atRisk) {
-    const worst = core.find(row => row.id === 'storage' && row.attention) || core.find(row => row.attention);
-    // At risk from a problem no core row explains, such as the background worker's: the proof
-    // names it, by its title (#20 slice 4c)
-    const named = worst ? null : riskTitle(summary, rows);
-    if (named) return { tone: 'failed', title: PAGE.atRisk, proof: `${named}.`, openRecovery: true, attention };
-    const shown = worst || core[0];
-    const checkedAt = shown && shown.time !== null ? ` Checked ${whenText(shown.time, now)}.` : '';
-    return { tone: 'failed', title: PAGE.atRisk, proof: `${shown ? shown.text : ''}${checkedAt}`.trim(), openRecovery: true, attention };
+    // At the background worker's risk, Saving new notes follows its problem, so the proof names
+    // it by its title, with no check's time (#20 slice 4c)
+    const worst = core.find(row => row.id === 'storage' && row.attention) || core.find(row => row.attention) || core[0];
+    const checkedAt = worst && worst.time !== null ? ` Checked ${whenText(worst.time, now)}.` : '';
+    return { tone: 'failed', title: PAGE.atRisk, proof: `${worst ? worst.text : ''}${checkedAt}`.trim(), openRecovery: true, attention };
   }
   if (checking && verified.length === 0) {
     return { tone: 'checking', title: PAGE.checkingNotes, proof: PAGE.checkingProof, openRecovery: false, attention };
