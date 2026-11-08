@@ -264,7 +264,8 @@ export const INCIDENT_TEXT = Object.freeze({
   'index/indexer-start-failed': 'Search may miss notes you changed until indexing starts again.',
   'recovery-readiness/purge-stopped':
     "When you delete something for good, NewTabNote also removes it from its recovery points. One recovery point didn't pass its check, so what you deleted is still in it. Nothing else changed.",
-  'coordinator/start-failed': 'New notes and changes may not be saved until it starts.',
+  // What has to start is saving: the worker may still answer its connections (signed as round 6)
+  'coordinator/start-failed': 'New notes and changes may not be saved until it starts saving.',
   'coordinator/entry-unreplayable': "NewTabNote kept it, so nothing is lost, but it couldn't add it to your notes as it was written.",
   'credentials/legacy-secret':
     "Other software on this computer, or anyone with a copy of this browser profile, could read it. It's kept in {count} places:",
