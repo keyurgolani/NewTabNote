@@ -438,6 +438,22 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     assert.equal(NEWTAB_SENDS('runStartupMaintenance'), undefined, 'its sends');
   });
 
+  it("the new tab's send lookup holds, for each command the worker's lookup holds for the new tab, the catalog's entry and the worker's result schema, and no payload schema (#35 slice 4d, S4, R23)", async () => {
+    const { NEWTAB_SENDS } = await import('../../js/kernel/composition/newtab-send-chunk.js');
+    const { PAGE_OPERATIONS } = await import('../../js/kernel/composition/page-operations.js');
+    const served = Object.entries(PAGE_OPERATIONS).filter(([, operation]) =>
+      operation.entry.surfaces.includes('newtab'),
+    );
+    assert.ok(served.length > 0);
+    for (const [type, operation] of served) {
+      const sent = /** @type {any} */ (NEWTAB_SENDS(type));
+      assert.ok(sent, `${type} is sent`);
+      assert.equal(sent.entry, COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)], `${type}: the catalog's entry`);
+      assert.equal(sent.result, operation.result, `${type}: the worker's result schema`);
+      assert.equal(sent.payload, undefined, `${type}: no payload schema`);
+    }
+  });
+
   it('the scan reads a send wherever its object is built, and says what it cannot read', () => {
     const page = [
       "const command = { type: 'createNote', commandId: 'c1' };",

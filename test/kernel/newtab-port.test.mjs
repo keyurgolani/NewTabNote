@@ -17,8 +17,8 @@ import { kernelClient, waitForWorkerUpgrade } from '../../js/kernel/composition/
 import { createNewTabDocumentClient, createNewTabNoteList } from '../../js/kernel/composition/newtab.js';
 import { WORKER_PAGE_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
 import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
-import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
-import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
+import { COMMAND_CEILING_BYTES, MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
+import { committed, rejected, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
 import { DRAFTS_LOCK, DRAFT_PREFIX } from '../../js/kernel/core/domain/close-draft-keys.js';
 import { journalEntry, ownerLock } from '../../js/kernel/core/domain/journal.js';
@@ -298,6 +298,28 @@ describe("the new tab's writes, over #13's port (#35 slice 4d)", () => {
     assert.equal(storage.getItem(key), null, 'the draft went once the reply came');
     assert.equal(wakes, 1, 'and the purge was woken');
   });
+
+  it("publishes each committed item of a bulk action under its own id, as the kernel's run of the items does (R4p)", async () => {
+    const tab = await profile();
+    const { client } = newTab(tab);
+    assert.equal(await client.whenReady(), null);
+    /** @type {Array<{aggregate: string, ids: readonly string[]}>} */
+    const heard = [];
+    client.subscribe(event => {
+      heard.push({ aggregate: event.aggregate, ids: [...event.ids] });
+    });
+    const outcome = await client.execute({
+      type: 'runBulkAction',
+      commandId: 'c-bulk',
+      action: 'archive',
+      noteIds: ['A', 'B', 'gone'],
+    });
+    assert.equal(outcome.kind, 'bulk');
+    assert.deepEqual(heard, [
+      { aggregate: 'note', ids: ['A'] },
+      { aggregate: 'note', ids: ['B'] },
+    ]);
+  });
 });
 
 /**
@@ -558,6 +580,36 @@ describe("the new tab's sends keep their order, its runs fail fast, and an upgra
     assert.equal((await storedBlocks(tab, 'A')).a1, 'alpha');
   });
 
+  it('reads the Daily Note an ensure over the port made, once its answer is in (#74, R10)', async () => {
+    const tab = await profile();
+    /** @type {string[]} the page's queries, each once it's answered */
+    const answered = [];
+    const { reader, client } = newTab(tab, {
+      // The worker takes a moment over the ensure: half a second, or until the page's read of the
+      // Daily Note is answered, as a read sent without waiting for the ensure's answer would be
+      before: async one => {
+        if (one.type !== 'ensureDailyNote') return;
+        for (const end = Date.now() + 500; Date.now() < end && !answered.includes('findDailyNote');) {
+          await new Promise(resolve => setTimeout(resolve, 2));
+        }
+      },
+    });
+    const watched = Object.freeze({
+      ...client,
+      query: async (/** @type {any} */ query) => {
+        const state = await client.query(query);
+        answered.push(query.type);
+        return state;
+      },
+    });
+    const editor = createNewTabDocumentClient(/** @type {any} */ (watched), reader, {
+      storage: tab.env.global.localStorage,
+    });
+    const { outcome, note } = await editor.ensureDailyNote('2026-11-08');
+    assert.equal(outcome.kind, 'committed');
+    assert.equal(/** @type {any} */ (note)?.dateStr, '2026-11-08', JSON.stringify(note));
+  });
+
   it("answers reload-required, unsent, once the reader's connection closed for an upgrade, while the save its close's flush sent still goes (rule 12, R11)", async () => {
     const tab = await profile();
     const { stand, reader, client } = newTab(tab);
@@ -624,5 +676,86 @@ describe("the new tab's sends keep their order, its runs fail fast, and an upgra
       'committed',
     );
     assert.equal(connects, 1, 'the first command did');
+  });
+});
+
+describe('the answers only the port gives a save (#35 slice 4d)', () => {
+  /**
+   * The new tab's save of A from the main pane, under `commandId`, with `content` in a1
+   * @param {ReturnType<typeof newTabOn>['client']} client
+   * @param {string} commandId
+   * @param {string} content
+   */
+  const save = (client, commandId, content) =>
+    client.execute(
+      { type: 'saveNoteContent', commandId, ...saveOfA([block('a1', 'A', 0, content)]) },
+      { pane: 'main' },
+    );
+
+  /** @param {LegacyContext} tab */
+  const entriesOf = async tab => (await journalOf(tab)).map(entry => entry.opId);
+
+  it('hands a save answered migrating to the editor as it came, keeps its journal entry, and the next save commits once the worker is done migrating (rule 18, R22)', async () => {
+    const tab = await profile();
+    let migrating = true;
+    const { client } = newTab(tab, {
+      answer: one =>
+        migrating && one.type === 'saveNoteContent' ? unavailable('coordinator', 'migrating', true) : undefined,
+    });
+    assert.deepEqual(
+      await save(client, 'c-1', 'alpha, typed as it migrates'),
+      unavailable('coordinator', 'migrating', true),
+    );
+    assert.deepEqual(await entriesOf(tab), ['c-1'], 'its entry stays');
+    migrating = false;
+    assert.equal((await save(client, 'c-2', 'alpha, typed as it migrates')).kind, 'committed');
+    assert.deepEqual(await entriesOf(tab), [], "and goes with the next save's commit");
+    assert.equal((await storedBlocks(tab, 'A')).a1, 'alpha, typed as it migrates');
+  });
+
+  it('keeps the entry of a save whose answer stays unknown, and its retry under a new key commits the latest text, makes no conflict record, and takes that entry with it (N3, R24)', async () => {
+    const tab = await profile();
+    // An answer the worker's router can't send, so the page hears outcome-unknown, twice, and the
+    // ledger has nothing of it
+    const { client } = newTab(tab, {
+      answer: one => (one.commandId === 'c-1' ? /** @type {any} */ ({ kind: 'nonsense' }) : undefined),
+    });
+    const first = await save(client, 'c-1', 'alpha, first');
+    assert.deepEqual(first.kind === 'unknown' && first.code, 'outcome-unknown');
+    assert.deepEqual(await entriesOf(tab), ['c-1'], 'its entry stays');
+    assert.equal((await save(client, 'c-2', 'alpha, first, then more')).kind, 'committed');
+    assert.equal((await storedBlocks(tab, 'A')).a1, 'alpha, first, then more');
+    assert.deepEqual(
+      (await legacyEnv.dumpDatabase(tab.env.indexedDB)).stores.conflicts.records,
+      [],
+      'no conflict record',
+    );
+    assert.deepEqual(await entriesOf(tab), [], "the stale entry went with the retry's commit");
+  });
+
+  it('keeps the entry of a save answered deadline-exceeded, as one the worker held past its deadline, and the next save commits the text (S3, R25)', async () => {
+    const tab = await profile();
+    const { client } = newTab(tab, {
+      answer: one => (one.commandId === 'c-1' ? unavailable('coordinator', 'deadline-exceeded', true) : undefined),
+    });
+    assert.deepEqual(
+      await save(client, 'c-1', 'alpha, behind a long turn'),
+      unavailable('coordinator', 'deadline-exceeded', true),
+    );
+    assert.deepEqual(await entriesOf(tab), ['c-1'], 'its entry stays');
+    assert.equal((await save(client, 'c-2', 'alpha, behind a long turn')).kind, 'committed');
+    assert.equal((await storedBlocks(tab, 'A')).a1, 'alpha, behind a long turn');
+    assert.deepEqual(await entriesOf(tab), []);
+  });
+
+  it('refuses a save over the ceiling before it goes, as payload-too-large, and ends its journal entry (#259, R26)', async () => {
+    const tab = await profile();
+    const { stand, client } = newTab(tab);
+    // A quote is two bytes in the codec's text, and four once Chrome encodes that text as JSON again
+    const quotes = Math.floor(COMMAND_CEILING_BYTES * 0.3);
+    assert.deepEqual(await save(client, 'c-big', '"'.repeat(quotes)), rejected('validation', 'payload-too-large'));
+    assert.equal(stand.frames.filter(frame => frame.operation === 'saveNoteContent').length, 0, 'it never went');
+    assert.deepEqual(await entriesOf(tab), [], 'its entry ended');
+    assert.equal((await storedBlocks(tab, 'A')).a1, 'alpha', 'and nothing was stored');
   });
 });
