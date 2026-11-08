@@ -61,11 +61,16 @@ const BUDGETS_FILE = 'build/budgets.json';
 const FONT = /\.(?:woff2?|ttf|otf)$/i;
 /** The start rows an entry can have */
 const START_TYPES = ['html', 'js', 'css', 'fonts'];
-/** Only the service worker runs these, and a run-time filter once kept one on a page's start (#35 slice 3c) */
+/**
+ * Only the service worker runs these: the modules a run-time filter once kept on a page's start
+ * (#35 slice 3c), and the payload schemas of every command a page sends the worker, which only the
+ * worker's router checks (#35 slice 4d)
+ */
 const WORKER_ONLY_MODULES = Object.freeze([
   'js/kernel/adapters/indexeddb/integrity.js',
   'js/kernel/adapters/indexeddb/ledger-sweep.js',
   'js/kernel/adapters/indexeddb/worker-tasks.js',
+  'js/kernel/composition/page-operations.js',
   'js/kernel/core/application/integrity-check.js',
   'js/kernel/core/application/record-catch-up.js',
 ]);
