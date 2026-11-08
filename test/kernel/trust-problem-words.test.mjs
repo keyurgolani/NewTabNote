@@ -164,7 +164,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     }
   });
 
-  it("says them in the signed words, the stopped purge's text as round 3 has it", () => {
+  it("says them in the signed words, the stopped purge's text as round 3 has it, and the worker's failed start as round 5 names it: what failed is saving", () => {
     assert.deepEqual(
       ['recovery-readiness/purge-stopped', 'coordinator/start-failed', 'coordinator/entry-unreplayable'].map(key => [
         /** @type {Record<string, string>} */ (INCIDENT)[key],
@@ -178,9 +178,9 @@ describe("recovery.html's words for a stopped purge and the background worker's 
           'What you deleted is out of every recovery point',
         ],
         [
-          "The background worker couldn't start",
+          "The background worker couldn't start saving",
           'New notes and changes may not be saved until it starts.',
-          'The background worker starts again',
+          'The background worker saves again',
         ],
         [
           "A change NewTabNote kept isn't in your notes yet",
@@ -203,7 +203,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       [true, [START_FAILED.id], START_FAILED.id],
     );
     const [problem] = problemsOf([START_FAILED], new Map(), () => null);
-    assert.deepEqual([problem.title, problem.rowId], ["The background worker couldn't start", 'platform']);
+    assert.deepEqual([problem.title, problem.rowId], ["The background worker couldn't start saving", 'platform']);
   });
 
   it("names the worker's capture-risk problem in the headline, by its title, from recovery.html's own summary, where it's no group's cause", () => {
@@ -216,7 +216,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     const head = trustHeadline(SUMMARY, rows, { now: AT, checking: false });
     assert.deepEqual(
       [head.tone, head.title, head.proof, head.openRecovery],
-      ['failed', 'New notes may not be saved', "The background worker couldn't start.", true],
+      ['failed', 'New notes may not be saved', "The background worker couldn't start saving.", true],
     );
   });
 
@@ -234,7 +234,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual(
       cards.map(problem => [problem.title, problem.stillWorks, problem.notWorking]),
       [
-        ["The background worker couldn't start", ['editing', 'reading'], ['capture']],
+        ["The background worker couldn't start saving", ['editing', 'reading'], ['capture']],
         ["A change NewTabNote kept isn't in your notes yet", ['editing', 'reading'], []],
         ['A key is saved as plain text', ['editing', 'reading'], []],
       ],
@@ -266,7 +266,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       incidents: [START_FAILED, KEPT, PURGE],
     });
     const rows = trustSections(report, { now: AT }).flatMap(section => section.rows);
-    const worker = "The background worker couldn't start.";
+    const worker = "The background worker couldn't start saving.";
     assert.deepEqual(
       rows.filter(row => row.attention).map(row => [row.id, row.status, row.statusText, row.tone, row.time, row.text]),
       [
@@ -389,7 +389,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual(
       [shown(failed), failed.sentence, failed.facts.map((/** @type {any} */ fact) => fact.label), shown(own)],
       [
-        ["The background worker couldn't start", 'Not working', 'failed', true],
+        ["The background worker couldn't start saving", 'Not working', 'failed', true],
         'New notes and changes may not be saved until it starts.',
         [PAGE.firstSeen, PAGE.lastSeen, PAGE.timesSeen, PAGE.ref],
         ['Saving new notes', 'Verified', 'ok', false],
@@ -397,8 +397,8 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     );
     // NewTabNote's own parts the same, before the parts its checks read
     assert.deepEqual(row('platform').evidence.map(shown), [
-      ["The background worker couldn't start", 'Not working', 'failed', true],
-      ['Background worker', 'Verified', 'ok', false],
+      ["The background worker couldn't start saving", 'Not working', 'failed', true],
+      ['Connections to the background worker', 'Verified', 'ok', false],
     ]);
     // A row with a finding takes its status and shape; one with none keeps Not verified yet
     assert.deepEqual(
@@ -563,7 +563,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       [
         [
           ["A page capture wasn't saved", 'Not working', 'failed', true],
-          ["The background worker couldn't start", 'Not working', 'failed', true],
+          ["The background worker couldn't start saving", 'Not working', 'failed', true],
           ['Saving new notes', 'Verified', 'ok', false],
         ],
         [PAGE.firstSeen, PAGE.lastSeen, PAGE.timesSeen, PAGE.ref],
@@ -644,7 +644,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       [
         [['Backups', 'Needs action', 'action', false]],
         [
-          ["The background worker couldn't start", 'Not working', 'failed', true],
+          ["The background worker couldn't start saving", 'Not working', 'failed', true],
           ['Saving new notes', 'Not working', 'failed', false],
         ],
       ],
@@ -690,7 +690,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
           'capture',
           'Not working',
           [
-            ["The background worker couldn't start", 'Not working', 'failed', true],
+            ["The background worker couldn't start saving", 'Not working', 'failed', true],
             ['Saving new notes', 'Verified', 'ok', false],
           ],
         ],

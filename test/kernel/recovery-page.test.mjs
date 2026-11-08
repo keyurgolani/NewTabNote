@@ -1950,7 +1950,7 @@ describe("recovery.html with the background worker's failed start, which no chec
           : [];
       };
       await until(() => subs().length === 2, "Saving new notes' two checks");
-      assert.deepEqual(subs(), ["The background worker couldn't start: Not working", 'Saving new notes: Verified']);
+      assert.deepEqual(subs(), ["The background worker couldn't start saving: Not working", 'Saving new notes: Verified']);
     } finally {
       close();
     }
