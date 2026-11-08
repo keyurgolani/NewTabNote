@@ -554,6 +554,11 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
           inference: { needsAction: 1, cause: cause({ providerId: 'remote-ai', faultCode: 'load-failed' }) },
           permissions: { needsAction: 1, cause: cause({ providerId: 'ai-scope-grants', faultCode: 'grant-missing' }) },
         }),
+        // Permissions sits at its first row, before Cloud AI, though its last row sits after it
+        await named({
+          permissions: one,
+          inference: { needsAction: 1, cause: cause({ providerId: 'remote-ai', faultCode: 'load-failed' }) },
+        }),
       ],
       [
         [
@@ -565,6 +570,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
           'Cloud AI and AI access to notes need your attention',
           '2 things need your attention: Cloud AI and AI access to notes.',
         ],
+        ['Permissions and Cloud AI need your attention', '2 things need your attention: Permissions and Cloud AI.'],
       ],
     );
     // recovery.html's rows in its page's order, each with its group, which the lines repeat
