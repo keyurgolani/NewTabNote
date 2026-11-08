@@ -452,7 +452,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     );
   });
 
-  it("lays recovery.html's cards and rows out as the Design gate's review of round 3 asked: card text that wraps pretty, a balanced attention line, each row's link at its far end, and a card's lone link on a line of text at the card's far end, the Undo link's way, each link's target 44px tall at least (round 4, and the code review's R4-3)", () => {
+  it("lays recovery.html's cards and rows out as the Design gate's review of round 3 asked: card text that wraps pretty, a balanced attention line, each row's link at its far end, and a card's lone link on a line of text at the card's far end, clear of the card's facts, each link's target at least 44px tall in its own box (round 4, and the code review's R4-3 and its fix check)", () => {
     const sheet = fs.readFileSync(path.join(ROOT, 'css', 'recovery.css'), 'utf8');
     /** The declarations of the first rule whose selector is exactly `selector` */
     const rule = (/** @type {string} */ selector) => {
@@ -466,23 +466,26 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     // "See it in Recovery Center" at the row's far end, with evidence before it or none
     assert.match(rule('.trust-row-actions'), /^\n\.trust-row-actions \{\n {2}margin-left: auto;$/);
     // A card with no Dismiss: its link alone on a line of text at the card's far end, so no
-    // button-high band, and the link the Undo link's way: inline on its baseline, with half of
-    // 44px less 1em above and below the text's own box, 1em tall or more, so each link's target
-    // is 44px tall at least without making its line taller
+    // button-high band, and 16px below the card's facts, so its focus ring clears them
     assert.match(
       rule('.trust-incident-actions:has(> .trust-crosslink:only-child)'),
-      /^\n\.trust-incident-actions:has\(> \.trust-crosslink:only-child\) \{\n {2}display: block;\n {2}text-align: end;$/,
+      /^\n\.trust-incident-actions:has\(> \.trust-crosslink:only-child\) \{\n {2}display: block;\n {2}margin-top: var\(--space-region\);\n {2}text-align: end;$/,
     );
     /** A rule's declarations, after its selector */
     const declarations = (/** @type {string} */ selector) => rule(selector).slice(rule(selector).indexOf('{') + 1);
-    const undo =
-      '\n  display: inline;\n  min-height: 0;\n  padding: calc((var(--target-min) - 1em) / 2) 0;\n  vertical-align: baseline;';
+    // Each target at least 44px tall in its own box. The lone link, an <a>, inline on its
+    // baseline: half of 44px less 1em above and below its text's own box, 1em tall or more,
+    // which leaves its line as tall as the text's. Undo, a <button>, whose inline is
+    // inline-block: 0.7rem above and below the button's 24px line (the fix check's ruling)
     assert.deepEqual(
       [
         declarations('.trust-incident-actions > .trust-crosslink:only-child'),
         declarations('.trust-notice .trust-linkbtn'),
       ],
-      [undo, undo],
+      [
+        '\n  display: inline;\n  min-height: 0;\n  padding: calc((var(--target-min) - 1em) / 2) 0;\n  vertical-align: baseline;',
+        '\n  display: inline;\n  min-height: 0;\n  padding: 0.7rem 0;\n  vertical-align: baseline;',
+      ],
     );
   });
 

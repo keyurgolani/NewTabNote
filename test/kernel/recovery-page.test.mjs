@@ -723,6 +723,20 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       control(page.doc, PAGE.dismiss, card()).click();
       await until(() => text(card()).includes(PAGE.dismissed), 'the dismissal');
       assert.notEqual(badge(), before);
+      // Undo is a button in its sentence and the link to its row an <a> alone in the card's
+      // actions, the boxes their padding is sized for (the fix check's ruling on R4-3)
+      const undo = control(page.doc, PAGE.undo, card());
+      const actions = card().querySelector('.trust-incident-actions');
+      assert.deepEqual(
+        [
+          undo.tagName,
+          Boolean(undo.closest('.trust-notice')),
+          [...actions.querySelectorAll('a'), ...actions.querySelectorAll('button')].map(
+            (/** @type {any} */ element) => `${element.tagName} ${element.className}`,
+          ),
+        ],
+        ['BUTTON', true, ['A trust-linkbtn trust-crosslink']],
+      );
       control(page.doc, PAGE.undo, card()).click();
       await until(() => !text(card()).includes(PAGE.dismissed) && badge() === before, 'Undo');
       assert.ok(page.calls.includes('recovery.dismiss') && page.calls.includes('recovery.undismiss'));
