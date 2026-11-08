@@ -388,6 +388,24 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     assert.deepEqual(shown(shownAgain).sidebar, ['New notes may not be saved›', 'recovery.html#recovery']);
   });
 
+  it('leaves the one more to the next showing when its time comes on a hidden tab, so a hidden tab never wakes the worker', async () => {
+    const { startTrustStatus } = await import('../../js/kernel/composition/trust-status.js');
+    const doc = tabDocument();
+    const timers = manualTimers();
+    const { sent, send } = sendOf([undefined, AT_RISK]);
+    await startTrustStatus({ document: /** @type {any} */ (doc), send, now: () => NOW, timers }).ready;
+    assert.equal(timers.pending.size, 1, 'the one more waits');
+    // The user switched away before its time came: it asks nothing
+    doc.visibilityState = 'hidden';
+    await timers.fire();
+    assert.deepEqual([sent.count, shown(doc).sidebar, timers.pending.size], [1, null, 0]);
+    // Shown again, the tab reads, as it does at every showing
+    doc.visibilityState = 'visible';
+    await Promise.all(doc.fire('visibilitychange'));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual([sent.count, shown(doc).sidebar], [2, ['New notes may not be saved›', 'recovery.html#recovery']]);
+  });
+
   it('answers a read whose drawing threw with nothing, so its first read still settles and nothing goes unhandled', async () => {
     const { startTrustStatus } = await import('../../js/kernel/composition/trust-status.js');
     const doc = tabDocument();
