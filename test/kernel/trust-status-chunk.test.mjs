@@ -281,6 +281,26 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     }
   });
 
+  it("tones the shapes on two tokens in the tab's own theme blocks, and gives a wrapped line and its focus ring room (the design review's S1, N1 and live check 1)", () => {
+    const sheet = fs.readFileSync(path.join(ROOT, 'css', 'editor.css'), 'utf8');
+    /** The declarations of the first rule whose selector is exactly `selector` */
+    const rule = (/** @type {string} */ selector) => {
+      const start = sheet.indexOf(`\n${selector} {\n`);
+      assert.ok(start >= 0, `css/editor.css has a ${selector} rule`);
+      return sheet.slice(start, sheet.indexOf('\n}', start));
+    };
+    // Sage where saving is checked and clay where something needs the user, as recovery.html has
+    // them light, and the text's color dark, in the blocks the tab already has
+    assert.match(rule(':root'), /\n {2}--trust-ok: #526f69;\n {2}--trust-action: #604c34;$/);
+    assert.match(rule('[data-theme="dark"]'), /\n {2}--trust-ok: var\(--text-primary\);\n {2}--trust-action: var\(--text-primary\);$/);
+    assert.match(rule('.trust-glyph.trust-tone-ok'), /^\n\.trust-glyph\.trust-tone-ok \{\n {2}color: var\(--trust-ok\);$/);
+    assert.match(rule('.trust-glyph.trust-tone-action'), /^\n\.trust-glyph\.trust-tone-action \{\n {2}color: var\(--trust-action\);$/);
+    // A line that wraps keeps its words off both hairlines, and its ring shows inside the
+    // sidebar, which clips what's outside it
+    assert.match(rule('.trust-sidebar-line'), /\n {2}min-height: 44px;\n {2}padding: 6px 16px;\n/);
+    assert.match(rule('.trust-sidebar-line:focus-visible'), /^\n\.trust-sidebar-line:focus-visible \{\n {2}outline-offset: -2px;$/);
+  });
+
   it('draws only the newest read started, so an older one that gets its answer later, none included, leaves what the newer drew', async () => {
     const { startTrustStatus } = await import('../../js/kernel/composition/trust-status.js');
     const doc = tabDocument();
