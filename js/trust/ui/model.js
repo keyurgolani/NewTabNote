@@ -390,39 +390,84 @@ function problemEvidence(problem, now) {
 }
 
 /**
+ * The faults each line states, by the consequence key its words are under (CONSEQUENCE's, or an
+ * update's): provider/fault/subject, or provider/fault for any subject. A problem counts as said
+ * by its row's line only when its fault is here and the line is its own check's, so a problem the
+ * line's words don't state gets a line of its own, though the row's check looks for it, as an
+ * older finding of the check's own does beside a failing answer, which looks at nothing (the code
+ * review's R8-1, ruled as this table). A capture-risk line states the causes Settings' line gives
+ * its words to (status.js), the health records' line their own two (R7-1), and every other line
+ * what its own words say.
+ */
+export const STATED = Object.freeze({
+  // The probes' failures, by their causes' words: a test save that failed, the device out of
+  // space, a newer NewTabNote's database, and a database that won't open
+  'storage.capture-at-risk': Object.freeze(['capture/probe-failed']),
+  'storage.quota': Object.freeze(['capture/quota', 'storage/quota']),
+  'storage.version-too-new': Object.freeze(['capture/version-too-new', 'storage/version-too-new']),
+  'storage.unavailable': Object.freeze(['storage/open-failed/CanvasTabDB', 'storage/probe-failed']),
+  'storage.trust-records-unavailable': Object.freeze([OPEN_FAILED_KEY, WRITE_FAILED_KEY]),
+  'storage.migration-pending': Object.freeze(['storage/migration-pending']),
+  'storage.migration-blocked': Object.freeze(['storage/migration-blocked']),
+  'storage.migration-failed': Object.freeze(['storage/migration-failed']),
+  'recovery.point-unverified': Object.freeze(['recovery-readiness/point-unverified']),
+  'vault.legacy-secret': Object.freeze(['credentials/legacy-secret']),
+  // Permissions that changed: a grant missing, or one Chrome gives beyond what's asked for
+  'permissions.changed': Object.freeze(['permissions/grant-missing', 'permissions/permission-changed']),
+  'permissions.site-access-limited': Object.freeze(['permissions/grant-missing']),
+  'inference.load-failed': Object.freeze(['local-inference/load-failed']),
+  'indexing.lagging': Object.freeze(['index/lagging']),
+  // Search that has to start over is behind as well, which the index's answer reports beside it
+  'indexing.resync-required': Object.freeze(['index/stalled', 'index/lagging']),
+  'platform.coordinator-unreachable': Object.freeze(['messaging/unreachable']),
+  'platform.contribution-unavailable': Object.freeze(['contributions/contribution-unavailable', 'block-types/contribution-unavailable']),
+  // What nothing has checked yet, as an interim check, a model that has loaded before, or
+  // recovery points none of which is checked, states no problem
+  'backup.not-verified': Object.freeze([]),
+  'sync.not-verified': Object.freeze([]),
+  'inference.not-verified': Object.freeze([]),
+  'recovery.no-verified-point': Object.freeze([]),
+});
+
+/**
  * A row's second line: a provider that isn't fine says what that means for you, one that's
- * fine or not set up what it found, and anything else what it is
+ * fine or not set up what it found, and anything else what it is. Where its words are a check's
+ * finding, the consequence key they're under and whose check it is, for what it states (STATED)
  * @param {string} rowId
  * @param {string} status
  * @param {ProviderEntry[]} entries
  * @param {number} now
+ * @returns {{text: string, key: string | null, providerId: string | null}}
  */
-function rowText(rowId, status, entries, now) {
+function rowLine(rowId, status, entries, now) {
   const notes = /** @type {Record<string, string>} */ (NOTE);
   const about = /** @type {Record<string, {about: string}>} */ (PROVIDER)[rowId].about;
+  /** @param {string} text */
+  const plain = text => ({ text, key: null, providerId: null });
   if (rowId === 'platform') {
     const bad = entries.find(entry => ATTENTION.includes(entry.status));
-    if (bad) return consequenceOf(bad.providerId, bad.receipt, now) || about;
-    return status === 'verified' ? notes['platform/verified'] : about;
+    const consequence = bad ? consequenceOf(bad.providerId, bad.receipt, now) : '';
+    if (bad && consequence) return { text: consequence, key: /** @type {HealthReceipt} */ (bad.receipt).consequenceKey, providerId: bad.providerId };
+    return plain(bad || status !== 'verified' ? about : notes['platform/verified']);
   }
   const [entry] = entries;
-  if (status === 'checking') return about;
+  if (status === 'checking') return plain(about);
   const receipt = entry.receipt;
   // No receipt: nothing on this device has checked it yet, which is its reason (change 8). A
   // check that hasn't run can't say more, such as whether the local model has loaded before
-  if (!receipt) return PAGE.neverChecked;
+  if (!receipt) return plain(PAGE.neverChecked);
   const update = rowId === 'storage' ? updateOf(receipt) : null;
-  if (update) return updateText(update, receipt);
+  if (update) return { text: updateText(update, receipt), key: update, providerId: entry.providerId };
   const evidence = /** @type {Record<string, any>} */ ((receipt && receipt.evidence) || {});
   const legacy = rowId === 'recovery-readiness' && evidence.records ? ` ${fill(notes['recovery-readiness/legacy'], { records: evidence.records })}` : '';
   const consequence = consequenceOf(rowId, receipt, now);
-  if (consequence) return `${consequence}${legacy}`;
+  if (consequence) return { text: `${consequence}${legacy}`, key: receipt.consequenceKey, providerId: entry.providerId };
   const note = notes[`${rowId}/${status}`];
   if (note) {
     const verifiedAt = typeof evidence.verifiedAt === 'number' ? stampText(evidence.verifiedAt, now) : '';
-    return `${fill(note, { count: evidence.count, verifiedAt })}${legacy}`;
+    return plain(`${fill(note, { count: evidence.count, verifiedAt })}${legacy}`);
   }
-  return about;
+  return plain(about);
 }
 
 /**
@@ -514,26 +559,21 @@ export function trustSections(report, { now, checking = new Set() }) {
     // which by its title, in place of its check's sentence (round 2, S3)
     const [named] = counted.length > 0 && !ATTENTION.includes(checked) ? problemsOf(counted, new Map(), id => entryOf(id) || null) : [];
     // Each row names each problem it's counted for that its line doesn't: the line names its
-    // first problem, or says what a check that found something found, which speaks for the
-    // faults that check looks for, and for the health records' own two, which no check looks
-    // for, only when its finding is the records themselves, as Notes database's is at can't
-    // confirm. So the headline's link lands on what it counted, on any row, and no line repeats
-    // the row's (the Design gate's review of round 4's shots, signed as round 5, and the code
-    // review's R5-2, R6-1 and R7-1)
-    const spoken = named ? null : entries.find(entry => ATTENTION.includes(entry.status)) || null;
-    const found = /** @type {{consequenceKey?: unknown, evidence?: Record<string, unknown>} | null} */ (spoken && spoken.receipt);
-    const aboutRecords =
-      found !== null &&
-      (found.consequenceKey === 'storage.trust-records-unavailable' || (found.evidence !== undefined && found.evidence.subjectId === 'NewTabNoteTrust'));
+    // first problem, or is what a check that found something found, which states only the
+    // faults its words state (STATED), whatever else that check looks for. So the headline's
+    // link lands on what it counted, on any row, and no line repeats the row's (the Design
+    // gate's review of round 4's shots, signed as round 5, and the code review's R5-2, R6-1,
+    // R7-1 and R8-1)
+    const line = named ? null : rowLine(rowId, checked, entries, now);
+    const stated = /** @type {Record<string, readonly string[]>} */ (STATED)[(line && line.key) || ''] || [];
     /** @param {Incident} incident */
-    const spokenFor = incident =>
-      spoken !== null &&
-      incident.providerId === spoken.providerId &&
-      (incident.key === OPEN_FAILED_KEY || incident.key === WRITE_FAILED_KEY
-        ? aboutRecords
-        : CHECKED.has(`${incident.providerId}/${incident.faultCode}`));
+    const said = incident =>
+      line !== null &&
+      incident.providerId === line.providerId &&
+      (stated.includes(`${incident.providerId}/${incident.faultCode}/${incident.subjectId || '-'}`) ||
+        stated.includes(`${incident.providerId}/${incident.faultCode}`));
     const problemLines = problemsOf(counted, new Map(), id => entryOf(id) || null)
-      .filter(problem => (named ? problem.title !== named.title : !problem.incidents.every(spokenFor)))
+      .filter(problem => (named ? problem.title !== named.title : !problem.incidents.every(said)))
       .map(problem => ({
         status: /** @type {Record<string, string>} */ (STATUS)[/** @type {Record<string, string>} */ (SEVERITY_STATUS)[problem.severity]],
         what: lowerFirst(problem.title),
@@ -584,7 +624,7 @@ export function trustSections(report, { now, checking = new Set() }) {
       tone: update ? /** @type {Record<string, {tone: string}>} */ (UPDATE_STATUS)[update].tone : /** @type {Record<string, string>} */ (TONE)[status] || 'unknown',
       // A check's time, never beside the shape of a problem no check here covers
       time: status === checked && showsTime && verifiedTimes.length > 0 ? Math.max(...verifiedTimes) : null,
-      text: named ? `${named.title}.` : rowText(rowId, checked, entries, now),
+      text: named ? `${named.title}.` : /** @type {{text: string}} */ (line).text,
       attention,
       // A row whose status gives its reason, or that asks for nothing, folds; a row reading
       // "Not verified yet" or "Not checked recently" keeps its reason in sight, and so does a
