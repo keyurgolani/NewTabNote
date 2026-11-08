@@ -282,6 +282,9 @@ function updateText(key, receipt) {
  * @property {boolean} folded - one line, its evidence a disclosure
  * @property {string[]} stillWorks
  * @property {string[]} notWorking
+ * @property {Array<{status: string, what: string}>} problemLines - NewTabNote's own parts: each
+ *   problem it's counted for that its line doesn't name, by its status word and its title, as
+ *   "Not working:" names what stopped (signed as round 5)
  * @property {Incident[]} open - its open problems that aren't dismissed
  * @property {Incident[]} counted - those that need the user: an update that's waiting doesn't
  *   (change 9)
@@ -349,6 +352,13 @@ function evidenceOf(entry, now) {
     facts: factsOf(entry.providerId, entry, entry.receipt, now),
   };
 }
+
+/**
+ * A title as the rest of a sentence: its first letter lower case, unless its first word is a name
+ * with capitals of its own, as NewTabNote is
+ * @param {string} title
+ */
+const lowerFirst = title => (/^[A-Z][^A-Z\s]*(?:\s|$)/.test(title) ? `${title[0].toLowerCase()}${title.slice(1)}` : title);
 
 /** The capability a row is itself, which its own Not working list doesn't repeat (round 4) */
 const ROW_IS = Object.freeze(/** @type {Record<string, string>} */ ({ capture: 'capture' }));
@@ -497,6 +507,24 @@ export function trustSections(report, { now, checking = new Set() }) {
     // A row that needs the user because of a problem, its checks finding nothing to ask, says
     // which by its title, in place of its check's sentence (round 2, S3)
     const [named] = counted.length > 0 && !ATTENTION.includes(checked) ? problemsOf(counted, new Map(), id => entryOf(id) || null) : [];
+    // NewTabNote's own parts names each problem it's counted for that its line doesn't: the line
+    // names its first problem, or says what a check that found something found, which speaks for
+    // that check's own problems. So the headline's link lands on what it counted (the Design
+    // gate's review of round 4's shots, signed as round 5)
+    const spoken = named ? null : entries.find(entry => ATTENTION.includes(entry.status)) || null;
+    const problemLines =
+      rowId === 'platform'
+        ? problemsOf(counted, new Map(), id => entryOf(id) || null)
+            .filter(problem =>
+              named
+                ? problem.title !== named.title
+                : !(spoken && problem.incidents.every(incident => incident.providerId === spoken.providerId)),
+            )
+            .map(problem => ({
+              status: /** @type {Record<string, string>} */ (STATUS)[/** @type {Record<string, string>} */ (SEVERITY_STATUS)[problem.severity]],
+              what: lowerFirst(problem.title),
+            }))
+        : [];
     const showsTime = !['not-configured', 'off', 'unsupported', 'checking', 'unverified'].includes(status);
     const verifiedTimes = entries
       .filter(entry => entry.receipt && (rowId !== 'platform' || entry.status === 'verified'))
@@ -554,6 +582,7 @@ export function trustSections(report, { now, checking = new Set() }) {
         (status === 'checking' || (FOLDED.includes(status) && !(rowId === 'remote-ai' && status !== 'not-configured'))),
       stillWorks: stillWorks.filter(capability => !down.has(capability)),
       notWorking,
+      problemLines,
       open,
       counted,
       action: rowAction(rowId, entries, counted),

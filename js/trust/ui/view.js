@@ -455,6 +455,10 @@ export function mountRecoveryPage({
       h('div', { class: 'trust-row-head' }, label, h('p', { class: 'trust-row-status-line' }, status)),
       row.text ? h('p', { class: 'trust-row-text' }, row.text) : null,
       row.attention ? keeps(row.stillWorks, row.notWorking, 'trust-row-keeps') : null,
+      // Each problem it's counted for that its line doesn't name, as "Not working:" names what stopped (round 5)
+      row.attention
+        ? row.problemLines.map(line => h('p', { class: 'trust-row-keeps' }, h('strong', {}, `${line.status}:`), ` ${line.what}.`))
+        : null,
       row.destinations ? destinations(row) : null,
       h(
         'div',
