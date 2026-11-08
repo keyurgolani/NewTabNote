@@ -358,8 +358,9 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
         '2 other things need your attention: Saved keys and Permissions.',
         '1 thing needs your attention: Saved keys.',
         '2 things need your attention: Saved keys and Permissions.',
-        // Past two, as signed: no count of things to call other
-        'Saved keys and 2 more need your attention.',
+        // Past two, as signed: no count of things to call other, and the first in the Trust
+        // Center's page order
+        'Backups and 2 more need your attention.',
       ],
     );
   });
@@ -527,6 +528,51 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
     assert.deepEqual(
       [pair.sidebar && pair.sidebar.text, pair.settings.second],
       ['Saved keys and Local model need your attention', '2 things need your attention: Saved keys and Local model.'],
+    );
+  });
+
+  it("name groups in the Trust Center's page order, whatever order the answer gives them: a group where its first row sits, and a row by its own label where that row sits (round 4b)", async () => {
+    const { ROW_ORDER } = await import('../../js/trust/ui/status-copy.js');
+    const { PAGE } = await import('../../js/trust/ui/copy.js');
+    const { PROVIDER_ROWS } = await import('../../js/trust/core/providers/rows.js');
+    const { HEALTH_GROUPS } = await import('../../js/trust/core/vocabulary.js');
+    /**
+     * The lines for the groups that need action, given in the worker's order, HEALTH_GROUPS'
+     * @param {Record<string, Record<string, unknown>>} needs - each group's fields
+     */
+    const named = async needs => {
+      const lines = await linesOf(summary({ groups: HEALTH_GROUPS.map(id => group(id, needs[id] || {})) }));
+      return [lines.sidebar && lines.sidebar.text, lines.settings.second];
+    };
+    const one = { needsAction: 1 };
+    assert.deepEqual(
+      [
+        await named({ vault: one, recovery: one }),
+        await named({ vault: one, recovery: one, backup: one }),
+        // Cloud AI's row sits before AI access to notes', though the Permissions group's first row sits before AI's
+        await named({
+          inference: { needsAction: 1, cause: cause({ providerId: 'remote-ai', faultCode: 'load-failed' }) },
+          permissions: { needsAction: 1, cause: cause({ providerId: 'ai-scope-grants', faultCode: 'grant-missing' }) },
+        }),
+      ],
+      [
+        [
+          'Recovery points and Saved keys need your attention',
+          '2 things need your attention: Recovery points and Saved keys.',
+        ],
+        ['Recovery points and 2 more need your attention', 'Recovery points and 2 more need your attention.'],
+        [
+          'Cloud AI and AI access to notes need your attention',
+          '2 things need your attention: Cloud AI and AI access to notes.',
+        ],
+      ],
+    );
+    // recovery.html's rows in its page's order, each with its group, which the lines repeat
+    assert.deepEqual(
+      ROW_ORDER,
+      PAGE.sections.flatMap((/** @type {{rows: string[]}} */ section) =>
+        section.rows.map(id => [id, id === 'platform' ? 'platform' : PROVIDER_ROWS.find(row => row.id === id)?.group]),
+      ),
     );
   });
 });

@@ -811,15 +811,13 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         ],
       };
     };
-    // Each names what it counts in its own order, the Trust Center its page's and Settings its
-    // groups', so a line of two names can differ in order alone
+    // Both name what they count in the Trust Center's page order, so each line reads the same
     for (const [
       why,
       incidents,
       recordsState,
       line,
-      inSettings = line,
-    ] of /** @type {Array<[string, any[], 'open' | 'fallback', string | null, string?]>} */ ([
+    ] of /** @type {Array<[string, any[], 'open' | 'fallback', string | null]>} */ ([
       ["the worker's failed start alone", [START_FAILED], 'open', null],
       [
         "the worker's failed start, a change the journal kept, and the stopped purge",
@@ -852,11 +850,10 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         [SAVED_KEY, PURGE],
         'open',
         '2 things need your attention: Recovery points and Saved keys.',
-        '2 things need your attention: Saved keys and Recovery points.',
       ],
     ])) {
       const seen = lines(incidents, recordsState);
-      assert.deepEqual([seen.trust, seen.settings], [line, inSettings], why);
+      assert.deepEqual([seen.trust, seen.settings], [line, line], why);
       assert.deepEqual([...seen.groups[0]].sort(), [...seen.groups[1]].sort(), `${why}: the same groups`);
     }
   });
