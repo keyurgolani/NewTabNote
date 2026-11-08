@@ -1852,6 +1852,15 @@ describe("recovery.html while its health records can't be saved (#115's review)"
       // The open check ran, so its rows say what it found, not that nothing ever checked them
       const storage = page.doc.getElementById('row-storage');
       assert.equal(text(storage.querySelector('.trust-row-text')), CONSEQUENCE['storage.trust-records-unavailable']);
+      // That line is about the health records themselves, so the row adds no line for their own
+      // two: it can't keep them, and so some weren't saved (the code review's R7-1)
+      assert.deepEqual(
+        storage
+          .querySelectorAll('.trust-row-keeps')
+          .map(text)
+          .filter((/** @type {string} */ line) => /health records/.test(line)),
+        [],
+      );
       assert.match(text(page.doc.getElementById('row-capture')), /Verified/);
       for (const id of ['capture', 'storage', 'permissions']) assert.doesNotMatch(text(page.doc.getElementById(`row-${id}`)), new RegExp(escape(PAGE.neverChecked)), id);
     } finally {

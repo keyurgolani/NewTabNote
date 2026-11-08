@@ -857,6 +857,191 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual([...reached].sort(), ['capture', 'index', 'platform', 'recovery-readiness', 'storage']);
   });
 
+  it("names every problem each row is counted for, in its line or a line of its own, and no line of its own repeats what its line says, over each state a check on recovery.html can come to: passing or answering each finding it looks for, under every problem its row can hold besides, and Notes database's check at can't confirm, whose finding is the health records themselves (the code review's R7-1)", () => {
+    /** @type {Map<string, Map<string, string>>} The faults each provider's events raise, by severity */
+    const raisedBy = new Map();
+    for (const code of Object.values(EVENT_CODES)) {
+      if (!('incident' in code) || !code.incident) continue;
+      const { providerId, faultCode, severity } = code.incident;
+      raisedBy.set(providerId, (raisedBy.get(providerId) || new Map()).set(faultCode, severity));
+    }
+    let n = 0;
+    /** A problem as its producer raises it, each with an id of its own */
+    const problem = (/** @type {Record<string, unknown>} */ fields) => {
+      n += 1;
+      const tail = n.toString(16).padStart(4, '0');
+      return /** @type {any} */ ({
+        ...START_FAILED,
+        id: `00000000-0000-4000-8000-00000000${tail}`,
+        ref: tail,
+        affected: [],
+        preserved: [],
+        subjectId: null,
+        ...fields,
+      });
+    };
+    const ofFault = (
+      /** @type {string} */ providerId,
+      /** @type {string} */ faultCode,
+      /** @type {string} */ severity,
+    ) => problem({ key: `${providerId}/${faultCode}`, providerId, faultCode, severity });
+    // The health records' own two, which Notes database holds and no check looks for
+    const records = () => [
+      problem({
+        key: OPEN_FAILED_KEY,
+        providerId: 'storage',
+        faultCode: 'open-failed',
+        subjectId: 'NewTabNoteTrust',
+        severity: 'data-risk',
+      }),
+      problem({ key: WRITE_FAILED_KEY, providerId: 'storage', faultCode: 'write-failed', severity: 'data-risk' }),
+    ];
+    const STATUS_OF = /** @type {Record<string, string>} */ ({
+      'capture-risk': 'failed',
+      'data-risk': 'action-required',
+      degraded: 'degraded',
+    });
+    /**
+     * @typedef {{why: string, providerId: string, receipt: Record<string, unknown>, incidents: any[],
+     *   finding: any, aboutRecords: boolean}} State
+     */
+    /** @type {State[]} */
+    const states = [];
+    for (const provider of PROVIDERS) {
+      const place = PROVIDER_ROWS.find(row => row.id === provider.id);
+      if (!place || !place.hosts.includes('recovery')) continue;
+      const observes = /** @type {readonly string[]} */ (provider.observes);
+      // What the row can hold besides what its check looks for: its events' faults, the worker's
+      // where no check covers it, and on Notes database the records' own two
+      const besides = () => [
+        ...[...(raisedBy.get(provider.id) || new Map())]
+          .filter(([fault]) => !observes.includes(fault))
+          .map(([fault, severity]) => ofFault(provider.id, fault, severity)),
+        ...(provider.id === 'capture' || PLATFORM.includes(provider.id) ? [{ ...START_FAILED }] : []),
+        ...(provider.id === 'storage' ? records() : []),
+      ];
+      const passing = { status: 'verified' };
+      // A passing check, which an interim one never is, under each of them alone and all at once
+      if (!Object.prototype.hasOwnProperty.call(INTERIM, provider.id)) {
+        const all = besides();
+        for (const one of all) {
+          states.push({
+            why: `${provider.id} passing, under ${one.key}`,
+            providerId: provider.id,
+            receipt: passing,
+            incidents: [{ ...one }],
+            finding: null,
+            aboutRecords: false,
+          });
+        }
+        if (all.length > 1) {
+          states.push({
+            why: `${provider.id} passing, under all of them`,
+            providerId: provider.id,
+            receipt: passing,
+            incidents: besides(),
+            finding: null,
+            aboutRecords: false,
+          });
+        }
+      }
+      // The check answering each finding it looks for, its own problem, under all the rest
+      for (const fault of observes) {
+        const finding = ofFault(provider.id, fault, 'data-risk');
+        const receipt = { status: STATUS_OF[finding.severity], consequenceKey: `${place.group}.${fault}` };
+        states.push({
+          why: `${provider.id} finding ${fault}`,
+          providerId: provider.id,
+          receipt,
+          incidents: [finding],
+          finding,
+          aboutRecords: false,
+        });
+        const all = besides();
+        if (all.length > 0) {
+          states.push({
+            why: `${provider.id} finding ${fault}, under all the rest`,
+            providerId: provider.id,
+            receipt,
+            incidents: [finding, ...all],
+            finding,
+            aboutRecords: false,
+          });
+        }
+      }
+    }
+    // At can't confirm: Notes database's check doesn't verify, its finding the records themselves,
+    // under their own two. A check that answers settles every fault it looks for, so none of
+    // those stays open beside its finding, and nothing else of Notes database's can
+    const unavailable = {
+      status: 'degraded',
+      capture: 'safe',
+      evidence: { subjectId: 'NewTabNoteTrust' },
+      consequenceKey: 'storage.trust-records-unavailable',
+      preserved: ['capture', 'editing', 'reading'],
+    };
+    for (const incidents of [records().slice(0, 1), records()]) {
+      states.push({
+        why: `storage at can't confirm, under ${incidents.map(item => item.key).join(', ')}`,
+        providerId: 'storage',
+        receipt: unavailable,
+        incidents,
+        finding: null,
+        aboutRecords: true,
+      });
+    }
+    for (const state of states) {
+      const rowId = PLATFORM.includes(state.providerId) ? 'platform' : state.providerId;
+      const group = /** @type {any} */ (PROVIDER_ROWS.find(row => row.id === state.providerId)).group;
+      const base = entry(state.providerId, group);
+      const own = /** @type {any} */ ({
+        ...base,
+        status: state.receipt.status,
+        receipt: { ...base.receipt, ...state.receipt },
+      });
+      const providers = [
+        ...REPORT.providers.filter((/** @type {any} */ item) => item.providerId !== state.providerId),
+        own,
+      ];
+      const report = /** @type {any} */ ({ ...REPORT, providers, incidents: state.incidents });
+      const row = /** @type {any} */ (
+        trustSections(report, { now: AT })
+          .flatMap(section => section.rows)
+          .find(item => item.id === rowId)
+      );
+      const providerOf = (/** @type {string} */ id) => providers.find(item => item.providerId === id) || null;
+      // What the row's line says: the problem it names, or what the row's own check found, and at
+      // can't confirm the records' own two, which the check's finding is about
+      /** @param {any} item */
+      const said = item =>
+        row.text === `${item.title}.` ||
+        (state.finding !== null &&
+          item.incidents.every((/** @type {any} */ incident) => incident.id === state.finding.id)) ||
+        (state.aboutRecords &&
+          item.incidents.every(
+            (/** @type {any} */ incident) => incident.key === OPEN_FAILED_KEY || incident.key === WRITE_FAILED_KEY,
+          ));
+      const added = row.problemLines.map((/** @type {any} */ line) => line.what.toLowerCase());
+      for (const item of problemsOf(row.counted, new Map(), providerOf)) {
+        const lined = added.includes(item.title.toLowerCase());
+        assert.ok(
+          said(item) || lined,
+          `${state.why}: ${row.label} is counted for "${item.title}", and nothing on it names that`,
+        );
+        assert.ok(
+          !(said(item) && lined),
+          `${state.why}: ${row.label}'s line names "${item.title}", and a line of its own repeats it`,
+        );
+      }
+      assert.equal(
+        added.length,
+        problemsOf(row.counted, new Map(), providerOf).filter(item => !said(item)).length,
+        `${state.why}: ${row.label}'s own lines name only what it's counted for`,
+      );
+    }
+    assert.ok(states.length > 40, `${states.length} states`);
+  });
+
   it("names on NewTabNote's own parts' visible lines each problem it's counted for that its line doesn't, under the problem's status word, as Not working names what stopped: the change the journal kept, under the worker's failed start (the Design gate's review of round 4's shots, signed as round 5)", () => {
     const providers = [
       ...REPORT.providers,
