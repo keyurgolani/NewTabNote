@@ -27,6 +27,7 @@ import { OPERATIONS, VERSION, lookup, scriptedCoordinator, settle, testScheduler
 /** @typedef {import('../../js/kernel/core/messaging/client.js').ClientOptions} ClientOptions */
 /** @typedef {import('../../js/kernel/core/ports/idempotency-ledger.js').IdempotencyLedger} IdempotencyLedger */
 /** @typedef {import('../../js/kernel/core/ports/idempotency-ledger.js').LedgerRead} LedgerRead */
+/** @typedef {import('../../js/kernel/core/ports/idempotency-ledger.js').LedgerStatus} LedgerStatus */
 /** @typedef {import('../../js/kernel/core/ports/journal.js').JournalEntry} JournalEntry */
 /** @typedef {import('../../js/kernel/core/contracts/commands.js').CommandEntry} CommandEntry */
 
@@ -657,7 +658,10 @@ describe('the client: resuming in journal order, by the record first', { timeout
 
 describe("the client: ledger reads that don't answer, and what closing does to a resume", { timeout: 10_000 }, () => {
   /** A ledger that never answers */
-  const silent = /** @type {IdempotencyLedger} */ ({ read: () => new Promise(() => {}), status: () => new Promise(() => {}) });
+  const silent = /** @type {IdempotencyLedger} */ ({
+    read: () => new Promise(() => {}),
+    status: () => new Promise(() => {}),
+  });
 
   it('gives a lost reply up as unknown once the ledger has not answered in LEDGER_READ_TIMEOUT_MS, and sends nothing again', async () => {
     const { scheduler, coordinator, client } = await welcomed({ ledger: silent });
@@ -806,5 +810,105 @@ describe('the client: closed while it reads the journal', { timeout: 10_000 }, (
     assert.deepEqual(await resumed, [{ commandId: 'c-n1', outcome: unknown('unavailable', 'c-n1') }]);
     assert.deepEqual(spy.reads, []);
     assert.equal(coordinator.attempts, 0);
+  });
+});
+
+/**
+ * A ledger with no record of anything, each of whose reads waits until the case answers it, by its
+ * command's key
+ */
+function heldReads() {
+  /** @type {Map<string, () => void>} */
+  const waiting = new Map();
+  /** @type {IdempotencyLedger} */
+  const ledger = {
+    read: command =>
+      new Promise(resolve => {
+        waiting.set(String(command.commandId), () => resolve(/** @type {LedgerRead} */ ({ status: 'absent' })));
+      }),
+    status: async () => /** @type {LedgerStatus} */ ({ status: 'absent' }),
+  };
+  return {
+    ledger,
+    /** The keys whose reads were asked, in the order they were */
+    keys: () => [...waiting.keys()],
+    /** @param {string} commandId */
+    answer: commandId => waiting.get(commandId)?.(),
+  };
+}
+
+describe("the client: send order once a reply was lost (#35 slice 4d's P-0, NTN-254)", { timeout: 10_000 }, () => {
+  it('sends two calls lost at once again in the order they were sent, whichever ledger read answers first, and a call asked meanwhile after both', async () => {
+    const reads = heldReads();
+    const { coordinator, client } = await welcomed({ ledger: reads.ledger });
+    const first = client.execute(pin('n1'));
+    const second = client.execute(pin('n2'));
+    await settle();
+    assert.equal(coordinator.last.requests().length, 2);
+    coordinator.last.close();
+    await settle();
+    assert.deepEqual(
+      reads.keys(),
+      ['c-n1', 'c-n2'],
+      'both replies were lost, and the client reads the ledger for each',
+    );
+    reads.answer('c-n2');
+    await welcomeNext(coordinator, 2);
+    const third = client.execute(pin('n3'));
+    await settle();
+    reads.answer('c-n1');
+    await settle();
+    assert.deepEqual(
+      coordinator.last.requests().map(request => request.payload.commandId),
+      ['c-n1', 'c-n2', 'c-n3'],
+      'the two go again in the order they were sent, and the third after both',
+    );
+    for (const request of coordinator.last.requests()) {
+      coordinator.last.send({
+        frame: 'response',
+        requestId: request.requestId,
+        result: committed('note-pinned', [request.payload.noteId]),
+      });
+    }
+    assert.deepEqual(await Promise.all([first, second, third]), [
+      committed('note-pinned', ['n1']),
+      committed('note-pinned', ['n2']),
+      committed('note-pinned', ['n3']),
+    ]);
+  });
+
+  it('sends a call at once while nothing is being verified, and settles a lost call the ledger has as committed with that outcome, sending it no more', async () => {
+    const spy = spyLedger();
+    spy.inner.record(pin('n1'), pinned);
+    const { coordinator, client } = await welcomed({ ledger: spy.ledger });
+    const free = client.execute(pin('n2'));
+    await settle();
+    const [went] = coordinator.last.requests();
+    assert.equal(went?.payload.commandId, 'c-n2', 'a call with no loss goes at once');
+    assert.equal(spy.reads.length, 0, 'and reads no ledger');
+    coordinator.last.send({ frame: 'response', requestId: went.requestId, result: committed('note-pinned', ['n2']) });
+    assert.deepEqual(await free, committed('note-pinned', ['n2']));
+
+    spy.hold = true;
+    const lost = client.execute(pin('n1'));
+    await settle();
+    coordinator.last.close();
+    await settle();
+    const later = client.execute(pin('n3'));
+    await welcomeNext(coordinator, 2);
+    spy.release();
+    assert.deepEqual(await lost, pinned, 'the lost call answers what the ledger kept');
+    await settle();
+    assert.equal(
+      coordinator.connections
+        .flatMap(connection => connection.requests())
+        .filter(request => request.payload.commandId === 'c-n1').length,
+      1,
+      'and it was never sent again',
+    );
+    const [after] = coordinator.last.requests();
+    assert.equal(after?.payload.commandId, 'c-n3', 'the call asked meanwhile goes on the next connection');
+    coordinator.last.send({ frame: 'response', requestId: after.requestId, result: committed('note-pinned', ['n3']) });
+    assert.deepEqual(await later, committed('note-pinned', ['n3']));
   });
 });

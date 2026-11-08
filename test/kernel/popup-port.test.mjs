@@ -6,7 +6,8 @@
 // journal names, so the drain on a closed port waits on that page alone. A chunk that can't load
 // sends nothing. Each of Popup's two runs, the start's apply and the journal's, stops sending once
 // the worker didn't take one of its commands, and the quick note never stops (#246). On legacy-env
-// profiles, with a stand-in for the worker (popup-worker.mjs).
+// profiles, with a stand-in for the worker (popup-worker.mjs). The last part holds the order Popup's
+// client sends in once its connection drops (NTN-254).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,6 +16,7 @@ import { inContextStores } from '../../js/kernel/adapters/in-context.js';
 import { waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import { createNewTabAdapter, createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
+import { popupSender } from '../../js/kernel/composition/popup-send-chunk.js';
 import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
@@ -559,6 +561,142 @@ describe("Popup's runs stop sending once the worker didn't take one of their com
         ['draft-a-apply', 'c-save-apply'],
       );
     } finally {
+      stand.close();
+    }
+  });
+});
+
+/**
+ * `runtime`, with each port it opens in the case's hand: drop() ends the last one as a worker that
+ * restarts does, so the worker's router and the page's client both hear it go
+ * @param {any} runtime - the page's chrome.runtime
+ */
+function droppable(runtime) {
+  /** @type {Array<() => void>} */
+  const drops = [];
+  return {
+    // Only what the page's transport reads of chrome.runtime
+    runtime: /** @type {any} */ ({
+      get lastError() {
+        return runtime.lastError;
+      },
+      connect(/** @type {unknown} */ info) {
+        const port = runtime.connect(info);
+        /** @type {Array<(port: unknown) => void>} */
+        const gone = [];
+        const end = {
+          name: port.name,
+          onMessage: port.onMessage,
+          onDisconnect: { addListener: (/** @type {(port: unknown) => void} */ listener) => gone.push(listener) },
+          postMessage: (/** @type {unknown} */ message) => port.postMessage(message),
+          disconnect: () => port.disconnect(),
+        };
+        port.onDisconnect.addListener(() => {
+          for (const listener of gone) listener(end);
+        });
+        drops.push(() => {
+          // The page's own disconnect tells only the worker's end, so the page's listeners hear it here
+          port.disconnect();
+          for (const listener of gone) listener(end);
+        });
+        return end;
+      },
+    }),
+    /** Ends the port opened last, on both its ends */
+    drop: () => drops.at(-1)?.(),
+  };
+}
+
+/**
+ * A save of A that puts `content` in a1, as a closing tab's edit
+ * @param {string} commandId
+ * @param {string} content
+ */
+const saveOfA = (commandId, content) => ({
+  type: /** @type {const} */ ('applyCloseDraft'),
+  commandId,
+  draft: {
+    v: 1,
+    id: `${commandId}-draft`,
+    noteId: 'A',
+    at: Date.UTC(2026, 10, 7, 14, 0),
+    base: { revision: 0 },
+    blocks: [block('a1', 'A', 0, content)],
+    deletedBlockIds: [],
+  },
+});
+
+describe("Popup's client once its connection drops (#35 slice 4d's P-0, NTN-254)", () => {
+  it("sends a save whose reply was lost again before a later save, so the note keeps the later save's text", async () => {
+    const tab = await profile();
+    const firstText = 'alpha, as the first save had it';
+    const secondText = 'alpha, as the second save has it';
+    const older = saveOfA('save-1', firstText);
+    const newer = saveOfA('save-2', secondText);
+    const texts = new Map([
+      [older.commandId, firstText],
+      [newer.commandId, secondText],
+    ]);
+    /** @type {unknown[]} */
+    const commits = [];
+    let stored = 'alpha';
+    let taken = false;
+    const stand = popupWorker({
+      indexedDB: tab.env.indexedDB,
+      settings: tab.env.chrome.api.storage.local,
+      // The worker that took the first save never begins it: the connection drops while it holds it
+      before: one => {
+        if (one.commandId !== older.commandId || taken) return undefined;
+        taken = true;
+        return new Promise(() => {});
+      },
+      // Each save lands as an editor's live save does, with no expectedRevision (editor.js), so the
+      // last one to commit is what the note holds
+      answer: one => {
+        stored = /** @type {string} */ (texts.get(/** @type {string} */ (one.commandId)));
+        commits.push(one.commandId);
+        return committed('close-draft-applied', ['A']);
+      },
+    });
+    const link = droppable(stand.runtime);
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const held = new Promise(resolve => {
+      release = resolve;
+    });
+    let reads = 0;
+    // The ledger has no record of the first save, and answers only once the case lets it
+    const ledger = /** @type {any} */ ({
+      read: async () => {
+        reads += 1;
+        await held;
+        return { status: 'absent' };
+      },
+      status: async () => ({ status: 'absent' }),
+    });
+    const client = popupSender({ runtime: link.runtime, extensionVersion: stand.extensionVersion, ledger });
+    try {
+      const first = client.execute(older);
+      assert.ok(
+        await until(() => stand.handed.some(one => one.commandId === older.commandId)),
+        'the worker took the first save',
+      );
+      link.drop();
+      assert.ok(await until(() => reads === 1), 'its reply was lost, and the client reads the ledger for it');
+      const second = client.execute(newer);
+      assert.ok(await until(() => client.state() === 'connected'), 'the client connected again for the second save');
+      await settle();
+      await settle();
+      release();
+      assert.deepEqual([(await first).kind, (await second).kind], ['committed', 'committed']);
+      assert.equal(
+        stored,
+        secondText,
+        "the note holds the second save's text, which the first save's resend didn't write over",
+      );
+      assert.deepEqual(commits, [older.commandId, newer.commandId], 'the first save committed before the second');
+    } finally {
+      client.close();
       stand.close();
     }
   });
