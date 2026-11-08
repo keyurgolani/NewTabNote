@@ -1096,10 +1096,10 @@ const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
 
 /**
  * The commands a page sends the worker over the port, as its router finds them (#35 slice 4b-2,
- * rule 5): Popup's two, the second of them also Side Panel's one (#35 slice 4c), on the shared
- * catalog's entries, with the schemas their modules export, imported here since an MV3 worker
- * can't import() (messaging/operations.js). The router knows the coordinator's own queries
- * besides, and no other operation.
+ * rule 5): page-operations.js's, every one the new tab sends but its session's write and startup
+ * maintenance (#35 slice 4d), Popup's two and Side Panel's one among them, on the shared catalog's
+ * entries, with the schemas their modules export, which only the worker loads. The router knows
+ * the coordinator's own queries besides, and no other operation.
  */
 const PAGE_LOOKUP = createLookup(PAGE_OPERATIONS);
 
@@ -1108,10 +1108,10 @@ const PAGE_LOOKUP = createLookup(PAGE_OPERATIONS);
  * opens by PORT_NAME reaches it (adapters/messaging/runtime-port.js). It serves the handshake,
  * system.messagingHealth and system.coordinatorHealth, and the commands a page sends over the port,
  * on the coordinator's queue (./coordinator.js, pageCommandHandlers), Popup's first (#35 slice
- * 4b-2). js/background.js calls this at its top level, synchronously, so the
- * listener is there before Chrome hands over the port that woke the worker. It never throws,
- * since a throw there would stop every listener the worker registers: `report` hears why a
- * router couldn't be installed, and what a port's listener threw.
+ * 4b-2) and the new tab's since slice 4d. js/background.js calls this at its top level,
+ * synchronously, so the listener is there before Chrome hands over the port that woke the worker.
+ * It never throws, since a throw there would stop every listener the worker registers: `report`
+ * hears why a router couldn't be installed, and what a port's listener threw.
  *
  * #35's coordinator gives it this instance's id, which each welcome sends, `status`, which
  * each welcome says, `settled`, which starts the coordinator and settles with its start, so

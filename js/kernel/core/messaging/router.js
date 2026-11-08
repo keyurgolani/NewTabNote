@@ -81,13 +81,14 @@ import { createScopeCheck } from './scope.js';
  * @property {number} deadline - when the router stops waiting for its answer
  * @property {() => boolean} begin
  *   A command's handler calls it just before it opens its transaction, and opens none if it
- *   answers false: the request was cancelled, its deadline came, or its connection closed.
- *   From then on the command runs to its outcome, whatever happens to the request, so a
- *   commit is never cut off halfway.
+ *   answers false: the request was cancelled, or its deadline came. Its connection closing ends
+ *   neither: a command the router received runs at its turn all the same, with its answer
+ *   dropped (#35 slice 4d, rule 17). From then on the command runs to its outcome, whatever happens to
+ *   the request, so a commit is never cut off halfway.
  * @property {(listener: () => void) => void} onCancel
- *   Tells `listener` once if the router stops waiting for the answer: a query, or a command
- *   that hasn't begun, was cancelled, its deadline came, or its connection closed. A listener
- *   added after that is told at once.
+ *   Tells `listener` once if the router stops waiting for the answer: a query was cancelled, its
+ *   deadline came, or its connection closed, or a command that hasn't begun was cancelled or its
+ *   deadline came. A listener added after that is told at once.
  */
 
 /**

@@ -179,13 +179,13 @@ import { createVersionTracker } from './versions.js';
  * @property {boolean} [copiesMissingStores]
  *   An `existing` open saves #33's recovery copy of a database at 8 that lacks some legacy
  *   store before it opens it, as js/storage.js's page open did: the new tab's (#17 PR 4a,
- *   recovery-copies.js)
+ *   recovery-copies.js), and the worker's (#35 slice 4d)
  * @property {boolean} [backups]
  *   It runs 1.4.x's backup tasks (backups.js) and makes the export file (backup-file.js): the
- *   new tab's, which passes chrome.storage.local as `settings`, for the automatic backups and
- *   the recovery copy (#17 PR 4a, the lead's Q1). Popup, Side Panel, and the service worker run
- *   none, as the policy has it, so their adapters answer each as one without the `backups` flag
- *   does.
+ *   new tab's, and the worker's for the new tab's commands (#35 slice 4d), each passing
+ *   chrome.storage.local as `settings`, for the automatic backups and the recovery copy (#17 PR
+ *   4a, the lead's Q1). Popup and Side Panel run none, as the policy has it, so their adapters
+ *   answer each as one without the `backups` flag does.
  * @property {import('./recovery-copies.js').CopyLocks | null} [locks]
  *   Web Locks, which that copy's check and write hold so tabs that open together write one
  * @property {Clock} [clock] - when a ledger row, a conflict record, and a tombstone are written
@@ -883,7 +883,7 @@ export function createIndexedDbAdapter({
    * @returns {Promise<CommitResult>}
    */
   const commitBackup = async (work, task, live = null) => {
-    // Popup, Side Panel, and the service worker run none, until #18's backup engine (the `backups` flag)
+    // Popup and Side Panel run none, until #18's backup engine (the `backups` flag)
     if (!backups) return { outcome: unavailable('adapter', 'backups-need-legacy-storage', false), replayed: false };
     /** @type {IDBDatabase} */
     let db;

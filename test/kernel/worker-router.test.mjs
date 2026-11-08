@@ -1,10 +1,10 @@
 // The worker's router (composition/background.js), which js/background.js installs at its top
 // level (#13, "Topology"): a page's port reaches it on the Chrome fake, and it serves the
-// handshake, system.messagingHealth, and the system.coordinatorHealth handler #35's
-// coordinator gives it, and nothing else until #35 adds the kernel's. Installing it never
-// throws, since a throw while the worker evaluates would stop every listener it registers. Its
-// policy is the shared catalog's, so no page reaches what only the worker runs
-// (contracts/worker-catalog.js), once slice 4 serves commands over the port too.
+// handshake, system.messagingHealth, the system.coordinatorHealth handler #35's coordinator gives
+// it, and the commands pages send on the coordinator's queue: Popup's and Side Panel's since #35
+// slices 4b-2 and 4c, and the new tab's since slice 4d. Installing it never throws, since a throw
+// while the worker evaluates would stop every listener it registers. Its policy is the shared
+// catalog's, so no page reaches what only the worker runs (contracts/worker-catalog.js).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

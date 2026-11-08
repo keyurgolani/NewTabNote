@@ -4,8 +4,9 @@
  * nothing prunes: #18's backup engine and #20's Recovery Center read them.
  * - Replace all's copy of every exported note before an import moves the active notes to
  *   trash (backups.js).
- * - #33's copy of a database at version 8 that lacks some of its stores, which the new tab
- *   writes before it opens one, as 1.4.1's guard does (copyMissingStores).
+ * - #33's copy of a database at version 8 that lacks some of its stores, which the new tab, and
+ *   the worker on an open of the database as it is (#35 slice 4d), write before they open one,
+ *   as 1.4.1's guard does (copyMissingStores).
  * Each store's values come through copy-reads.js, which writes nothing, so the storage guard's
  * raw export reads them without reaching the writes here (NTN-255).
  */
@@ -115,15 +116,15 @@ async function copyUnlessKept(db, missing, settings, clock) {
 }
 
 /**
- * #33's copy before the new tab opens a database at version 8 that lacks some legacy store:
- * one recovery copy of every store it can read, and the stores it lacks, with a marker that
- * names them, so a later start skips it for the same missing stores. The check and the write
- * hold Web Lock `ntn-recovery-copy` when there are locks, so of two tabs that open together,
- * the later one finds the earlier one's copy. It reads through an open of its own that upgrades
- * nothing and makes no database. A database at any other version gets none: 1.4.1 only ever
- * wrote one at 8, and the worker's run gives a database every store it lacks after its own
- * recovery point. It never changes the database, and never rejects, so a copy that can't be
- * written leaves the open to go on, as Storage's did.
+ * #33's copy before the new tab, or the worker as it is (#35 slice 4d), opens a database at
+ * version 8 that lacks some legacy store: one recovery copy of every store it can read, and the
+ * stores it lacks, with a marker that names them, so a later start skips it for the same missing
+ * stores. The check and the write hold Web Lock `ntn-recovery-copy` when there are locks, so of
+ * two contexts that open together, the later one finds the earlier one's copy. It reads through
+ * an open of its own that upgrades nothing and makes no database. A database at any other
+ * version gets none: 1.4.1 only ever wrote one at 8, and the worker's run gives a database every
+ * store it lacks after its own recovery point. It never changes the database, and never rejects,
+ * so a copy that can't be written leaves the open to go on, as Storage's did.
  * @param {{indexedDB: IDBFactory, settings: CopyStore, clock: Clock, locks?: CopyLocks | null}} options
  * @returns {Promise<'written' | 'kept' | 'not-needed' | 'failed'>}
  */
