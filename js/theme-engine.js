@@ -26,7 +26,7 @@ class ThemeEngine {
         this.darkProperties = {
             '--bg-primary': '#191919',
             '--bg-secondary': '#252525',
-            '--bg-hover': '#2f2f2f',
+            '--bg-hover': '#2a2a2a',
             '--bg-active': '#3a3a3a',
             '--text-primary': '#e0e0e0',
             '--text-secondary': '#9b9b9b',

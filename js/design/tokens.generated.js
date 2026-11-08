@@ -313,9 +313,9 @@ export const DESIGN_TOKENS = freeze({
       "role": "Quiet fills, such as a quiet button's hover",
       "values": {
         "light": "#e8ecea",
-        "dark": "#2f2f2f",
+        "dark": "#2a2a2a",
         "more": "#e8ecea",
-        "darkMore": "#2f2f2f",
+        "darkMore": "#2a2a2a",
         "forced": "Canvas"
       },
       "candidateCells": [
@@ -606,9 +606,9 @@ export const DESIGN_TOKENS = freeze({
       "role": "Local ink: text and sole-cue markers in the local tone",
       "values": {
         "light": "#526f69",
-        "dark": "#e0e0e0",
+        "dark": "#7a9d95",
         "more": "#526f69",
-        "darkMore": "#e0e0e0",
+        "darkMore": "#7a9d95",
         "forced": "CanvasText"
       }
     },
@@ -636,9 +636,9 @@ export const DESIGN_TOKENS = freeze({
       "role": "Urgent ink: text and sole-cue markers in the urgent tone",
       "values": {
         "light": "#604c34",
-        "dark": "#e0e0e0",
+        "dark": "#af916c",
         "more": "#604c34",
-        "darkMore": "#e0e0e0",
+        "darkMore": "#af916c",
         "forced": "CanvasText"
       }
     },
@@ -736,6 +736,25 @@ export const DESIGN_TOKENS = freeze({
         "more",
         "darkMore"
       ],
+      "refs": {
+        "more": "--control-boundary",
+        "darkMore": "--control-boundary"
+      }
+    },
+    "--seam-tint": {
+      "type": "color",
+      "axis": "color",
+      "status": "candidate",
+      "overridable": false,
+      "registered": true,
+      "role": "Quiet Seam on a tinted row, such as the divider above Also checked on a row that needs attention",
+      "values": {
+        "light": "#cbd5d1",
+        "dark": "#414141",
+        "more": "#778179",
+        "darkMore": "#9b9b9b",
+        "forced": "CanvasText"
+      },
       "refs": {
         "more": "--control-boundary",
         "darkMore": "--control-boundary"
@@ -2456,6 +2475,7 @@ export const DESIGN_TOKENS = freeze({
       },
       "boundaries": [
         "--seam",
+        "--seam-tint",
         "--seam-strong",
         "--control-boundary"
       ],

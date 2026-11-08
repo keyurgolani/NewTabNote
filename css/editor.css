@@ -111,7 +111,8 @@
 [data-theme="dark"] {
   --bg-primary: #191919;
   --bg-secondary: #252525;
-  --bg-hover: #2f2f2f;
+  /* The row hover is light's step from the sidebar, 1.07:1 (#267) */
+  --bg-hover: #2a2a2a;
   --bg-active: #3a3a3a;
   --text-primary: #e0e0e0;
   --text-secondary: #9b9b9b;
@@ -128,9 +129,10 @@
   --row-active-share: 11.5%;
   --selection-bg: rgba(100, 168, 235, 0.25);
   --modal-bg: rgba(0, 0, 0, 0.6);
-  /* The status lines' shapes in the text's color, as recovery.html draws them dark until #16 */
-  --trust-ok: var(--text-primary);
-  --trust-action: var(--text-primary);
+  /* The status lines' shapes keep their hue in dark, at 4.5:1 on the dark surfaces and tints: #16's
+     provisional values, as recovery.html draws them (#267) */
+  --trust-ok: #7a9d95;
+  --trust-action: #af916c;
 }
 
 [data-font="serif"] {
@@ -3430,7 +3432,7 @@ a.setting-link {
   width: 16px;
   height: 16px;
   border: 2px solid var(--border-color);
-  border-top-color: var(--accent-color, #2d8cff);
+  border-top-color: var(--accent-color);
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
   transform: translateY(-50%);
@@ -3475,7 +3477,7 @@ a.setting-link {
 .block.block-selected {
   background: var(--accent-color-alpha, rgba(45, 140, 255, 0.08));
   border-radius: 4px;
-  outline: 2px solid var(--accent-color, #2d8cff);
+  outline: 2px solid var(--accent-color);
   outline-offset: -2px;
 }
 
