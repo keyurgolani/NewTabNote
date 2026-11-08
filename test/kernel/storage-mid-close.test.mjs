@@ -366,54 +366,58 @@ describe("#17's adapter, as the new tab's root opens it, when its connection goe
     adapter.close();
   });
 
-  it("another context's upgrade lands while a command commits at 8, with no ledger to answer a resend: the command runs once and answers committed", { timeout: 10_000 }, async () => {
-    const of = await profileWith(/** @type {any} */ (synthesized().get('v8.basic')));
-    const adapter = newTabTestAdapter({
-      indexedDB: of.real,
-      settings: of.chrome.api.storage.local,
-      awaitUpgrade: async () => {},
-      locks: null,
-    });
-    const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
-    await adapter.open();
-    const { transaction } = fake.IDBDatabase.prototype;
-    let runs = 0;
-    /** @type {Promise<void> | undefined} */
-    let upgrade;
-    /**
-     * Each write over the notes, and the upgrade sent as the first opens
-     * @this {IDBDatabase}
-     * @param {string | string[]} names
-     * @param {IDBTransactionMode} [txMode]
-     * @param {IDBTransactionOptions} [options]
-     */
-    fake.IDBDatabase.prototype.transaction = function watched(names, txMode, options) {
-      const tx = transaction.call(this, names, txMode, options);
-      if (txMode === 'readwrite' && [names].flat().includes('canvases')) {
-        runs += 1;
-        if (!upgrade) {
-          upgrade = legacyEnv
-            .requestToPromise(of.real.open('CanvasTabDB', this.version + 1))
-            .then((/** @type {IDBDatabase} */ opened) => opened.close());
+  it(
+    "another context's upgrade lands while a command commits at 8, with no ledger to answer a resend: the command runs once and answers committed",
+    { timeout: 10_000 },
+    async () => {
+      const of = await profileWith(/** @type {any} */ (synthesized().get('v8.basic')));
+      const adapter = newTabTestAdapter({
+        indexedDB: of.real,
+        settings: of.chrome.api.storage.local,
+        awaitUpgrade: async () => {},
+        locks: null,
+      });
+      const kernel = createKernel({ adapter, policy: createBaselinePolicy(), caller: CALLERS.newtab, ids, clock });
+      await adapter.open();
+      const { transaction } = fake.IDBDatabase.prototype;
+      let runs = 0;
+      /** @type {Promise<void> | undefined} */
+      let upgrade;
+      /**
+       * Each write over the notes, and the upgrade sent as the first opens
+       * @this {IDBDatabase}
+       * @param {string | string[]} names
+       * @param {IDBTransactionMode} [txMode]
+       * @param {IDBTransactionOptions} [options]
+       */
+      fake.IDBDatabase.prototype.transaction = function watched(names, txMode, options) {
+        const tx = transaction.call(this, names, txMode, options);
+        if (txMode === 'readwrite' && [names].flat().includes('canvases')) {
+          runs += 1;
+          if (!upgrade) {
+            upgrade = legacyEnv
+              .requestToPromise(of.real.open('CanvasTabDB', this.version + 1))
+              .then((/** @type {IDBDatabase} */ opened) => opened.close());
+          }
         }
+        return tx;
+      };
+      let during;
+      try {
+        during = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'during', name: 'During' });
+        await upgrade;
+      } finally {
+        fake.IDBDatabase.prototype.transaction = transaction;
       }
-      return tx;
-    };
-    let during;
-    try {
-      during = await kernel.execute({ type: 'createNote', commandId: 'c1', noteId: 'during', name: 'During' });
-      await upgrade;
-    } finally {
-      fake.IDBDatabase.prototype.transaction = transaction;
-    }
-    // The close this adapter makes on versionchange fires no close event, and waits for the
-    // command, which commits, so it isn't taken for the end of the command's transaction
-    assert.equal(during.kind, 'committed', JSON.stringify(during));
-    assert.equal(runs, 1, 'the command ran once');
-    assert.ok(await noteIn(of, 'during'));
-    assert.equal(adapter.openState(), 'version-changed');
-    adapter.close();
-  });
+      // The close this adapter makes on versionchange fires no close event, and waits for the
+      // command, which commits, so it isn't taken for the end of the command's transaction
+      assert.equal(during.kind, 'committed', JSON.stringify(during));
+      assert.equal(runs, 1, 'the command ran once');
+      assert.ok(await noteIn(of, 'during'));
+      assert.equal(adapter.openState(), 'version-changed');
+      adapter.close();
+    },
+  );
 
   it('Chrome closes it while two saves of one note are in flight: the older, which the newer overtook, transaction-failed, and the newer reload-required once its run again fails there', { timeout: 10_000 }, async () => {
     const { of, adapter, kernel } = await newTab();
