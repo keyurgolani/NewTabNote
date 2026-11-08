@@ -1130,6 +1130,16 @@
       "replace": "const ADAPTER_PAGES = Object.freeze(['newtab']);\n",
       "test": "test/budgets.test.js",
       "name": "fails the new tab's start that loads the adapter chunk, as Popup's and Side Panel's, since it reads through #17's reader too (#35 slice 4d, P2)"
+    },
+    {
+      "id": "ai-insert-focus-read-after-save",
+      "behavior": "#276 insert at the cursor",
+      "protects": "The AI chat's blocks go after the block focused as the insert began, though the confirm click's blur clears the editor's focus while the save before the insert is pending.",
+      "file": "js/controllers/ai-chat-controller.js",
+      "find": "      if (editor.noteId === noteId && focusedBlockId) {\n        const activeIdx = editor.blocks.findIndex(b => b.id === focusedBlockId);\n",
+      "replace": "      if (editor.noteId === noteId && editor.activeBlock) {\n        const activeIdx = editor.blocks.findIndex(b => b.id === editor.activeBlock);\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "at the cursor, though the confirm click's blur clears the focus while the save before the insert is pending: the blocks go after the block focused as it began (#276)"
     }
   ]
 }
