@@ -14,12 +14,19 @@
 import { WORKER_CATALOG } from '../contracts/worker-catalog.js';
 import { captureCommands } from './capture.js';
 import { closeDraftCommands } from './close-drafts.js';
+import { folderCommands } from './folders.js';
 import { handlerTable } from './handlers.js';
+import { indexCommands } from './indexing.js';
 import { integrityCommands } from './integrity-check.js';
+import { jobCommands } from './jobs.js';
 import { journalCommands, journalQueries } from './journal.js';
 import { maintenanceCommands } from './maintenance.js';
-import { noteCommands } from './notes.js';
+import { bulkRefusal, noteCommands } from './notes.js';
+import { preferenceCommands } from './preferences.js';
 import { recordCatchUpCommands } from './record-catch-up.js';
+import { remoteChangesRefusal, remoteCommands } from './remote.js';
+import { snapshotCommands } from './snapshots.js';
+import { workspaceDataCommands } from './workspace-data.js';
 
 export const WORKER_HANDLERS = handlerTable(
   {
@@ -47,5 +54,16 @@ export const WORKER_HANDLERS = handlerTable(
  * since a service worker can't import()
  */
 export const WORKER_PAGE_HANDLERS = handlerTable({
-  commands: { createNote: noteCommands.createNote, applyCloseDraft: closeDraftCommands.applyCloseDraft },
+  commands: {
+    ...noteCommands,
+    applyCloseDraft: closeDraftCommands.applyCloseDraft,
+    ...folderCommands,
+    ...preferenceCommands,
+    ...jobCommands,
+    ...snapshotCommands,
+    ...workspaceDataCommands,
+    ...indexCommands,
+    ...remoteCommands,
+  },
+  refusals: { runBulkAction: bulkRefusal, applyRemoteChanges: remoteChangesRefusal },
 });

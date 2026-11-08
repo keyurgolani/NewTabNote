@@ -1573,37 +1573,24 @@ function replaceOnce(source, find, replace) {
 }
 
 /**
- * The worker serves the new tab's index command over the port, as #35 slice 4d's worker half will:
- * its handler on the new tab's kernel in the worker, and its operation in the router's lookup, in
- * these cases only. The handler waits `perEntryMs` on the worker's fake clock for each entry it's
- * sent before its unit, so a write holds the queue as long as it's large, as the whole index does on
- * a large profile: a `rewrite` for loadBackground
+ * The worker's handler of the new tab's index command, which it serves over the port since #35
+ * slice 4d's worker half, waits `perEntryMs` on the worker's fake clock for each entry it's sent
+ * before its unit, so a write holds the queue as long as it's large, as the whole index does on a
+ * large profile: a `rewrite` for loadBackground
  * @param {number} perEntryMs
  */
 const indexOnTheWorker = (perEntryMs) => ({
   'js/kernel/core/application/handlers-worker.js': (source) => replaceOnce(
-    replaceOnce(source, "import { handlerTable } from './handlers.js';\n", "import { handlerTable } from './handlers.js';\nimport { indexCommands } from './indexing.js';\n"),
-    '  commands: { createNote: noteCommands.createNote, applyCloseDraft: closeDraftCommands.applyCloseDraft },\n',
+    source,
+    '    ...indexCommands,\n',
     [
-      '  commands: {',
-      '    createNote: noteCommands.createNote,',
-      '    applyCloseDraft: closeDraftCommands.applyCloseDraft,',
+      '    ...indexCommands,',
       '    updateSearchIndex: async (command, context) => {',
       `      await new Promise((resolve) => setTimeout(resolve, command.entries.length * ${perEntryMs}));`,
       '      return indexCommands.updateSearchIndex(command, context);',
       '    },',
-      '  },',
       '',
     ].join('\n'),
-  ),
-  'js/kernel/composition/background.js': (source) => replaceOnce(
-    replaceOnce(
-      source,
-      "import * as createNoteOperation from '../core/contracts/operations/create-note.js';\n",
-      "import * as createNoteOperation from '../core/contracts/operations/create-note.js';\nimport * as updateSearchIndexOperation from '../core/contracts/operations/update-search-index.js';\n",
-    ),
-    '  applyCloseDraft: operationOf(COMMANDS.applyCloseDraft, applyCloseDraftOperation),\n});',
-    '  applyCloseDraft: operationOf(COMMANDS.applyCloseDraft, applyCloseDraftOperation),\n  updateSearchIndex: operationOf(COMMANDS.updateSearchIndex, updateSearchIndexOperation),\n});',
   ),
 });
 

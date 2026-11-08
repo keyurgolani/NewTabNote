@@ -710,6 +710,46 @@
       "replace": "",
       "test": "test/kernel/conformance-coverage.test.mjs",
       "name": "when it calls the runner only in a describe with skip in its options"
+    },
+    {
+      "id": "port-lookup-drops-new-tab-command",
+      "behavior": "#35 port commands",
+      "protects": "The worker's router knows every command the new tab sends it, so none is refused as an unknown operation.",
+      "file": "js/kernel/composition/page-operations.js",
+      "find": "  renameNote: operationOf(COMMANDS.renameNote, renameNoteOperation),\n",
+      "replace": "",
+      "test": "test/kernel/worker-router.test.mjs",
+      "name": "hands every command the new tab sends to the coordinator's queue as the new tab, each with its request's own begin, but its session's write and startup maintenance, which the router doesn't know (#35 slice 4d, rule 10)"
+    },
+    {
+      "id": "worker-adapter-without-backups",
+      "behavior": "#35 port commands",
+      "protects": "The worker's adapter runs the new tab's import and automatic backup, so neither is refused for want of the backup tasks.",
+      "file": "js/kernel/composition/background.js",
+      "find": "        backups: true,\n",
+      "replace": "",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "runs every command the new tab sends on a new tab kernel, its backup tasks among them, leaves its session's write and startup maintenance to the page and the worker's start, and refuses what only the worker runs (#35 slice 4d, rule 10)"
+    },
+    {
+      "id": "worker-open-without-missing-stores-copy",
+      "behavior": "#35 port commands",
+      "protects": "The worker's open of a database at 8 that lacks a store, as it is, saves #33's recovery copy first.",
+      "file": "js/kernel/composition/background.js",
+      "find": "        copiesMissingStores: !upgraded,\n",
+      "replace": "",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "makes #33's recovery copy as it opens a database at 8 that lacks a store, as it is, under the copy's lock, and once with the new tab's copy on too (#35 slice 4d, rule 9)"
+    },
+    {
+      "id": "import-unit-unchecked-after-cut",
+      "behavior": "#35 port commands",
+      "protects": "A Replace all import whose turn the queue cut commits none of its unit, since its commit checks the turn inside its transaction.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit], live);\n",
+      "replace": "      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit]);\n",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "commits no unit of a Replace all import whose turn the queue cut after the kernel's check, on #247's check inside its commit, and commits one whose turn it didn't cut (#35 slice 4d, rule 11)"
     }
   ]
 }

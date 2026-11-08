@@ -4,9 +4,9 @@
 // v1.4.1, the tag's own files), both ways: a file this build exports imports through 1.4.1, and
 // a file 1.4.1 exported imports here as it does there. js/storage.js's copies, which only the
 // legacy adapter called, are 4b's facade's to drop, so nothing here calls them. Then
-// the commands that run them, on an adapter with the backup tasks, as the new tab's is, and on
-// one without, as Popup's, Side Panel's, and the worker's are. The kernel-adapter suite runs
-// its backups checks on the first (storage-contract.test.mjs).
+// the commands that run them, on an adapter with the backup tasks, as the new tab's and, since #35
+// slice 4d, the worker's are, and on one without, as Popup's and Side Panel's are. The
+// kernel-adapter suite runs its backups checks on the first (storage-contract.test.mjs).
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -541,7 +541,7 @@ describe("the import on #17's adapter (#17 PR 4a)", () => {
 describe("the backup commands on #17's adapter (#17 PR 4a)", () => {
   /**
    * A new tab's kernel on #17's adapter over `of`, opened as the new tab will open it, with the
-   * backup tasks unless `backups` is false, as Popup's, Side Panel's, and the worker's are
+   * backup tasks unless `backups` is false, as Popup's and Side Panel's are
    * @param {Profile} of
    * @param {{backups?: boolean}} [options]
    */
@@ -571,7 +571,7 @@ describe("the backup commands on #17's adapter (#17 PR 4a)", () => {
       key => key.startsWith(AUTO_BACKUP_PREFIX) || key.startsWith('recovery_backup_') || key === LAST_BACKUP_KEY,
     );
 
-  it("one made without `backups`, as Popup's, Side Panel's, and the worker's are, runs no task and makes no file, writing nothing", async () => {
+  it("one made without `backups`, as Popup's and Side Panel's are, runs no task and makes no file, writing nothing", async () => {
     const of = await made();
     const before = [await legacyEnv.dumpDatabase(of.real), legacyEnv.plain(of.chrome.local)];
     const { adapter, kernel, command } = await newTab(of, { backups: false });

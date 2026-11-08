@@ -75,8 +75,10 @@ const APPLIER_MODULES =
  * closing tab's edits and journals what it sends (#33, #35 slice 3b). recovery.html reads only
  * its theme through its kernel, so it does neither (#20 slice 4b). `sends` looks up the commands a
  * page's root sends the worker over #13's port, not its kernel, as Popup's and Side Panel's do
- * (#35 slices 4b-2 and 4c).
- * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, sends?: (type: string) => unknown, maintains: boolean, writesNotes: boolean}>}
+ * (#35 slices 4b-2 and 4c). `forPages` is the worker's table for its kernels of a page's surface,
+ * which run what pages send it over the port (#35 slice 4d): what the worker's code sends that only
+ * that table holds, as the remote apply's parts, runs there.
+ * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, sends?: (type: string) => unknown, forPages?: HandlerTable, maintains: boolean, writesNotes: boolean}>}
  */
 const PAGES = [
   {
@@ -102,6 +104,7 @@ const PAGES = [
     entries: ['js/background.js'],
     surface: 'worker-internal',
     table: WORKER_HANDLERS,
+    forPages: WORKER_PAGE_HANDLERS,
     maintains: true,
     writesNotes: true,
   },
@@ -366,13 +369,16 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     return { sent: new Set([...types, ...(maintains ? own : [])]), own, unread };
   };
 
-  for (const { page, entries, surface, table, sends, maintains } of PAGES) {
+  for (const { page, entries, surface, table, sends, forPages, maintains } of PAGES) {
+    /** What only the worker's kernels of a page's surface run @param {string} type */
+    const pagesOnly = type => !!forPages && registered(forPages).has(type) && !registered(table).has(type);
+
     it(`${page}: its table holds every command and query its code and its root send`, () => {
       const { sent, own, unread } = sentBy({ page, entries, maintains });
       assert.ok(sent.size > 0, `${page} sends something`);
       assert.deepEqual([...own], ['runStartupMaintenance'], "the kernel's own send");
       assert.deepEqual(
-        [...sent].filter(type => !registered(table).has(type) && !sends?.(type)),
+        [...sent].filter(type => !registered(table).has(type) && !sends?.(type) && !pagesOnly(type)),
         [],
         `${page} sends what its table and its sends to the worker don't hold`,
       );
@@ -392,7 +398,7 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       it(`${page}: its table holds nothing else, so its start loads no handler it never runs`, () => {
         assert.deepEqual(
           [...registered(table)].sort(),
-          [...sentBy({ page, entries, maintains }).sent].filter(type => !sends?.(type)).sort(),
+          [...sentBy({ page, entries, maintains }).sent].filter(type => !sends?.(type) && !pagesOnly(type)).sort(),
         );
       });
     }

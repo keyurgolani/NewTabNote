@@ -35,20 +35,19 @@ import { WORKER_TASKS } from '../adapters/indexeddb/worker-tasks.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { WORKER_HANDLERS, WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
 import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
-import { COMMANDS } from '../core/contracts/commands.js';
-import * as applyCloseDraftOperation from '../core/contracts/operations/apply-close-draft.js';
-import * as createNoteOperation from '../core/contracts/operations/create-note.js';
 import { UnavailableError, unavailable } from '../core/contracts/outcomes.js';
 import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
-import { createLookup, operationOf } from '../core/messaging/operations.js';
+import { createLookup } from '../core/messaging/operations.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
-import { MIGRATE_MESSAGE, PURGE_MESSAGE, chromeSettings, kernelClient } from './host.js';
+import { MIGRATE_MESSAGE, PURGE_MESSAGE, chromeBackupSettings, kernelClient } from './host.js';
 import { hostTimers, randomIds } from './messaging.js';
+import { PAGE_OPERATIONS } from './page-operations.js';
 
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('../adapters/indexeddb/adapter.js').SettingsStore} SettingsStore */
+/** @typedef {import('../adapters/indexeddb/backups.js').BackupStore} BackupStore */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrateLocks} MigrateLocks */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrationOutcome} MigrationOutcome */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrationRun} MigrationRun */
@@ -82,8 +81,11 @@ import { hostTimers, randomIds } from './messaging.js';
  * @typedef {object} WorkerHost
  * @property {IDBFactory} indexedDB
  * @property {typeof IDBKeyRange} keyRange
- * @property {SettingsStore} settings
+ * @property {BackupStore} settings
+ *   chrome.storage.local, with the remove the automatic backup prunes its oldest with, since the
+ *   worker runs the new tab's backup tasks (#35 slice 4d)
  * @property {MigrateLocks} locks
+ *   Web Locks: the migration run's, and #33's copy's on an `existing` open (#35 slice 4d, rule 9)
  * @property {Estimate | null} estimate
  * @property {Digester} crypto
  * @property {string | null} [version] - the build's manifest version, which a record that stands must match
@@ -270,7 +272,7 @@ export function workerHost() {
   return {
     indexedDB: globalThis.indexedDB,
     keyRange: globalThis.IDBKeyRange,
-    settings: chromeSettings(),
+    settings: chromeBackupSettings(),
     locks: /** @type {MigrateLocks} */ (/** @type {unknown} */ (nav && nav.locks)),
     estimate: nav && nav.storage && typeof nav.storage.estimate === 'function' ? () => nav.storage.estimate() : null,
     crypto: /** @type {Digester} */ (/** @type {unknown} */ (globalThis.crypto)),
@@ -786,6 +788,15 @@ export function createWorkerClient(host = workerHost()) {
         commands: WORKER_COMMANDS,
         // And it runs the worker's own storage tasks, which no page's adapter has
         workerTasks: WORKER_TASKS,
+        // The new tab's backup tasks run here, on the settings handle that can remove (#35 slice 4d)
+        backups: true,
+        // #33's copy of a database at 8 that lacks a store, as an `existing` open finds it, under the
+        // copy's lock, so it and a new tab opening beside it write one copy (#35 slice 4d, rule 9).
+        // Web Locks take the copy's request(name, callback) as they take the run's with its options.
+        locks: /** @type {import('../adapters/indexeddb/recovery-copies.js').CopyLocks} */ (
+          /** @type {unknown} */ (host.locks)
+        ),
+        copiesMissingStores: !upgraded,
       });
       if (replaced) replaced.close();
       const built = kernelClient({
@@ -1057,10 +1068,7 @@ const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
  * can't import() (messaging/operations.js). The router knows the coordinator's own queries
  * besides, and no other operation.
  */
-const PAGE_LOOKUP = createLookup({
-  createNote: operationOf(COMMANDS.createNote, createNoteOperation),
-  applyCloseDraft: operationOf(COMMANDS.applyCloseDraft, applyCloseDraftOperation),
-});
+const PAGE_LOOKUP = createLookup(PAGE_OPERATIONS);
 
 /**
  * #13's router, on `runtime`'s port listener, so each port one of this extension's pages
