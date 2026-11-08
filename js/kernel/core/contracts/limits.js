@@ -41,7 +41,8 @@ export const QUERY_DEADLINE_MS = 15_000;
 
 /**
  * How long startup maintenance has: the time its integrity check took to read every note, which
- * it kept when the check went with #17 PR 4a
+ * it kept when the check went with #17 PR 4a. The import and the automatic backup have it too
+ * (#35 slice 4d, N7).
  */
 export const MAINTENANCE_DEADLINE_MS = 120_000;
 
@@ -50,7 +51,9 @@ export const MAINTENANCE_DEADLINE_MS = 120_000;
  * before the queue cuts it and starts the next (#35 slice 4b-1): four command deadlines. The
  * integrity check, the longest thing the worker runs, is off the queue. A caller with a client
  * deadline has had its answer from that client for at least 89 s by then, since a client gives up
- * 31 s after it sends, and a turn starts no earlier than its send. One that sends with none, as the
+ * 31 s after it sends, and a turn starts no earlier than its send, but for the three commands with
+ * MAINTENANCE_DEADLINE_MS: startup maintenance, the import and the automatic backup, whose client
+ * gives up 121 s after it sends, so the cut can come first. One that sends with none, as the
  * journal drain's replays and js/background.js's rerun of a capture with no entry do, gets its
  * answer from the cut.
  */

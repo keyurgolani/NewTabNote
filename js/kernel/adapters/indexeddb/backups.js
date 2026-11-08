@@ -34,7 +34,7 @@
  * so a page that only reads or checks reaches none of the writes here (NTN-255).
  */
 
-import { rejected, unavailable } from '../../core/contracts/outcomes.js';
+import { TURN_EXCEEDED, UnavailableError, rejected, unavailable } from '../../core/contracts/outcomes.js';
 import { withoutPlacement } from '../../core/domain/placement.js';
 import { exportObject, readExport, validateBackup } from './backup-file.js';
 import { blobOf } from './data-urls.js';
@@ -111,11 +111,14 @@ async function autoBackupKeys(settings) {
  * `auto_backup_<time>`, then the oldest removed so three are kept, then the time of the last
  * backup. Rejects with what IndexedDB threw when the export can't be read, and with the
  * UnavailableError for what chrome.storage.local threw when the backup or its time can't be
- * saved, as every settings write on #17's adapter answers: `quota` for a full one.
- * @param {{db: IDBDatabase, settings: BackupStore, clock: Clock}} options
+ * saved, as every settings write on #17's adapter answers: `quota` for a full one. When its turn
+ * on the coordinator's queue gave a `live`, it's checked right before the first set, so a backup
+ * the queue cut writes nothing and rejects as `turn-exceeded`; once that set has gone, the prune
+ * and the time follow it (#35 slice 4d, S2).
+ * @param {{db: IDBDatabase, settings: BackupStore, clock: Clock, live?: (() => boolean) | null}} options
  * @returns {Promise<void>}
  */
-export async function createAutoBackup({ db, settings, clock }) {
+export async function createAutoBackup({ db, settings, clock, live = null }) {
   const data = {
     ...(await exportObject(await readExport(db), clock.now())),
     autoBackup: true,
@@ -131,6 +134,7 @@ export async function createAutoBackup({ db, settings, clock }) {
   };
   const key = `${AUTO_BACKUP_PREFIX}${clock.now()}`;
   const existing = await autoBackupKeys(settings);
+  if (live !== null && live() !== true) throw new UnavailableError('coordinator', TURN_EXCEEDED, true);
   await save({ [key]: data });
   const all = [...existing, key].sort();
   if (all.length > AUTO_BACKUPS_KEPT) {

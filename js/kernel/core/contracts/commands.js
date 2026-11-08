@@ -273,9 +273,18 @@ export const COMMANDS = Object.freeze({
   recordExportNotice: entry('record-export-notice', 'backup', ['newtab'], { entityTypes: [] }),
   // The space notice's put-off (#17 PR 1b), beside the export notice's outcome
   snoozeSpaceNotice: entry('snooze-space-notice', 'backup', ['newtab'], { entityTypes: [] }),
-  // The legacy backup tasks, until #18's engine
-  createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], { entityTypes: [] }),
-  importBackup: entry('import-backup', 'note', ['newtab'], { entityTypes: [], maxBytes: LARGE }),
+  // The legacy backup tasks, until #18's engine, with startup maintenance's deadline: the worker's
+  // queue runs them, and the automatic backup keeps no ledger row, so a client that gave up at 31 s
+  // and sent it again would run a second one (#35 slice 4d, N7)
+  createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], {
+    entityTypes: [],
+    deadlineMs: MAINTENANCE_DEADLINE_MS,
+  }),
+  importBackup: entry('import-backup', 'note', ['newtab'], {
+    entityTypes: [],
+    maxBytes: LARGE,
+    deadlineMs: MAINTENANCE_DEADLINE_MS,
+  }),
   // #22's indexer and embeddings, which run in the new tab (#17 PR 4b)
   updateSearchIndex: entry('update-search-index', 'index', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),
   saveVector: entry('save-vector', 'index', ['newtab'], { entityTypes: ['note'], maxBytes: LARGE }),

@@ -810,6 +810,36 @@
       "replace": "                .then(beforeOpen)\n                .then(copied => {\n                  if (copied === 'failed') throw new UnavailableError('storage', 'copy-failed', true);\n                }),\n",
       "test": "test/kernel/worker-root.test.mjs",
       "name": "lets a capture's open of a database at 8 that lacks a store go on when #33's copy can't be written: the capture commits, with no copy or marker left (#35 slice 4d, rule 9)"
+    },
+    {
+      "id": "bulk-items-unfenced",
+      "behavior": "#35 port commands",
+      "protects": "Once the coordinator's queue cuts a bulk command's turn, no item after the cut commits.",
+      "file": "js/kernel/core/application/kernel.js",
+      "find": "        live === null\n          ? context\n          : { ...context, run: item => /** @type {Promise<Outcome>} */ (dispatch(clone(item), live)) },\n",
+      "replace": "        context,\n",
+      "test": "test/kernel/kernel.test.mjs",
+      "name": "commits no item of a bulk command once the queue cut its turn: each item's commit takes the turn's live (#35 slice 4d, rule 11, R4w)"
+    },
+    {
+      "id": "auto-backup-set-unchecked",
+      "behavior": "#35 port commands",
+      "protects": "An automatic backup whose turn the queue cut writes nothing: it checks its turn's live right before its first set.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "  if (live !== null && live() !== true) throw new UnavailableError('coordinator', TURN_EXCEEDED, true);\n",
+      "replace": "",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "writes nothing of an automatic backup whose turn the queue cut after the kernel's check, on its own check before its first set, and writes one whose turn it didn't cut (#35 slice 4d, rule 11, S2's backup half of R20)"
+    },
+    {
+      "id": "auto-backup-short-deadline",
+      "behavior": "#35 port commands",
+      "protects": "The automatic backup has startup maintenance's 120 s deadline, so a client that gave up at 31 s never sends a second one.",
+      "file": "js/kernel/core/contracts/commands.js",
+      "find": "  createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], {\n    entityTypes: [],\n    deadlineMs: MAINTENANCE_DEADLINE_MS,\n  }),\n",
+      "replace": "  createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], {\n    entityTypes: [],\n  }),\n",
+      "test": "test/kernel/catalog.test.mjs",
+      "name": "gives an import and an automatic backup the 120 s deadline startup maintenance has, and every other page command 30 s (#35 slice 4d, N7, R27)"
     }
   ]
 }

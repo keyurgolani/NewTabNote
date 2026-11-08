@@ -335,8 +335,9 @@ export function createKernel({
 
   /**
    * Runs a command the caller can no longer change, its commit fenced by `live` when its turn on the
-   * coordinator's queue gave one. A bulk command's items run through `context.run`, unfenced: no bulk
-   * command is sent on the queue yet, and the slice that sends the first fences them too
+   * coordinator's queue gave one. A bulk command's items run through its context's `run`, each
+   * fenced by the same `live`, so once the queue cuts the turn no item after the cut commits (#35
+   * slice 4d, the page move that sends the first bulk command on the queue)
    * @param {unknown} copy
    * @param {(() => boolean) | null} [live]
    * @returns {Promise<Outcome | BulkOutcome>}
@@ -374,7 +375,12 @@ export function createKernel({
         if (!isOutcome(remembered)) throw new TypeError('recall answered without an outcome');
         return Promise.resolve(remembered);
       }
-      const result = handler(command, context);
+      const result = handler(
+        command,
+        live === null
+          ? context
+          : { ...context, run: item => /** @type {Promise<Outcome>} */ (dispatch(clone(item), live)) },
+      );
       pending = isThenable(result)
         ? Promise.resolve(result).then(done => commitResult(done, live))
         : commitResult(result, live);
