@@ -398,6 +398,9 @@ export const PAGE = Object.freeze({
   partOfDatabase: 'Part of your notes database needs a look.',
   attention: '{count} need your attention: {names}.',
   attentionOne: '1 thing needs your attention: {names}.',
+  // Under a headline a problem leads, the rest are other, as the header's badge counts them all (round 4)
+  attentionOther: '{count} other things need your attention: {names}.',
+  attentionOtherOne: '1 other thing needs your attention: {names}.',
   // Past two, the first row and how many more (the design review's answer 7)
   attentionMore: '{first} and {count} more need your attention.',
   openRecovery: 'Open Recovery Center',

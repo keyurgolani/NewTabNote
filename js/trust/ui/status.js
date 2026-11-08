@@ -128,14 +128,18 @@ const sidebarWords = named =>
       : fill(STATUS.sidebarMore, { a: named[0].name, count: named.length - 1 });
 
 /**
- * Settings' second line for the groups `named` names, or null for none
+ * Settings' second line for the groups `named` names, or null for none: counted as other after a
+ * first line that leads with a problem (round 4)
  * @param {Named[]} named
+ * @param {boolean} other
  */
-const settingsWords = named => {
+const settingsWords = (named, other) => {
   const names = named.map(item => item.name);
   if (names.length === 0) return null;
-  if (names.length === 1) return fill(STATUS.attentionOne, { names: names[0] });
-  if (names.length === 2) return fill(STATUS.attentionMany, { count: 2, names: `${names[0]} and ${names[1]}` });
+  if (names.length === 1) return fill(other ? STATUS.attentionOtherOne : STATUS.attentionOne, { names: names[0] });
+  if (names.length === 2) {
+    return fill(other ? STATUS.attentionOtherMany : STATUS.attentionMany, { count: 2, names: `${names[0]} and ${names[1]}` });
+  }
   return fill(STATUS.attentionMore, { first: names[0], count: names.length - 1 });
 };
 
@@ -181,7 +185,8 @@ export function statusOf(summary, { now, spaceNotice = false }) {
     sidebar,
     settings: {
       first,
-      second: settingsWords(needing.map(nameOf)),
+      // After a first line that leads with a problem, the rest are other (round 4)
+      second: settingsWords(needing.map(nameOf), atRisk || unsure),
       riskLine: toRecovery ? STATUS.recoveryShows : null,
       action: {
         label: toRecovery ? STATUS.openRecovery : STATUS.openTrust,

@@ -73,9 +73,12 @@ export const STATUS = Object.freeze({
   notCheckedRecently: "Saving hasn't been checked recently. Last checked {when}.",
   atRiskLine: 'New notes may not be saved.',
   cantConfirmLine: "NewTabNote can't confirm your notes are saving.",
-  // Settings' second line, which counts the groups it names (g2)
+  // Settings' second line, which counts the groups it names (g2), and counts them as other after
+  // a first line that leads with a problem (round 4)
   attentionOne: '1 thing needs your attention: {names}.',
   attentionMany: '{count} things need your attention: {names}.',
+  attentionOtherOne: '1 other thing needs your attention: {names}.',
+  attentionOtherMany: '{count} other things need your attention: {names}.',
   attentionMore: '{first} and {count} more need your attention.',
   // In place of the section's sentence wherever its button opens the Recovery Center (change 7, round 2)
   recoveryShows: 'The Recovery Center shows what went wrong and can save a copy of everything that can still be read.',

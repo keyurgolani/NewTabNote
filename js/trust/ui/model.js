@@ -607,12 +607,16 @@ export function trustHeadline(summary, rows, { now, checking }) {
 
 /**
  * The headline's attention line: "2 things need your attention: Saved keys and Permissions.",
- * and past two, "Saved keys and 2 more need your attention."
+ * and past two, "Saved keys and 2 more need your attention." Under a headline a problem leads,
+ * at capture risk and at can't confirm, the rest are other: "2 other things need your
+ * attention: ...", as the header's badge counts them all (round 4)
  * @param {readonly {label: string}[]} rows
+ * @param {boolean} [other] - a problem leads the headline
  */
-export function attentionText(rows) {
+export function attentionText(rows, other = false) {
   if (rows.length > 2) return fill(PAGE.attentionMore, { first: rows[0].label, count: rows.length - 1 });
   const names = joinList(rows.map(row => row.label));
+  if (other) return rows.length === 1 ? fill(PAGE.attentionOtherOne, { names }) : fill(PAGE.attentionOther, { count: rows.length, names });
   return rows.length === 1 ? fill(PAGE.attentionOne, { names }) : fill(PAGE.attention, { count: `${rows.length} things`, names });
 }
 

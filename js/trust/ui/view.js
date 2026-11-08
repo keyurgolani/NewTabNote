@@ -480,7 +480,7 @@ export function mountRecoveryPage({
         ? h(
             'p',
             { class: 'trust-attention-line' },
-            attentionLine(model.attention),
+            attentionLine(model.attention, model.openRecovery),
           )
         : null;
     return [
@@ -508,11 +508,13 @@ export function mountRecoveryPage({
   }
 
   /**
-   * "2 things need your attention: Saved keys and Permissions.", each name a link to its row
+   * "2 things need your attention: Saved keys and Permissions.", each name a link to its row,
+   * and "other" under a headline a problem leads (round 4)
    * @param {Array<{id: string, label: string}>} rows
+   * @param {boolean} other
    */
-  function attentionLine(rows) {
-    const text = attentionText(rows);
+  function attentionLine(rows, other) {
+    const text = attentionText(rows, other);
     const parts = [];
     let rest = text;
     for (const row of rows) {
