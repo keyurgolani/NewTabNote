@@ -790,6 +790,16 @@
       "replace": "    return false;\n",
       "test": "test/kernel/worker-router.test.mjs",
       "name": "answers a command still waiting at its deadline while the coordinator migrates as unavailable, coordinator, migrating, retryable, and one outside a migration deadline-exceeded, as before (#35 slice 4d, rule 18)"
+    },
+    {
+      "id": "probe-heap-wait-page-alone",
+      "behavior": "#35 port commands",
+      "protects": "The probe reads the heap only once the worker's readwrite transactions have committed too, as a page that sends its writes over the port saves in the worker.",
+      "file": "scripts/perf/timing.js",
+      "find": "  const all = [...page, ...worker];\n",
+      "replace": "  const all = [...page];\n",
+      "test": "test/perf-probe.test.js",
+      "name": "waits for the worker's readwrite transactions too, as a page that sends its writes over the port saves in the worker (#35 slice 4d)"
     }
   ]
 }
