@@ -384,7 +384,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     /** @param {any} item */
     const shown = item => [item.title, item.statusText, item.tone, Boolean(item.problem)];
     // Saving new notes' "How this was checked" names the worker's failed start as its evidence,
-    // and its own passing write check after it, as passed
+    // and its own passing write check after it, apart, as what it tested and passed (round 5)
     const [failed, own] = row('capture').evidence;
     assert.deepEqual(
       [shown(failed), failed.sentence, failed.facts.map((/** @type {any} */ fact) => fact.label), shown(own)],
@@ -392,13 +392,13 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         ["The background worker couldn't start saving", 'Not working', 'failed', true],
         'New notes and changes may not be saved until it starts.',
         [PAGE.firstSeen, PAGE.lastSeen, PAGE.timesSeen, PAGE.ref],
-        ['Saving new notes', 'Verified', 'ok', false],
+        ['Test save', 'Passed', 'ok', false],
       ],
     );
     // NewTabNote's own parts the same, before the parts its checks read
     assert.deepEqual(row('platform').evidence.map(shown), [
       ["The background worker couldn't start saving", 'Not working', 'failed', true],
-      ['Connections to the background worker', 'Verified', 'ok', false],
+      ['Connections to the background worker', 'Passed', 'ok', false],
     ]);
     // A row with a finding takes its status and shape; one with none keeps Not verified yet
     assert.deepEqual(
@@ -564,7 +564,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         [
           ["A page capture wasn't saved", 'Not working', 'failed', true],
           ["The background worker couldn't start saving", 'Not working', 'failed', true],
-          ['Saving new notes', 'Verified', 'ok', false],
+          ['Test save', 'Passed', 'ok', false],
         ],
         [PAGE.firstSeen, PAGE.lastSeen, PAGE.timesSeen, PAGE.ref],
       ],
@@ -580,7 +580,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         'Partly working',
         [
           ["Search indexing didn't start", 'Partly working', 'partial', true],
-          ['Search', 'Verified', 'ok', false],
+          ['Search', 'Passed', 'ok', false],
         ],
       ],
     );
@@ -595,7 +595,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         'Needs action',
         [
           ["An automatic backup didn't finish", 'Needs action', 'action', true],
-          ['Backups', 'Verified', 'ok', false],
+          ['Backups', 'Passed', 'ok', false],
         ],
       ],
     );
@@ -610,7 +610,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         'Not working',
         [
           ["A page capture wasn't saved", 'Not working', 'failed', true],
-          ['Saving new notes', 'Verified', 'ok', false],
+          ['Test save', 'Passed', 'ok', false],
         ],
       ],
     );
@@ -691,11 +691,79 @@ describe("recovery.html's words for a stopped purge and the background worker's 
           'Not working',
           [
             ["The background worker couldn't start saving", 'Not working', 'failed', true],
-            ['Saving new notes', 'Verified', 'ok', false],
+            ['Test save', 'Passed', 'ok', false],
           ],
         ],
       ],
     );
+  });
+
+  it("sets a row's passing checks apart under Also checked where a problem leads its evidence, each as what it tested and Passed, keeps a check that didn't pass where it reads, and lists each as it does where no problem leads (the Design gate's review of round 4's shots, signed as round 5)", () => {
+    /** A provider's entry whose check found `status`, by its real operation */
+    const checked = (
+      /** @type {string} */ providerId,
+      /** @type {string} */ group,
+      /** @type {string} */ operation,
+      status = 'verified',
+    ) => entry(providerId, group, { status, receipt: { ...entry(providerId, group).receipt, operation, status } });
+    const providers = [
+      checked('capture', 'storage', 'capture.probe-commit'),
+      entry('storage', 'storage'),
+      checked('messaging', 'platform', 'messaging.query-health'),
+      checked('contributions', 'platform', 'contributions.read-resolution-report'),
+      checked('block-types', 'platform', 'block-types.read-resolution-report'),
+    ];
+    /** @param {any[]} list @param {any[]} incidents */
+    const rowsOf = (list, incidents) =>
+      trustSections(/** @type {any} */ ({ ...REPORT, providers: list, incidents }), { now: AT }).flatMap(
+        section => section.rows,
+      );
+    /** @param {any[]} rows @param {string} id */
+    const evidenceOf = (rows, id) =>
+      /** @type {any} */ (rows.find(row => row.id === id)).evidence.map((/** @type {any} */ item) => [
+        item.title,
+        item.statusText,
+        item.tone,
+        Boolean(item.problem),
+        Boolean(item.also),
+      ]);
+    const worker = ["The background worker couldn't start saving", 'Not working', 'failed', true, false];
+    const led = rowsOf(providers, [START_FAILED]);
+    // Saving new notes' write check is the test save it ran, with its sentence as it is, so the
+    // row's own name never sits beside Verified while the row isn't working
+    assert.deepEqual(evidenceOf(led, 'capture'), [worker, ['Test save', 'Passed', 'ok', false, true]]);
+    const capture = /** @type {any} */ (led.find(row => row.id === 'capture'));
+    assert.deepEqual(
+      [capture.status, capture.evidence[1].sentence],
+      ['failed', 'Saved a test entry where new notes go, read it back, and removed it.'],
+    );
+    // NewTabNote's own parts: each part its checks read, by its own name
+    assert.deepEqual(evidenceOf(led, 'platform'), [
+      worker,
+      ['Connections to the background worker', 'Passed', 'ok', false, true],
+      ['Built-in features', 'Passed', 'ok', false, true],
+      ['Block types', 'Passed', 'ok', false, true],
+    ]);
+    // A check that didn't pass isn't set apart: it reads where it did, after the problem
+    const partly = providers.map(item =>
+      item.providerId === 'block-types'
+        ? checked('block-types', 'platform', 'block-types.read-resolution-report', 'degraded')
+        : item,
+    );
+    assert.deepEqual(evidenceOf(rowsOf(partly, [START_FAILED]), 'platform'), [
+      worker,
+      ['Block types', 'Partly working', 'partial', false, false],
+      ['Connections to the background worker', 'Passed', 'ok', false, true],
+      ['Built-in features', 'Passed', 'ok', false, true],
+    ]);
+    // With no problem leading, each check lists as it does now, with its usual status word
+    const plain = rowsOf(providers, []);
+    assert.deepEqual(evidenceOf(plain, 'capture'), [['Saving new notes', 'Verified', 'ok', false, false]]);
+    assert.deepEqual(evidenceOf(plain, 'platform'), [
+      ['Connections to the background worker', 'Verified', 'ok', false, false],
+      ['Built-in features', 'Verified', 'ok', false, false],
+      ['Block types', 'Verified', 'ok', false, false],
+    ]);
   });
 
   it("leaves out of the line under a problem that leads a row the user needs only by its check's status, as the header's badge counts no such row, and keeps it under a headline no problem leads: Saved keys, its key dismissed while its check still asks (round 4b)", () => {

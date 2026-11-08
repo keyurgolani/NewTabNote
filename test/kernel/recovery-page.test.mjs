@@ -1938,7 +1938,7 @@ describe("recovery.html with the background worker's failed start, which no chec
     };
   }
 
-  it("names the worker's failed start as Saving new notes' evidence, and its own passing check after it as passed (round 4)", async () => {
+  it("names the worker's failed start as Saving new notes' evidence, and its own passing check after it, apart under Also checked, as the test save it ran and passed (round 4, and round 5)", async () => {
     const { page, close } = await withFailedStart();
     try {
       await page.ready;
@@ -1950,7 +1950,21 @@ describe("recovery.html with the background worker's failed start, which no chec
           : [];
       };
       await until(() => subs().length === 2, "Saving new notes' two checks");
-      assert.deepEqual(subs(), ["The background worker couldn't start saving: Not working", 'Saving new notes: Verified']);
+      assert.deepEqual(subs(), ["The background worker couldn't start saving: Not working", 'Test save: Passed']);
+      // The label sits between the problem and the check it sets apart, and the check keeps its sentence
+      const body = page.doc.getElementById('row-capture').querySelector('.trust-evidence-body');
+      assert.deepEqual(
+        body.children.map((/** @type {any} */ child) =>
+          child.matches('.trust-also') ? ['label', text(child)] : ['check', text(child.querySelector('h4'))],
+        ),
+        [
+          ['check', "The background worker couldn't start saving: Not working"],
+          ['label', PAGE.alsoChecked],
+          ['check', 'Test save: Passed'],
+        ],
+      );
+      assert.equal(PAGE.alsoChecked, 'Also checked');
+      assert.equal(text(body.children[2].querySelector('p')), 'Saved a test entry where new notes go, read it back, and removed it.');
     } finally {
       close();
     }
