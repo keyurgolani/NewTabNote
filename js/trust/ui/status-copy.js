@@ -50,6 +50,27 @@ export const ROW_LABEL = Object.freeze({
 /** The verb a row's label takes */
 export const ROW_VERB = 'needs';
 
+/**
+ * recovery.html's rows in its page's order, each with its group (copy.js PAGE.sections, and
+ * providers/rows.js for the groups), which test/kernel/trust-status.test.mjs holds equal: the
+ * order the lines name groups in, so every surface lists the same things alike. A group sits
+ * where its first row does, and a row named by its own label where that row does
+ */
+export const ROW_ORDER = Object.freeze([
+  ['capture', 'storage'],
+  ['storage', 'storage'],
+  ['recovery-readiness', 'recovery'],
+  ['backup', 'backup'],
+  ['sync', 'sync'],
+  ['credentials', 'vault'],
+  ['permissions', 'permissions'],
+  ['remote-ai', 'inference'],
+  ['ai-scope-grants', 'permissions'],
+  ['local-inference', 'inference'],
+  ['index', 'indexing'],
+  ['platform', 'platform'],
+]);
+
 /** What capture at risk means, by its cause's consequence, as recovery.html's rows say it */
 export const CAPTURE_CONSEQUENCE = Object.freeze({
   'storage.capture-at-risk': "NewTabNote couldn't save a test entry, so new notes and captures may not be saved.",

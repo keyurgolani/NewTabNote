@@ -20,7 +20,7 @@
  * - A wait for free space alone shows no sidebar line while 1b's space notice shows (change 9).
  */
 
-import { CAPTURE_CONSEQUENCE, GROUP, GROUP_VERB, ROUTE_HREF, ROW_LABEL, ROW_VERB, STATUS } from './status-copy.js';
+import { CAPTURE_CONSEQUENCE, GROUP, GROUP_VERB, ROUTE_HREF, ROW_LABEL, ROW_ORDER, ROW_VERB, STATUS } from './status-copy.js';
 import { whenText } from './when.js';
 
 /** @typedef {import('../core/status-message.js').TrustStatus} TrustStatus */
@@ -97,23 +97,45 @@ const waitsForSpace = group =>
 /** @typedef {{name: string, verb: string}} Named */
 
 /**
- * A group as the lines name it, with its name's verb: the row its one problem sits on, when that
- * row has a name of its own, else the group. A group with more than one problem is named by the
- * group, whose cause names only the worst; no row with a name of its own raises more than one, so
- * then they're on more than one of its rows, as "AI" is for both AI rows (round 2).
+ * The row the lines name a group by: the row its one problem sits on, when that row has a name of
+ * its own, else none. A group with more than one problem is named by the group, whose cause names
+ * only the worst; no row with a name of its own raises more than one, so then they're on more
+ * than one of its rows, as "AI" is for both AI rows (round 2).
+ * @param {Group} group
+ * @returns {string | null} - the row's provider
+ */
+const rowOf = group =>
+  group.needsAction === 1 &&
+  group.cause !== null &&
+  group.cause.from === 'incident' &&
+  Object.prototype.hasOwnProperty.call(ROW_LABEL, group.cause.providerId)
+    ? group.cause.providerId
+    : null;
+
+/**
+ * A group as the lines name it, with its name's verb: its row (rowOf), else the group
  * @param {Group} group
  * @returns {Named}
  */
 const nameOf = group => {
-  const row =
-    group.needsAction === 1 && group.cause !== null && group.cause.from === 'incident'
-      ? /** @type {Record<string, string>} */ (ROW_LABEL)[group.cause.providerId]
-      : undefined;
-  if (row) return { name: row, verb: ROW_VERB };
+  const row = rowOf(group);
+  if (row) return { name: /** @type {Record<string, string>} */ (ROW_LABEL)[row], verb: ROW_VERB };
   return {
     name: /** @type {Record<string, string>} */ (GROUP)[group.group] || group.group,
     verb: /** @type {Record<string, string>} */ (GROUP_VERB)[group.group] || ROW_VERB,
   };
+};
+
+/**
+ * Where a group's name sits in recovery.html's page order (ROW_ORDER): its row's place when the
+ * lines name its row, else its first row's, so both surfaces list the same things alike (round
+ * 4b). A group with no row there sits after every one that has
+ * @param {Group} group
+ */
+const placeOf = group => {
+  const row = rowOf(group);
+  const at = ROW_ORDER.findIndex(([id, of]) => (row ? id === row : of === group.group));
+  return at === -1 ? ROW_ORDER.length : at;
 };
 
 /**
@@ -158,12 +180,14 @@ export function statusOf(summary, { now, spaceNotice = false }) {
   // The group capture is at risk in, whose cause the first line says: the one whose cause is a
   // capture risk, else storage
   const risky = atRisk ? summary.groups.find(group => group.cause && group.cause.severity === 'capture-risk') || storage : null;
-  const needing = summary.groups.filter(group => group.needsAction > 0);
+  // The groups in the Trust Center's page order, which the lines name them in
+  const ordered = [...summary.groups].sort((a, b) => placeOf(a) - placeOf(b));
+  const needing = ordered.filter(group => group.needsAction > 0);
   // Under a first line that leads with a problem, a group counts as other only if it holds a
   // problem that needs the user besides those that lead, as the Trust Center counts its rows (the
   // code review's R4-1 and F1). The worker's read counts them in each group (summary.js
   // leadingOf): at capture risk its capture-risk problems, and otherwise the records' own two
-  const others = summary.groups.filter(group => group.needsAction > group.leading);
+  const others = ordered.filter(group => group.needsAction > group.leading);
 
   /** @type {SidebarLine | null} */
   let sidebar = null;
