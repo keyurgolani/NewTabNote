@@ -17,9 +17,9 @@
  * Until the lines' chunk has loaded, it asks again when the tab is shown again; from then on the
  * chunk reads for itself, and the ask has it read again each time Settings opens. Lines that
  * started stay, whatever their first read did. It imports nothing, so loading it touches no
- * browser API and holds no
- * trust code: the message's type and the groups repeat status-message.js's and vocabulary.js's,
- * which test/kernel/trust-status-ask.test.mjs holds equal.
+ * browser API and holds no trust code: the message's type and the groups repeat
+ * status-message.js's and vocabulary.js's, which test/kernel/trust-status-ask.test.mjs holds
+ * equal.
  */
 
 /** @typedef {{sendMessage(message: unknown): Promise<unknown> | unknown}} Runtime */
