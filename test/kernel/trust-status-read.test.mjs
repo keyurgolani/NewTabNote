@@ -172,6 +172,21 @@ describe("the worker's status read (#20 slice 4c)", () => {
     );
   });
 
+  it("answers what the page's full check takes, causes and all, after the JSON a message carries it as", async () => {
+    const { workerStatusRead } = await import('../../js/kernel/composition/trust-status-read.js');
+    const { statusFrom } = await import('../../js/trust/core/status-message.js');
+    const { clock, store, settings } = await seeded();
+    const { store: makeStore, build } = watchedRecords(store, settings, clock);
+    const read = workerStatusRead({ store: makeStore, records: /** @type {any} */ (build), clock, extensionId: () => EXT });
+    const sent = JSON.parse(JSON.stringify(await read(READ, page('newtab.html'))));
+    assert.deepEqual(
+      sent.groups.filter((/** @type {any} */ group) => group.cause !== null).map((/** @type {any} */ group) => group.group),
+      ['storage', 'platform'],
+      'with causes in it',
+    );
+    assert.deepEqual(statusFrom(sent), sent);
+  });
+
   it("answers each of two asks sent before the store's first open settles as the summary, both waiting on its one connection", async () => {
     const { workerStatusRead } = await import('../../js/kernel/composition/trust-status-read.js');
     const { narrowStatus } = await import('../../js/trust/core/status-message.js');

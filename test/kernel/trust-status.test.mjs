@@ -118,8 +118,76 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
   });
 
   it('read an update that waits as saving normally, and show no line for it', async () => {
-    const waiting = summary({
-      groups: [group('storage'), group('backup')],
+    const { summarize } = await import('../../js/trust/core/summary.js');
+    const { narrowStatus } = await import('../../js/trust/core/status-message.js');
+    const { rowsOn } = await import('../../js/trust/core/providers/rows.js');
+    /**
+     * A core provider's receipt, verified at CHECKED with capture safe, with `fields` over it
+     * @param {string} providerId
+     * @param {Record<string, unknown>} [fields]
+     */
+    const receipt = (providerId, fields = {}) => ({
+      id: `00000000-0000-4000-8000-0000000000${providerId === 'capture' ? 'c1' : 'c2'}`,
+      providerId,
+      verifiedAt: CHECKED,
+      durationMs: 1,
+      freshnessMs: 86_400_000,
+      operation: `${providerId}.check`,
+      consequenceKey: null,
+      preserved: ['capture', 'editing', 'reading'],
+      nextAction: null,
+      executionClass: 'local-cheap',
+      status: 'verified',
+      capture: 'safe',
+      evidence: {},
+      ...fields,
+    });
+    // Storage's check while CanvasTabDB waits below the latest version: degraded, its update
+    // pending and capture still safe (providers/probe.js), and the update's incident open
+    const update = {
+      id: '00000000-0000-4000-8000-0000000000d1',
+      ref: '0000d1',
+      key: 'storage/migration-pending/CanvasTabDB',
+      providerId: 'storage',
+      faultCode: 'migration-pending',
+      subjectId: 'CanvasTabDB',
+      severity: 'degraded',
+      state: 'open',
+      dismissed: false,
+      dismissChangedAt: null,
+      firstSeenAt: CHECKED,
+      lastSeenAt: CHECKED,
+      resolvedAt: null,
+      occurrences: 1,
+      affected: [],
+      preserved: ['capture', 'editing', 'reading'],
+      evidence: {},
+      appliedOps: [],
+    };
+    const waiting = narrowStatus(
+      summarize({
+        providers: rowsOn('workspace'),
+        receipts: /** @type {any} */ ([
+          receipt('capture'),
+          receipt('storage', {
+            status: 'degraded',
+            consequenceKey: 'storage.migration-pending',
+            evidence: { subjectId: 'CanvasTabDB' },
+          }),
+        ]),
+        incidents: /** @type {any} */ ([update]),
+        copyRead: true,
+        recordsRead: true,
+        recordsState: 'open',
+        now: NOW,
+      }),
+    );
+    // The update is open, and it waits, so the storage group needs nothing for it
+    assert.deepEqual(waiting.groups.find(item => item.group === 'storage'), {
+      group: 'storage',
+      needsAction: 0,
+      checkedAt: CHECKED,
+      cause: null,
     });
     const lines = await linesOf(waiting);
     assert.deepEqual([lines.sidebar, lines.settings.first.text, lines.settings.second], [null, SAVING, null]);
