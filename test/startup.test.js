@@ -837,9 +837,15 @@ describe('background capture on a version-8 database', () => {
     });
     assert.deepEqual(await dumpDatabase(env.indexedDB), before);
     // The run gave it a recovery point and no step (Q13), and recorded that, and the refusal
-    // marked its incident
+    // marked its incident. The worker opened it as it is, so it saved #33's copy first, as a new
+    // tab does, with the key that names that copy in the same write (#35 slice 4d, rule 9)
     await waitFor(() => marks.length >= 1, { withinMs: 10000, message: "the refusal's mark" });
-    assert.deepEqual(writesButUpgradeRecord(env, { refused: 1, marks }), []);
+    const named = env.chrome.local.recovery_copy_missing_stores;
+    assert.deepEqual(named?.missingStores, ['elements']);
+    assert.equal(env.chrome.local[named.key]?.reason, 'missing-stores');
+    assert.deepEqual(writesButUpgradeRecord(env, { refused: 1, marks }), [
+      { method: 'set', keys: [named.key, 'recovery_copy_missing_stores'], failed: false },
+    ]);
     assert.equal(env.chrome.local.setting_storageUpgrade.status, 'refused');
   });
 

@@ -29,7 +29,9 @@
  *   the echo, the driver waits until a readwrite IndexedDB transaction has begun, none is open,
  *   and none has begun for QUIET_MS since the last one ended, for SAVE_WAIT_MS at most, and
  *   reports when the last one ended (`saveMs`, after the echo; null when none began in time).
- *   Read at the echo, the heap counted what that save allocates, which is garbage once it
+ *   It counts the service worker's transactions as well as the page's, since a page that sends
+ *   its writes over the port has its save, and the writes after it, in the worker (#35 slice
+ *   4d). Read at the echo, the heap counted what that save allocates, which is garbage once it
  *   commits, so where the save started against the collection moved #147's typical heap
  *   between modes 0.8 MiB apart (#147's T2 profile). Read once the save alone has committed,
  *   it caught the save's follow-up work, a snapshot and two search-index writes, partway in.
@@ -95,18 +97,11 @@ function probeInit({ editor, key }) {
     target: null,
     /** Each readwrite transaction the page opened, by when it began and ended: times only */
     writes: [],
-    /** When the last write begun since the echo ended, once settled() first answered true */
+    /**
+     * When the last write begun since the echo ended, in the page or the worker, once the driver's
+     * wait found them settled (settledBoth)
+     */
     savedAt: null,
-    /** Whether a write has begun since the echo, none is open, and none began for `quietMs` */
-    settled(quietMs) {
-      if (probe.echoedAt === null) return false;
-      const since = probe.writes.filter(write => write.began >= probe.echoedAt);
-      if (since.length === 0 || probe.writes.some(write => write.ended === null)) return false;
-      const last = Math.max(...since.map(write => write.ended));
-      if (performance.now() - last < quietMs) return false;
-      probe.savedAt = last;
-      return true;
-    },
     /**
      * What became of the key this try typed, from the page's own events: when the try began
      * (focus), when its keydown came, what had it and whether that was the editor, and when the
@@ -211,6 +206,104 @@ function probeInit({ editor, key }) {
 }
 
 /**
+ * Runs in the service worker once it's up and the profile is seeded, through Playwright's
+ * evaluate: it watches the worker's readwrite IndexedDB transactions, as probeInit watches the
+ * page's, since a page whose writes go over the port has its save, and the writes that follow, in
+ * the worker (#35 slice 4d). Times are on the epoch clock, so the driver can set them beside the
+ * page's. A worker that already watches keeps the watch it has.
+ * @returns {boolean}
+ */
+function workerWritesInit() {
+  if (globalThis.__ntnWorkerWrites) return true;
+  /** @type {Array<{began: number, ended: number | null}>} */
+  const writes = [];
+  Object.defineProperty(globalThis, '__ntnWorkerWrites', { value: writes, configurable: true });
+  const now = () => performance.timeOrigin + performance.now();
+  const transaction = IDBDatabase.prototype.transaction;
+  IDBDatabase.prototype.transaction = function (...args) {
+    const made = transaction.apply(this, args);
+    if (args[1] === 'readwrite') {
+      const write = { began: now(), ended: null };
+      writes.push(write);
+      if (writes.length > 2000) writes.splice(0, writes.length - 2000);
+      const end = () => {
+        if (write.ended === null) write.ended = now();
+      };
+      made.addEventListener('complete', end);
+      made.addEventListener('abort', end);
+    }
+    return made;
+  };
+  return true;
+}
+
+/**
+ * When the save the probe's key set off, and the writes it set off in turn, had all committed, in
+ * the page and in the worker, or null while they haven't: a readwrite transaction has begun in
+ * either since the echo, none is open in either, and none has begun in either for `quietMs` since
+ * the last one ended. Every time is on the epoch clock.
+ * @param {{echoedAt: number | null, now: number, page: Array<{began: number, ended: number | null}>, worker: Array<{began: number, ended: number | null}>}} seen
+ * @param {number} quietMs
+ * @returns {number | null} when the last of them ended
+ */
+function settledAt({ echoedAt, now, page, worker }, quietMs) {
+  if (echoedAt === null) return null;
+  const all = [...page, ...worker];
+  const since = all.filter(write => write.began >= echoedAt);
+  if (since.length === 0 || all.some(write => write.ended === null)) return null;
+  const last = Math.max(...since.map(write => /** @type {number} */ (write.ended)));
+  return now - last >= quietMs ? last : null;
+}
+
+/**
+ * Polls the page and, once its watch went in, the worker, for `waitMs` at most, until settledAt
+ * says their writes have all committed, and then sets the page's `savedAt`, on the page's clock,
+ * to when the last of them ended. A worker that can't be read counts as one with no writes, so a
+ * package whose worker writes nothing for the page reads as before.
+ * @param {any} page
+ * @param {any} worker
+ * @param {boolean} watched - whether the worker's watch went in
+ * @param {number} quietMs
+ * @param {number} waitMs
+ * @returns {Promise<boolean>}
+ */
+async function settledBoth(page, worker, watched, quietMs, waitMs) {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const seen = await page.evaluate(() => {
+      const probe = window.__ntnProbe;
+      const origin = performance.timeOrigin;
+      return {
+        echoedAt: probe.echoedAt === null ? null : origin + probe.echoedAt,
+        now: origin + performance.now(),
+        page: probe.writes.map(write => ({
+          began: origin + write.began,
+          ended: write.ended === null ? null : origin + write.ended,
+        })),
+      };
+    });
+    /** @type {Array<{began: number, ended: number | null}>} */
+    let writes = [];
+    if (watched) {
+      try {
+        writes = await worker.evaluate(() => (globalThis.__ntnWorkerWrites || []).slice(-500));
+      } catch {
+        writes = [];
+      }
+    }
+    const last = settledAt({ ...seen, worker: writes }, quietMs);
+    if (last !== null) {
+      await page.evaluate(at => {
+        window.__ntnProbe.savedAt = at - performance.timeOrigin;
+      }, last);
+      return true;
+    }
+    if (Date.now() >= until) return false;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
+/**
  * @param {{dist: string, fixture: object | null, chromium?: any, page?: string}} options
  * @returns {Promise<{interactionReadyMs: number, markMs: number | null, heapBytes: number, saveMs: number | null, driverMs: number, throttledAtMs: number, documentAtMs: number, domContentLoadedMs: number | null, browser: string, keyTries: number, retypes: Array<{try: number, state: string, rule: string, target?: string | null, keydownMs?: number | null, inputMs?: number | null, decidedMs?: number | null}>}>}
  */
@@ -221,6 +314,11 @@ async function installCold({ dist, fixture, chromium, page: file = 'newtab.html'
     if (fixture) await fixtureHost(extension.worker).loadFixture(fixture);
     await new Promise(resolve => setTimeout(resolve, SETTLE_MS));
     await extension.context.addInitScript(probeInit, { editor: EDITOR, key: KEY });
+    // The worker's writes too, which a page that sends its writes over the port saves through
+    const workerWatched = await extension.worker.evaluate(workerWritesInit).then(
+      watching => watching === true,
+      () => false,
+    );
 
     const opened = extension.context.waitForEvent('page', { timeout: TIMEOUT_MS });
     const startedAt = await extension.worker.evaluate(name => {
@@ -270,10 +368,9 @@ async function installCold({ dist, fixture, chromium, page: file = 'newtab.html'
     }
 
     // The heap once the save the key set off, and the writes it set off in turn, have
-    // committed, so what they allocate, and let go of as they commit, isn't in the reading
-    const saved = await page
-      .waitForFunction(quietMs => window.__ntnProbe.settled(quietMs), QUIET_MS, { polling: 10, timeout: SAVE_WAIT_MS })
-      .then(() => true, () => false);
+    // committed, in the page and in the worker, so what they allocate, and let go of as they
+    // commit, isn't in the reading
+    const saved = await settledBoth(page, extension.worker, workerWatched, QUIET_MS, SAVE_WAIT_MS);
     await cdp.send('HeapProfiler.collectGarbage');
     const heap = await cdp.send('Runtime.getHeapUsage');
     const read = await page.evaluate(name => {
@@ -308,4 +405,4 @@ async function installCold({ dist, fixture, chromium, page: file = 'newtab.html'
   }
 }
 
-module.exports = { installCold, THROTTLE, SETTLE_MS, EDITOR, KEY, SAVE_WAIT_MS, QUIET_MS };
+module.exports = { installCold, settledAt, THROTTLE, SETTLE_MS, EDITOR, KEY, SAVE_WAIT_MS, QUIET_MS };

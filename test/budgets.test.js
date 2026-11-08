@@ -218,12 +218,14 @@ describe('the budget gate', () => {
     assert.ok(!run(budgetsFor()).some(line => line.includes('trust')));
   });
 
-  // The worker's modules #35 slice 3c moved off the pages' start, as the test's own copy: the gate's
-  // list is pinned to it, and the cases after the pin put each one on each page's start
+  // The worker's modules #35 slice 3c moved off the pages' start, and the page commands' operations
+  // #35 slice 4d keeps off them, as the test's own copy: the gate's list is pinned to it, and the
+  // cases after the pin put each one on each page's start
   const WORKER_ONLY = [
     'js/kernel/adapters/indexeddb/integrity.js',
     'js/kernel/adapters/indexeddb/ledger-sweep.js',
     'js/kernel/adapters/indexeddb/worker-tasks.js',
+    'js/kernel/composition/page-operations.js',
     'js/kernel/core/application/integrity-check.js',
     'js/kernel/core/application/record-catch-up.js',
   ];

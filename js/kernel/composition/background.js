@@ -35,20 +35,19 @@ import { WORKER_TASKS } from '../adapters/indexeddb/worker-tasks.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { WORKER_HANDLERS, WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
 import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
-import { COMMANDS } from '../core/contracts/commands.js';
-import * as applyCloseDraftOperation from '../core/contracts/operations/apply-close-draft.js';
-import * as createNoteOperation from '../core/contracts/operations/create-note.js';
-import { UnavailableError, unavailable } from '../core/contracts/outcomes.js';
+import { TURN_EXCEEDED, UnavailableError, unavailable } from '../core/contracts/outcomes.js';
 import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
-import { createLookup, operationOf } from '../core/messaging/operations.js';
+import { createLookup } from '../core/messaging/operations.js';
 import { createRouter } from '../core/messaging/router.js';
 import { createBaselinePolicy } from '../core/ports/policy.js';
 import { systemClock } from '../core/ports/runtime.js';
-import { MIGRATE_MESSAGE, PURGE_MESSAGE, chromeSettings, kernelClient } from './host.js';
+import { MIGRATE_MESSAGE, PURGE_MESSAGE, chromeBackupSettings, kernelClient } from './host.js';
 import { hostTimers, randomIds } from './messaging.js';
+import { PAGE_OPERATIONS } from './page-operations.js';
 
 /** @typedef {import('./host.js').Client} Client */
 /** @typedef {import('../adapters/indexeddb/adapter.js').SettingsStore} SettingsStore */
+/** @typedef {import('../adapters/indexeddb/backups.js').BackupStore} BackupStore */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrateLocks} MigrateLocks */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrationOutcome} MigrationOutcome */
 /** @typedef {import('../adapters/indexeddb/migrate.js').MigrationRun} MigrationRun */
@@ -82,8 +81,11 @@ import { hostTimers, randomIds } from './messaging.js';
  * @typedef {object} WorkerHost
  * @property {IDBFactory} indexedDB
  * @property {typeof IDBKeyRange} keyRange
- * @property {SettingsStore} settings
+ * @property {BackupStore} settings
+ *   chrome.storage.local, with the remove the automatic backup prunes its oldest with, since the
+ *   worker runs the new tab's backup tasks (#35 slice 4d)
  * @property {MigrateLocks} locks
+ *   Web Locks: the migration run's, and #33's copy's on an `existing` open (#35 slice 4d, rule 9)
  * @property {Estimate | null} estimate
  * @property {Digester} crypto
  * @property {string | null} [version] - the build's manifest version, which a record that stands must match
@@ -270,7 +272,7 @@ export function workerHost() {
   return {
     indexedDB: globalThis.indexedDB,
     keyRange: globalThis.IDBKeyRange,
-    settings: chromeSettings(),
+    settings: chromeBackupSettings(),
     locks: /** @type {MigrateLocks} */ (/** @type {unknown} */ (nav && nav.locks)),
     estimate: nav && nav.storage && typeof nav.storage.estimate === 'function' ? () => nav.storage.estimate() : null,
     crypto: /** @type {Digester} */ (/** @type {unknown} */ (globalThis.crypto)),
@@ -396,6 +398,37 @@ async function record(settings, outcome, stored, now, version, costly) {
  * and the purge after it
  * @typedef {Client & {migration: WorkerMigration, transforms: WorkerTransforms, recordsCatchUp: WorkerRecordsCatchUp, purge: WorkerPurge}} WorkerClient
  */
+
+/**
+ * `adapter`, with every settings write its kernels hand it going one after another, each checked
+ * against its own turn's `live` right before its set goes (#35 slice 4d, rule 11). One context's
+ * chrome.storage.local calls apply in the order they're made, so a cut turn's set that has gone
+ * lands before a later turn's; what the chain adds is that a set cut while it waits for the one
+ * before never goes. It's the worker's alone, where the coordinator's queue gives each turn its
+ * `live`: a page's own settings writes, which have none, go as they always have.
+ * @param {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter} adapter
+ * @returns {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter}
+ */
+function settingsInTurns(adapter) {
+  /** @type {Promise<unknown>} */
+  let writes = Promise.resolve();
+  /** @type {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter['commit']} */
+  const commit = (work, options) => {
+    if (work.effect.kind !== 'settings') return adapter.commit(work, options);
+    const live = options?.live ?? null;
+    const write = writes.then(() =>
+      live === null || live() === true
+        ? adapter.commit(work, options)
+        : { outcome: unavailable('coordinator', TURN_EXCEEDED, true), replayed: false },
+    );
+    writes = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    return write;
+  };
+  return Object.freeze(Object.create(adapter, { commit: { value: commit, enumerable: true } }));
+}
 
 /**
  * The worker's kernel and its client. It starts a migration attempt now: a run, unless one of
@@ -786,10 +819,21 @@ export function createWorkerClient(host = workerHost()) {
         commands: WORKER_COMMANDS,
         // And it runs the worker's own storage tasks, which no page's adapter has
         workerTasks: WORKER_TASKS,
+        // The new tab's backup tasks run here, on the settings handle that can remove (#35 slice 4d)
+        backups: true,
+        // #33's copy of a database at 8 that lacks a store, as an `existing` open finds it, under the
+        // copy's lock, so it and a new tab opening beside it write one copy (#35 slice 4d, rule 9).
+        // Web Locks take the copy's request(name, callback) as they take the run's with its options.
+        locks: /** @type {import('../adapters/indexeddb/recovery-copies.js').CopyLocks} */ (
+          /** @type {unknown} */ (host.locks)
+        ),
+        copiesMissingStores: !upgraded,
       });
       if (replaced) replaced.close();
+      // The kernels on it, the worker's own and each page's, write their settings in turn order
+      const kernels = settingsInTurns(adapter);
       const built = kernelClient({
-        adapter,
+        adapter: kernels,
         surface: 'worker-internal',
         handlers: WORKER_HANDLERS,
         maintainOnOpen: upgraded,
@@ -803,7 +847,7 @@ export function createWorkerClient(host = workerHost()) {
         requestCatchUp(adapter, built);
         requestPurge();
       }
-      const opened = adapter;
+      const opened = kernels;
       /** @type {Map<Surface, Client>} */
       const pages = new Map();
       /** @param {Surface} surface */
@@ -1052,25 +1096,22 @@ const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
 
 /**
  * The commands a page sends the worker over the port, as its router finds them (#35 slice 4b-2,
- * rule 5): Popup's two, the second of them also Side Panel's one (#35 slice 4c), on the shared
- * catalog's entries, with the schemas their modules export, imported here since an MV3 worker
- * can't import() (messaging/operations.js). The router knows the coordinator's own queries
- * besides, and no other operation.
+ * rule 5): page-operations.js's, every one the new tab sends but its session's write and startup
+ * maintenance (#35 slice 4d), Popup's two and Side Panel's one among them, on the shared catalog's
+ * entries, with the schemas their modules export, which only the worker loads. The router knows
+ * the coordinator's own queries besides, and no other operation.
  */
-const PAGE_LOOKUP = createLookup({
-  createNote: operationOf(COMMANDS.createNote, createNoteOperation),
-  applyCloseDraft: operationOf(COMMANDS.applyCloseDraft, applyCloseDraftOperation),
-});
+const PAGE_LOOKUP = createLookup(PAGE_OPERATIONS);
 
 /**
  * #13's router, on `runtime`'s port listener, so each port one of this extension's pages
  * opens by PORT_NAME reaches it (adapters/messaging/runtime-port.js). It serves the handshake,
  * system.messagingHealth and system.coordinatorHealth, and the commands a page sends over the port,
  * on the coordinator's queue (./coordinator.js, pageCommandHandlers), Popup's first (#35 slice
- * 4b-2). js/background.js calls this at its top level, synchronously, so the
- * listener is there before Chrome hands over the port that woke the worker. It never throws,
- * since a throw there would stop every listener the worker registers: `report` hears why a
- * router couldn't be installed, and what a port's listener threw.
+ * 4b-2) and the new tab's since slice 4d. js/background.js calls this at its top level,
+ * synchronously, so the listener is there before Chrome hands over the port that woke the worker.
+ * It never throws, since a throw there would stop every listener the worker registers: `report`
+ * hears why a router couldn't be installed, and what a port's listener threw.
  *
  * #35's coordinator gives it this instance's id, which each welcome sends, `status`, which
  * each welcome says, `settled`, which starts the coordinator and settles with its start, so

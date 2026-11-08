@@ -45,7 +45,7 @@
 import { encode, encodedBytes } from '../contracts/codec.js';
 import { code } from '../contracts/fields.js';
 import { LATENCY_BUCKETS_MS, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, WELCOME_WAIT_MS } from '../contracts/limits.js';
-import { ready } from '../contracts/outcomes.js';
+import { ready, unavailable } from '../contracts/outcomes.js';
 import { POLICY_CODES, VALIDATION_CODES } from '../contracts/transport-codes.js';
 import { check, checkRequest, checkResult, readFrame } from '../contracts/validate.js';
 import { silentLogger } from '../ports/runtime.js';
@@ -81,13 +81,14 @@ import { createScopeCheck } from './scope.js';
  * @property {number} deadline - when the router stops waiting for its answer
  * @property {() => boolean} begin
  *   A command's handler calls it just before it opens its transaction, and opens none if it
- *   answers false: the request was cancelled, its deadline came, or its connection closed.
- *   From then on the command runs to its outcome, whatever happens to the request, so a
- *   commit is never cut off halfway.
+ *   answers false: the request was cancelled, or its deadline came. Its connection closing ends
+ *   neither: a command the router received runs at its turn all the same, with its answer
+ *   dropped (#35 slice 4d, rule 17). From then on the command runs to its outcome, whatever happens to
+ *   the request, so a commit is never cut off halfway.
  * @property {(listener: () => void) => void} onCancel
- *   Tells `listener` once if the router stops waiting for the answer: a query, or a command
- *   that hasn't begun, was cancelled, its deadline came, or its connection closed. A listener
- *   added after that is told at once.
+ *   Tells `listener` once if the router stops waiting for the answer: a query was cancelled, its
+ *   deadline came, or its connection closed, or a command that hasn't begun was cancelled or its
+ *   deadline came. A listener added after that is told at once.
  */
 
 /**
@@ -185,6 +186,12 @@ const MAX_OUTCOME_CODES = 64;
 
 /** The most sessions it remembers, to count a hello from one it has seen as a reconnect */
 const MAX_SESSIONS = 256;
+
+/**
+ * The reason the coordinator's status gives while its migration runs (composition/coordinator.js),
+ * which a command still waiting at its deadline then answers with (#35 slice 4d, rule 18)
+ */
+const MIGRATING = 'migrating';
 
 /**
  * @param {Map<string | number | null, number>} counts
@@ -385,8 +392,12 @@ export function createRouter({
       timers.clear(peer.held);
       peer.held = null;
     }
+    // A command it received still runs at its turn, and its answer goes nowhere: it was checked as
+    // it came in, and it's keyed, so a trash, rename or pin clicked just before a page closes still
+    // happens, as it did in the page. Its deadline still holds while it waits. A query ends here
+    // (#35 slice 4d, rule 17).
     for (const [requestId, running] of [...peer.running]) {
-      end(peer, requestId, running, !(running.isCommand && running.begun));
+      if (!running.isCommand) end(peer, requestId, running, true);
     }
     if (peer.session) tellSessions('closed', peer.session);
   };
@@ -417,6 +428,12 @@ export function createRouter({
       return { status: 'degraded', reason: /** @type {string} */ (reason) };
     }
     return { status: 'degraded', reason: 'status-unknown' };
+  };
+
+  /** Whether the coordinator says it's migrating now, as a welcome would say it */
+  const migrating = () => {
+    const now = statusNow();
+    return now.status === 'degraded' && now.reason === MIGRATING;
   };
 
   /**
@@ -561,6 +578,15 @@ export function createRouter({
     running.timer = timers.set(() => {
       if (running.ended || (running.isCommand && running.begun)) return;
       end(peer, requestId, running, true);
+      if (running.isCommand && migrating()) {
+        // Still waiting while the coordinator migrates: migrating, retryable, as an answer every
+        // page reads (outcome-schemas.js), so its page can tell a slow upgrade from a lost command
+        // (#35 slice 4d, rule 18)
+        const result = unavailable('coordinator', MIGRATING, true);
+        countAnswer(result, arrived);
+        send(peer, { frame: 'response', requestId, result });
+        return;
+      }
       refuse(peer, requestId, 'deadline-exceeded');
     }, deadline - clock.now());
 

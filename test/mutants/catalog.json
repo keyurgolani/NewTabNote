@@ -710,6 +710,106 @@
       "replace": "",
       "test": "test/kernel/conformance-coverage.test.mjs",
       "name": "when it calls the runner only in a describe with skip in its options"
+    },
+    {
+      "id": "port-lookup-drops-new-tab-command",
+      "behavior": "#35 port commands",
+      "protects": "The worker's router knows every command the new tab sends it, so none is refused as an unknown operation.",
+      "file": "js/kernel/composition/page-operations.js",
+      "find": "  renameNote: operationOf(COMMANDS.renameNote, renameNoteOperation),\n",
+      "replace": "",
+      "test": "test/kernel/worker-router.test.mjs",
+      "name": "hands every command the new tab sends to the coordinator's queue as the new tab, each with its request's own begin, but its session's write and startup maintenance, which the router doesn't know (#35 slice 4d, rule 10)"
+    },
+    {
+      "id": "worker-adapter-without-backups",
+      "behavior": "#35 port commands",
+      "protects": "The worker's adapter runs the new tab's import and automatic backup, so neither is refused for want of the backup tasks.",
+      "file": "js/kernel/composition/background.js",
+      "find": "        backups: true,\n",
+      "replace": "",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "runs every command the new tab sends on a new tab kernel, its backup tasks among them, leaves its session's write and startup maintenance to the page and the worker's start, and refuses what only the worker runs (#35 slice 4d, rule 10)"
+    },
+    {
+      "id": "worker-open-without-missing-stores-copy",
+      "behavior": "#35 port commands",
+      "protects": "The worker's open of a database at 8 that lacks a store, as it is, saves #33's recovery copy first.",
+      "file": "js/kernel/composition/background.js",
+      "find": "        copiesMissingStores: !upgraded,\n",
+      "replace": "",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "makes #33's recovery copy as it opens a database at 8 that lacks a store, as it is, under the copy's lock, and once with the new tab's copy on too (#35 slice 4d, rule 9)"
+    },
+    {
+      "id": "import-unit-unchecked-after-cut",
+      "behavior": "#35 port commands",
+      "protects": "A Replace all import whose turn the queue cut commits none of its unit, since its commit checks the turn inside its transaction.",
+      "file": "js/kernel/adapters/indexeddb/adapter.js",
+      "find": "      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit], live);\n",
+      "replace": "      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit]);\n",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "commits no unit of a Replace all import whose turn the queue cut after the kernel's check, on #247's check inside its commit, and commits one whose turn it didn't cut (#35 slice 4d, rule 11)"
+    },
+    {
+      "id": "worker-settings-not-in-turns",
+      "behavior": "#35 port commands",
+      "protects": "The worker's settings writes go one after another, each checked against its turn right before it goes, so one cut while it waits never goes.",
+      "file": "js/kernel/composition/background.js",
+      "find": "      const kernels = settingsInTurns(adapter);\n",
+      "replace": "      const kernels = adapter;\n",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "writes the new tab's settings one after another, each checked against its turn's live right before it goes: a cut turn's held set lands before the next turn's, and one cut while it waits never goes (#35 slice 4d, rule 11)"
+    },
+    {
+      "id": "router-close-ends-received-command",
+      "behavior": "#35 port commands",
+      "protects": "A command the router received before its page's port closed still runs at its turn.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "      if (!running.isCommand) end(peer, requestId, running, true);\n",
+      "replace": "      end(peer, requestId, running, !(running.isCommand && running.begun));\n",
+      "test": "test/kernel/worker-router.test.mjs",
+      "name": "lets a command it received before its port closed run at its turn, and drops its answer, while a query from that port ends and a command whose deadline comes first ends unrun (#35 slice 4d, rule 17)"
+    },
+    {
+      "id": "router-closed-command-outlives-deadline",
+      "behavior": "#35 port commands",
+      "protects": "A command still waiting at its deadline after its page's port closed ends unrun there, so nothing of it commits after a long turn.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "      if (running.ended || (running.isCommand && running.begun)) return;\n",
+      "replace": "      if (running.ended || (running.isCommand && (running.begun || peer.phase === 'closed'))) return;\n",
+      "test": "test/background-coordinator.test.js",
+      "name": "holds a command it received before its port closed until its deadline, behind a turn of over 30 s, ends it unrun there, and commits nothing of it when that turn ends (#35 slice 4d, rule 17)"
+    },
+    {
+      "id": "router-deadline-ignores-migration",
+      "behavior": "#35 port commands",
+      "protects": "A command still waiting at its deadline while the coordinator migrates answers migrating, retryable, not deadline-exceeded.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "    return now.status === 'degraded' && now.reason === MIGRATING;\n",
+      "replace": "    return false;\n",
+      "test": "test/kernel/worker-router.test.mjs",
+      "name": "answers a command still waiting at its deadline while the coordinator migrates as unavailable, coordinator, migrating, retryable, and one outside a migration deadline-exceeded, as before (#35 slice 4d, rule 18)"
+    },
+    {
+      "id": "probe-heap-wait-page-alone",
+      "behavior": "#35 port commands",
+      "protects": "The probe reads the heap only once the worker's readwrite transactions have committed too, as a page that sends its writes over the port saves in the worker.",
+      "file": "scripts/perf/timing.js",
+      "find": "  const all = [...page, ...worker];\n",
+      "replace": "  const all = [...page];\n",
+      "test": "test/perf-probe.test.js",
+      "name": "waits for the worker's readwrite transactions too, as a page that sends its writes over the port saves in the worker (#35 slice 4d)"
+    },
+    {
+      "id": "open-refused-after-failed-copy",
+      "behavior": "#35 port commands",
+      "protects": "A capture's open on the worker of a database at 8 that lacks a store goes on when #33's copy can't be written: the copy's failure never fails the open.",
+      "file": "js/kernel/adapters/indexeddb/connection.js",
+      "find": "                .then(beforeOpen)\n                .then(\n                  () => undefined,\n                  () => undefined,\n                ),\n",
+      "replace": "                .then(beforeOpen)\n                .then(copied => {\n                  if (copied === 'failed') throw new UnavailableError('storage', 'copy-failed', true);\n                }),\n",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "lets a capture's open of a database at 8 that lacks a store go on when #33's copy can't be written: the capture commits, with no copy or marker left (#35 slice 4d, rule 9)"
     }
   ]
 }

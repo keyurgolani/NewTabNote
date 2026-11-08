@@ -1,10 +1,10 @@
 // The worker's router (composition/background.js), which js/background.js installs at its top
 // level (#13, "Topology"): a page's port reaches it on the Chrome fake, and it serves the
-// handshake, system.messagingHealth, and the system.coordinatorHealth handler #35's
-// coordinator gives it, and nothing else until #35 adds the kernel's. Installing it never
-// throws, since a throw while the worker evaluates would stop every listener it registers. Its
-// policy is the shared catalog's, so no page reaches what only the worker runs
-// (contracts/worker-catalog.js), once slice 4 serves commands over the port too.
+// handshake, system.messagingHealth, the system.coordinatorHealth handler #35's coordinator gives
+// it, and the commands pages send on the coordinator's queue: Popup's and Side Panel's since #35
+// slices 4b-2 and 4c, and the new tab's since slice 4d. Installing it never throws, since a throw
+// while the worker evaluates would stop every listener it registers. Its policy is the shared
+// catalog's, so no page reaches what only the worker runs (contracts/worker-catalog.js).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,10 +17,12 @@ import { installWorkerRouter } from '../../js/kernel/composition/background.js';
 import { coordinatorHandlers } from '../../js/kernel/composition/coordinator.js';
 import * as coordination from '../../js/kernel/composition/coordinator.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
+import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { PROTOCOL_VERSION } from '../../js/kernel/core/contracts/limits.js';
 import { WORKER_ONLY_COMMANDS, WORKER_ONLY_QUERIES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { PAGE_FILES, createChromeFake } from './chrome-fake.mjs';
+import { COMMAND_SAMPLES } from './command-samples.mjs';
 import { hello, request, settle } from './messaging-support.mjs';
 
 /** @typedef {keyof typeof import('./chrome-fake.mjs').PAGE_FILES} PageSurface */
@@ -281,6 +283,162 @@ describe('the worker\'s router (#13, "Topology")', () => {
       begins.map(begin => begin()),
       [false, false],
     );
+  });
+
+  it("hands every command the new tab sends to the coordinator's queue as the new tab, each with its request's own begin, but its session's write and startup maintenance, which the router doesn't know (#35 slice 4d, rule 10)", async () => {
+    // The catalog's, not the worker's tables', so a lookup that drops one is caught
+    const stayOff = ['saveWorkspaceSession', 'runStartupMaintenance'];
+    const sends = Object.keys(COMMANDS).filter(
+      type =>
+        COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].surfaces.includes('newtab') && !stayOff.includes(type),
+    );
+    assert.equal(sends.length, 46);
+    /** @type {Array<[unknown, unknown, unknown]>} */
+    const queued = [];
+    const coordinator = {
+      /** @param {any} command @param {any} [dispatch] */
+      enqueue: async (command, dispatch = {}) => {
+        queued.push([command.type, dispatch.surface, typeof dispatch.begin === 'function' && dispatch.begin()]);
+        return committed('note-created', []);
+      },
+    };
+    const handlers = /** @type {any} */ (coordination).pageCommandHandlers?.(() => coordinator) ?? {};
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, handlers });
+    });
+    const port = fake.page('newtab').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    port.postMessage(encode(hello('newtab', 's1')));
+    for (const type of [...sends, ...stayOff]) {
+      const fields = COMMAND_SAMPLES[/** @type {keyof typeof COMMAND_SAMPLES} */ (type)];
+      port.postMessage(encode(request(`r-${type}`, { ...fields, type, commandId: `c-${type}` }, soon())));
+    }
+    for (let round = 0; round < 10; round++) await settle();
+    assert.deepEqual(
+      frames.filter(frame => frame.frame === 'error').map(frame => [frame.requestId, frame.code]),
+      stayOff.map(type => [`r-${type}`, 'unknown-operation']),
+    );
+    assert.deepEqual(
+      [...queued].sort(([a], [b]) => String(a).localeCompare(String(b))),
+      sends.map(type => [type, 'newtab', true]).sort(([a], [b]) => String(a).localeCompare(String(b))),
+    );
+  });
+
+  it('lets a command it received before its port closed run at its turn, and drops its answer, while a query from that port ends and a command whose deadline comes first ends unrun (#35 slice 4d, rule 17)', async () => {
+    /** @type {Array<{type: unknown, begin: () => boolean, answer: (value: unknown) => void}>} */
+    const held = [];
+    const coordinator = {
+      /** @param {any} command @param {any} [dispatch] */
+      enqueue: (command, dispatch = {}) =>
+        new Promise(answer => {
+          held.push({ type: command.type, begin: dispatch.begin, answer });
+        }),
+    };
+    /** @type {string[]} */
+    const stopped = [];
+    const handlers = {
+      .../** @type {any} */ (coordination).pageCommandHandlers?.(() => coordinator),
+      // A query the router holds open until its port goes
+      'system.coordinatorHealth': (/** @type {unknown} */ payload, /** @type {any} */ dispatch) => {
+        dispatch.onCancel(() => stopped.push('health'));
+        return new Promise(() => {});
+      },
+    };
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, handlers });
+    });
+    const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    const quick = (/** @type {string} */ id) => ({
+      type: 'createNote',
+      commandId: `c-${id}`,
+      noteId: id,
+      name: 'Quick',
+      blocks: [],
+    });
+    port.postMessage(encode(hello('popup', 's1')));
+    port.postMessage(encode(request('r1', quick('n1'), soon())));
+    port.postMessage(encode(request('r2', { type: 'system.coordinatorHealth' }, soon())));
+    port.postMessage(encode(request('r3', quick('n3'), { deadline: Date.now() + 40 })));
+    await settle();
+    await settle();
+    assert.deepEqual(
+      held.map(entry => entry.type),
+      ['createNote', 'createNote'],
+    );
+    // The page goes before either command's turn
+    port.disconnect();
+    await settle();
+    await settle();
+    assert.deepEqual(stopped, ['health'], 'the query ends with its port');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const [first, late] = held;
+    assert.equal(first.begin(), true, 'the first runs at its turn');
+    assert.equal(late.begin(), false, 'the second, whose deadline came first, ends unrun');
+    first.answer(committed('note-created', ['n1']));
+    await settle();
+    await settle();
+    assert.deepEqual(
+      frames.filter(frame => frame.frame !== 'welcome'),
+      [],
+      'nothing goes to the page that went',
+    );
+  });
+
+  it('answers a command still waiting at its deadline while the coordinator migrates as unavailable, coordinator, migrating, retryable, and one outside a migration deadline-exceeded, as before (#35 slice 4d, rule 18)', async () => {
+    /** @type {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} */
+    let status = { status: 'degraded', reason: 'migrating' };
+    // A queue whose turn never comes
+    const coordinator = { enqueue: () => new Promise(() => {}) };
+    const handlers = /** @type {any} */ (coordination).pageCommandHandlers?.(() => coordinator) ?? {};
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, status: () => status, handlers });
+    });
+    const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    const quick = (/** @type {string} */ id) => ({
+      type: 'createNote',
+      commandId: `c-${id}`,
+      noteId: id,
+      name: 'Quick',
+      blocks: [],
+    });
+    port.postMessage(encode(hello('popup', 's1')));
+    port.postMessage(encode(request('r1', quick('n1'), { deadline: Date.now() + 40 })));
+    await new Promise(resolve => setTimeout(resolve, 120));
+    status = { status: 'ready' };
+    port.postMessage(encode(request('r2', quick('n2'), { deadline: Date.now() + 40 })));
+    await new Promise(resolve => setTimeout(resolve, 120));
+    await settle();
+    const during = frames.find(frame => frame.requestId === 'r1');
+    assert.deepEqual(
+      during && [
+        during.frame,
+        during.result?.kind,
+        during.result?.cause,
+        during.result?.code,
+        during.result?.retryable,
+      ],
+      ['response', 'unavailable', 'coordinator', 'migrating', true],
+      JSON.stringify(during),
+    );
+    const after = frames.find(frame => frame.requestId === 'r2');
+    assert.deepEqual(after && [after.frame, after.code], ['error', 'deadline-exceeded'], JSON.stringify(after));
   });
 
   it("serves no page what only the worker runs, even with a handler for each (the catalog split's sixth rule)", async () => {

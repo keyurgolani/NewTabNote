@@ -127,7 +127,7 @@ A new module under `js/kernel/`, or a new fake of a port anywhere, fails the che
 | Field | What it holds |
 | --- | --- |
 | `id` | kebab-case, unique |
-| `behavior` | the approved test plan's behavior it samples: commit waits, schema fields, backup inclusion, placeholder health, auth checks, conflict branches, plus the #33 save fixes, the #46 note-leave rules, and the conformance runs |
+| `behavior` | the approved test plan's behavior it samples: commit waits, schema fields, backup inclusion, placeholder health, auth checks, conflict branches, plus the #33 save fixes, the #46 note-leave rules, the conformance runs, and the #35 port commands |
 | `protects` | the protected behavior, in a sentence |
 | `file` | the file it edits, from the repository root: production code, or test infrastructure when that test protects a gate |
 | `find` | text that occurs exactly once in `file` |

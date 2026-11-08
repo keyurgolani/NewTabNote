@@ -20,6 +20,9 @@ import {
 } from '../../js/kernel/composition/background.js';
 import { createFailureEvents } from '../../js/kernel/composition/trust.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { MISSING_STORES_COPY_KEY, RECOVERY_COPY_LOCK } from '../../js/kernel/adapters/indexeddb/recovery-copies.js';
+import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
+import { COMMAND_SAMPLES } from './command-samples.mjs';
 import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { SWEPT_KEY } from '../../js/kernel/adapters/indexeddb/ledger-sweep.js';
@@ -1271,5 +1274,297 @@ describe("a page's command on the worker, on a kernel of its surface (#35 slice 
     );
     // And with no surface, the worker's own capture runs on its own kernel, as before
     assert.equal((await capture(worker, 'own')).kind, 'committed');
+  });
+});
+
+/**
+ * The commands the new tab sends the worker over the port (#35 slice 4d, rule 10): every one the
+ * shared catalog grants the new tab but the two that stay off the worker's new tab kernel, its
+ * session's write, which the page commits itself, and startup maintenance, which the worker's own
+ * start runs. The catalog's, not the worker's tables', so a table that drops one is caught.
+ */
+const STAY_OFF = Object.freeze(['saveWorkspaceSession', 'runStartupMaintenance']);
+const NEWTAB_SENDS = Object.freeze(
+  Object.keys(COMMANDS).filter(
+    type =>
+      COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].surfaces.includes('newtab') && !STAY_OFF.includes(type),
+  ),
+);
+
+/** @param {number} [count] */
+const rounds = async (count = 50) => {
+  for (let round = 0; round < count; round++) await new Promise(resolve => setImmediate(resolve));
+};
+
+/**
+ * `local`, chrome.storage.local, as a store whose set of the sidebar width `held` waits until the
+ * case lets it go, as a slow write would, with each set's sidebar width in `landed`, by when it
+ * reached the store
+ * @param {any} local
+ * @param {number} held
+ */
+const holdingSets = (local, held) => {
+  /** @type {number[]} */
+  const landed = [];
+  /** @type {() => void} */
+  let release = () => {};
+  const released = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  /** @type {() => void} */
+  let reach = () => {};
+  const reached = new Promise(resolve => {
+    reach = () => resolve(undefined);
+  });
+  const store = {
+    get: (/** @type {any} */ keys) => local.get(keys),
+    remove: (/** @type {any} */ keys) => local.remove(keys),
+    set: async (/** @type {Record<string, unknown>} */ items) => {
+      const width = items.setting_sidebarWidth;
+      if (width === held) {
+        reach();
+        await released;
+      }
+      // The case's own, past the first-run setting the worker's start writes
+      if (typeof width === 'number' && width >= held) landed.push(width);
+      return local.set(items);
+    },
+  };
+  return { store, landed, reached, release };
+};
+
+/** @param {string} id @param {number} sidebarWidth */
+const widthSet = (id, sidebarWidth) => ({ type: 'setPreferences', commandId: `c-${id}`, values: { sidebarWidth } });
+
+describe("the new tab's commands on the worker, on a kernel of its surface (#35 slice 4d)", () => {
+  it("runs every command the new tab sends on a new tab kernel, its backup tasks among them, leaves its session's write and startup maintenance to the page and the worker's start, and refuses what only the worker runs (#35 slice 4d, rule 10)", async () => {
+    assert.equal(NEWTAB_SENDS.length, 46);
+    const of = newProfile();
+    const worker = /** @type {any} */ (createWorkerClient(hostOf(of)));
+    const newtab = { surface: 'newtab' };
+    /** @type {Array<[string, string, unknown, unknown]>} */
+    const answers = [];
+    /** @type {any} */
+    let imported = null;
+    for (const [type, fields] of Object.entries(COMMAND_SAMPLES)) {
+      if (!NEWTAB_SENDS.includes(type)) continue;
+      const outcome = await worker.execute({ ...fields, type, commandId: `c-${type}` }, newtab);
+      answers.push([type, outcome.kind, outcome.reason, outcome.code]);
+      if (type === 'importBackup') imported = outcome;
+    }
+    assert.equal(answers.length, 46);
+    assert.deepEqual(
+      answers.filter(([, kind, reason]) => kind === 'rejected' && reason === 'policy'),
+      [],
+      "none is refused as not registered or not the new tab's",
+    );
+    // The backup tasks run here now, on the adapter's backups: the import's note lands, and the
+    // automatic backup is in chrome.storage.local
+    assert.deepEqual(
+      answers
+        .filter(([type]) => type === 'createAutoBackup' || type === 'importBackup')
+        .map(([type, kind]) => [type, kind]),
+      [
+        ['createAutoBackup', 'committed'],
+        ['importBackup', 'committed'],
+      ],
+    );
+    assert.ok(
+      Object.keys(legacyEnv.plain(of.chrome.local)).some(key => key.startsWith('auto_backup_')),
+      'an automatic backup',
+    );
+    // The import gives the note it adds an id of its own, the first its outcome names
+    const [importedId] = imported?.changedIds ?? [];
+    assert.equal(
+      (await recordsOf(of, 'canvases')).filter(note => note.id === importedId && note.name === 'Plan').length,
+      1,
+      `the import's note: ${JSON.stringify(imported)}`,
+    );
+    // The two that stay off it are refused, with nothing written, and so is the worker's own capture
+    for (const type of STAY_OFF) {
+      const fields = COMMAND_SAMPLES[/** @type {keyof typeof COMMAND_SAMPLES} */ (type)];
+      const outcome = await worker.execute({ ...fields, type, commandId: `c-again-${type}` }, newtab);
+      assert.deepEqual([outcome.kind, outcome.reason, outcome.code], ['rejected', 'policy', 'not-registered'], type);
+    }
+    const captured = await worker.execute(
+      {
+        type: 'captureToDailyNote',
+        commandId: 'c-newtab-capture',
+        noteId: 'd-newtab',
+        blockId: 'b-newtab',
+        capture: { type: 'text', content: 'Not the new tab to capture' },
+      },
+      newtab,
+    );
+    assert.deepEqual([captured.kind, captured.reason], ['rejected', 'policy'], JSON.stringify(captured));
+    assert.deepEqual(
+      (await recordsOf(of, 'canvases')).filter(note => note.id === 'd-newtab'),
+      [],
+    );
+  });
+
+  it("writes the new tab's settings one after another, each checked against its turn's live right before it goes: a cut turn's held set lands before the next turn's, and one cut while it waits never goes (#35 slice 4d, rule 11)", async () => {
+    const of = newProfile();
+    const held = holdingSets(of.chrome.api.storage.local, 301);
+    const worker = /** @type {any} */ (createWorkerClient({ ...hostOf(of), settings: held.store }));
+    assert.equal(await worker.whenReady(), null);
+    let cutA = false;
+    let cutC = false;
+    // Turn A's set reaches the store and is held there, and the queue cuts A
+    const a = worker.execute(widthSet('a', 301), { surface: 'newtab', live: () => !cutA });
+    const first = await Promise.race([held.reached.then(() => 'held'), a]);
+    assert.equal(first, 'held', `A's set reached the store first: ${JSON.stringify(first)}`);
+    cutA = true;
+    // B and C come after it, each live as its kernel checks it; C is cut while it waits
+    const b = worker.execute(widthSet('b', 302), { surface: 'newtab', live: () => true });
+    const c = worker.execute(widthSet('c', 303), { surface: 'newtab', live: () => !cutC });
+    await rounds();
+    cutC = true;
+    held.release();
+    const [doneA, doneB, doneC] = await Promise.all([a, b, c]);
+    assert.deepEqual(held.landed, [301, 302], 'A, then B, and C never');
+    assert.deepEqual(
+      [doneA.kind, doneB.kind, doneC.kind, doneC.code],
+      ['committed', 'committed', 'unavailable', 'turn-exceeded'],
+    );
+    assert.equal(of.chrome.local.setting_sidebarWidth, 302);
+  });
+
+  it("makes #33's recovery copy as it opens a database at 8 that lacks a store, as it is, under the copy's lock, and once with the new tab's copy on too (#35 slice 4d, rule 9)", async () => {
+    const WITHOUT_THEMES = {
+      omit: ['themes'],
+      records: {
+        canvases: [legacyEnv.note('n1', { name: 'Kept' })],
+        elements: [legacyEnv.block('b1', 'n1', 0, 'Kept text')],
+      },
+    };
+    /** @param {Profile} of */
+    const copiesIn = of =>
+      Object.entries(legacyEnv.plain(of.chrome.local)).filter(
+        ([key, copy]) => key.startsWith('recovery_backup_') && /** @type {any} */ (copy).reason === 'missing-stores',
+      );
+    // The worker alone, whose run is short of space, so it opens the database as it is
+    const of = newProfile();
+    await legacyEnv.createDatabase(of.real, WITHOUT_THEMES);
+    const host = hostOf(of, { estimate: CRAMPED });
+    /** @type {string[]} */
+    const named = [];
+    const request = host.locks.request.bind(host.locks);
+    host.locks.request = (/** @type {string} */ name, /** @type {any[]} */ ...rest) => {
+      named.push(name);
+      return /** @type {any} */ (request)(name, ...rest);
+    };
+    const worker = createWorkerClient(host);
+    assert.equal(await worker.whenReady(), null);
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    assert.equal(copiesIn(of).length, 1);
+    assert.deepEqual(legacyEnv.plain(of.chrome.local)[MISSING_STORES_COPY_KEY].missingStores, ['themes']);
+    assert.ok(named.includes(RECOVERY_COPY_LOCK), `the copy's lock: ${named.join(', ')}`);
+    assert.equal((await inspect(of.real)).version, 8, 'the database as it was');
+    // With the new tab's adapter opening beside it on the same locks, as the new tab still copies
+    // until the page move, one copy between them
+    const both = newProfile();
+    await legacyEnv.createDatabase(both.real, WITHOUT_THEMES);
+    const shared = hostOf(both, { estimate: CRAMPED });
+    const tab = createIndexedDbAdapter({
+      indexedDB: both.real,
+      settings: both.chrome.api.storage.local,
+      locks: shared.locks,
+      mode: 'existing',
+      requireCore: true,
+      maintains: true,
+      copiesMissingStores: true,
+      backups: true,
+    });
+    await Promise.all([createWorkerClient(shared).whenReady(), tab.open()]);
+    assert.equal(copiesIn(both).length, 1);
+    tab.close();
+  });
+
+  it("commits no unit of a Replace all import whose turn the queue cut after the kernel's check, on #247's check inside its commit, and commits one whose turn it didn't cut (#35 slice 4d, rule 11)", async () => {
+    const of = newProfile();
+    const local = of.chrome.api.storage.local;
+    // Replace all saves its recovery copy before its unit commits, so a cut there comes between
+    let atCopy = () => {};
+    const settings = {
+      get: (/** @type {any} */ keys) => local.get(keys),
+      remove: (/** @type {any} */ keys) => local.remove(keys),
+      set: (/** @type {Record<string, unknown>} */ items) => {
+        if (Object.keys(items).some(key => key.startsWith('recovery_backup_'))) atCopy();
+        return local.set(items);
+      },
+    };
+    const worker = /** @type {any} */ (createWorkerClient({ ...hostOf(of), settings }));
+    assert.equal(await worker.whenReady(), null);
+    // An import gives the note it adds an id of its own, so each is found by its name
+    /** @param {string} id */
+    const replacing = id => ({
+      type: 'importBackup',
+      commandId: `c-${id}`,
+      mode: 'replace',
+      backup: { version: 1, exportedAt: 1, canvases: [{ id, name: `Imported ${id}` }], elements: [] },
+    });
+    /** @param {string} id */
+    const named = async id => (await recordsOf(of, 'canvases')).filter(note => note.name === `Imported ${id}`);
+    let cut = false;
+    atCopy = () => {
+      cut = true;
+    };
+    const cutOne = await worker.execute(replacing('n-cut'), { surface: 'newtab', live: () => !cut });
+    assert.deepEqual(
+      [cutOne.kind, cutOne.cause, cutOne.code],
+      ['unavailable', 'coordinator', 'turn-exceeded'],
+      JSON.stringify(cutOne),
+    );
+    assert.equal(cut, true, 'cut as its recovery copy was saved');
+    assert.deepEqual(await named('n-cut'), []);
+    atCopy = () => {};
+    const kept = await worker.execute(replacing('n-kept'), { surface: 'newtab', live: () => true });
+    assert.equal(kept.kind, 'committed', JSON.stringify(kept));
+    assert.equal((await named('n-kept')).length, 1);
+  });
+
+  it("lets a capture's open of a database at 8 that lacks a store go on when #33's copy can't be written: the capture commits, with no copy or marker left (#35 slice 4d, rule 9)", async () => {
+    const of = newProfile();
+    await legacyEnv.createDatabase(of.real, {
+      omit: ['themes'],
+      records: {
+        canvases: [legacyEnv.note('n1', { name: 'Kept' })],
+        elements: [legacyEnv.block('b1', 'n1', 0, 'Kept text')],
+      },
+    });
+    const local = of.chrome.api.storage.local;
+    /** @type {string[][]} */
+    const thrown = [];
+    // The copy's write throws, as a full chrome.storage.local's does, and every other write goes on
+    const settings = {
+      get: (/** @type {any} */ keys) => local.get(keys),
+      remove: (/** @type {any} */ keys) => local.remove(keys),
+      set: (/** @type {Record<string, unknown>} */ items) => {
+        if (Object.keys(items).some(key => key.startsWith('recovery_backup_'))) {
+          thrown.push(Object.keys(items));
+          throw new Error('QUOTA_BYTES quota exceeded');
+        }
+        return local.set(items);
+      },
+    };
+    // Short of space, so its run leaves the database as it is, and the capture waits on the open
+    const worker = /** @type {any} */ (createWorkerClient({ ...hostOf(of, { estimate: CRAMPED }), settings }));
+    const captured = await capture(worker, 'copy-failed');
+    assert.equal(captured.kind, 'committed', JSON.stringify(captured));
+    assert.deepEqual(
+      thrown.map(keys => keys.slice(1)),
+      [[MISSING_STORES_COPY_KEY]],
+      'the copy was tried once, with its marker in the same write',
+    );
+    const stored = legacyEnv.plain(of.chrome.local);
+    assert.equal(stored[MISSING_STORES_COPY_KEY], undefined);
+    assert.deepEqual(
+      Object.keys(stored).filter(key => key.startsWith('recovery_backup_')),
+      [],
+    );
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    assert.equal((await recordsOf(of, 'elements')).filter(block => block.id === 'b-copy-failed').length, 1);
+    assert.equal((await inspect(of.real)).version, 8, 'the database as it was');
   });
 });
