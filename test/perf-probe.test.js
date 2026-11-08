@@ -313,3 +313,22 @@ describe("ref-desktop's fixture profiles (scripts/perf/profiles.js)", () => {
     await assert.rejects(profileFixture('lib-1k'), /no profile "lib-1k"/);
   });
 });
+
+describe("the probe's heap wait (scripts/perf/timing.js)", () => {
+  it("waits for the worker's readwrite transactions too, as a page that sends its writes over the port saves in the worker (#35 slice 4d)", () => {
+    const { settledAt, QUIET_MS } = require('../scripts/perf/timing');
+    const echoedAt = 1000;
+    const page = [{ began: 1100, ended: 1200 }];
+    const worker = [{ began: 1150, ended: 1500 }];
+    // The page's own write is done, but the worker's is still open
+    assert.equal(settledAt({ echoedAt, now: 9000, page, worker: [{ began: 1150, ended: null }] }, QUIET_MS), null);
+    // Both done, quiet since the later of them, the worker's
+    assert.equal(settledAt({ echoedAt, now: 1500 + QUIET_MS, page, worker }, QUIET_MS), 1500);
+    assert.equal(settledAt({ echoedAt, now: 1500 + QUIET_MS - 1, page, worker }, QUIET_MS), null);
+    // A save that went to the worker alone counts
+    assert.equal(settledAt({ echoedAt, now: 2000 + QUIET_MS, page: [], worker: [{ began: 1100, ended: 2000 }] }, QUIET_MS), 2000);
+    // With no write since the key's echo in either, it hasn't settled
+    assert.equal(settledAt({ echoedAt, now: 9000, page: [{ began: 500, ended: 600 }], worker: [{ began: 700, ended: 800 }] }, QUIET_MS), null);
+    assert.equal(settledAt({ echoedAt: null, now: 9000, page, worker }, QUIET_MS), null);
+  });
+});
