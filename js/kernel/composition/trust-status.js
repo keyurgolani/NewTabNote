@@ -11,9 +11,9 @@
  * the ask has it read for Settings' opening. Only the newest read started draws, so an older one
  * that gets its answer later changes nothing. When the worker didn't answer in time, or answers
  * anything the check doesn't take, it draws nothing, and Settings' section reads as it did before
- * (#20 slice 4b); a read that got no answer asks once more RETRY_MS later. A drawing that throws
- * draws nothing more, and its read answers nothing. Its rules are the new tab's own
- * (css/editor.css), so it puts no style in the page.
+ * (#20 slice 4b); a read that got no answer asks once more RETRY_MS later, if the tab shows then.
+ * A drawing that throws draws nothing more, and its read answers nothing. Its rules are the new
+ * tab's own (css/editor.css), so it puts no style in the page.
  *
  * Loading it touches no browser API: its first read is the send's.
  */
@@ -141,7 +141,8 @@ export function startTrustStatus({
 
   /**
    * A read: asks through `send`, checks the answer, and draws it, unless a newer read started
-   * while it waited. One that got no answer asks once more RETRY_MS later, unless it's that one.
+   * while it waited. One that got no answer asks once more RETRY_MS later, unless it's that one,
+   * if the tab shows then.
    * @param {boolean} again - it's the one more
    * @returns {Promise<Lines | null>}
    */
@@ -164,9 +165,11 @@ export function startTrustStatus({
     }
     if (mine !== started) return null;
     if (!heard && !again) {
+      // On a tab that shows when its time comes; a hidden one reads at its next showing anyway,
+      // so a hidden tab never wakes the worker
       retry = timers.setTimeout(() => {
         retry = null;
-        read(true);
+        if (doc.visibilityState === 'visible') read(true);
       }, RETRY_MS);
     }
     try {
