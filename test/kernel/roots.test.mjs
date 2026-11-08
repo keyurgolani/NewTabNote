@@ -483,6 +483,16 @@ describe('each composition root', () => {
     closeAll([tab]);
   });
 
+  it("runs no startup maintenance as the new tab starts: its kernel writes no first-run setting, which the worker's versioned open writes (#35 slice 4d, rule 8, R17)", async () => {
+    // A database an earlier build made, with no first-run settings, and no worker to wake
+    const tab = legacyContext(undefined, { worker: false });
+    await legacyEnv.createDatabase(tab.env.indexedDB, {});
+    assert.equal(await newTabOf(tab).client.whenReady(), null);
+    assert.equal(tab.env.chrome.local.setting_storageInitialized, undefined);
+    assert.deepEqual(tab.env.chrome.writes(), [], 'it wrote nothing');
+    closeAll([tab]);
+  });
+
   it('checks integrity in the worker only when asked, as runIntegrityCheck (#35), and not as the new tab starts (#17 PR 4a)', async () => {
     /** @param {LegacyContext} context */
     const reported = context =>

@@ -7,7 +7,8 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  createLegacyEnv, createDatabase, settle, waitFor, plain, note, block, makeEditor, startEditorClient, runUntil, releaseStorage,
+  createLegacyEnv, createDatabase, dumpDatabase, recordsOf, settle, waitFor, plain, note, block, makeEditor, startEditorClient,
+  runUntil, releaseStorage,
 } = require('./helpers/legacy-env');
 
 const FILES = [
@@ -191,6 +192,93 @@ describe('T6: a revert keeps what was done elsewhere and loses nothing typed', (
     const modal = env.document.getElementById('snapshot-preview-modal');
     assert.ok(modal, 'the preview opens');
     assert.match(modal.textContent, /Second/);
+  });
+});
+
+describe('a revert whose answer stays unknown, which the note as stored settles (#35 slice 4d, rule 13, N2, R9)', () => {
+  let env;
+  let toasts;
+  let editor;
+
+  beforeEach(async () => {
+    // As page() starts it, with no frozen 1.4.1 Storage beside it: these cases read what's stored
+    // from the database itself, so the mutant review's copy of the tree, which holds no release
+    // files, runs them
+    env = createLegacyEnv();
+    await createDatabase(env.indexedDB, { records: RECORDS });
+    env.load(...FILES);
+    await startEditorClient(env);
+    toasts = [];
+    env.get('Utils').showToast = (message, kind) => toasts.push({ message, kind });
+    editor = makeEditor(env);
+    await editor.loadNote('A');
+  });
+
+  /** A's blocks as stored, in note order, as [id, content] */
+  const storedOfA = async () =>
+    Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
+      .filter((row) => row.canvasId === 'A')
+      .sort((a, b) => (a.order || 0) - (b.order || 0) || (a.id < b.id ? -1 : 1))
+      .map((row) => [row.id, row.content]);
+
+  /**
+   * The revert's restore goes to the page's kernel when `commits`, and its answer is lost on the
+   * way back either way, as a reply the worker sent and the port dropped, which no ledger read
+   * settled
+   * @param {boolean} commits
+   */
+  function losingRestore(commits) {
+    const client = env.documentClient;
+    const real = client.restoreSnapshot;
+    client.restoreSnapshot = async (...args) => {
+      if (commits) await real(...args);
+      return { kind: 'unknown', code: 'outcome-unknown', commandId: 'c-restore' };
+    };
+  }
+
+  /** A snapshot of A as it is, then 'Oat milk' typed and saved over its first block */
+  async function snapshotThenEdit() {
+    const summary = await snapshotNow(env, editor);
+    type(editor, 'Oat milk');
+    env.clock.tick(500);
+    await runUntil(env, editor.flushSave());
+    return summary;
+  }
+
+  it('shows the snapshot and says Reverted to snapshot when the note as stored holds its blocks', async () => {
+    const summary = await snapshotThenEdit();
+    losingRestore(true);
+    await runUntil(env, editor._revertToSnapshot(summary));
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs']);
+    assert.deepEqual(toasts.at(-1), { message: 'Reverted to snapshot', kind: 'success' });
+    assert.deepEqual(await storedOfA(), [['a1', 'Milk'], ['a2', 'Eggs']]);
+  });
+
+  it('says Failed to revert to snapshot when the note as stored holds anything else, and keeps the text', async () => {
+    const summary = await snapshotThenEdit();
+    losingRestore(false);
+    await runUntil(env, editor._revertToSnapshot(summary));
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['Oat milk', 'Eggs']);
+    assert.deepEqual(toasts.at(-1), { message: 'Failed to revert to snapshot', kind: 'error' });
+    assert.deepEqual(await storedOfA(), [['a1', 'Oat milk'], ['a2', 'Eggs']]);
+  });
+
+  it("keeps saves held and shows the reload notice when the note as stored can't be read either, so no save lands on a note the revert may have restored", async () => {
+    const summary = await snapshotThenEdit();
+    losingRestore(false);
+    env.documentClient.openNote = async () => {
+      throw new Error('the read failed too');
+    };
+    await runUntil(env, editor._revertToSnapshot(summary));
+    assert.ok(editor.root.querySelector('.reload-notice'), 'the reload notice shows');
+    assert.equal(editor._savesHeld, true, 'saves stay held');
+    type(editor, 'Typed after');
+    env.clock.tick(500);
+    for (let round = 0; round < 20; round++) {
+      env.frames();
+      await settle(2);
+    }
+    assert.deepEqual(await storedOfA(), [['a1', 'Oat milk'], ['a2', 'Eggs']], 'no save went');
   });
 });
 

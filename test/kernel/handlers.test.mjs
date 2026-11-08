@@ -431,6 +431,13 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
     );
   });
 
+  it("the new tab's start runs no startup maintenance: its kernel doesn't maintain, and its table and its sends to the worker hold no runStartupMaintenance (#35 slice 4d, rule 8, R17)", async () => {
+    const { NEWTAB_SENDS } = await import('../../js/kernel/composition/newtab-send-chunk.js');
+    assert.equal(PAGES.find(row => row.surface === 'newtab')?.maintains, false, 'its kernel maintains nothing');
+    assert.equal(registered(NEWTAB_HANDLERS).has('runStartupMaintenance'), false, 'its table');
+    assert.equal(NEWTAB_SENDS('runStartupMaintenance'), undefined, 'its sends');
+  });
+
   it('the scan reads a send wherever its object is built, and says what it cannot read', () => {
     const page = [
       "const command = { type: 'createNote', commandId: 'c1' };",

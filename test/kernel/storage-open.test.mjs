@@ -193,6 +193,12 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
     }
   });
 
+  it("writes no missing-stores copy as the new tab opens a version-8 database that lacks a store, which the worker's open writes (#35 slice 4d, rule 9)", async () => {
+    const of = await made(SHAPES['version 8 without themes, holding a note, a setting, and an image']);
+    assert.equal(await newTabOpen(of), null);
+    assert.deepEqual(of.chrome.writes(), [], 'no copy, and no setting');
+  });
+
   it('opens a database as it is for Popup and Side Panel: no upgrade, and no database made on a profile without one', async () => {
     const of = await made(SHAPES['version 7 (1.2.0)']);
     const before = await legacyEnv.dumpDatabase(of.real);

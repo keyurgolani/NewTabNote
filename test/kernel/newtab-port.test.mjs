@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 
 import { inContextStores } from '../../js/kernel/adapters/in-context.js';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
+import { DB_NAME, DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { kernelClient, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import { createNewTabDocumentClient, createNewTabNoteList } from '../../js/kernel/composition/newtab.js';
 import { WORKER_PAGE_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
@@ -20,7 +21,7 @@ import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
 import { DRAFTS_LOCK, DRAFT_PREFIX } from '../../js/kernel/core/domain/close-draft-keys.js';
-import { journalEntry } from '../../js/kernel/core/domain/journal.js';
+import { journalEntry, ownerLock } from '../../js/kernel/core/domain/journal.js';
 import { COMMAND_SAMPLES } from './command-samples.mjs';
 import { legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { settle } from './messaging-support.mjs';
@@ -335,6 +336,49 @@ async function leaveSave(tab, { id = 'c-save', session = 'page-gone', at = AT } 
 /** The worker's answer when it can't take a command */
 const notTaken = () => unavailable('coordinator', 'unavailable', true);
 
+/**
+ * `runtime`, whose port, once `losing()` holds, loses the first reply it hears and drops on both
+ * ends, as a worker that restarts after it committed does
+ * @param {any} runtime - the page's chrome.runtime
+ * @param {() => boolean} losing
+ */
+function losingReplies(runtime, losing) {
+  return {
+    get lastError() {
+      return runtime.lastError;
+    },
+    connect(/** @type {unknown} */ info) {
+      const port = runtime.connect(info);
+      /** @type {Array<(message: unknown) => void>} */
+      const heard = [];
+      /** @type {Array<(port: unknown) => void>} */
+      const gone = [];
+      let lost = false;
+      const end = {
+        name: port.name,
+        onMessage: { addListener: (/** @type {(message: unknown) => void} */ listener) => heard.push(listener) },
+        onDisconnect: { addListener: (/** @type {(port: unknown) => void} */ listener) => gone.push(listener) },
+        postMessage: (/** @type {unknown} */ message) => port.postMessage(message),
+        disconnect: () => port.disconnect(),
+      };
+      port.onMessage.addListener((/** @type {unknown} */ message) => {
+        if (!lost && losing() && typeof message === 'string' && JSON.parse(message).frame === 'response') {
+          lost = true;
+          // The page's own disconnect tells only the worker's end, so the page's listeners hear it here
+          port.disconnect();
+          for (const listener of gone) listener(end);
+          return;
+        }
+        for (const listener of heard) listener(message);
+      });
+      port.onDisconnect.addListener(() => {
+        for (const listener of gone) listener(end);
+      });
+      return end;
+    },
+  };
+}
+
 describe("the new tab's sends keep their order, its runs fail fast, and an upgrade gates them (#35 slice 4d)", () => {
   it('loads the send chunk once for every command, and sends each, in order, once it is in and its journal holds the owner lock (rule 3, R5)', async () => {
     const tab = await profile();
@@ -445,5 +489,140 @@ describe("the new tab's sends keep their order, its runs fail fast, and an upgra
       stand.handed.map(one => one.commandId),
       ['draft-a-apply', 'c-save-apply'],
     );
+  });
+
+  it("names the journal's owner lock and each entry for the session its hello says (rule 3, R8)", async () => {
+    const tab = await profile();
+    const real = tab.env.global.navigator.locks;
+    /** @type {string[]} */
+    const requested = [];
+    const locks = {
+      request: (/** @type {string} */ name, /** @type {any} */ options, /** @type {any} */ callback) => {
+        requested.push(name);
+        return real.request(name, options, callback);
+      },
+      query: () => real.query(),
+    };
+    /** @type {unknown[]} */
+    let owners = [];
+    const { stand, client } = newTab(tab, {
+      locks,
+      before: async one => {
+        await until(async () => (await journalOf(tab)).some(entry => entry.opId === one.commandId));
+        owners = (await journalOf(tab)).map(entry => entry.ownerSessionId);
+      },
+    });
+    const save = {
+      type: /** @type {const} */ ('saveNoteContent'),
+      commandId: 'c-save',
+      ...saveOfA([block('a1', 'A', 0, 'alpha, typed')]),
+    };
+    assert.equal((await client.execute(save)).kind, 'committed');
+    const [sent] = stand.handed;
+    assert.ok(sent, 'the worker got it');
+    assert.ok(requested.includes(ownerLock(sent.sessionId)), requested.join(', '));
+    assert.deepEqual(owners, [sent.sessionId]);
+  });
+
+  it('resolves a restore whose reply was lost by its key, from the ledger the reader reads (rule 3, R9)', async () => {
+    const tab = await profile();
+    let losing = false;
+    const { client } = newTab(tab, { runtime: runtime => losingReplies(runtime, () => losing) });
+    const snapshot = {
+      type: /** @type {const} */ ('saveSnapshot'),
+      commandId: 'c-snap',
+      noteId: 'A',
+      snapshotId: 's1',
+    };
+    assert.equal(
+      (await client.execute({ ...snapshot, blocks: [block('a1', 'A', 0, 'alpha')], title: 'Alpha plan' })).kind,
+      'committed',
+    );
+    const save = {
+      type: /** @type {const} */ ('saveNoteContent'),
+      commandId: 'c-save',
+      ...saveOfA([block('a1', 'A', 0, 'alpha, changed')]),
+    };
+    assert.equal((await client.execute(save)).kind, 'committed');
+    losing = true;
+    const restored = await client.execute({
+      type: 'restoreSnapshot',
+      commandId: 'c-restore',
+      noteId: 'A',
+      snapshotId: 's1',
+      preSnapshotId: 's2',
+      blocks: [block('a1', 'A', 0, 'alpha')],
+      name: 'Alpha plan',
+    });
+    assert.equal(restored.kind, 'committed', JSON.stringify(restored));
+    assert.equal((await storedBlocks(tab, 'A')).a1, 'alpha');
+  });
+
+  it("answers reload-required, unsent, once the reader's connection closed for an upgrade, while the save its close's flush sent still goes (rule 12, R11)", async () => {
+    const tab = await profile();
+    const { stand, reader, client } = newTab(tab);
+    assert.equal(await client.whenReady(), null);
+    /** @type {Promise<unknown> | undefined} */
+    let flushed;
+    reader.beforeClose(() => {
+      flushed = client.execute({
+        type: 'saveNoteContent',
+        commandId: 'c-flush',
+        ...saveOfA([block('a1', 'A', 0, 'alpha, as the close flushed it')]),
+      });
+    });
+    // Another context's upgrade, which closes every connection on the database
+    await new Promise((resolve, reject) => {
+      const request = tab.env.indexedDB.open(DB_NAME, DB_VERSION + 1);
+      request.onsuccess = () => {
+        request.result.close();
+        resolve(undefined);
+      };
+      request.onerror = () => reject(request.error);
+    });
+    assert.ok(flushed, 'the flush ran');
+    const after = await client.execute({ type: 'setPinned', commandId: 'c-pin', noteId: 'A', pinned: true });
+    assert.deepEqual(after, unavailable('storage', 'reload-required', false));
+    await flushed;
+    assert.deepEqual(
+      stand.handed.map(one => one.commandId),
+      ['c-flush'],
+      'the flush went, and nothing after it',
+    );
+  });
+
+  it('opens no port before its first command, though its first read loads the send chunk at idle (Q6 a, G1)', async () => {
+    const tab = await profile();
+    let connects = 0;
+    let loads = 0;
+    const { client } = newTab(tab, {
+      runtime: runtime => ({
+        get lastError() {
+          return runtime.lastError;
+        },
+        connect: (/** @type {unknown} */ info) => {
+          connects += 1;
+          return runtime.connect(info);
+        },
+      }),
+      // The page's idle, at once
+      requestIdle: callback => {
+        callback();
+      },
+      send: () => {
+        loads += 1;
+        return import('../../js/kernel/composition/newtab-send-chunk.js');
+      },
+    });
+    assert.equal(await client.whenReady(), null);
+    assert.equal((await client.query({ type: 'getNote', noteId: 'A' })).kind, 'ready');
+    assert.equal(await until(() => loads === 1), true, 'the first read loaded the chunk at idle');
+    await settle();
+    assert.equal(connects, 0, 'and opened no port');
+    assert.equal(
+      (await client.execute({ type: 'setPinned', commandId: 'c-pin', noteId: 'A', pinned: true })).kind,
+      'committed',
+    );
+    assert.equal(connects, 1, 'the first command did');
   });
 });
