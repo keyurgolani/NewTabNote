@@ -10,14 +10,17 @@
  *   incidents that share a title. A count here is of the groups it names.
  * - It reads saving from `capture` and the storage group's last check. The status doesn't carry
  *   `worstCore`, which reads `degraded` while an update waits though nothing needs the user.
+ * - It says each group's name with the verb that name takes, and when a group's one problem sits
+ *   on a row with a name of its own (ROW_LABEL), it names the row (the lead's round 2).
  * - At capture risk, for any cause, the line says new notes may not be saved, and Settings adds
  *   the cause's sentence when the summary has one of the four recovery.html words. While the
  *   health records can't be read, so the summary routes to the Recovery Center with capture
- *   unknown, it can't confirm notes are saving.
+ *   unknown, it can't confirm notes are saving. Wherever Settings' button opens the Recovery
+ *   Center, change 7's line takes the section's sentence's place.
  * - A wait for free space alone shows no sidebar line while 1b's space notice shows (change 9).
  */
 
-import { CAPTURE_CONSEQUENCE, GROUP, ROUTE_HREF, STATUS } from './status-copy.js';
+import { CAPTURE_CONSEQUENCE, GROUP, GROUP_VERB, ROUTE_HREF, ROW_LABEL, ROW_VERB, STATUS } from './status-copy.js';
 import { whenText } from './when.js';
 
 /** @typedef {import('../core/status-message.js').TrustStatus} TrustStatus */
@@ -31,7 +34,8 @@ import { whenText } from './when.js';
 
 /**
  * Settings' Trust Center lines: the first, with the cause's sentence at capture risk; the second,
- * or null; the line in place of the section's sentence at capture risk, or null; and its button
+ * or null; the line in place of the section's sentence wherever the button opens the Recovery
+ * Center, or null; and its button
  * @typedef {object} SettingsLines
  * @property {{text: string, cause: string | null, tone: 'ok' | 'unknown' | 'action' | 'failed'}} first
  * @property {string | null} second
@@ -90,25 +94,45 @@ const waitsForSpace = group =>
   group.cause.faultCode === 'migration-blocked' &&
   group.cause.errorCode === 'space-short';
 
-/** @param {Group} group */
-const nameOf = group => /** @type {Record<string, string>} */ (GROUP)[group.group] || group.group;
+/** @typedef {{name: string, verb: string}} Named */
 
 /**
- * The sidebar's words for the groups `names` names
- * @param {string[]} names
+ * A group as the lines name it, with its name's verb: the row its one problem sits on, when that
+ * row has a name of its own, else the group. A group with more than one problem is named by the
+ * group, whose cause names only the worst; no row with a name of its own raises more than one, so
+ * then they're on more than one of its rows, as "AI" is for both AI rows (round 2).
+ * @param {Group} group
+ * @returns {Named}
  */
-const sidebarWords = names =>
-  names.length === 1
-    ? fill(STATUS.sidebarOne, { a: names[0] })
-    : names.length === 2
-      ? fill(STATUS.sidebarTwo, { a: names[0], b: names[1] })
-      : fill(STATUS.sidebarMore, { a: names[0], count: names.length - 1 });
+const nameOf = group => {
+  const row =
+    group.needsAction === 1 && group.cause !== null && group.cause.from === 'incident'
+      ? /** @type {Record<string, string>} */ (ROW_LABEL)[group.cause.providerId]
+      : undefined;
+  if (row) return { name: row, verb: ROW_VERB };
+  return {
+    name: /** @type {Record<string, string>} */ (GROUP)[group.group] || group.group,
+    verb: /** @type {Record<string, string>} */ (GROUP_VERB)[group.group] || ROW_VERB,
+  };
+};
 
 /**
- * Settings' second line for the groups `names` names, or null for none
- * @param {string[]} names
+ * The sidebar's words for the groups `named` names
+ * @param {Named[]} named
  */
-const settingsWords = names => {
+const sidebarWords = named =>
+  named.length === 1
+    ? fill(STATUS.sidebarOne, { a: named[0].name, verb: named[0].verb })
+    : named.length === 2
+      ? fill(STATUS.sidebarTwo, { a: named[0].name, b: named[1].name })
+      : fill(STATUS.sidebarMore, { a: named[0].name, count: named.length - 1 });
+
+/**
+ * Settings' second line for the groups `named` names, or null for none
+ * @param {Named[]} named
+ */
+const settingsWords = named => {
+  const names = named.map(item => item.name);
   if (names.length === 0) return null;
   if (names.length === 1) return fill(STATUS.attentionOne, { names: names[0] });
   if (names.length === 2) return fill(STATUS.attentionMany, { count: 2, names: `${names[0]} and ${names[1]}` });
@@ -150,14 +174,17 @@ export function statusOf(summary, { now, spaceNotice = false }) {
     first = { text: fill(STATUS.notCheckedRecently, { when: whenText(storage.checkedAt, now) }), cause: null, tone: 'unknown' };
   } else first = { text: STATUS.notVerifiedYet, cause: null, tone: 'unknown' };
 
+  // The button opens the Recovery Center at capture risk and at can't confirm, and change 7's line
+  // then says what that page does, in the section's sentence's place (round 2)
+  const toRecovery = summary.route === 'recovery';
   return {
     sidebar,
     settings: {
       first,
       second: settingsWords(needing.map(nameOf)),
-      riskLine: atRisk ? STATUS.recoveryShows : null,
+      riskLine: toRecovery ? STATUS.recoveryShows : null,
       action: {
-        label: summary.route === 'recovery' ? STATUS.openRecovery : STATUS.openTrust,
+        label: toRecovery ? STATUS.openRecovery : STATUS.openTrust,
         href: ROUTE_HREF[summary.route],
         primary: atRisk,
       },

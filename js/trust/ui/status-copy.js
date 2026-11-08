@@ -1,9 +1,10 @@
 /**
  * The status pages' words (#20 slice 4c): the new tab's sidebar line and Settings' Trust Center
- * lines, as the lead signed them on 2026-11-07, and what every surface says alike with
- * recovery.html, which reads them from here (copy.js): the groups' names (the design review's
- * change 6) and the four capture-risk consequences. So each thing keeps one name on every
- * surface. It imports nothing, so a status page loads it with its lines and no more.
+ * lines, as the lead signed them on 2026-11-07 and in round 2 on 2026-11-08, and what every
+ * surface says alike with recovery.html, which reads them from here (copy.js): the groups' names
+ * (the design review's change 6), the rows' labels the lines name, and the four capture-risk
+ * consequences. So each thing keeps one name on every surface. It imports nothing, so a status
+ * page loads it with its lines and no more.
  */
 
 /** The groups trust.summary names, as every status page says them (change 6) */
@@ -19,6 +20,36 @@ export const GROUP = Object.freeze({
   platform: "NewTabNote's own parts",
 });
 
+/**
+ * The verb each group's name takes in the one-group sidebar line, "{a} {verb} your attention":
+ * "need" for a plural name (round 2, from the design review's S4)
+ */
+export const GROUP_VERB = Object.freeze({
+  storage: 'needs',
+  vault: 'need',
+  backup: 'need',
+  sync: 'needs',
+  indexing: 'needs',
+  inference: 'needs',
+  permissions: 'need',
+  recovery: 'need',
+  platform: 'need',
+});
+
+/**
+ * The rows whose labels aren't their group's name, as recovery.html labels them, which reads
+ * them from here: when a group's one problem sits on one of them, the lines name the row, and it
+ * takes "needs" (round 2, from the design review's S2)
+ */
+export const ROW_LABEL = Object.freeze({
+  'local-inference': 'Local model',
+  'remote-ai': 'Cloud AI',
+  'ai-scope-grants': 'AI access to notes',
+});
+
+/** The verb a row's label takes */
+export const ROW_VERB = 'needs';
+
 /** What capture at risk means, by its cause's consequence, as recovery.html's rows say it */
 export const CAPTURE_CONSEQUENCE = Object.freeze({
   'storage.capture-at-risk': "NewTabNote couldn't save a test entry, so new notes and captures may not be saved.",
@@ -30,8 +61,8 @@ export const CAPTURE_CONSEQUENCE = Object.freeze({
 /** The lines' own words */
 export const STATUS = Object.freeze({
   // The sidebar line: what needs attention, by group, past two the first and how many more (n1, n4,
-  // the verdict's answer 7), or the state of saving
-  sidebarOne: '{a} needs your attention',
+  // the verdict's answer 7), with the verb a name takes for one (round 2), or the state of saving
+  sidebarOne: '{a} {verb} your attention',
   sidebarTwo: '{a} and {b} need your attention',
   sidebarMore: '{a} and {count} more need your attention',
   atRisk: 'New notes may not be saved',
@@ -46,7 +77,7 @@ export const STATUS = Object.freeze({
   attentionOne: '1 thing needs your attention: {names}.',
   attentionMany: '{count} things need your attention: {names}.',
   attentionMore: '{first} and {count} more need your attention.',
-  // At capture risk, in place of the section's sentence (change 7)
+  // In place of the section's sentence wherever its button opens the Recovery Center (change 7, round 2)
   recoveryShows: 'The Recovery Center shows what went wrong and can save a copy of everything that can still be read.',
   openTrust: 'Open Trust Center',
   openRecovery: 'Open Recovery Center',

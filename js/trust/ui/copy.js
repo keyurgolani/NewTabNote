@@ -6,7 +6,7 @@
  * The house style for a failure is "Failed to X: reason."
  */
 
-import { CAPTURE_CONSEQUENCE, GROUP } from './status-copy.js';
+import { CAPTURE_CONSEQUENCE, GROUP, ROW_LABEL } from './status-copy.js';
 
 /** What a capability is called in "Still works:" and "Not working:" lines */
 export const CAPABILITY = Object.freeze({
@@ -24,7 +24,10 @@ export const CAPABILITY = Object.freeze({
   'side-panel': 'the side panel',
 });
 
-/** Each row, in the user's words: its label, and what it is, shown when nothing else is */
+/**
+ * Each row, in the user's words: its label, and what it is, shown when nothing else is. The labels
+ * the status lines name too are status-copy.js's, so both pages read one list (round 2)
+ */
 export const PROVIDER = Object.freeze({
   capture: { label: 'Saving new notes', about: 'New notes, quick notes, and captured pages.' },
   storage: { label: 'Notes database', about: 'Everything you write, kept in this browser profile on this device.' },
@@ -33,9 +36,9 @@ export const PROVIDER = Object.freeze({
   sync: { label: 'Sync', about: 'Copies of your notes kept on a service you choose.' },
   credentials: { label: 'Saved keys', about: 'API keys and sync passwords NewTabNote keeps for you.' },
   permissions: { label: 'Permissions', about: 'What Chrome lets NewTabNote do, and every place it can connect to.' },
-  'ai-scope-grants': { label: 'AI access to notes', about: 'Which AI features may read which notes.' },
-  'remote-ai': { label: 'Cloud AI', about: 'An AI provider you set up, such as OpenAI or Anthropic.' },
-  'local-inference': { label: 'Local model', about: 'The model semantic search runs on this device.' },
+  'ai-scope-grants': { label: ROW_LABEL['ai-scope-grants'], about: 'Which AI features may read which notes.' },
+  'remote-ai': { label: ROW_LABEL['remote-ai'], about: 'An AI provider you set up, such as OpenAI or Anthropic.' },
+  'local-inference': { label: ROW_LABEL['local-inference'], about: 'The model semantic search runs on this device.' },
   index: { label: 'Search', about: 'What makes your notes searchable.' },
   platform: { label: "NewTabNote's own parts", about: 'Its background worker, built-in features, and block types.' },
   messaging: { label: 'Background worker', about: "Passes saves and captures between NewTabNote's pages." },
