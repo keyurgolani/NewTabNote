@@ -1722,4 +1722,33 @@ describe("the new tab's commands over the port, in the worker (#35 slice 4d)", (
     assert.equal(Object.values(recordsOf(dump, 'canvases')).filter((record) => record.name === 'Imported').length, 1, "the import's note");
     assert.ok(Object.keys(plain(worker.env.chrome.local)).some((key) => key.startsWith('auto_backup_')), 'the automatic backup');
   });
+
+  it("holds a command it received before its port closed until its deadline, behind a turn of over 30 s, ends it unrun there, and commits nothing of it when that turn ends (#35 slice 4d, rule 17)", async () => {
+    // The capture holds the queue for 40 s, past the 10 s deadline of the quick note behind it
+    const worker = await loadBackground({ rewrite: slowCapture(40_000) });
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+    await worker.drain();
+    const page = pagePort('popup');
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('popup-closing');
+    requestOn(page, 'held', { ...QUICK_NOTE, commandId: 'c-held', noteId: 'n-held' });
+    await worker.drain();
+    page.close();
+    await worker.drain();
+    worker.env.clock.tick(11_000);
+    await worker.drain();
+    // The router ended it at its deadline, not at the close, while the capture still held the queue
+    const health = pagePort('popup');
+    await worker.dispatch('runtime.onConnect', health.port);
+    health.hello('popup-health');
+    requestOn(health, 'health', { type: 'system.messagingHealth' });
+    await worker.drain();
+    const answer = health.received.find((frame) => frame.requestId === 'health');
+    const ended = answer && answer.result && answer.result.data.rejections.filter((entry) => entry.code === 'deadline-exceeded');
+    assert.deepEqual(ended && ended.map((entry) => entry.count), [1], JSON.stringify(answer));
+    // Its turn comes once the capture's ends, and its begin() answers false there
+    await pastTheHold(worker);
+    assert.equal(await holdsNote(worker, 'n-held'), false);
+    assert.deepEqual(page.received.filter((frame) => frame.requestId === 'held'), [], 'no answer to the page that went');
+  });
 });

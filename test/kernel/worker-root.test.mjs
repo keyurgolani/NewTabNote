@@ -1480,4 +1480,47 @@ describe("the new tab's commands on the worker, on a kernel of its surface (#35 
     assert.equal(copiesIn(both).length, 1);
     tab.close();
   });
+
+  it("commits no unit of a Replace all import whose turn the queue cut after the kernel's check, on #247's check inside its commit, and commits one whose turn it didn't cut (#35 slice 4d, rule 11)", async () => {
+    const of = newProfile();
+    const local = of.chrome.api.storage.local;
+    // Replace all saves its recovery copy before its unit commits, so a cut there comes between
+    let atCopy = () => {};
+    const settings = {
+      get: (/** @type {any} */ keys) => local.get(keys),
+      remove: (/** @type {any} */ keys) => local.remove(keys),
+      set: (/** @type {Record<string, unknown>} */ items) => {
+        if (Object.keys(items).some(key => key.startsWith('recovery_backup_'))) atCopy();
+        return local.set(items);
+      },
+    };
+    const worker = /** @type {any} */ (createWorkerClient({ ...hostOf(of), settings }));
+    assert.equal(await worker.whenReady(), null);
+    // An import gives the note it adds an id of its own, so each is found by its name
+    /** @param {string} id */
+    const replacing = id => ({
+      type: 'importBackup',
+      commandId: `c-${id}`,
+      mode: 'replace',
+      backup: { version: 1, exportedAt: 1, canvases: [{ id, name: `Imported ${id}` }], elements: [] },
+    });
+    /** @param {string} id */
+    const named = async id => (await recordsOf(of, 'canvases')).filter(note => note.name === `Imported ${id}`);
+    let cut = false;
+    atCopy = () => {
+      cut = true;
+    };
+    const cutOne = await worker.execute(replacing('n-cut'), { surface: 'newtab', live: () => !cut });
+    assert.deepEqual(
+      [cutOne.kind, cutOne.cause, cutOne.code],
+      ['unavailable', 'coordinator', 'turn-exceeded'],
+      JSON.stringify(cutOne),
+    );
+    assert.equal(cut, true, 'cut as its recovery copy was saved');
+    assert.deepEqual(await named('n-cut'), []);
+    atCopy = () => {};
+    const kept = await worker.execute(replacing('n-kept'), { surface: 'newtab', live: () => true });
+    assert.equal(kept.kind, 'committed', JSON.stringify(kept));
+    assert.equal((await named('n-kept')).length, 1);
+  });
 });

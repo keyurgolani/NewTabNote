@@ -329,6 +329,118 @@ describe('the worker\'s router (#13, "Topology")', () => {
     );
   });
 
+  it('lets a command it received before its port closed run at its turn, and drops its answer, while a query from that port ends and a command whose deadline comes first ends unrun (#35 slice 4d, rule 17)', async () => {
+    /** @type {Array<{type: unknown, begin: () => boolean, answer: (value: unknown) => void}>} */
+    const held = [];
+    const coordinator = {
+      /** @param {any} command @param {any} [dispatch] */
+      enqueue: (command, dispatch = {}) =>
+        new Promise(answer => {
+          held.push({ type: command.type, begin: dispatch.begin, answer });
+        }),
+    };
+    /** @type {string[]} */
+    const stopped = [];
+    const handlers = {
+      .../** @type {any} */ (coordination).pageCommandHandlers?.(() => coordinator),
+      // A query the router holds open until its port goes
+      'system.coordinatorHealth': (/** @type {unknown} */ payload, /** @type {any} */ dispatch) => {
+        dispatch.onCancel(() => stopped.push('health'));
+        return new Promise(() => {});
+      },
+    };
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, handlers });
+    });
+    const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    const quick = (/** @type {string} */ id) => ({
+      type: 'createNote',
+      commandId: `c-${id}`,
+      noteId: id,
+      name: 'Quick',
+      blocks: [],
+    });
+    port.postMessage(encode(hello('popup', 's1')));
+    port.postMessage(encode(request('r1', quick('n1'), soon())));
+    port.postMessage(encode(request('r2', { type: 'system.coordinatorHealth' }, soon())));
+    port.postMessage(encode(request('r3', quick('n3'), { deadline: Date.now() + 40 })));
+    await settle();
+    await settle();
+    assert.deepEqual(
+      held.map(entry => entry.type),
+      ['createNote', 'createNote'],
+    );
+    // The page goes before either command's turn
+    port.disconnect();
+    await settle();
+    await settle();
+    assert.deepEqual(stopped, ['health'], 'the query ends with its port');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const [first, late] = held;
+    assert.equal(first.begin(), true, 'the first runs at its turn');
+    assert.equal(late.begin(), false, 'the second, whose deadline came first, ends unrun');
+    first.answer(committed('note-created', ['n1']));
+    await settle();
+    await settle();
+    assert.deepEqual(
+      frames.filter(frame => frame.frame !== 'welcome'),
+      [],
+      'nothing goes to the page that went',
+    );
+  });
+
+  it('answers a command still waiting at its deadline while the coordinator migrates as unavailable, coordinator, migrating, retryable, and one outside a migration deadline-exceeded, as before (#35 slice 4d, rule 18)', async () => {
+    /** @type {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} */
+    let status = { status: 'degraded', reason: 'migrating' };
+    // A queue whose turn never comes
+    const coordinator = { enqueue: () => new Promise(() => {}) };
+    const handlers = /** @type {any} */ (coordination).pageCommandHandlers?.(() => coordinator) ?? {};
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, status: () => status, handlers });
+    });
+    const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    const quick = (/** @type {string} */ id) => ({
+      type: 'createNote',
+      commandId: `c-${id}`,
+      noteId: id,
+      name: 'Quick',
+      blocks: [],
+    });
+    port.postMessage(encode(hello('popup', 's1')));
+    port.postMessage(encode(request('r1', quick('n1'), { deadline: Date.now() + 40 })));
+    await new Promise(resolve => setTimeout(resolve, 120));
+    status = { status: 'ready' };
+    port.postMessage(encode(request('r2', quick('n2'), { deadline: Date.now() + 40 })));
+    await new Promise(resolve => setTimeout(resolve, 120));
+    await settle();
+    const during = frames.find(frame => frame.requestId === 'r1');
+    assert.deepEqual(
+      during && [
+        during.frame,
+        during.result?.kind,
+        during.result?.cause,
+        during.result?.code,
+        during.result?.retryable,
+      ],
+      ['response', 'unavailable', 'coordinator', 'migrating', true],
+      JSON.stringify(during),
+    );
+    const after = frames.find(frame => frame.requestId === 'r2');
+    assert.deepEqual(after && [after.frame, after.code], ['error', 'deadline-exceeded'], JSON.stringify(after));
+  });
+
   it("serves no page what only the worker runs, even with a handler for each (the catalog split's sixth rule)", async () => {
     const workerOnly = [...Object.keys(WORKER_ONLY_COMMANDS), ...Object.keys(WORKER_ONLY_QUERIES)];
     /** @type {string[]} */
