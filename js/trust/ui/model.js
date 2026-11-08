@@ -482,14 +482,28 @@ export function trustSections(report, { now, checking = new Set() }) {
  */
 
 /**
- * The title of the capture-risk problem the summary names as a group's cause, or null
+ * The title of the capture-risk problem the summary names as a group's cause, or, when no group's
+ * cause names one, of the newest open capture-risk problem a row holds that isn't dismissed:
+ * recovery.html's summary leaves out the providers its host doesn't run, the background worker's
+ * among them, so no group there names the worker's problem, while NewTabNote's own parts holds it.
+ * Null with neither.
  * @param {TrustSummary} summary
+ * @param {Row[]} rows
  * @returns {string | null}
  */
-function riskTitle(summary) {
+function riskTitle(summary, rows) {
+  /** @param {{providerId: string, faultCode: string | null}} problem */
+  const titleOf = problem =>
+    problem.faultCode === null
+      ? null
+      : /** @type {Record<string, string>} */ (INCIDENT)[`${problem.providerId}/${problem.faultCode}`] || null;
   const cause = (summary.groups || []).map(group => group.cause).find(item => item && item.severity === 'capture-risk');
-  if (!cause || cause.faultCode === null) return null;
-  return /** @type {Record<string, string>} */ (INCIDENT)[`${cause.providerId}/${cause.faultCode}`] || null;
+  if (cause) return titleOf(cause);
+  const [newest] = rows
+    .flatMap(row => row.open)
+    .filter(incident => incident.severity === 'capture-risk')
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  return newest ? titleOf(newest) : null;
 }
 
 /**
@@ -510,7 +524,7 @@ export function trustHeadline(summary, rows, { now, checking }) {
     const worst = core.find(row => row.id === 'storage' && row.attention) || core.find(row => row.attention);
     // At risk from a problem no core row explains, such as the background worker's: the proof
     // names it, by its title (#20 slice 4c)
-    const named = worst ? null : riskTitle(summary);
+    const named = worst ? null : riskTitle(summary, rows);
     if (named) return { tone: 'failed', title: PAGE.atRisk, proof: `${named}.`, openRecovery: true, attention };
     const shown = worst || core[0];
     const checkedAt = shown && shown.time !== null ? ` Checked ${whenText(shown.time, now)}.` : '';
