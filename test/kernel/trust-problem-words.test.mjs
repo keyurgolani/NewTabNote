@@ -20,9 +20,9 @@ import { narrowStatus } from '../../js/trust/core/status-message.js';
 import { leadingOf, summarize } from '../../js/trust/core/summary.js';
 import { OPEN_FAILED_KEY, WRITE_FAILED_KEY } from '../../js/trust/core/trust-records.js';
 import { HEALTH_GROUPS } from '../../js/trust/core/vocabulary.js';
-import { INCIDENT, INCIDENT_TEXT, PAGE, RESOLVED } from '../../js/trust/ui/copy.js';
+import { CONSEQUENCE, INCIDENT, INCIDENT_TEXT, PAGE, RESOLVED } from '../../js/trust/ui/copy.js';
 import { PLATFORM, attentionText, problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
-import { statusOf } from '../../js/trust/ui/status.js';
+import { causeSentence, statusOf } from '../../js/trust/ui/status.js';
 import { CAPTURE_CONSEQUENCE, GROUP } from '../../js/trust/ui/status-copy.js';
 
 const AT = new Date(2026, 10, 7, 18, 42).getTime();
@@ -857,150 +857,393 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual([...reached].sort(), ['capture', 'index', 'platform', 'recovery-readiness', 'storage']);
   });
 
-  it("names every problem each row is counted for, in its line or a line of its own, and no line of its own repeats what its line says, over each state a check on recovery.html can come to: passing or answering each finding it looks for, under every problem its row can hold besides, and Notes database's check at can't confirm, whose finding is the health records themselves (the code review's R7-1)", () => {
-    /** @type {Map<string, Map<string, string>>} The faults each provider's events raise, by severity */
+  it("names every problem each row is counted for, in its line or a line of its own, and no line of its own repeats what its line says, over each state a check on recovery.html can come to: each answer it gives, as it gives it, under every problem its row can hold besides, and under each older finding of its own the answer doesn't look at, which stays open beside it, as an update waiting for free space does beside a probe that fails on the space (the code review's R7-1 and R8-1)", () => {
+    /** @type {Map<string, Map<string, Record<string, any>>>} The faults each provider's events raise, as they raise them */
     const raisedBy = new Map();
     for (const code of Object.values(EVENT_CODES)) {
       if (!('incident' in code) || !code.incident) continue;
-      const { providerId, faultCode, severity } = code.incident;
-      raisedBy.set(providerId, (raisedBy.get(providerId) || new Map()).set(faultCode, severity));
+      const incident = /** @type {Record<string, any>} */ (code.incident);
+      raisedBy.set(
+        incident.providerId,
+        (raisedBy.get(incident.providerId) || new Map()).set(incident.faultCode, incident),
+      );
     }
     let n = 0;
-    /** A problem as its producer raises it, each with an id of its own */
-    const problem = (/** @type {Record<string, unknown>} */ fields) => {
+    /** A problem as its producer raises it, each with an id of its own, keyed as the records key it */
+    const problem = (/** @type {Record<string, any>} */ fields) => {
       n += 1;
       const tail = n.toString(16).padStart(4, '0');
+      const subjectId = fields.subjectId === undefined ? null : fields.subjectId;
       return /** @type {any} */ ({
         ...START_FAILED,
         id: `00000000-0000-4000-8000-00000000${tail}`,
         ref: tail,
         affected: [],
         preserved: [],
-        subjectId: null,
+        evidence: {},
         ...fields,
+        subjectId,
+        key: `${fields.providerId}/${fields.faultCode}/${subjectId || '-'}`,
       });
     };
-    const ofFault = (
-      /** @type {string} */ providerId,
-      /** @type {string} */ faultCode,
-      /** @type {string} */ severity,
-    ) => problem({ key: `${providerId}/${faultCode}`, providerId, faultCode, severity });
     // The health records' own two, which Notes database holds and no check looks for
     const records = () => [
-      problem({
-        key: OPEN_FAILED_KEY,
-        providerId: 'storage',
-        faultCode: 'open-failed',
-        subjectId: 'NewTabNoteTrust',
-        severity: 'data-risk',
-      }),
-      problem({ key: WRITE_FAILED_KEY, providerId: 'storage', faultCode: 'write-failed', severity: 'data-risk' }),
+      problem({ providerId: 'storage', faultCode: 'open-failed', subjectId: 'NewTabNoteTrust', severity: 'data-risk' }),
+      problem({ providerId: 'storage', faultCode: 'write-failed', severity: 'data-risk' }),
     ];
-    const STATUS_OF = /** @type {Record<string, string>} */ ({
-      'capture-risk': 'failed',
-      'data-risk': 'action-required',
-      degraded: 'degraded',
+    assert.deepEqual(
+      records().map(item => item.key),
+      [OPEN_FAILED_KEY, WRITE_FAILED_KEY],
+    );
+    const CANVAS = 'CanvasTabDB';
+    const PROBED = ['quota', 'version-too-new', 'probe-failed'];
+    const MIGRATIONS = ['migration-pending', 'migration-failed', 'migration-blocked'];
+    // What each line's words say, as the titles of the problems they state (copy.js)
+    const TEST_SAVE = ['A test save failed'];
+    const UNOPENED = ["Your notes database won't open", ...TEST_SAVE];
+    const ACCESS = ['Site access is limited', 'Chrome grants NewTabNote more than it asks for'];
+    const RESYNC = ['Search stopped updating', 'Search is behind'];
+    const UPDATE = /** @type {Record<string, string[]>} */ ({
+      'migration-pending': ['An update is waiting to finish'],
+      'migration-failed': ["An update couldn't change how your notes are stored"],
+      'migration-blocked': ['An update is waiting for free space'],
     });
     /**
-     * @typedef {{why: string, providerId: string, receipt: Record<string, unknown>, incidents: any[],
-     *   finding: any, aboutRecords: boolean}} State
+     * @typedef {{providerId: string, why: string, receipt: Record<string, unknown>,
+     *   found: Array<Record<string, any>>, looked: string[], says: string[]}} Answer
      */
-    /** @type {State[]} */
-    const states = [];
-    for (const provider of PROVIDERS) {
-      const place = PROVIDER_ROWS.find(row => row.id === provider.id);
-      if (!place || !place.hosts.includes('recovery')) continue;
-      const observes = /** @type {readonly string[]} */ (provider.observes);
-      // What the row can hold besides what its check looks for: its events' faults, the worker's
-      // where no check covers it, and on Notes database the records' own two
-      const besides = () => [
-        ...[...(raisedBy.get(provider.id) || new Map())]
-          .filter(([fault]) => !observes.includes(fault))
-          .map(([fault, severity]) => ofFault(provider.id, fault, severity)),
-        ...(provider.id === 'capture' || PLATFORM.includes(provider.id) ? [{ ...START_FAILED }] : []),
-        ...(provider.id === 'storage' ? records() : []),
-      ];
-      const passing = { status: 'verified' };
-      // A passing check, which an interim one never is, under each of them alone and all at once
-      if (!Object.prototype.hasOwnProperty.call(INTERIM, provider.id)) {
-        const all = besides();
-        for (const one of all) {
-          states.push({
-            why: `${provider.id} passing, under ${one.key}`,
-            providerId: provider.id,
-            receipt: passing,
-            incidents: [{ ...one }],
-            finding: null,
-            aboutRecords: false,
-          });
-        }
-        if (all.length > 1) {
-          states.push({
-            why: `${provider.id} passing, under all of them`,
-            providerId: provider.id,
-            receipt: passing,
-            incidents: besides(),
-            finding: null,
-            aboutRecords: false,
-          });
-        }
-      }
-      // The check answering each finding it looks for, its own problem, under all the rest
-      for (const fault of observes) {
-        const finding = ofFault(provider.id, fault, 'data-risk');
-        const receipt = { status: STATUS_OF[finding.severity], consequenceKey: `${place.group}.${fault}` };
-        states.push({
-          why: `${provider.id} finding ${fault}`,
-          providerId: provider.id,
-          receipt,
-          incidents: [finding],
-          finding,
-          aboutRecords: false,
+    /**
+     * Each answer a check on recovery.html gives, as it gives it (providers/probe.js,
+     * recovery-readiness.js, legacy.js, permissions.js, index-lag.js and platform.js): its
+     * receipt, the faults it reports, the faults it looked at, which it settles, and what its
+     * line's words say. A fault it didn't look at stays as it was, so an older finding of the
+     * check's own stays open beside it, as beside a failing probe, which looks at nothing
+     * @type {Answer[]}
+     */
+    const answers = [];
+    /** A probe's failing answer, which looks at nothing */
+    const fails = (
+      /** @type {string} */ providerId,
+      /** @type {string} */ faultCode,
+      /** @type {string} */ status,
+      /** @type {string} */ consequenceKey,
+      /** @type {string[]} */ says,
+    ) =>
+      answers.push({
+        providerId,
+        why: `${providerId} failing on ${faultCode}`,
+        receipt: {
+          status,
+          capture: 'at-risk',
+          consequenceKey,
+          evidence: { ...(faultCode === 'probe-failed' ? {} : { errorCode: faultCode }), subjectId: CANVAS },
+        },
+        found: [
+          {
+            faultCode,
+            subjectId: CANVAS,
+            severity: 'capture-risk',
+            affected: providerId === 'capture' ? ['capture'] : ['capture', 'editing'],
+          },
+        ],
+        looked: [],
+        says,
+      });
+    fails('capture', 'quota', 'action-required', 'storage.capture-at-risk', TEST_SAVE);
+    fails('capture', 'version-too-new', 'action-required', 'storage.capture-at-risk', TEST_SAVE);
+    fails('capture', 'probe-failed', 'failed', 'storage.capture-at-risk', TEST_SAVE);
+    fails('storage', 'quota', 'action-required', 'storage.quota', ['This device is out of space for NewTabNote']);
+    fails('storage', 'version-too-new', 'action-required', 'storage.version-too-new', [
+      'Your notes database is from a newer NewTabNote',
+    ]);
+    fails('storage', 'probe-failed', 'failed', 'storage.unavailable', UNOPENED);
+    fails('storage', 'open-failed', 'failed', 'storage.unavailable', UNOPENED);
+    // An update below the latest version: after a probe that committed, which looked at every
+    // fault, or one that couldn't open the database at its version, which looked at the update's
+    // alone. A blocked one carries why, so it reads as the wait for free space it is (R8-3)
+    for (const faultCode of MIGRATIONS) {
+      for (const committed of [true, false]) {
+        answers.push({
+          providerId: 'storage',
+          why: `storage finding ${faultCode}${committed ? '' : ', its probe below the latest version'}`,
+          receipt: {
+            status: 'degraded',
+            capture: committed ? 'safe' : undefined,
+            consequenceKey: `storage.${faultCode}`,
+            evidence: { subjectId: CANVAS, ...(faultCode === 'migration-blocked' ? { errorCode: 'space-short' } : {}) },
+          },
+          found: [{ faultCode, subjectId: CANVAS, severity: 'degraded', preserved: ['capture', 'editing', 'reading'] }],
+          looked: committed ? [...PROBED, 'open-failed', ...MIGRATIONS] : MIGRATIONS,
+          says: UPDATE[faultCode],
         });
-        const all = besides();
-        if (all.length > 0) {
-          states.push({
-            why: `${provider.id} finding ${fault}, under all the rest`,
-            providerId: provider.id,
-            receipt,
-            incidents: [finding, ...all],
-            finding,
-            aboutRecords: false,
-          });
-        }
       }
     }
-    // At can't confirm: Notes database's check doesn't verify, its finding the records themselves,
-    // under their own two. A check that answers settles every fault it looks for, so none of
-    // those stays open beside its finding, and nothing else of Notes database's can
-    const unavailable = {
-      status: 'degraded',
-      capture: 'safe',
-      evidence: { subjectId: 'NewTabNoteTrust' },
-      consequenceKey: 'storage.trust-records-unavailable',
-      preserved: ['capture', 'editing', 'reading'],
-    };
-    for (const incidents of [records().slice(0, 1), records()]) {
-      states.push({
-        why: `storage at can't confirm, under ${incidents.map(item => item.key).join(', ')}`,
+    // At can't confirm: the probe committed and the health records won't take writes, its finding
+    // the records themselves, with the update's state read or not
+    for (const known of [true, false]) {
+      answers.push({
         providerId: 'storage',
-        receipt: unavailable,
-        incidents,
-        finding: null,
-        aboutRecords: true,
+        why: `storage at can't confirm${known ? '' : ", the update's state unread"}`,
+        receipt: {
+          status: 'degraded',
+          capture: 'safe',
+          consequenceKey: 'storage.trust-records-unavailable',
+          evidence: { subjectId: 'NewTabNoteTrust' },
+          preserved: ['capture', 'editing', 'reading'],
+        },
+        found: [],
+        looked: [...PROBED, 'open-failed', ...(known ? MIGRATIONS : [])],
+        says: ["NewTabNote can't keep its health records", "Some health records weren't saved"],
       });
+    }
+    answers.push(
+      {
+        providerId: 'recovery-readiness',
+        why: 'recovery-readiness finding point-unverified',
+        receipt: {
+          status: 'degraded',
+          consequenceKey: 'recovery.point-unverified',
+          evidence: { count: 1, attempts: 2 },
+        },
+        found: [
+          {
+            faultCode: 'point-unverified',
+            subjectId: 'NewTabNoteRecovery',
+            severity: 'data-risk',
+            affected: ['restore'],
+          },
+        ],
+        looked: ['point-unverified'],
+        says: ['A recovery point failed its check'],
+      },
+      {
+        providerId: 'credentials',
+        why: 'credentials finding legacy-secret',
+        receipt: { status: 'action-required', consequenceKey: 'vault.legacy-secret', evidence: { count: 1 } },
+        found: [{ faultCode: 'legacy-secret', subjectId: 'setting_llmApiKey', severity: 'data-risk' }],
+        looked: ['legacy-secret'],
+        says: ['A key is saved as plain text'],
+      },
+      {
+        providerId: 'permissions',
+        why: 'permissions finding grant-missing, for an API',
+        receipt: {
+          status: 'action-required',
+          consequenceKey: 'permissions.changed',
+          evidence: { count: 1, records: 1, pending: 1 },
+        },
+        found: [{ faultCode: 'grant-missing', severity: 'degraded' }],
+        looked: ['grant-missing', 'permission-changed'],
+        says: ACCESS,
+      },
+      {
+        providerId: 'permissions',
+        why: 'permissions finding grant-missing, for sites alone',
+        receipt: {
+          status: 'degraded',
+          consequenceKey: 'permissions.site-access-limited',
+          evidence: { count: 1, records: 1, pending: 1 },
+        },
+        found: [{ faultCode: 'grant-missing', severity: 'degraded', affected: ['ai'] }],
+        looked: ['grant-missing', 'permission-changed'],
+        says: ['Site access is limited'],
+      },
+      {
+        providerId: 'permissions',
+        why: 'permissions finding permission-changed',
+        receipt: {
+          status: 'action-required',
+          consequenceKey: 'permissions.changed',
+          evidence: { count: 1, records: 1, pending: 0 },
+        },
+        found: [{ faultCode: 'permission-changed', severity: 'degraded' }],
+        looked: ['grant-missing', 'permission-changed'],
+        says: ACCESS,
+      },
+      {
+        providerId: 'local-inference',
+        why: 'local-inference finding load-failed',
+        receipt: {
+          status: 'action-required',
+          consequenceKey: 'inference.load-failed',
+          evidence: { since: AT - 60_000 },
+        },
+        found: [{ faultCode: 'load-failed', severity: 'degraded', affected: ['ai', 'search'] }],
+        looked: ['load-failed'],
+        says: ["The local model didn't load"],
+      },
+      {
+        providerId: 'index',
+        why: 'index finding lagging',
+        receipt: { status: 'degraded', consequenceKey: 'indexing.lagging', evidence: { records: 1, lag: 9, count: 1 } },
+        found: [{ faultCode: 'lagging', severity: 'degraded', affected: ['search'] }],
+        looked: ['lagging', 'stalled'],
+        says: ['Search is behind'],
+      },
+      {
+        providerId: 'index',
+        why: 'index finding stalled',
+        receipt: {
+          status: 'degraded',
+          consequenceKey: 'indexing.resync-required',
+          evidence: { records: 1, lag: 0, count: 1 },
+        },
+        found: [{ faultCode: 'stalled', severity: 'degraded', affected: ['search'] }],
+        looked: ['lagging', 'stalled'],
+        says: RESYNC,
+      },
+      {
+        providerId: 'index',
+        why: 'index finding stalled and lagging',
+        receipt: {
+          status: 'degraded',
+          consequenceKey: 'indexing.resync-required',
+          evidence: { records: 2, lag: 9, count: 2 },
+        },
+        found: [
+          { faultCode: 'stalled', severity: 'degraded', affected: ['search'] },
+          { faultCode: 'lagging', severity: 'degraded', affected: ['search'] },
+        ],
+        looked: ['lagging', 'stalled'],
+        says: RESYNC,
+      },
+      {
+        providerId: 'messaging',
+        why: 'messaging finding unreachable',
+        receipt: { status: 'degraded', consequenceKey: 'platform.coordinator-unreachable', evidence: {} },
+        found: [{ faultCode: 'unreachable', severity: 'degraded' }],
+        looked: ['unreachable'],
+        says: ["The background worker didn't answer"],
+      },
+      {
+        providerId: 'contributions',
+        why: 'contributions finding contribution-unavailable',
+        receipt: {
+          status: 'degraded',
+          consequenceKey: 'platform.contribution-unavailable',
+          evidence: { records: 4, count: 1 },
+        },
+        found: [{ faultCode: 'contribution-unavailable', severity: 'degraded' }],
+        looked: ['contribution-unavailable'],
+        says: ["Part of NewTabNote didn't load"],
+      },
+      {
+        providerId: 'block-types',
+        why: 'block-types finding contribution-unavailable',
+        receipt: {
+          status: 'degraded',
+          consequenceKey: 'platform.contribution-unavailable',
+          evidence: { records: 4, count: 1 },
+        },
+        found: [{ faultCode: 'contribution-unavailable', severity: 'degraded' }],
+        looked: ['contribution-unavailable'],
+        says: ["A block type didn't load"],
+      },
+    );
+    /** The providers whose checks run on recovery.html */
+    const here = PROVIDERS.filter(provider => {
+      const place = PROVIDER_ROWS.find(row => row.id === provider.id);
+      return place !== undefined && place.hosts.includes('recovery');
+    });
+    /** @param {string} providerId */
+    const observesOf = providerId =>
+      /** @type {readonly string[]} */ (
+        /** @type {any} */ (PROVIDERS.find(provider => provider.id === providerId)).observes
+      );
+    // A passing check, which an interim one never is, looks at every fault it observes; but
+    // storage's looks at the update's only where it read the update's state
+    for (const provider of here) {
+      if (Object.prototype.hasOwnProperty.call(INTERIM, provider.id)) continue;
+      answers.push({
+        providerId: provider.id,
+        why: `${provider.id} passing`,
+        receipt: { status: 'verified' },
+        found: [],
+        looked: [...observesOf(provider.id)],
+        says: [],
+      });
+    }
+    answers.push({
+      providerId: 'storage',
+      why: "storage passing, the update's state unread",
+      receipt: { status: 'verified' },
+      found: [],
+      looked: [...PROBED, 'open-failed'],
+      says: [],
+    });
+    // Every fault a check here looks for, some answer of its reports
+    for (const provider of here) {
+      for (const fault of observesOf(provider.id)) {
+        assert.ok(
+          answers.some(
+            answer => answer.providerId === provider.id && answer.found.some(item => item.faultCode === fault),
+          ),
+          `no answer of ${provider.id}'s reports ${fault}`,
+        );
+      }
+    }
+    /**
+     * The faults `providerId`'s check reports, as its answers report them
+     * @param {string} providerId
+     */
+    const reported = providerId => {
+      /** @type {Map<string, Record<string, any>>} */
+      const byFault = new Map();
+      for (const answer of answers.filter(item => item.providerId === providerId)) {
+        for (const fault of answer.found) if (!byFault.has(fault.faultCode)) byFault.set(fault.faultCode, fault);
+      }
+      return [...byFault.values()];
+    };
+    /**
+     * What the row can hold besides what its check looks for: its events' faults, the worker's
+     * where no check covers it, and on Notes database the records' own two
+     * @param {string} providerId
+     */
+    const besides = providerId => [
+      ...[...(raisedBy.get(providerId) || new Map()).values()]
+        .filter(incident => !observesOf(providerId).includes(incident.faultCode))
+        .map(incident => problem({ ...incident })),
+      ...(providerId === 'capture' || PLATFORM.includes(providerId) ? [{ ...START_FAILED }] : []),
+      ...(providerId === 'storage' ? records() : []),
+    ];
+    /** @type {Array<{why: string, answer: Answer, incidents: any[]}>} */
+    const states = [];
+    for (const answer of answers) {
+      const own = () => answer.found.map(fault => problem({ providerId: answer.providerId, ...fault }));
+      const add = (/** @type {string} */ why, /** @type {any[]} */ more) =>
+        states.push({ why: `${answer.why}${why}`, answer, incidents: [...own(), ...more] });
+      add('', []);
+      const all = besides(answer.providerId);
+      for (const one of all) add(`, under ${one.key}`, [one]);
+      if (all.length > 1) add(', under all it can hold besides', besides(answer.providerId));
+      // An older finding of the check's own that this answer didn't look at, which it leaves open
+      // (the code review's R8-1), each alone, and all at once under everything else
+      const older = reported(answer.providerId).filter(
+        fault =>
+          !answer.looked.includes(fault.faultCode) && !answer.found.some(item => item.faultCode === fault.faultCode),
+      );
+      /** @param {Record<string, any>} fault */
+      const before = fault =>
+        problem({ providerId: answer.providerId, ...fault, firstSeenAt: AT - 86_400_000, lastSeenAt: AT - 86_400_000 });
+      for (const fault of older) add(`, under its older finding ${fault.faultCode}`, [before(fault)]);
+      if (older.length > 0)
+        add(', under every older finding it leaves and all it can hold besides', [
+          ...older.map(before),
+          ...besides(answer.providerId),
+        ]);
     }
     for (const state of states) {
-      const rowId = PLATFORM.includes(state.providerId) ? 'platform' : state.providerId;
-      const group = /** @type {any} */ (PROVIDER_ROWS.find(row => row.id === state.providerId)).group;
-      const base = entry(state.providerId, group);
+      const { answer } = state;
+      const rowId = PLATFORM.includes(answer.providerId) ? 'platform' : answer.providerId;
+      const group = /** @type {any} */ (PROVIDER_ROWS.find(row => row.id === answer.providerId)).group;
+      const base = entry(answer.providerId, group);
       const own = /** @type {any} */ ({
         ...base,
-        status: state.receipt.status,
-        receipt: { ...base.receipt, ...state.receipt },
+        status: answer.receipt.status,
+        receipt: { ...base.receipt, ...answer.receipt },
       });
       const providers = [
-        ...REPORT.providers.filter((/** @type {any} */ item) => item.providerId !== state.providerId),
+        ...REPORT.providers.filter((/** @type {any} */ item) => item.providerId !== answer.providerId),
         own,
       ];
       const report = /** @type {any} */ ({ ...REPORT, providers, incidents: state.incidents });
@@ -1010,19 +1253,18 @@ describe("recovery.html's words for a stopped purge and the background worker's 
           .find(item => item.id === rowId)
       );
       const providerOf = (/** @type {string} */ id) => providers.find(item => item.providerId === id) || null;
-      // What the row's line says: the problem it names, or what the row's own check found, and at
-      // can't confirm the records' own two, which the check's finding is about
+      const problems = problemsOf(row.counted, new Map(), providerOf);
+      // What the row's line says: the problem it names, or what its words state of its own
+      // check's problems, read from the words themselves
+      const named = problems.some(item => row.text === `${item.title}.`);
       /** @param {any} item */
       const said = item =>
         row.text === `${item.title}.` ||
-        (state.finding !== null &&
-          item.incidents.every((/** @type {any} */ incident) => incident.id === state.finding.id)) ||
-        (state.aboutRecords &&
-          item.incidents.every(
-            (/** @type {any} */ incident) => incident.key === OPEN_FAILED_KEY || incident.key === WRITE_FAILED_KEY,
-          ));
+        (!named &&
+          answer.says.includes(item.title) &&
+          item.incidents.every((/** @type {any} */ incident) => incident.providerId === answer.providerId));
       const added = row.problemLines.map((/** @type {any} */ line) => line.what.toLowerCase());
-      for (const item of problemsOf(row.counted, new Map(), providerOf)) {
+      for (const item of problems) {
         const lined = added.includes(item.title.toLowerCase());
         assert.ok(
           said(item) || lined,
@@ -1035,11 +1277,151 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       }
       assert.equal(
         added.length,
-        problemsOf(row.counted, new Map(), providerOf).filter(item => !said(item)).length,
+        problems.filter(item => !said(item)).length,
         `${state.why}: ${row.label}'s own lines name only what it's counted for`,
       );
     }
-    assert.ok(states.length > 40, `${states.length} states`);
+    assert.ok(states.length > 150, `${states.length} states`);
+  });
+
+  it("gives every line recovery.html's rows can show its entry in the table of the faults it states, each a fault a check, an event or the health records raise, and states each capture-risk cause by the words Settings' line gives it (the code review's R8-1)", async () => {
+    const { STATED } = /** @type {any} */ (await import('../../js/trust/ui/model.js'));
+    assert.ok(STATED, 'model.js has no table of the faults each line states');
+    const stated = /** @type {Record<string, readonly string[]>} */ (STATED);
+    // The keys a line's words are under: each consequence's, by provider/key or key
+    const shown = [...new Set(Object.keys(CONSEQUENCE).map(key => key.slice(key.indexOf('/') + 1)))].sort();
+    assert.deepEqual(Object.keys(stated).sort(), shown);
+    // Each fault it names is one something raises: a check's, an event's, or the records' own
+    // write-failed, which they raise themselves (trust-records.js)
+    const raised = new Set([
+      ...PROVIDERS.flatMap(provider =>
+        /** @type {readonly string[]} */ (provider.observes).map(fault => `${provider.id}/${fault}`),
+      ),
+      ...Object.values(EVENT_CODES).flatMap(code =>
+        'incident' in code && code.incident ? [`${code.incident.providerId}/${code.incident.faultCode}`] : [],
+      ),
+      'storage/write-failed',
+    ]);
+    for (const [key, faults] of Object.entries(stated)) {
+      for (const fault of faults) {
+        const [providerId, faultCode] = fault.split('/');
+        assert.ok(raised.has(`${providerId}/${faultCode}`), `${key} states ${fault}, which nothing raises`);
+      }
+    }
+    // A probe's capture-risk cause reads on its row as Settings' line reads it (status.js)
+    const consequence = /** @type {Record<string, string>} */ (CAPTURE_CONSEQUENCE);
+    for (const provider of PROVIDERS.filter(item => item.id === 'capture' || item.id === 'storage')) {
+      for (const faultCode of /** @type {readonly string[]} */ (provider.observes).filter(
+        fault => !fault.startsWith('migration-'),
+      )) {
+        const sentence = causeSentence(/** @type {any} */ ({ from: 'incident', providerId: provider.id, faultCode }));
+        const key = Object.keys(consequence).find(item => consequence[item] === sentence);
+        assert.ok(
+          key !== undefined &&
+            stated[key].some(
+              fault => fault === `${provider.id}/${faultCode}` || fault === `${provider.id}/${faultCode}/CanvasTabDB`,
+            ),
+          `${provider.id}/${faultCode} reads as ${key}, which doesn't state it`,
+        );
+      }
+    }
+  });
+
+  it("names on Notes database's lines an update waiting for free space beside the device out of space, which the space's line doesn't state though its check looks for both: a probe that fails looks at nothing, so its older finding stays open (the code review's R8-1)", () => {
+    /** A provider's entry whose probe found the device out of space, as each probe answers it */
+    const full = (
+      /** @type {string} */ providerId,
+      /** @type {string} */ operation,
+      /** @type {string} */ consequenceKey,
+    ) =>
+      entry(providerId, 'storage', {
+        status: 'action-required',
+        receipt: {
+          ...entry(providerId, 'storage').receipt,
+          operation,
+          status: 'action-required',
+          capture: 'at-risk',
+          consequenceKey,
+          evidence: { errorCode: 'quota', subjectId: 'CanvasTabDB' },
+          preserved: ['reading'],
+        },
+        stillWorks: ['reading'],
+      });
+    /** A problem as its producer raises it */
+    const raised = (/** @type {string} */ n, /** @type {Record<string, unknown>} */ fields) =>
+      /** @type {any} */ ({
+        ...START_FAILED,
+        id: `00000000-0000-4000-8000-0000000000${n}`,
+        ref: `0000${n}`,
+        affected: [],
+        preserved: [],
+        ...fields,
+      });
+    const DAY_BEFORE = AT - 86_400_000;
+    const incidents = [
+      // An earlier check found the update blocked, short of space for its copy
+      raised('f1', {
+        key: 'storage/migration-blocked/CanvasTabDB',
+        providerId: 'storage',
+        faultCode: 'migration-blocked',
+        subjectId: 'CanvasTabDB',
+        severity: 'degraded',
+        preserved: ['capture', 'editing', 'reading'],
+        firstSeenAt: DAY_BEFORE,
+        lastSeenAt: DAY_BEFORE,
+      }),
+      // Then the device filled up, and both probes failed on the space
+      raised('f2', {
+        key: 'storage/quota/CanvasTabDB',
+        providerId: 'storage',
+        faultCode: 'quota',
+        subjectId: 'CanvasTabDB',
+        severity: 'capture-risk',
+        affected: ['capture', 'editing'],
+      }),
+      raised('f3', {
+        key: 'capture/quota/CanvasTabDB',
+        providerId: 'capture',
+        faultCode: 'quota',
+        subjectId: 'CanvasTabDB',
+        severity: 'capture-risk',
+        affected: ['capture'],
+      }),
+    ];
+    const providers = [
+      full('capture', 'capture.probe-commit', 'storage.capture-at-risk'),
+      full('storage', 'storage.probe-readwrite', 'storage.quota'),
+      entry('messaging', 'platform'),
+    ];
+    const rows = trustSections(/** @type {any} */ ({ ...REPORT, providers, incidents }), { now: AT }).flatMap(
+      section => section.rows,
+    );
+    const storage = /** @type {any} */ (rows.find(row => row.id === 'storage'));
+    // With the space's receipt in its place, the update reads as the wait for free space, which
+    // needs the user, and the space's line states the space alone
+    assert.deepEqual(
+      [storage.text, storage.counted.map((/** @type {any} */ incident) => incident.faultCode), storage.problemLines],
+      [
+        CAPTURE_CONSEQUENCE['storage.quota'],
+        ['migration-blocked', 'quota'],
+        [{ status: 'Partly working', what: 'an update is waiting for free space' }],
+      ],
+    );
+    // So the row the headline counts as other for it names it
+    const summary = summarize({
+      providers: rowsOn('recovery'),
+      receipts: providers.map(provider => provider.receipt),
+      incidents,
+      copyRead: true,
+      recordsRead: true,
+      recordsState: 'open',
+      now: AT,
+    });
+    const head = trustHeadline(summary, rows, { now: AT, checking: false });
+    assert.equal(
+      attentionText(head.attention, head.openRecovery),
+      '1 other thing needs your attention: Notes database.',
+    );
   });
 
   it("names on NewTabNote's own parts' visible lines each problem it's counted for that its line doesn't, under the problem's status word, as Not working names what stopped: the change the journal kept, under the worker's failed start (the Design gate's review of round 4's shots, signed as round 5)", () => {
@@ -1176,7 +1558,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     );
   });
 
-  it("names on a row's lines each problem its own check doesn't look for, though that check found something and speaks the row's line: out of space, Notes database's probe reports the space, and the health records' own two still get their lines, and Saving new notes' probe the same beside a page capture that wasn't saved (the code review's R6-1)", () => {
+  it("names on a row's lines each problem its line doesn't state, though its own check found something and speaks the line: out of space, Notes database's line states the space, so the health records' own two still get their lines, and Saving new notes' line states a test save that failed, so the space and a page capture that wasn't saved get theirs (the code review's R6-1 and R8-1)", () => {
     /** A provider's entry whose probe found the device out of space, as each probe answers it */
     const full = (
       /** @type {string} */ providerId,
@@ -1258,8 +1640,8 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       { now: AT },
     ).flatMap(section => section.rows);
     const row = (/** @type {string} */ id) => /** @type {any} */ (rows.find(item => item.id === id));
-    // Each row's line is its probe's finding, which speaks for the space the probe looks for:
-    // the test save that failed, and the device out of space
+    // Each row's line is its probe's finding, in the words Settings' line gives it: the test save
+    // that failed, which states a failed test save and not the space, and the device out of space
     const consequence = /** @type {Record<string, string>} */ (CAPTURE_CONSEQUENCE);
     assert.deepEqual(
       [row('capture').text, row('storage').text],
@@ -1269,7 +1651,10 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       { status: 'Needs action', what: "NewTabNote can't keep its health records" },
       { status: 'Needs action', what: "some health records weren't saved" },
     ]);
-    assert.deepEqual(row('capture').problemLines, [{ status: 'Not working', what: "a page capture wasn't saved" }]);
+    assert.deepEqual(row('capture').problemLines, [
+      { status: 'Not working', what: 'this device is out of space for NewTabNote' },
+      { status: 'Not working', what: "a page capture wasn't saved" },
+    ]);
   });
 
   it("leaves out of the line under a problem that leads a row the user needs only by its check's status, as the header's badge counts no such row, and keeps it under a headline no problem leads: Saved keys, its key dismissed while its check still asks (round 4b)", () => {
