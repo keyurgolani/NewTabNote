@@ -152,7 +152,12 @@ describe("the worker's status read (#20 slice 4c)", () => {
     const { narrowStatus } = await import('../../js/trust/core/status-message.js');
     const { clock, store, settings, trust } = await seeded();
     const { seen, store: makeStore, build } = watchedRecords(store, settings, clock);
-    const read = workerStatusRead({ store: makeStore, records: /** @type {any} */ (build), clock, extensionId: () => EXT });
+    const read = workerStatusRead({
+      store: makeStore,
+      records: /** @type {any} */ (build),
+      clock,
+      extensionId: () => EXT,
+    });
     const summary = /** @type {any} */ (await trust.summary());
     assert.equal(summary.kind, 'ready');
     const expected = narrowStatus(summary.data);
@@ -177,10 +182,17 @@ describe("the worker's status read (#20 slice 4c)", () => {
     const { statusFrom } = await import('../../js/trust/core/status-message.js');
     const { clock, store, settings } = await seeded();
     const { store: makeStore, build } = watchedRecords(store, settings, clock);
-    const read = workerStatusRead({ store: makeStore, records: /** @type {any} */ (build), clock, extensionId: () => EXT });
+    const read = workerStatusRead({
+      store: makeStore,
+      records: /** @type {any} */ (build),
+      clock,
+      extensionId: () => EXT,
+    });
     const sent = JSON.parse(JSON.stringify(await read(READ, page('newtab.html'))));
     assert.deepEqual(
-      sent.groups.filter((/** @type {any} */ group) => group.cause !== null).map((/** @type {any} */ group) => group.group),
+      sent.groups
+        .filter((/** @type {any} */ group) => group.cause !== null)
+        .map((/** @type {any} */ group) => group.group),
       ['storage', 'platform'],
       'with causes in it',
     );
@@ -205,7 +217,12 @@ describe("the worker's status read (#20 slice 4c)", () => {
       close: () => store.close(),
     };
     const { seen, store: makeStore, build } = watchedRecords(slow, settings, clock);
-    const read = workerStatusRead({ store: makeStore, records: /** @type {any} */ (build), clock, extensionId: () => EXT });
+    const read = workerStatusRead({
+      store: makeStore,
+      records: /** @type {any} */ (build),
+      clock,
+      extensionId: () => EXT,
+    });
     const expected = narrowStatus(/** @type {any} */ (await trust.summary()).data);
     // Two tabs opened at a cold start, or a tab and Popup: neither waits for the other
     const asks = [read(READ, page('newtab.html')), read(READ, page('popup.html'))];
@@ -233,7 +250,12 @@ describe("the worker's status read (#20 slice 4c)", () => {
       close: () => store.close(),
     };
     const { store: makeStore, build } = watchedRecords(flaky, settings, clock);
-    const read = workerStatusRead({ store: makeStore, records: /** @type {any} */ (build), clock, extensionId: () => EXT });
+    const read = workerStatusRead({
+      store: makeStore,
+      records: /** @type {any} */ (build),
+      clock,
+      extensionId: () => EXT,
+    });
     const first = /** @type {any} */ (await read(READ, page('newtab.html')));
     assert.deepEqual(
       [first.capture, first.route, first.records],
@@ -252,7 +274,12 @@ describe("the worker's status read (#20 slice 4c)", () => {
     const { workerStatusRead } = await import('../../js/kernel/composition/trust-status-read.js');
     const { clock, store, settings } = await seeded();
     const { seen, store: makeStore, build } = watchedRecords(store, settings, clock);
-    const read = workerStatusRead({ store: makeStore, records: /** @type {any} */ (build), clock, extensionId: () => EXT });
+    const read = workerStatusRead({
+      store: makeStore,
+      records: /** @type {any} */ (build),
+      clock,
+      extensionId: () => EXT,
+    });
     await read(READ, page('newtab.html'));
     await read(READ, page('popup.html'));
     assert.deepEqual([seen.opens, seen.settingsWrites, seen.runs.filter(mode => mode !== 'readonly')], [0, 0, []]);
@@ -281,7 +308,12 @@ describe("the worker's status read (#20 slice 4c)", () => {
     const { workerStatusRead } = await import('../../js/kernel/composition/trust-status-read.js');
     const { clock, store, settings } = await seeded();
     const { store: makeStore, build } = watchedRecords(store, settings, clock);
-    const read = workerStatusRead({ store: makeStore, records: /** @type {any} */ (build), clock, extensionId: () => EXT });
+    const read = workerStatusRead({
+      store: makeStore,
+      records: /** @type {any} */ (build),
+      clock,
+      extensionId: () => EXT,
+    });
     for (const sender of [
       page('newtab.html'),
       page('newtab.html', { tab: { id: 7 } }),
@@ -314,7 +346,10 @@ describe("the worker's status read (#20 slice 4c)", () => {
     const source = fs.readFileSync(path.join(ROOT, 'js', 'kernel', 'composition', 'trust-status-read.js'), 'utf8');
     assert.match(source, /\n\s+store: makeStore = browserStore,\n\s+records: build = browserRecords,\n/);
     assert.match(source, /\n\s+if \(!store\) store = makeStore\(\);\n\s+const records = build\(store\);\n/);
-    assert.match(source, /\nfunction browserStore\(\) \{\n\s+return readOnlyTrustStore\(\{ indexedDB: browserTrustHost\(\)\.indexedDB \}\);\n\}\n/);
+    assert.match(
+      source,
+      /\nfunction browserStore\(\) \{\n\s+return readOnlyTrustStore\(\{ indexedDB: browserTrustHost\(\)\.indexedDB \}\);\n\}\n/,
+    );
     assert.match(source, /\n\s+store,\n\s+settings: \{ get: settings\.get, set: noWrite \},/);
     assert.doesNotMatch(source.replace(/\/\*[\s\S]*?\*\//g, ''), /\.open\(/);
   });

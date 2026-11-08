@@ -184,12 +184,15 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
       }),
     );
     // The update is open, and it waits, so the storage group needs nothing for it
-    assert.deepEqual(waiting.groups.find(item => item.group === 'storage'), {
-      group: 'storage',
-      needsAction: 0,
-      checkedAt: CHECKED,
-      cause: null,
-    });
+    assert.deepEqual(
+      waiting.groups.find(item => item.group === 'storage'),
+      {
+        group: 'storage',
+        needsAction: 0,
+        checkedAt: CHECKED,
+        cause: null,
+      },
+    );
     const lines = await linesOf(waiting);
     assert.deepEqual([lines.sidebar, lines.settings.first.text, lines.settings.second], [null, SAVING, null]);
   });
@@ -344,10 +347,10 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
     const { GROUP_VERB } = await import('../../js/trust/ui/status-copy.js');
     const { HEALTH_GROUPS } = await import('../../js/trust/core/vocabulary.js');
     // A name and its verb for each group, so a group added later can't ship without its verb
-    assert.deepEqual([Object.keys(GROUP).sort(), Object.keys(GROUP_VERB || {}).sort()], [
-      [...HEALTH_GROUPS].sort(),
-      [...HEALTH_GROUPS].sort(),
-    ]);
+    assert.deepEqual(
+      [Object.keys(GROUP).sort(), Object.keys(GROUP_VERB || {}).sort()],
+      [[...HEALTH_GROUPS].sort(), [...HEALTH_GROUPS].sort()],
+    );
     // The one-group line as the lead signed it, round 2 (2026-11-08 00:12:20)
     const signed = {
       storage: 'Notes database needs your attention',
@@ -370,7 +373,11 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
     const { ROW_LABEL } = await import('../../js/trust/ui/status-copy.js');
     const { PROVIDER } = await import('../../js/trust/ui/copy.js');
     // One list, which recovery.html's rows read too
-    const labels = { 'local-inference': 'Local model', 'remote-ai': 'Cloud AI', 'ai-scope-grants': 'AI access to notes' };
+    const labels = {
+      'local-inference': 'Local model',
+      'remote-ai': 'Cloud AI',
+      'ai-scope-grants': 'AI access to notes',
+    };
     assert.deepEqual(ROW_LABEL, labels);
     for (const [id, label] of Object.entries(labels)) {
       assert.equal(/** @type {Record<string, {label: string}>} */ (PROVIDER)[id].label, label, id);
@@ -411,7 +418,10 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
         groups: [
           group('storage'),
           group('vault', { needsAction: 1 }),
-          group('inference', { needsAction: 1, cause: cause({ providerId: 'local-inference', faultCode: 'load-failed' }) }),
+          group('inference', {
+            needsAction: 1,
+            cause: cause({ providerId: 'local-inference', faultCode: 'load-failed' }),
+          }),
         ],
       }),
     );

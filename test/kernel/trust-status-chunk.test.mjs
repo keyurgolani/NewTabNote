@@ -292,13 +292,25 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     // Sage where saving is checked and clay where something needs the user, as recovery.html has
     // them light, and the text's color dark, in the blocks the tab already has
     assert.match(rule(':root'), /\n {2}--trust-ok: #526f69;\n {2}--trust-action: #604c34;$/);
-    assert.match(rule('[data-theme="dark"]'), /\n {2}--trust-ok: var\(--text-primary\);\n {2}--trust-action: var\(--text-primary\);$/);
-    assert.match(rule('.trust-glyph.trust-tone-ok'), /^\n\.trust-glyph\.trust-tone-ok \{\n {2}color: var\(--trust-ok\);$/);
-    assert.match(rule('.trust-glyph.trust-tone-action'), /^\n\.trust-glyph\.trust-tone-action \{\n {2}color: var\(--trust-action\);$/);
+    assert.match(
+      rule('[data-theme="dark"]'),
+      /\n {2}--trust-ok: var\(--text-primary\);\n {2}--trust-action: var\(--text-primary\);$/,
+    );
+    assert.match(
+      rule('.trust-glyph.trust-tone-ok'),
+      /^\n\.trust-glyph\.trust-tone-ok \{\n {2}color: var\(--trust-ok\);$/,
+    );
+    assert.match(
+      rule('.trust-glyph.trust-tone-action'),
+      /^\n\.trust-glyph\.trust-tone-action \{\n {2}color: var\(--trust-action\);$/,
+    );
     // A line that wraps keeps its words off both hairlines, and its ring shows inside the
     // sidebar, which clips what's outside it
     assert.match(rule('.trust-sidebar-line'), /\n {2}min-height: 44px;\n {2}padding: 6px 16px;\n/);
-    assert.match(rule('.trust-sidebar-line:focus-visible'), /^\n\.trust-sidebar-line:focus-visible \{\n {2}outline-offset: -2px;$/);
+    assert.match(
+      rule('.trust-sidebar-line:focus-visible'),
+      /^\n\.trust-sidebar-line:focus-visible \{\n {2}outline-offset: -2px;$/,
+    );
   });
 
   it('draws only the newest read started, so an older one that gets its answer later, none included, leaves what the newer drew', async () => {
@@ -327,7 +339,11 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     assert.deepEqual(shown(doc).sidebar, ['New notes may not be saved›', 'recovery.html#recovery']);
     letGo();
     assert.equal(await lines.ready, null, 'the older read draws nothing');
-    assert.deepEqual(shown(doc).sidebar, ['New notes may not be saved›', 'recovery.html#recovery'], 'and wipes nothing');
+    assert.deepEqual(
+      shown(doc).sidebar,
+      ['New notes may not be saved›', 'recovery.html#recovery'],
+      'and wipes nothing',
+    );
   });
 
   it('asks once more RETRY_MS after a read that got no answer, draws what that one answers, and asks no more after it', async () => {
@@ -350,15 +366,20 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     const quiet = tabDocument();
     const again = manualTimers();
     const silent = sendOf([undefined, undefined]);
-    await startTrustStatus({ document: /** @type {any} */ (quiet), send: silent.send, now: () => NOW, timers: again }).ready;
+    await startTrustStatus({ document: /** @type {any} */ (quiet), send: silent.send, now: () => NOW, timers: again })
+      .ready;
     await again.fire();
     assert.deepEqual([silent.sent.count, again.pending.size], [2, 0]);
     // A send that failed is no answer too; a read that starts while the one more waits takes its place
     const shownAgain = tabDocument();
     const waiting = manualTimers();
     const failing = sendOf([new Error('Could not establish connection. Receiving end does not exist.'), AT_RISK]);
-    await startTrustStatus({ document: /** @type {any} */ (shownAgain), send: failing.send, now: () => NOW, timers: waiting })
-      .ready;
+    await startTrustStatus({
+      document: /** @type {any} */ (shownAgain),
+      send: failing.send,
+      now: () => NOW,
+      timers: waiting,
+    }).ready;
     assert.equal(waiting.pending.size, 1);
     shownAgain.visibilityState = 'visible';
     await Promise.all(shownAgain.fire('visibilitychange'));

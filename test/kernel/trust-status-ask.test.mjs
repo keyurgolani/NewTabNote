@@ -403,7 +403,11 @@ describe("the status read's ask (#20 slice 4c, startStatusAsk)", () => {
       const sends = seen.sends;
       assert.deepEqual([seen.loads, seen.starts], [1, 1], why);
       await ask.settingsOpened();
-      assert.deepEqual([seen.sends, seen.loads, seen.starts], [sends + 1, 1, 1], `${why}: Settings opened, the lines read again`);
+      assert.deepEqual(
+        [seen.sends, seen.loads, seen.starts],
+        [sends + 1, 1, 1],
+        `${why}: Settings opened, the lines read again`,
+      );
       await ask.settingsOpened();
       assert.equal(seen.sends, sends + 2, `${why}: and at the next opening`);
     }
@@ -421,7 +425,11 @@ describe("the status read's ask (#20 slice 4c, startStatusAsk)", () => {
       },
     });
     const doc = tabDocument();
-    const ask = startStatusAsk({ document: /** @type {any} */ (doc), send: async () => ({ error: 'unavailable' }), load });
+    const ask = startStatusAsk({
+      document: /** @type {any} */ (doc),
+      send: async () => ({ error: 'unavailable' }),
+      load,
+    });
     await ask.asked;
     await doc.shown();
     await ask.settingsOpened();
