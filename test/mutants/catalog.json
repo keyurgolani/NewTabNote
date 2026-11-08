@@ -226,8 +226,8 @@
       "behavior": "backup inclusion",
       "protects": "The export includes every folder.",
       "file": "js/kernel/adapters/indexeddb/backup-file.js",
-      "find": "  return { notes, elements, media, folders };",
-      "replace": "  return { notes, elements, media, folders: [] };",
+      "find": "  return { notes, elements, media, folders, conflicts: kept };",
+      "replace": "  return { notes, elements, media, folders: [], conflicts: kept };",
       "test": "test/export.test.js",
       "name": "includes active and archived notes, templates, folders, and their media; not trash"
     },
