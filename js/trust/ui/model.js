@@ -827,7 +827,12 @@ export const reasonText = code => (code && /** @type {Record<string, string>} */
 /**
  * A recent repair's result. A run that finished says "checked" only once its problem's check
  * passed after it: still there when a sighting came after it, and not checked yet with no
- * word since, or no problem to read.
+ * word since, or no problem to read. A sighting in the millisecond of the run's last update
+ * counts as after it, as a resolution then does (#265): the page asks for the check after a
+ * run only once the run has answered, after that update is stored, so the check never reads an
+ * earlier time, and on a fast machine it reads the same one. A sighting from before the run's
+ * end shares that millisecond only when another check lands in it, and the check after the run
+ * settles the row once it lands.
  * @param {RemediationRun} run
  * @param {readonly Incident[]} [incidents]
  * @returns {{tone: string, text: string}}
@@ -838,7 +843,7 @@ export function runResult(run, incidents = []) {
     if (incident && incident.state === 'resolved' && incident.resolvedAt !== null && incident.resolvedAt >= run.updatedAt) {
       return { tone: 'ok', text: PAGE.doneAndChecked };
     }
-    if (incident && incident.state !== 'resolved' && incident.lastSeenAt > run.updatedAt) return { tone: 'partial', text: PAGE.doneStillThere };
+    if (incident && incident.state !== 'resolved' && incident.lastSeenAt >= run.updatedAt) return { tone: 'partial', text: PAGE.doneStillThere };
     return { tone: 'todo', text: PAGE.doneNotChecked };
   }
   if (run.state === 'failed') return { tone: 'failed', text: fill(PAGE.failedRun, { reason: reasonText(run.outcome) }) };
