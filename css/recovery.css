@@ -347,6 +347,12 @@ html {
   text-wrap: balance;
 }
 
+/* A link in it wraps whole, so a balanced line never splits one into what reads as two, as
+   "Recovery / points" did (#20 slice 4c) */
+.trust-attention-line .trust-link {
+  white-space: nowrap;
+}
+
 .trust-headline-actions {
   display: flex;
   flex-wrap: wrap;
@@ -404,6 +410,12 @@ html {
 
 .trust-row-status time {
   color: var(--text-secondary);
+}
+
+/* The status's words give it its baseline, its shape beside them still centered, so in a row with
+   a line under it the status sits on its label's first baseline, not 2px above it (#20 slice 4c) */
+.trust-row-status > :not(.trust-glyph) {
+  align-self: baseline;
 }
 
 .trust-row-text,
@@ -546,6 +558,7 @@ html {
 
 .trust-facts dd {
   margin: 0;
+  text-wrap: pretty;
 }
 
 .trust-main code {
@@ -666,9 +679,11 @@ html {
   margin-top: var(--space-control);
 }
 
-/* The way to the problem's row sits at the card's far end, as the mockup has it */
+/* The way to the problem's row sits at the card's far end, as the mockup has it, reaching the 4px
+   of room beside its words past that end, so they stay where they were (#20 slice 4c) */
 .trust-crosslink {
   margin-left: auto;
+  margin-inline-end: -4px;
 }
 
 /* With no Dismiss beside it, the link alone sits on a line of text at the card's far end, with no
@@ -678,13 +693,14 @@ html {
 .trust-incident-actions:has(> .trust-crosslink:only-child) {
   display: block;
   margin-top: var(--space-region);
+  padding-bottom: 3px;
   text-align: end;
 }
 
 .trust-incident-actions > .trust-crosslink:only-child {
   display: inline;
   min-height: 0;
-  padding: calc((var(--target-min) - 1em) / 2) 0;
+  padding-block: calc((var(--target-min) - 1em) / 2);
   vertical-align: baseline;
 }
 
@@ -698,16 +714,26 @@ html {
   color: var(--text-secondary);
 }
 
-/* Undo sits in its sentence, on its baseline, its target still 44px tall */
+/* Undo sits in its sentence, on its baseline, its target still 44px tall, 4px further from the
+   sentence than a space, so its focus ring keeps 4px from the words before it */
 .trust-notice {
   margin: var(--space-compact) 0 0;
 }
 
 .trust-notice .trust-linkbtn {
   display: inline;
+  margin-inline-start: 4px;
   min-height: 0;
-  padding: 0.7rem 0;
+  padding-block: 0.7rem;
   vertical-align: baseline;
+}
+
+/* The Recovery Center's text actions, the "See ... in Trust Center" links and Undo: 4px of room
+   beside their words, so a focus ring keeps 4px from them, the inner ring in dark too, and the
+   card's border 4px from the ring below a lone link (#20 slice 4c) */
+.trust-crosslink,
+.trust-notice .trust-linkbtn {
+  padding-inline: 4px;
 }
 
 /* A repair's panel: inside its problem's card, after a seam, never a card of its own */
