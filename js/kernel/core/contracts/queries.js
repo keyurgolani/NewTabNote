@@ -28,6 +28,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 /** @typedef {import('./operations/get-note-list.js').GetNoteList} GetNoteList */
 /** @typedef {import('./operations/get-notes-by-ids.js').GetNotesByIds} GetNotesByIds */
 /** @typedef {import('./operations/list-search-entries.js').ListSearchEntries} ListSearchEntries */
+/** @typedef {import('./operations/list-search-entry-ids.js').ListSearchEntryIds} ListSearchEntryIds */
 /** @typedef {import('./operations/list-folders.js').ListFolders} ListFolders */
 /** @typedef {import('./operations/get-preferences.js').GetPreferences} GetPreferences */
 /** @typedef {import('./operations/get-workspace-session.js').GetWorkspaceSession} GetWorkspaceSession */
@@ -55,7 +56,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
 
 /**
  * @typedef {ListNotes | GetNote | GetNoteBlocks | GetBacklinks | GetNoteList | GetNotesByIds | ListSearchEntries
- *   | ListFolders
+ *   | ListSearchEntryIds | ListFolders
  *   | GetPreferences | GetWorkspaceSession | GetPopupInsightsEnabled | GetInsightsPending | GetJobRuns
  *   | ListSnapshots | GetSnapshot | FindDailyNote
  *   | GetWorkspaceData | ListThemes | ExportBackup | ProfileHoldsContent | ListLinks | ListVectors | GetSyncData
@@ -84,6 +85,7 @@ import { MAX_MESSAGE_BYTES, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './lim
  * @property {{notes: NoteRecord[], folders: FolderRecord[], searchEntries: SearchEntry[]}} getNoteList
  * @property {{notes: NoteRecord[], searchEntries: SearchEntry[]}} getNotesByIds
  * @property {SearchEntry[]} listSearchEntries
+ * @property {string[]} listSearchEntryIds
  * @property {FolderRecord[]} listFolders
  * @property {PreferenceValues} getPreferences
  * @property {Partial<WorkspaceSession>} getWorkspaceSession
@@ -177,6 +179,8 @@ export const QUERIES = Object.freeze({
   getNoteList: entry('get-note-list', [], NEW_TAB),
   getNotesByIds: entry('get-notes-by-ids', ['note'], NEW_TAB, MAX_MESSAGE_BYTES),
   listSearchEntries: entry('list-search-entries', [], NEW_TAB),
+  // The whole index's write reads which entries are stored as it begins, keys alone (#262)
+  listSearchEntryIds: entry('list-search-entry-ids', [], NEW_TAB),
   listFolders: entry('list-folders', []),
   getPreferences: entry('get-preferences', [], PREFERENCE_READERS),
   getWorkspaceSession: entry('get-workspace-session', []),

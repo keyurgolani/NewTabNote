@@ -1,7 +1,8 @@
 /**
  * #22's derived writes and the reads beside them (#17 PR 4b): the search entries the new tab's
  * indexer makes from notes, each note's embedding, and the links and embeddings the graph view
- * and semantic search read. Both writes are derived (scopes.js), so neither can touch a note,
+ * and semantic search read, and the stored entries' note ids, which the whole index's write reads
+ * as it begins (#262). Both writes are derived (scopes.js), so neither can touch a note,
  * and neither leaves a search entry or an embedding behind for a note that's gone.
  *
  * A record keeps the content revision it was made from when its job says one,
@@ -86,14 +87,15 @@ export const indexCommands = {
         if (!tx.has('searchIndex')) return;
         // When it's all replaced, the notes and the entries are read at once, as keys alone, so
         // the transaction never reads the text of every note and entry (R131). Otherwise each
-        // is read on its own.
+        // is read on its own, by its key alone too, so a batch of the whole index reads no text
+        // either (#262).
         const notes = replaceAll ? new Set(await tx.getAllKeys('notes')) : null;
         const stored = replaceAll ? new Set(await tx.getAllKeys('searchIndex')) : null;
         /** @type {Set<string>} */
         const kept = new Set();
         for (const entry of entries) {
           // A note deleted since the indexer read it keeps no entry: its entry went with it
-          const found = notes ? notes.has(entry.noteId) : Boolean(await tx.get('notes', entry.noteId));
+          const found = notes ? notes.has(entry.noteId) : (await tx.getKey('notes', entry.noteId)) !== undefined;
           if (!found) continue;
           kept.add(entry.noteId);
           // Only an entry that says what it was made from reads the stored one, to drop itself
@@ -106,7 +108,7 @@ export const indexCommands = {
         // Replacing the index drops the entry of every note the batch doesn't name or that's gone
         const gone = stored ? [...stored].filter(noteId => !kept.has(noteId)) : [];
         for (const noteId of new Set([...removed, ...gone])) {
-          const present = stored ? stored.has(noteId) : Boolean(await tx.get('searchIndex', noteId));
+          const present = stored ? stored.has(noteId) : (await tx.getKey('searchIndex', noteId)) !== undefined;
           if (!present) continue;
           tx.delete('searchIndex', noteId);
           changed.push(noteId);
@@ -155,7 +157,13 @@ export const indexCommands = {
   },
 };
 
-/** @type {{listLinks: QueryHandler<'listLinks'>, listVectors: QueryHandler<'listVectors'>}} */
+/**
+ * @type {{
+ *   listLinks: QueryHandler<'listLinks'>,
+ *   listVectors: QueryHandler<'listVectors'>,
+ *   listSearchEntryIds: QueryHandler<'listSearchEntryIds'>,
+ * }}
+ */
 export const indexQueries = {
   async listLinks(query, { adapter, clock }) {
     const links = await adapter.read(['links'], tx => tx.getAll('links'));
@@ -165,5 +173,13 @@ export const indexQueries = {
   async listVectors(query, { adapter, clock }) {
     const vectors = await adapter.read(['vectors'], tx => tx.getAll('vectors'));
     return vectors.length > 0 ? ready(clock.now(), vectors) : empty(clock.now());
+  },
+
+  // The note ids of the stored search entries, keys alone, which the whole index's write reads
+  // once as it begins, so it removes only what was stored then (#262). A key that isn't an id is
+  // left out, since no command can name it.
+  async listSearchEntryIds(query, { adapter, clock }) {
+    const noteIds = (await adapter.read(['searchIndex'], tx => tx.getAllKeys('searchIndex'))).filter(isId);
+    return noteIds.length > 0 ? ready(clock.now(), noteIds) : empty(clock.now());
   },
 };

@@ -68,6 +68,7 @@ const QUERY_SAMPLES = {
   getNoteList: {},
   getNotesByIds: { noteIds: ['n1', 'n2'] },
   listSearchEntries: {},
+  listSearchEntryIds: {},
   listFolders: {},
   getPreferences: { keys: ['theme', 'sidebarWidth'] },
   getWorkspaceSession: {},

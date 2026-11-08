@@ -196,7 +196,7 @@ function heldFacade(stored) {
 const shapeOf = command => [command.entries.length, command.replaceAll === true, (command.removed || []).length];
 
 describe("js/storage.js's calls as a facade over the new tab's kernel (#17 PR 4b, Q7)", () => {
-  it("NotesManager's index is updateSearchIndex's: the whole index, one entry, and a removal, each one command", async () => {
+  it("NotesManager's index is updateSearchIndex's: the whole index once it has read what's stored, one entry, and a removal, each one command here", async () => {
     const tab = await newTab();
     const [a, b] = [await tab.note('Alpha'), await tab.note('Beta')];
     // The whole index: a note deleted since the indexer read it keeps no entry, and a note
@@ -214,6 +214,8 @@ describe("js/storage.js's calls as a facade over the new tab's kernel (#17 PR 4b
     const byNote = (one, other) => (one.noteId < other.noteId ? -1 : 1);
     const stored = async () => [...(await tab.data({ type: 'listSearchEntries' }))].sort(byNote);
     assert.deepEqual(await stored(), [entry(a, 'milk'), entry(b, 'beta')].sort(byNote));
+    // What the whole index reads first: the stored entries' note ids, keys alone (#262)
+    assert.deepEqual([...(await tab.data({ type: 'listSearchEntryIds' }))].sort(), [a, b].sort());
     await tab.stores.searchIndex.setSearchIndexEntry(entry(b, 'eggs'));
     await tab.stores.searchIndex.removeSearchIndexEntry(a);
     assert.deepEqual(await stored(), [entry(b, 'eggs')]);
@@ -226,10 +228,12 @@ describe("js/storage.js's calls as a facade over the new tab's kernel (#17 PR 4b
         return [type, replaceAll === true, Array.isArray(removed) ? removed.length : 0];
       }),
       [
-        ['updateSearchIndex', true, 0],
+        ['listSearchEntryIds', false, 0],
+        ['updateSearchIndex', false, 0],
         ['updateSearchIndex', false, 0],
         ['updateSearchIndex', false, 1],
-        ['updateSearchIndex', true, 0],
+        ['listSearchEntryIds', false, 0],
+        ['updateSearchIndex', false, 1],
       ],
     );
     await tab.close();
@@ -410,6 +414,8 @@ describe("js/storage.js's calls as a facade over the new tab's kernel (#17 PR 4b
     await tab.stores.searchIndex.setSearchIndexEntry(entry(a, 'kept nowhere'));
     await tab.stores.searchIndex.setSearchIndex([entry(a, 'kept nowhere')]);
     assert.deepEqual(await tab.stores.searchIndex.getAllVectors(), []);
+    // With no store, no entry is stored, so the whole index's read answers empty (#262)
+    assert.equal((await tab.client.query({ type: 'listSearchEntryIds' })).kind, 'empty');
     await tab.close();
   });
 
