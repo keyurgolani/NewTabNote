@@ -18,14 +18,14 @@
   },
   "files": {
     "css/editor.css": {
-      "color-literal": 136,
+      "color-literal": 133,
       "theme-branching": 7,
       "undefined-var": 8,
       "hard-shadow": 1,
       "one-sided-border": 6,
       "transition-all": 47,
       "px-font-size": 176,
-      "alias-use": 601
+      "alias-use": 588
     },
     "css/popup.css": {
       "color-literal": 54,
@@ -35,11 +35,11 @@
       "alias-use": 37
     },
     "css/premium-chat.css": {
-      "color-literal": 93,
+      "color-literal": 86,
       "theme-branching": 1,
       "backdrop-filter": 2,
       "px-font-size": 23,
-      "alias-use": 99
+      "alias-use": 93
     },
     "css/sidepanel.css": {
       "color-literal": 21,
@@ -87,13 +87,13 @@
       "runtime-style": 1,
       "transition-all": 1,
       "px-font-size": 4,
-      "alias-use": 18
+      "alias-use": 16
     },
     "js/ui/formatting-toolbar.js": {
       "color-literal": 12,
       "runtime-style": 1,
       "px-font-size": 3,
-      "alias-use": 8
+      "alias-use": 7
     },
     "js/ui/graph-view.js": {
       "color-literal": 4,
