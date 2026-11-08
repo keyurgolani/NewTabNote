@@ -294,12 +294,19 @@ class App {
 
   /**
    * What opening Settings sets off: the pre-update copy's section reads its state again (#17 PR
-   * 1b), and the status read's ask loads the lines' chunk for Settings' Trust Center lines (#20
-   * slice 4c), which Settings doesn't wait for
+   * 1b), and the status read's ask has the lines read for Settings' Trust Center lines, loading
+   * their chunk the first time (#20 slice 4c), which Settings doesn't wait for. An ask that throws
+   * goes to the log, and the section reads all the same.
    * @returns {Promise<void>}
    */
   settingsOpened() {
-    this.askTrustStatus().then((ask) => ask && ask.settingsOpened());
+    try {
+      this.askTrustStatus()
+        .then((ask) => ask && ask.settingsOpened())
+        .catch((error) => this.logger.error('App', 'The status lines did not read', error));
+    } catch (error) {
+      this.logger.error('App', 'The status lines did not start', error);
+    }
     return this.preUpdateCopySection ? this.preUpdateCopySection.refresh() : Promise.resolve();
   }
 
@@ -532,8 +539,12 @@ class App {
 
       // Defer non-critical initialization until after first render (Req 27.1)
       const deferWork = async () => {
-        // The status read's ask first, without holding up the rest (#20 slice 4c)
-        this.askTrustStatus();
+        // The status read's ask first, without holding up the rest, which goes on when it throws (#20 slice 4c)
+        try {
+          this.askTrustStatus();
+        } catch (error) {
+          this.logger.error('App', 'The status lines did not start', error);
+        }
         await this.initAnalyticsController();
         await this.initGraphView();
         await this.initSyncService();

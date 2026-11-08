@@ -7,9 +7,12 @@
  * reads the records, so no record, no IndexedDB and no check is in this chunk, and neither Valibot
  * nor #13's client is.
  *
- * It reads again when the tab is shown again and when Settings opens at Data & Backup. When the
- * worker didn't answer in time, or answers anything the check doesn't take, it draws nothing, and
- * Settings' section reads as it did before (#20 slice 4b). Its rules are the new tab's own
+ * It reads again when the tab is shown again, when Settings opens at Data & Backup, and each time
+ * the ask has it read for Settings' opening. Only the newest read started draws, so an older one
+ * that gets its answer later changes nothing. When the worker didn't answer in time, or answers
+ * anything the check doesn't take, it draws nothing, and Settings' section reads as it did before
+ * (#20 slice 4b); a read that got no answer asks once more RETRY_MS later. A drawing that throws
+ * draws nothing more, and its read answers nothing. Its rules are the new tab's own
  * (css/editor.css), so it puts no style in the page.
  *
  * Loading it touches no browser API: its first read is the send's.
@@ -20,6 +23,10 @@ import { GLYPHS } from '../../trust/ui/glyphs.js';
 import { statusOf } from '../../trust/ui/status.js';
 
 /** @typedef {ReturnType<typeof statusOf>} Lines */
+/** @typedef {{setTimeout(callback: () => void, ms: number): unknown, clearTimeout(handle: unknown): void}} Timers */
+
+/** How long after a read that got no answer the lines ask once more: a few seconds */
+export const RETRY_MS = 3000;
 
 /**
  * A status shape, which screen readers skip: the words beside it say the state
@@ -72,11 +79,18 @@ function spaceNoticeShows(doc) {
 
 /**
  * Starts the lines: reads the status now through `send`, the ask's, and again when the tab is
- * shown again and when Settings opens at Data & Backup. `now` is a test's.
- * @param {{document?: Document, send: () => Promise<unknown>, now?: () => number}} options
- * @returns {{read: () => Promise<Lines | null>, ready: Promise<Lines | null>}} - `ready`: the first read
+ * shown again, when Settings opens at Data & Backup, and at each call of `read`. `now` and
+ * `timers` are a test's.
+ * @param {{document?: Document, send: () => Promise<unknown>, now?: () => number, timers?: Timers}} options
+ * @returns {{read: () => Promise<Lines | null>, ready: Promise<Lines | null>}} - each read answers
+ *   what it drew, or null when it drew nothing; `ready`: the first read
  */
-export function startTrustStatus({ document: doc = globalThis.document, send: ask, now = () => Date.now() }) {
+export function startTrustStatus({
+  document: doc = globalThis.document,
+  send: ask,
+  now = () => Date.now(),
+  timers = globalThis,
+}) {
   const section = doc.querySelector('.settings-section[data-setting-label="trust center"]');
   const lead = section ? section.querySelector('.setting-lead') : null;
   const link = section ? section.querySelector('.setting-link') : null;
@@ -120,24 +134,53 @@ export function startTrustStatus({ document: doc = globalThis.document, send: as
       : shipped.className;
   };
 
-  /** @returns {Promise<Lines | null>} */
-  const read = async () => {
+  /** How many reads have started: only the newest one draws */
+  let started = 0;
+  /** @type {unknown} the one more read after one that got no answer, while it waits */
+  let retry = null;
+
+  /**
+   * A read: asks through `send`, checks the answer, and draws it, unless a newer read started
+   * while it waited. One that got no answer asks once more RETRY_MS later, unless it's that one.
+   * @param {boolean} again - it's the one more
+   * @returns {Promise<Lines | null>}
+   */
+  const read = async again => {
+    const mine = ++started;
+    if (retry !== null) {
+      timers.clearTimeout(retry);
+      retry = null;
+    }
+    let heard = false;
     /** @type {Lines | null} */
     let lines = null;
     try {
-      const status = statusFrom(await ask());
+      const answer = await ask();
+      heard = answer !== undefined;
+      const status = statusFrom(answer);
       if (status) lines = statusOf(status, { now: now(), spaceNotice: spaceNoticeShows(doc) });
     } catch {
       lines = null;
     }
-    draw(lines);
-    return lines;
+    if (mine !== started) return null;
+    if (!heard && !again) {
+      retry = timers.setTimeout(() => {
+        retry = null;
+        read(true);
+      }, RETRY_MS);
+    }
+    try {
+      draw(lines);
+      return lines;
+    } catch {
+      return null;
+    }
   };
 
   doc.addEventListener('visibilitychange', () => {
-    if (doc.visibilityState === 'visible') read();
+    if (doc.visibilityState === 'visible') read(false);
   });
   const data = doc.querySelector('.settings-nav-item[data-category="data"]');
-  if (data) data.addEventListener('click', () => read());
-  return { read, ready: read() };
+  if (data) data.addEventListener('click', () => read(false));
+  return { read: () => read(false), ready: read(false) };
 }

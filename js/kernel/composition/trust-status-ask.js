@@ -14,7 +14,9 @@
  * chunk checks it in full (js/trust/core/status-message.js) and draws nothing on what it refuses.
  *
  * Until the lines' chunk has loaded, it asks again when the tab is shown again; from then on the
- * chunk reads for itself. It imports nothing, so loading it touches no browser API and holds no
+ * chunk reads for itself, and the ask has it read again each time Settings opens. Lines that
+ * started stay, whatever their first read did. It imports nothing, so loading it touches no
+ * browser API and holds no
  * trust code: the message's type and the groups repeat status-message.js's and vocabulary.js's,
  * which test/kernel/trust-status-ask.test.mjs holds equal.
  */
@@ -23,7 +25,8 @@
 /** @typedef {{setTimeout(callback: () => void, ms: number): unknown, clearTimeout(handle: unknown): void}} Timers */
 /** @typedef {{status: string, module?: any}} LoadResult */
 /** @typedef {{loadChunk(name: string, load: () => Promise<any>): Promise<LoadResult>}} Loader */
-/** @typedef {{startTrustStatus(options: {document?: Document, send: () => Promise<unknown>}): {ready: Promise<unknown>}}} LinesChunk */
+/** @typedef {{read: () => Promise<unknown>, ready: Promise<unknown>}} Lines */
+/** @typedef {{startTrustStatus(options: {document?: Document, send: () => Promise<unknown>}): Lines}} LinesChunk */
 
 /** The status read's type, js/trust/core/status-message.js's TRUST_STATUS_MESSAGE */
 export const TRUST_STATUS_MESSAGE = 'trust.status';
@@ -111,8 +114,9 @@ export function plainlyClear(answer) {
  * Starts the ask: asks the worker now, and when the tab is shown again until the lines' chunk has
  * loaded, and loads that chunk through `loader` when an answer isn't plainly all clear, or when
  * Settings opens (settingsOpened). The chunk's first read takes the answer that loaded it, and
- * with Settings it reads for itself. A load that fails is tried again at the next one. `send` and
- * `load` are a test's; the browser's are made here.
+ * with Settings it reads for itself; once it has loaded, each Settings opening has it read again.
+ * A load that fails is tried again at the next one. `send` and `load` are a test's; the browser's
+ * are made here.
  * @param {{loader?: Loader, document?: Document, runtime?: Runtime, send?: () => Promise<unknown>, load?: () => Promise<LinesChunk | null>}} [options]
  * @returns {{asked: Promise<void>, settingsOpened: () => Promise<void>}} - `asked`: the first ask, and the load it set off
  */
@@ -124,11 +128,14 @@ export function startStatusAsk({ loader, document: doc = globalThis.document, ru
       const result = await /** @type {Loader} */ (loader).loadChunk('trust-status', () => import('./trust-status.js'));
       return result.status === 'loaded' ? result.module : null;
     });
-  /** @type {Promise<unknown> | null} */
+  /** @type {Promise<Lines | null> | null} */
   let lines = null;
   /**
-   * The lines' chunk, loaded once and started, its first read taking `heard` when there's one
+   * The lines' chunk, loaded once and started, its first read taking `heard` when there's one.
+   * Answers the lines once that read is done, or null when the chunk didn't load. Lines that
+   * started stay, whatever their first read did, so no second set starts beside them.
    * @param {{answer: unknown} | null} heard - what an ask answered
+   * @returns {Promise<Lines | null>}
    */
   const start = heard => {
     if (!lines) {
@@ -145,7 +152,14 @@ export function startStatusAsk({ loader, document: doc = globalThis.document, ru
       };
       lines = Promise.resolve()
         .then(loadLines)
-        .then(chunk => (chunk ? chunk.startTrustStatus({ document: doc, send: read }).ready : failed()))
+        .then(chunk => {
+          if (!chunk) return failed();
+          const started = chunk.startTrustStatus({ document: doc, send: read });
+          return Promise.resolve(started.ready).then(
+            () => started,
+            () => started,
+          );
+        })
         .catch(failed);
     }
     return lines;
@@ -167,8 +181,11 @@ export function startStatusAsk({ loader, document: doc = globalThis.document, ru
   });
   return {
     asked: check(),
+    // Lines that start for Settings read for themselves; lines started already read again
     settingsOpened: async () => {
-      await start(null);
+      const fresh = lines === null;
+      const started = await start(null);
+      if (started && !fresh) await started.read();
     },
   };
 }
