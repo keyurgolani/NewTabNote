@@ -21,6 +21,8 @@ import { openWithoutUpgrade } from '../../js/kernel/adapters/indexeddb/shapes.js
 import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { PROVIDER_SETTING_KEYS, SYNC_SETTING_KEYS } from '../../js/kernel/composition/holder-settings.js';
 import { NEWTAB_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
+import { encodedBytes } from '../../js/kernel/core/contracts/codec.js';
+import { empty, failed, ready } from '../../js/kernel/core/contracts/outcomes.js';
 import { kernelClient, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import {
   connectNewTabStorage,
@@ -28,7 +30,7 @@ import {
   createNewTabLegacyStores,
   createNewTabStorageState,
 } from '../../js/kernel/composition/newtab.js';
-import { StorageFacadeError } from '../../js/kernel/composition/storage-facade.js';
+import { StorageFacadeError, createStorageFacade } from '../../js/kernel/composition/storage-facade.js';
 
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
 /** @typedef {import('../../js/kernel/core/domain/note.js').NoteRecord} NoteRecord */
@@ -44,10 +46,12 @@ const writePaths = requireCommonJs('../../scripts/write-paths.js');
 /**
  * A new tab on #17's adapter as its root opens it, on a fresh profile the worker's run made, or
  * on a version-8 database without the `omit` stores. `sent` is every command and query the
- * holders' handles send, in order.
- * @param {{omit?: string[]}} [options]
+ * holders' handles send, in order, and each of their commands waits for `beforeExecute` first,
+ * so a case can run another command just before one goes. A query `fails` names answers failed,
+ * as one whose answer was over the cap would.
+ * @param {{omit?: string[], beforeExecute?: (command: unknown) => Promise<void>, fails?: (query: {type: string}) => boolean}} [options]
  */
-async function newTab({ omit = [] } = {}) {
+async function newTab({ omit = [], beforeExecute = async () => {}, fails = () => false } = {}) {
   const env = legacyEnv.createLegacyEnv({ context: 'page' });
   if (omit.length > 0) await legacyEnv.createDatabase(env.indexedDB, { omit });
   const host = {
@@ -66,8 +70,9 @@ async function newTab({ omit = [] } = {}) {
     ...client,
     execute: /** @type {Client['execute']} */ (
       /** @type {unknown} */ (
-        (/** @type {any} */ command) => {
+        async (/** @type {any} */ command) => {
           sent.push(command);
+          await beforeExecute(command);
           return client.execute(command);
         }
       )
@@ -75,7 +80,7 @@ async function newTab({ omit = [] } = {}) {
     query: /** @type {Client['query']} */ (
       query => {
         sent.push(query);
-        return client.query(query);
+        return fails(query) ? Promise.resolve(failed('coordinator', 'payload-too-large')) : client.query(query);
       }
     ),
   });
@@ -141,6 +146,55 @@ async function putRaw(env, store, record) {
  */
 const entry = (noteId, content) => ({ noteId, name: 'Note', content, tags: [], updatedAt: 1 });
 
+/** The most one batch of the whole index holds (#262): entries, and bytes of their JSON as UTF-8 */
+const BATCH_ENTRIES = 100;
+const BATCH_BYTES = 256 * 1024;
+
+/** Lets the facade send whatever it sends before the next answer comes */
+async function settled() {
+  for (let round = 0; round < 5; round++) await new Promise(resolve => setImmediate(resolve));
+}
+
+/**
+ * The facade on a client that answers each command only when the case says, so a case sees what
+ * goes before an answer. `stored` is what its read of the stored entries' note ids answers, and
+ * `sent` is every query and command, in order.
+ * @param {string[]} stored
+ */
+function heldFacade(stored) {
+  /** @type {Array<Record<string, any>>} */
+  const sent = [];
+  /** @type {Array<() => void>} */
+  const answers = [];
+  let next = 0;
+  const client = /** @type {Client} */ (
+    /** @type {unknown} */ ({
+      ids: { next: () => `c-${(next += 1)}` },
+      whenReady: async () => null,
+      query: async (/** @type {Record<string, any>} */ query) => {
+        sent.push(query);
+        return stored.length > 0 ? ready(1, [...stored]) : empty(1);
+      },
+      execute: (/** @type {Record<string, any>} */ command) =>
+        new Promise(resolve => {
+          sent.push(command);
+          answers.push(() =>
+            resolve({ kind: 'committed', code: 'search-index-updated', changedIds: [], severity: 'success' }),
+          );
+        }),
+    })
+  );
+  const facade = createStorageFacade(client, { openDatabase: { openState: 'open', missingStores: [] } });
+  const commands = () => sent.filter(item => item.type === 'updateSearchIndex');
+  return { facade, sent, answers, commands };
+}
+
+/**
+ * A command of the whole index as [entries it carries, whether it replaces the index, entries it removes]
+ * @param {Record<string, any>} command
+ */
+const shapeOf = command => [command.entries.length, command.replaceAll === true, (command.removed || []).length];
+
 describe("js/storage.js's calls as a facade over the new tab's kernel (#17 PR 4b, Q7)", () => {
   it("NotesManager's index is updateSearchIndex's: the whole index, one entry, and a removal, each one command", async () => {
     const tab = await newTab();
@@ -176,6 +230,141 @@ describe("js/storage.js's calls as a facade over the new tab's kernel (#17 PR 4b
         ['updateSearchIndex', false, 0],
         ['updateSearchIndex', false, 1],
         ['updateSearchIndex', true, 0],
+      ],
+    );
+    await tab.close();
+  });
+
+  it('sends the whole index as batches of at most 100 entries, each once the one before it answers, none replacing the index, and removes last the stored entries it names none of (#262)', async () => {
+    const { facade, sent, answers, commands } = heldFacade(['n-0', 'stale-1', 'stale-2']);
+    const entries = Array.from({ length: BATCH_ENTRIES * 2 + 1 }, (_, index) => entry(`n-${index}`, `text ${index}`));
+    const run = facade.setSearchIndex(entries);
+    await settled();
+    assert.deepEqual(commands().map(shapeOf), [[BATCH_ENTRIES, false, 0]], 'the first batch, alone until it answers');
+    answers[0]();
+    await settled();
+    assert.deepEqual(
+      commands().map(shapeOf),
+      [
+        [BATCH_ENTRIES, false, 0],
+        [BATCH_ENTRIES, false, 0],
+      ],
+      'the second, once the first answered',
+    );
+    answers[1]();
+    await settled();
+    assert.deepEqual(
+      commands().map(shapeOf).slice(2),
+      [[1, false, 2]],
+      'the last, with the stored entries it names none of',
+    );
+    answers[2]();
+    assert.equal(await run, undefined);
+    assert.deepEqual(commands()[2].removed, ['stale-1', 'stale-2']);
+    assert.deepEqual(
+      commands().flatMap(command => command.entries.map((/** @type {{noteId: string}} */ one) => one.noteId)),
+      entries.map(one => one.noteId),
+      'every entry once, in order',
+    );
+    // What was stored is read before the first batch goes, keys alone
+    assert.deepEqual(sent[0], { type: 'listSearchEntryIds' });
+  });
+
+  it("counts a batch's bytes as its entries' JSON in UTF-8, at most 256 KiB, and sends an entry over that alone (#262)", async () => {
+    const { facade, answers, commands } = heldFacade([]);
+    // 'é' is one code unit and two bytes, so two of these fit by code units and not by bytes
+    const wide = 'é'.repeat(70_000);
+    const entries = [
+      entry('w-1', wide),
+      entry('w-2', wide),
+      entry('big', 'x'.repeat(BATCH_BYTES)),
+      entry('small', 'y'),
+    ];
+    const run = facade.setSearchIndex(entries);
+    let done = false;
+    void run.then(() => {
+      done = true;
+    });
+    for (let answered = 0; !done && answered < 10; answered++) {
+      await settled();
+      answers[answered]?.();
+    }
+    assert.equal(await run, undefined);
+    assert.deepEqual(
+      commands().map(command => command.entries.map((/** @type {{noteId: string}} */ one) => one.noteId)),
+      [['w-1'], ['w-2'], ['big'], ['small']],
+    );
+    for (const command of commands()) {
+      const bytes = command.entries.reduce(
+        (/** @type {number} */ sum, /** @type {unknown} */ one) => sum + encodedBytes(JSON.stringify(one)),
+        0,
+      );
+      assert.ok(command.entries.length === 1 || bytes <= BATCH_BYTES, `${bytes} bytes in one batch`);
+    }
+  });
+
+  it("keeps an entry another command writes once the whole index's write began, and drops one stored when it began that the write names none of (#262)", async () => {
+    /** @type {(() => Promise<unknown>) | null} */
+    let meanwhile = null;
+    const tab = await newTab({
+      // Another tab makes a note once this write has begun, just before its first batch goes, and
+      // the note's entry goes with it
+      beforeExecute: async () => {
+        const write = meanwhile;
+        meanwhile = null;
+        if (write) await write();
+      },
+    });
+    const [a, b, c] = [await tab.note('Alpha'), await tab.note('Beta'), await tab.note('Gamma')];
+    await tab.run({ type: 'updateSearchIndex', entries: [entry(a, 'old'), entry(c, 'stale')] });
+    /** @type {string | null} */
+    let made = null;
+    meanwhile = async () => {
+      made = await tab.note('Made meanwhile');
+    };
+    // Two entries too large to share a batch, so the write takes two
+    const long = 'x'.repeat(BATCH_BYTES / 2 + 1);
+    await tab.stores.searchIndex.setSearchIndex([entry(a, long), entry(b, long)]);
+    assert.ok(made, 'the other command ran');
+    const stored = /** @type {Array<{noteId: string, name: string, content: string}>} */ (
+      await tab.data({ type: 'listSearchEntries' })
+    );
+    assert.deepEqual(
+      stored.map(one => [one.noteId, one.noteId === made ? one.name : one.content]).sort(),
+      [
+        [a, long],
+        [b, long],
+        [made, 'Made meanwhile'],
+      ].sort(),
+      'the entry another tab wrote meanwhile stays, and the stale one goes',
+    );
+    await tab.close();
+  });
+
+  it("still sends every batch when its read of the stored entries' ids fails, as one over the answer cap would, and removes nothing (#262)", async () => {
+    const tab = await newTab({ fails: query => query.type === 'listSearchEntryIds' });
+    const [a, b, c] = [await tab.note('Alpha'), await tab.note('Beta'), await tab.note('Gamma')];
+    await tab.run({ type: 'updateSearchIndex', entries: [entry(c, 'stored before')] });
+    const long = 'x'.repeat(BATCH_BYTES / 2 + 1);
+    assert.equal(await tab.stores.searchIndex.setSearchIndex([entry(a, long), entry(b, long)]), undefined);
+    const stored = /** @type {Array<{noteId: string, content: string}>} */ (
+      await tab.data({ type: 'listSearchEntries' })
+    );
+    assert.deepEqual(
+      stored.map(one => [one.noteId, one.content]).sort(),
+      [
+        [a, long],
+        [b, long],
+        [c, 'stored before'],
+      ].sort(),
+    );
+    assert.deepEqual(
+      tab.sent
+        .filter(item => /** @type {{type: string}} */ (item).type === 'updateSearchIndex')
+        .map(item => shapeOf(/** @type {Record<string, any>} */ (item))),
+      [
+        [1, false, 0],
+        [1, false, 0],
       ],
     );
     await tab.close();
