@@ -13,7 +13,7 @@
  */
 
 import { COMMANDS, JOURNALED, commandEntry } from './commands.js';
-import { MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES } from './limits.js';
+import { COMMAND_CEILING_BYTES, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES } from './limits.js';
 import { QUERIES, queryEntry } from './queries.js';
 
 /** @typedef {import('./commands.js').CommandEntry} CommandEntry */
@@ -44,10 +44,11 @@ export const WORKER_ONLY_COMMANDS = Object.freeze({
   }),
   // The one-time catch-up of 1.4.x's lagging records after the update, in batches (#33)
   catchUpNoteRecords: commandEntry('catch-up-note-records', 'note', worker(), { entityTypes: ['note'] }),
-  // A journal entry the drain can't replay as written, kept as a conflict record (#35 slice 3)
+  // A journal entry the drain can't replay as written, kept as a conflict record (#35 slice 3), as
+  // large as the journaled command it keeps (#259)
   keepJournalEntry: commandEntry('keep-journal-entry', 'note', worker(), {
     entityTypes: ['note'],
-    maxBytes: MAX_MESSAGE_BYTES,
+    maxBytes: COMMAND_CEILING_BYTES,
   }),
 });
 

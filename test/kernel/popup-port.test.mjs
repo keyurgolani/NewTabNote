@@ -288,18 +288,14 @@ describe("Popup's writes, over #13's port (#35 slice 4b-2)", () => {
     }
   });
 
-  it("sends nothing for a closing tab's edit over the port's 1 MiB, which stays for a page that applies it in-process (rule 10)", async () => {
+  it("sends a closing tab's edit of 2 MiB to the worker, under the ceiling, and it commits there (#259)", async () => {
     const tab = await profile();
-    const key = writeDraft(tab, 'x'.repeat(MAX_MESSAGE_BYTES));
+    const key = writeDraft(tab, 'x'.repeat(2 * MAX_MESSAGE_BYTES));
     const { stand, client } = popupOn(tab);
     assert.equal(await client.whenReady(), null);
-    assert.deepEqual(
-      stand.frames.filter(frame => frame.operation === 'applyCloseDraft'),
-      [],
-      'nothing went on the port',
-    );
-    assert.notEqual(tab.env.global.localStorage.getItem(key), null, 'the draft stays');
-    assert.deepEqual((await client.applied())?.kept, ['A'], "Popup's start applied it, and kept it");
+    assert.deepEqual((await client.applied())?.saved, ['A'], "Popup's start applied it over the port");
+    assert.equal(stand.frames.filter(frame => frame.operation === 'applyCloseDraft').length, 1, 'it went on the port');
+    assert.equal(tab.env.global.localStorage.getItem(key), null, 'and the draft went');
     stand.close();
   });
 

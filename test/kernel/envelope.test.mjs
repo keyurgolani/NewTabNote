@@ -19,6 +19,7 @@ import {
   tooLateSchema,
   welcomeSchema,
 } from '../../js/kernel/core/contracts/envelope.js';
+import * as limits from '../../js/kernel/core/contracts/limits.js';
 import { MAX_DEPTH, MAX_MESSAGE_BYTES, SMALL_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { failedSchema, outcomeSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
 import { bulk, committed, rejected } from '../../js/kernel/core/contracts/outcomes.js';
@@ -37,6 +38,11 @@ import {
   WORKER_QUERIES as QUERIES,
 } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { NOW } from './support.mjs';
+
+/** What `text` comes to as the port sends it: the UTF-8 bytes of its JSON encoding, as Chrome sends a string */
+const onPort = (/** @type {string} */ text) => Buffer.byteLength(JSON.stringify(text), 'utf8');
+/** The ceiling #259 sets (limits.js), read off the namespace so this file loads before it's there */
+const CEILING = /** @type {number} */ (/** @type {Record<string, unknown>} */ (limits).COMMAND_CEILING_BYTES);
 
 /** @typedef {import('../../js/kernel/core/contracts/validate.js').Operation} Operation */
 
@@ -266,17 +272,18 @@ describe('the checks a request passes (#13, AC1 and AC4)', () => {
     assert.equal(Object.getPrototypeOf(block), Object.prototype);
   });
 
-  it('refuses a message that is no text, over 1 MiB, not JSON, too deep, or no frame', () => {
+  it('refuses a message that is no text, over the ceiling, not JSON, too deep, or no frame (#259)', () => {
+    assert.ok(Number.isSafeInteger(CEILING) && CEILING > MAX_MESSAGE_BYTES, 'the ceiling is over 1 MiB');
     assert.deepEqual(readFrame(/** @type {any} */ ({ frame: 'request' })), {
       ok: false,
       code: 'invalid-payload',
       issues: [],
     });
-    const long = readFrame('x'.repeat(MAX_MESSAGE_BYTES + 1));
+    const long = readFrame('x'.repeat(CEILING + 1));
     assert.equal(long.ok === false && long.code, 'payload-too-large');
     // Fewer UTF-16 units than the limit, but more bytes once it's UTF-8
-    const wide = encode(request('createNote', { padding: '€'.repeat(MAX_MESSAGE_BYTES / 3 + 1) }));
-    assert.ok(wide.length < MAX_MESSAGE_BYTES);
+    const wide = encode(request('createNote', { padding: '€'.repeat(Math.floor(CEILING / 3) + 1) }));
+    assert.ok(wide.length < CEILING);
     const tooWide = readFrame(wide);
     assert.equal(tooWide.ok === false && tooWide.code, 'payload-too-large');
     const notJson = readFrame('{"frame":');
@@ -302,15 +309,15 @@ describe('the checks a request passes (#13, AC1 and AC4)', () => {
     assert.equal(larger.ok === false && larger.code, 'payload-too-large');
   });
 
-  it("holds a request to its operation's maxBytes before its schema, the limit itself included", () => {
+  it("holds a request to its operation's maxBytes, counted as the port sends it, before its schema, the limit itself included (#259)", () => {
     assert.equal(COMMANDS.archiveNote.maxBytes, SMALL_MESSAGE_BYTES);
-    /** @param {number} bytes - what the encoded request comes to */
+    /** @param {number} bytes - what the request comes to on the port */
     const sized = bytes => {
       const payload = { type: 'archiveNote', commandId: 'c1', noteId: 'n1', padding: '' };
-      const base = encode(request('archiveNote', payload)).length;
+      const base = onPort(encode(request('archiveNote', payload)));
       return encode(request('archiveNote', { ...payload, padding: 'x'.repeat(bytes - base) }));
     };
-    assert.equal(sized(SMALL_MESSAGE_BYTES).length, SMALL_MESSAGE_BYTES);
+    assert.equal(onPort(sized(SMALL_MESSAGE_BYTES)), SMALL_MESSAGE_BYTES);
     const over = readRequest(sized(SMALL_MESSAGE_BYTES + 1));
     assert.equal(over.ok === false && over.code, 'payload-too-large');
     // At the limit the size passes, and the junk is a payload its schema refuses
@@ -318,15 +325,17 @@ describe('the checks a request passes (#13, AC1 and AC4)', () => {
     assert.equal(at.ok === false && at.code, 'invalid-payload');
   });
 
-  it('reads a message of exactly MAX_MESSAGE_BYTES, and none a byte longer', () => {
-    /** @param {number} bytes */
+  it('reads a message of exactly the ceiling, and none a byte longer (#259)', () => {
+    assert.ok(Number.isSafeInteger(CEILING) && CEILING > MAX_MESSAGE_BYTES, 'the ceiling is over 1 MiB');
+    /** @param {number} bytes - what the frame comes to on the port */
     const sized = bytes => {
-      const base = encode(request('createNote', { padding: '' })).length;
+      const base = onPort(encode(request('createNote', { padding: '' })));
       return encode(request('createNote', { padding: 'x'.repeat(bytes - base) }));
     };
-    const at = readFrame(sized(MAX_MESSAGE_BYTES));
-    assert.equal(at.ok && at.bytes, MAX_MESSAGE_BYTES);
-    const over = readFrame(sized(MAX_MESSAGE_BYTES + 1));
+    assert.equal(onPort(sized(CEILING)), CEILING);
+    const at = readFrame(sized(CEILING));
+    assert.equal(at.ok && at.bytes, CEILING);
+    const over = readFrame(sized(CEILING + 1));
     assert.equal(over.ok === false && over.code, 'payload-too-large');
   });
 

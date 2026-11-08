@@ -142,8 +142,8 @@ import { createScopeCheck } from './scope.js';
  * @property {SessionHooks} [sessions]
  * @property {Logger} [logger]
  * @property {boolean} [capped]
- *   Whether #13's message limits apply: MAX_MESSAGE_BYTES to every message and every answer, and
- *   each operation's own maxBytes. True unless its every connection is the worker's own code on
+ *   Whether #13's message limits apply: COMMAND_CEILING_BYTES to every message it reads, each
+ *   operation's own maxBytes to its request, and MAX_MESSAGE_BYTES to every answer. True unless its every connection is the worker's own code on
  *   the in-process transport, as the worker's own router's is, since 1.5.0 saves a capture over
  *   1 MiB (#35 slice 4a, the lead's ruling; composition/worker-internal.js).
  */

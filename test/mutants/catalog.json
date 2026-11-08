@@ -449,7 +449,7 @@
       "find": "  if (bytes > operation.entry.maxBytes) return",
       "replace": "  if (bytes > Infinity) return",
       "test": "test/kernel/envelope.test.mjs",
-      "name": "holds a request to its operation's maxBytes before its schema, the limit itself included"
+      "name": "holds a request to its operation's maxBytes, counted as the port sends it, before its schema, the limit itself included (#259)"
     },
     {
       "id": "auth-baseline-policy-any-surface",

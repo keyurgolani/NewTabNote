@@ -160,6 +160,35 @@ export function decode(text) {
 }
 
 /**
+ * What `text` comes to as a runtime port sends it, in bytes. Chrome encodes each message as JSON once
+ * more (adapters/messaging/runtime-port.js), so it's the UTF-8 length of that encoding, its quotes and
+ * escapes included, as #259's measure of the ceiling counts a frame.
+ * @param {string} text - the codec's text
+ * @returns {number}
+ */
+export function wireBytes(text) {
+  // Counted, not built, so a frame near the ceiling costs no second copy. JSON.stringify writes
+  // the quotes, escapes a quote and a backslash with a backslash, the five control characters
+  // with names in two characters, the rest under U+0020 and each lone surrogate as \uXXXX, and
+  // every other character as itself, which UTF-8 then counts.
+  let bytes = 2;
+  for (let index = 0; index < text.length; index++) {
+    const unit = text.charCodeAt(index);
+    if (unit === 0x22 || unit === 0x5c) bytes += 2;
+    else if (unit < 0x20)
+      bytes += unit === 0x08 || unit === 0x09 || unit === 0x0a || unit === 0x0c || unit === 0x0d ? 2 : 6;
+    else if (unit < 0x80) bytes += 1;
+    else if (unit < 0x800) bytes += 2;
+    else if (unit >= 0xd800 && unit <= 0xdbff && (text.charCodeAt(index + 1) & 0xfc00) === 0xdc00) {
+      bytes += 4;
+      index++;
+    } else if (unit >= 0xd800 && unit <= 0xdfff) bytes += 6;
+    else bytes += 3;
+  }
+  return bytes;
+}
+
+/**
  * How many bytes `text` takes as UTF-8, which is what a message's size is measured in. A lone
  * surrogate counts as the three bytes of the replacement character it becomes.
  * @param {string} text

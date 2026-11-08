@@ -12,11 +12,20 @@
 export const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 0 });
 
 /**
- * The most any one message may encode to, in bytes: 1 MiB. Journaled operations declare exactly
- * this, and so does any operation whose request carries content or a list as long as the user
- * makes it.
+ * The most an answer, or a query's request, may encode to, in bytes: 1 MiB. A command the catalog
+ * doesn't size small declares COMMAND_CEILING_BYTES instead (#259).
  */
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
+
+/**
+ * The most a command the catalog doesn't size small may come to as a runtime port sends it, the
+ * codec's text once Chrome encodes it as JSON again (codec.js, wireBytes), in bytes: 32 MiB,
+ * half the largest frame Chrome 156.0.8078.4's port carried in #259's measure, 67,108,864 bytes, so a
+ * later Chrome that carries less still takes every frame this sends (#259, the lead's O3). Journaled
+ * commands declare exactly this, and so does any command whose request carries content or a list as
+ * long as the user makes it.
+ */
+export const COMMAND_CEILING_BYTES = 32 * 1024 * 1024;
 
 /** The most a request of ids, flags, and codes may encode to, envelope included: 16 KiB */
 export const SMALL_MESSAGE_BYTES = 16 * 1024;
