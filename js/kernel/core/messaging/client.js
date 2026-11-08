@@ -43,12 +43,11 @@
  * waits changes nothing, and no keep-alive runs: the next request reconnects.
  */
 
-import { decode, encode, encodedBytes } from '../contracts/codec.js';
+import { decode, encode, wireBytes } from '../contracts/codec.js';
 import {
   DEADLINE_GRACE_MS,
   HANDSHAKE_TIMEOUT_MS,
   LEDGER_READ_TIMEOUT_MS,
-  MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   RECONNECTING_AFTER_MS,
   RECONNECT_DELAYS_MS,
@@ -138,9 +137,10 @@ import { silentLogger } from '../ports/runtime.js';
  *   one, such a command answers unknown at once.
  * @property {JournalReader} [journal] - #17's journal, which resume() reads
  * @property {boolean} [capped]
- *   Whether #13's message limits apply to what it sends and hears: MAX_MESSAGE_BYTES, and each
- *   operation's own maxBytes. True unless it's the worker's own client on the in-process
- *   transport, since 1.5.0 saves a capture over 1 MiB (#35 slice 4a, the lead's ruling).
+ *   Whether #13's message limits apply to what it sends and hears: each operation's own maxBytes,
+ *   on the frame as the port sends it (#259), and the codec's read cap on what it hears. True
+ *   unless it's the worker's own client on the in-process transport, since 1.5.0 saves a capture
+ *   over 1 MiB (#35 slice 4a, the lead's ruling).
  */
 
 /**
@@ -762,7 +762,8 @@ export function createClient({
       } catch {
         return refuse('invalid-payload');
       }
-      if (capped && encodedBytes(text) > Math.min(operation.entry.maxBytes, MAX_MESSAGE_BYTES)) {
+      // Counted as the port sends it, once Chrome encodes the text as JSON again (#259)
+      if (capped && wireBytes(text) > operation.entry.maxBytes) {
         return refuse('payload-too-large');
       }
       if (signal) {

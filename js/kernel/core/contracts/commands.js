@@ -17,7 +17,7 @@
  * add theirs as they route callers to the kernel.
  */
 
-import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_MESSAGE_BYTES } from './limits.js';
+import { COMMAND_CEILING_BYTES, COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, SMALL_MESSAGE_BYTES } from './limits.js';
 
 /** @typedef {import('./surfaces.js').Surface} Surface */
 /** @typedef {import('./fields.js').EntityType} EntityType */
@@ -126,8 +126,8 @@ import { COMMAND_DEADLINE_MS, MAINTENANCE_DEADLINE_MS, MAX_MESSAGE_BYTES, SMALL_
  */
 
 /**
- * A command's catalog entry. `maxBytes` caps its encoded request, envelope included, and a
- * journaled command declares exactly MAX_MESSAGE_BYTES. `deadlineMs` runs from when the
+ * A command's catalog entry. `maxBytes` caps its request as the port sends it, envelope included
+ * (codec.js, wireBytes), and a journaled command declares exactly COMMAND_CEILING_BYTES. `deadlineMs` runs from when the
  * request is sent. A command can be cancelled only until the coordinator opens its
  * transaction, and its `commandId` is its idempotency key. `destinations` stays empty until
  * #21 (security boundaries) adds destination ids. A bulk command returns an outcome per item.
@@ -181,10 +181,13 @@ const entry = (module, aggregate, surfaces, { entityTypes, maxBytes = SMALL_MESS
     ...options,
   });
 
-/** What a request that carries content, or a list as long as the user makes it, may encode to */
-const LARGE = MAX_MESSAGE_BYTES;
+/**
+ * What a request that carries content, or a list as long as the user makes it, may come to: the
+ * ceiling, so every command the catalog doesn't size small takes it, a later one too (#259)
+ */
+const LARGE = COMMAND_CEILING_BYTES;
 
-/** A journaled command's options: journaled, and as large as a message, as each journaled entry declares */
+/** A journaled command's options: journaled, and as large as the ceiling, as each journaled entry declares */
 export const JOURNALED = Object.freeze({ maxBytes: LARGE, journaled: true });
 
 /** The entry builder, which the service worker's part of the catalog builds its own with */

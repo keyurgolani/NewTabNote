@@ -18,10 +18,10 @@
  */
 
 import * as v from '../../../lib/valibot/index.mjs';
-import { CodecError, decode, encodedBytes } from './codec.js';
+import { CodecError, decode, wireBytes } from './codec.js';
 import { frameSchema } from './envelope.js';
 import { channelFrameSchema } from './hint-channel.js';
-import { MAX_MESSAGE_BYTES } from './limits.js';
+import { COMMAND_CEILING_BYTES } from './limits.js';
 
 /** @typedef {import('./envelope.js').Frame} Frame */
 /** @typedef {import('./hint-channel.js').ChannelFrame} ChannelFrame */
@@ -91,15 +91,16 @@ export function check(schema, value) {
  * @template {v.GenericSchema} S
  * @param {S} schema
  * @param {unknown} text
- * @param {boolean} capped - whether MAX_MESSAGE_BYTES applies
+ * @param {boolean} capped - whether COMMAND_CEILING_BYTES applies
  * @returns {{ok: true, frame: v.InferOutput<S>, bytes: number} | {ok: false, code: TransportCode, issues: Issue[]}}
  */
 function readAs(schema, text, capped) {
   if (typeof text !== 'string') return { ok: false, code: 'invalid-payload', issues: [] };
-  // Each UTF-16 unit takes at least one byte, so a longer text can't fit
-  if (capped && text.length > MAX_MESSAGE_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
-  const bytes = encodedBytes(text);
-  if (capped && bytes > MAX_MESSAGE_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
+  // Each UTF-16 unit takes at least one byte on the port, so a longer text can't fit
+  if (capped && text.length > COMMAND_CEILING_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
+  // Counted as the port sent it, once Chrome encoded the text as JSON again, as the client counts it (#259)
+  const bytes = wireBytes(text);
+  if (capped && bytes > COMMAND_CEILING_BYTES) return { ok: false, code: 'payload-too-large', issues: [] };
   /** @type {unknown} */
   let message;
   try {
@@ -114,8 +115,9 @@ function readAs(schema, text, capped) {
 }
 
 /**
- * A message as it arrived, read as one frame. Any message over MAX_MESSAGE_BYTES fails
- * before it's parsed, unless `capped` is false, as does one that isn't JSON the codec carries.
+ * A message as it arrived, read as one frame. Any message over COMMAND_CEILING_BYTES, the most any
+ * request may be (#259), fails before it's parsed, unless `capped` is false, as does one that isn't
+ * JSON the codec carries. A request is then held to its own entry's maxBytes (checkRequest).
  * @param {unknown} text
  * @param {Limits} [limits]
  * @returns {ReadFrame}
@@ -145,8 +147,8 @@ export function readChannelFrame(text) {
  */
 
 /**
- * A request frame checked against the operation it names. `bytes` is the encoded size of the
- * message it came in. A request names the catalog version it was built against, and only the
+ * A request frame checked against the operation it names. `bytes` is the size of the message it
+ * came in, as the port sent it (#259). A request names the catalog version it was built against, and only the
  * catalog's current version is served: a journaled command's older entry is upcast at replay
  * instead. The payload it passes on is the one that arrived, once its schema accepts it, not
  * Valibot's copy: that copy drops a `__proto__`, `constructor`, or `prototype` key a loose
