@@ -12,9 +12,10 @@
  * removeNotes (removal.js) instead, which moves the panes around the write.
  *
  * A read rejects when its query fails, as the Storage call it replaces rejected, so the
- * editor fails where it always has. A write answers the command's outcome and never rejects,
- * and a save opens its transaction before saveContent returns, as the kernel commits it in
- * the calling task.
+ * editor fails where it always has. A write answers the command's outcome and never rejects.
+ * On the new tab, a write goes to the worker over #13's port (#35 slice 4d): a save is sent
+ * before saveContent returns, and nothing the page sends after it lands first, since the root
+ * sends its commands in the order the page gives them and the worker's queue runs them so.
  */
 
 import { compareKeys, dailyDateStr } from '../core/domain/note.js';

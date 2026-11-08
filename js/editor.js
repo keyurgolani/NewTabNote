@@ -4545,8 +4545,9 @@ class BlockEditor {
   }
 
   /**
-   * Delete blocks the user deleted from the loaded note, as their own command. Its transaction
-   * opens before this returns, so a save that starts later can't write the blocks back.
+   * Delete blocks the user deleted from the loaded note, as their own command. It's sent before
+   * this returns, and nothing the page sends later lands before it, so a save that starts later
+   * can't write the blocks back.
    * @param {Array<string>} blockIds
    * @returns {Promise<void>}
    */
@@ -5280,9 +5281,9 @@ class BlockEditor {
 
   /**
    * Save a captured state with saveNoteContent: its blocks, what the editor derived from them,
-   * a title set since the last save, and the note names its wiki links hold. The command opens
-   * its note-and-blocks transaction before this returns, and writes no other note field, so a
-   * pin, folder move, or template conversion made meanwhile stays. The search entry's name and
+   * a title set since the last save, and the note names its wiki links hold. The command is sent
+   * before this returns, nothing the page sends after it lands first, and it writes no other note
+   * field, so a pin, folder move, or template conversion made meanwhile stays. The search entry's name and
    * the links follow in the same command, as 1.4.x's save updated them after the note.
    * @param {EditorSaveState} state
    * @param {{preview: string, todoProgress: Object|null, text: string}} meta
@@ -7107,8 +7108,8 @@ class BlockEditor {
       return;
     }
 
-    // Its transaction opens now, with nothing waiting to save, after every save the page issued
-    // so far, which it overwrites (#33)
+    // It's sent now, with nothing waiting to save, after every save the page issued so far, none
+    // of which lands after it, so it overwrites them all (#33)
     const restoring = this.documentClient.restoreSnapshot(noteId, snap.id, snap.blocks || [], snap.title || undefined);
     const restoredAt = pageSeq;
     this._revertingNoteId = noteId;

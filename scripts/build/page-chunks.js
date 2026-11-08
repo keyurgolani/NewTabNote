@@ -11,15 +11,19 @@
  * test/page-chunks.test.js holds both lists to the pages' import graphs.
  *   host     the first five merged: what the three starts share, and the helper they preload
  *            through. So it holds codec.js, which Popup and Side Panel import only in their send
- *            chunks, and op-fields.js, which Popup imports only in its send chunk too: merged,
- *            the new tab's start measured about 1,350 bytes gzip under the bundler's own split.
+ *            chunks: merged with op-fields.js then, the new tab's start measured about 1,350 bytes
+ *            gzip under the bundler's own split. op-fields.js left it with the page move (#35
+ *            slice 4d), since only the send chunks with payload schemas, and the worker, import it.
  *            The group names the helper itself, since no host module calls import(). Left out,
- *            it went with the adapter's group, whose close-drafts-on-demand.js does call
- *            import(), and Popup loaded the adapter chunk for it.
- *   adapter  the rest of #17's adapter, adapter.js and what it imports that host doesn't hold,
- *            and close-drafts-on-demand.js, applyCloseDraft's handler. Once Popup and Side Panel
- *            read through the reader (#35 slices 4b-2 and 4c), only the new tab's start loads it
- *            (ADAPTER_PAGES).
+ *            it would go with whichever group's modules call import(). Since the new tab reads
+ *            through #17's reader too (#35 slice 4d), host holds the reader and page-reads.js,
+ *            which all three starts load.
+ *   adapter  the rest of #17's adapter, adapter.js and what it imports that host doesn't hold.
+ *            Once the three pages read through the reader (#35 slices 4b-2, 4c and 4d), no
+ *            page's start loads it (ADAPTER_PAGES is empty). The export reads, the import's
+ *            check and the copy's reads (backup-file.js, copy-reads.js) and data-urls.js, which
+ *            the new tab alone still runs, aren't on either list, so they go with the new tab's
+ *            own chunk, not host, and Popup's and Side Panel's starts carry none of them.
  * Three modules stay in chunks of the bundler's own:
  *   - preferences.js, the domain's and the application's. Only the new tab's and Popup's starts
  *     import them, so in host Side Panel's start would carry them.
