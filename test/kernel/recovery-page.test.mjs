@@ -35,7 +35,7 @@ import { closeAll as closeContexts, legacyContext, legacyEnv } from './legacy-fi
 import { KeyRange, profileWith, synthesized } from './migration-support.mjs';
 import { faultyFactory } from './storage-faults.mjs';
 import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
-import { realTimers, webLocks } from './trust-support.mjs';
+import { manualClock, realTimers, webLocks } from './trust-support.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('../../js/kernel/composition/recovery.js').RecoveryHost} RecoveryHost */
@@ -138,12 +138,14 @@ function pageDocument() {
  * returns, as a client that stops waiting while the call goes on. The page waits 10 ms where it
  * would wait to read a run again, and reads the time from `now` when one is given. `hashTo`
  * changes the address's hash as Back and Forward do, and calls the listener the page was handed.
+ * `inFlight` counts the calls the page made that haven't answered yet.
  * @param {RecoveryRoot} root
  * @param {{hash?: string, answers?: Record<string, unknown[]>, now?: () => number}} [options]
  */
 function openPage(root, { hash = '', answers = {}, now } = {}) {
   /** @type {string[]} */
   const calls = [];
+  let inFlight = 0;
   /**
    * @param {string} type
    * @param {() => Promise<any>} call
@@ -152,8 +154,18 @@ function openPage(root, { hash = '', answers = {}, now } = {}) {
     const index = calls.filter(made => made === type).length;
     calls.push(type);
     const given = answers[type] ? answers[type][index] : undefined;
-    if (typeof given === 'function') return Promise.resolve(given(call));
-    return given === undefined ? call() : Promise.resolve(given);
+    const answered =
+      typeof given === 'function'
+        ? Promise.resolve(given(call))
+        : given === undefined
+          ? call()
+          : Promise.resolve(given);
+    inFlight += 1;
+    const settled = () => {
+      inFlight -= 1;
+    };
+    answered.then(settled, settled);
+    return answered;
   };
   const trust = {
     /** @param {any} query */
@@ -185,7 +197,7 @@ function openPage(root, { hash = '', answers = {}, now } = {}) {
     location.hash = next;
     for (const listener of hashListeners) listener();
   };
-  return { doc, calls, ready, location, hashTo, reloads: () => reloads };
+  return { doc, calls, ready, location, hashTo, reloads: () => reloads, inFlight: () => inFlight };
 }
 
 /** @param {any} element */
@@ -750,10 +762,19 @@ describe("recovery.html after #115's design review", () => {
 
   /**
    * The page at the Recovery Center on a profile with `count` notes whose index lost its entries,
-   * and a search pipeline as `pipeline` gives it
-   * @param {{count?: number, stuck?: boolean, whole?: boolean, behindOnce?: boolean, answers?: Record<string, unknown[]>, now?: () => number}} [options]
+   * and a search pipeline as `pipeline` gives it. With `clock`, the root reads its times from it, as
+   * a host can give one, so the case sets when each run and sighting happens
+   * @param {{count?: number, stuck?: boolean, whole?: boolean, behindOnce?: boolean, answers?: Record<string, unknown[]>, now?: () => number, clock?: {now(): number}}} [options]
    */
-  async function recoveryOn({ count = 2, stuck = false, whole = false, behindOnce = false, answers = {}, now } = {}) {
+  async function recoveryOn({
+    count = 2,
+    stuck = false,
+    whole = false,
+    behindOnce = false,
+    answers = {},
+    now,
+    clock,
+  } = {}) {
     const tab = await profileWithStaleIndex(count);
     if (whole) {
       // Every entry as the new tab's indexer writes it
@@ -775,7 +796,8 @@ describe("recovery.html after #115's design review", () => {
       pipelines: [{ id: 'search', windowSeq: 0, checkpoint: async () => (reads++ === 0 ? 0 : HEAD) }],
       commitLog: /** @type {any} */ ({ head: async () => HEAD }),
     };
-    const root = createRecoveryRoot({ host: hostOf(context, behindOnce ? once : searchPipeline(tab.env.indexedDB, { stuck })) });
+    const pipeline = behindOnce ? once : searchPipeline(tab.env.indexedDB, { stuck });
+    const root = createRecoveryRoot({ host: hostOf(context, clock ? { ...pipeline, clock } : pipeline) });
     const page = openPage(root, { hash: '#recovery', answers, now });
     await page.ready;
     const card = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'open');
@@ -934,14 +956,46 @@ describe("recovery.html after #115's design review", () => {
     return runs ? runs.querySelector('tbody').querySelectorAll('tr').map((/** @type {any} */ row) => text(row.querySelectorAll('td')[1])) : [];
   };
 
-  it("logs a run as Done and checked only once the check after it passed: still there, or not checked yet, otherwise", async () => {
-    const still = await recoveryOn({ stuck: true });
+  /**
+   * Whether the page read the incidents again after its last `type` call, and every call it made
+   * has answered, so the page has drawn what that read gave it
+   * @param {{calls: string[], inFlight: () => number}} page
+   * @param {string} type
+   */
+  const readSince = (page, type) =>
+    page.calls.lastIndexOf('recovery.incidents') > page.calls.lastIndexOf(type) && page.inFlight() === 0;
+
+  /**
+   * The page after a confirmed rebuild of a problem that stays, on a clock the case sets (#265):
+   * the open check sights the problem, and the run's last update comes a millisecond later. The
+   * check after the run sights it again `after` milliseconds after that, unless `checked` answers
+   * it in the root's place. It returns once the panel reads `state` and the page has drawn the
+   * read after the check.
+   * @param {{after?: number, checked?: unknown, state: string}} options
+   */
+  async function rebuiltOn({ after = 1, checked, state }) {
+    const clock = manualClock(Date.now());
+    const check =
+      checked === undefined ? (/** @type {() => Promise<unknown>} */ call) => (clock.advance(after), call()) : checked;
+    const rebuilt = await recoveryOn({ stuck: true, clock, answers: { 'recovery.check': [check] } });
     try {
-      control(still.page.doc, REBUILD.action, still.card()).click();
-      await until(() => still.panel() && still.panel().getAttribute('data-state') === 'awaiting', 'the preview');
-      control(still.page.doc, REBUILD.confirm, still.panel()).click();
-      await until(() => still.panel() && still.panel().getAttribute('data-state') === 'still-there', 'still there');
-      await until(() => runResults(still.page.doc).length > 0, 'the run logged');
+      clock.advance(1);
+      control(rebuilt.page.doc, REBUILD.action, rebuilt.card()).click();
+      await until(() => rebuilt.panel() && rebuilt.panel().getAttribute('data-state') === 'awaiting', 'the preview');
+      control(rebuilt.page.doc, REBUILD.confirm, rebuilt.panel()).click();
+      await until(() => rebuilt.panel() && rebuilt.panel().getAttribute('data-state') === state, state);
+      // The row is drawn from the read after the check, which starts once the check answers
+      await until(() => readSince(rebuilt.page, 'recovery.check'), 'the read after the check');
+      return rebuilt;
+    } catch (error) {
+      rebuilt.close();
+      throw error;
+    }
+  }
+
+  it("logs a run as Done and checked only once the check after it passed: still there, or not checked yet, otherwise", async () => {
+    const still = await rebuiltOn({ state: 'still-there' });
+    try {
       assert.deepEqual(runResults(still.page.doc), [PAGE.doneStillThere]);
       const glyph = still.page.doc.querySelector('table.trust-runs').querySelector('.trust-glyph');
       assert.ok(glyph.classList.contains('trust-tone-partial'));
@@ -949,17 +1003,25 @@ describe("recovery.html after #115's design review", () => {
       still.close();
     }
     // The check after it couldn't run, so nothing says whether it's fixed
-    const unchecked = await recoveryOn({ stuck: true, answers: { 'recovery.check': [{ kind: 'checked', result: 'not-checked', retryable: true }] } });
+    const unchecked = await rebuiltOn({
+      checked: { kind: 'checked', result: 'not-checked', retryable: true },
+      state: 'not-checked',
+    });
     try {
-      control(unchecked.page.doc, REBUILD.action, unchecked.card()).click();
-      await until(() => unchecked.panel() && unchecked.panel().getAttribute('data-state') === 'awaiting', 'the preview');
-      control(unchecked.page.doc, REBUILD.confirm, unchecked.panel()).click();
-      await until(() => unchecked.panel() && unchecked.panel().getAttribute('data-state') === 'not-checked', 'not checked');
-      await until(() => runResults(unchecked.page.doc).length > 0, 'the run logged');
       assert.deepEqual(runResults(unchecked.page.doc), [PAGE.doneNotChecked]);
       assert.ok(unchecked.page.doc.querySelector('table.trust-runs').querySelector('.trust-glyph').classList.contains('trust-tone-todo'));
     } finally {
       unchecked.close();
+    }
+  });
+
+  it("logs a run as Done, but the problem is still there, when the check after it sighted the problem in the millisecond of the run's last update (#265)", async () => {
+    // As on a fast machine: the check after the run reads the time the run's last update read
+    const still = await rebuiltOn({ after: 0, state: 'still-there' });
+    try {
+      assert.deepEqual(runResults(still.page.doc), [PAGE.doneStillThere]);
+    } finally {
+      still.close();
     }
   });
 
@@ -1663,6 +1725,27 @@ describe("the Recovery Center's words for what it knows (#115's high review)", (
     assert.deepEqual(runResult(run, []), { tone: 'todo', text: PAGE.doneNotChecked });
     // Resolved before the run ended: something else fixed it, not this run's check
     assert.deepEqual(runResult(run, [incident({ state: 'resolved', resolvedAt: 1800 })]), { tone: 'todo', text: PAGE.doneNotChecked });
+  });
+
+  it("reads a sighting in the millisecond of a finished run's last update as the check after it, as it reads a resolution then (#265)", () => {
+    const run = /** @type {any} */ ({
+      id: 'r',
+      commandId: 'rebuild-index',
+      incidentId: '00000000-0000-4000-8000-0000000000c1',
+      state: 'succeeded',
+      outcome: 'verified',
+      startedAt: 1500,
+      updatedAt: 2000,
+    });
+    // Before the run's last update: what the run may have fixed, with no word since
+    assert.deepEqual(runResult(run, [incident({ lastSeenAt: 1999 })]), { tone: 'todo', text: PAGE.doneNotChecked });
+    // At it and after it: the check after the run found the problem still there
+    assert.deepEqual(runResult(run, [incident({ lastSeenAt: 2000 })]), { tone: 'partial', text: PAGE.doneStillThere });
+    assert.deepEqual(runResult(run, [incident({ lastSeenAt: 2001 })]), { tone: 'partial', text: PAGE.doneStillThere });
+    assert.deepEqual(runResult(run, [incident({ state: 'resolved', resolvedAt: 2000 })]), {
+      tone: 'ok',
+      text: PAGE.doneAndChecked,
+    });
   });
 });
 
