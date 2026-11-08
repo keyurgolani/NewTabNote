@@ -189,9 +189,11 @@ describe('Settings > Data & Backup: Copy From Before the Update', () => {
     // The only place the section reads its state: without it Data & Backup shows the heading
     // with no Export button, whatever the copy (R88's read of the rebase onto #129)
     const app = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+    // Through App's settingsOpened, which also has the status lines load for Settings (#20 slice 4c)
+    assert.match(app, /new SettingsController\(\{[^}]*\n {6}onOpened: \(\) => this\.settingsOpened\(\),\n/);
     assert.match(
       app,
-      /new SettingsController\(\{[^}]*\n {6}onOpened: this\.preUpdateCopySection \? \(\) => this\.preUpdateCopySection\.refresh\(\) : null,\n/,
+      /\n {2}settingsOpened\(\) \{\n(?: {4}.*\n)*? {4}return this\.preUpdateCopySection \? this\.preUpdateCopySection\.refresh\(\) : Promise\.resolve\(\);\n {2}\}\n/,
     );
   });
 

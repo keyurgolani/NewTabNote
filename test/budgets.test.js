@@ -282,12 +282,17 @@ describe('the budget gate', () => {
 
   // The modules that load only at their first use, as the test's own copy: the gate's list is
   // pinned to it, and the case puts each one on each page's start and in a lazy chunk
-  const LAZY_ONLY = ['js/ui/menu-keys.js'];
+  const LAZY_ONLY = [
+    'js/kernel/composition/trust-status-ask.js',
+    'js/kernel/composition/trust-status.js',
+    'js/ui/menu-keys.js',
+  ];
   const lazyOnly = (/** @type {string} */ page, /** @type {string} */ file) => `budget/lazy-only ${page}: its start holds ${file}, which loads only at its first use, through the page's loader`;
 
   it("fails a page's start that holds a module that loads only at its first use, by the module and the page, and passes the lazy chunk that holds it (#14 slice 4)", () => {
-    // The gate's list is the copy above, each a file of the tree: the block menus' roles and
-    // keys, which load at a menu's first open
+    // The gate's list is the copy above, each a file of the tree: the new tab's status read's
+    // ask, first in its deferred work, and its status lines, when an answer could put a line in
+    // the sidebar or Settings opens, and the block menus' roles and keys, at a menu's first open
     assert.deepEqual(LAZY_ONLY_MODULES, LAZY_ONLY);
     for (const file of LAZY_ONLY_MODULES) assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} is in the tree`);
     const budgets = budgetsFor({ sidepanel: sidePanelRow });
