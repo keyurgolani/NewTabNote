@@ -50,7 +50,7 @@ const { problem } = require('./diagnostics.js');
 const { htmlTags, cssUrls } = require('./markup.js');
 const { sourcePath } = require('./bundle.js');
 const { PAGES, OWN_PASS_PAGES, BACKGROUND_ENTRY, CLASSIC_SCRIPTS } = require('./vite-config.js');
-const { ADAPTER_MODULES, ADAPTER_PAGES, PAGE_CHUNKS, PRELOAD_HELPER } = require('./page-chunks.js');
+const { ADAPTER_PAGES, PAGE_CHUNKS, PRELOAD_HELPER } = require('./page-chunks.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./package-files.js').PackageFiles} PackageFiles */
@@ -464,11 +464,10 @@ function kib(bytes) {
 
 /**
  * Where the pages pass's host and adapter chunks load (budget/layout, scripts/build/page-chunks.js):
- * each pages-pass start that holds Vite's preload helper loads it from host (P1), the new tab's and
- * Side Panel's load the adapter chunk once a pages-pass start holds a module of the adapter's list
- * (P4), and no other pages-pass start loads it, as Popup reads through #17's reader (P2).
- * recovery.html's start loads no chunk named for either, which only the pages pass's groups write
- * (P5).
+ * each pages-pass start that holds Vite's preload helper loads it from host (P1), and no pages-pass
+ * start loads the adapter chunk, since the new tab, Popup and Side Panel read through #17's reader
+ * (P2, #35 slices 4b-2, 4c and 4d). recovery.html's start loads no chunk named for either, which
+ * only the pages pass's groups write (P5).
  * @param {Record<string, EntryGraph>} graphs
  * @param {ChunkReport[]} chunks
  * @returns {Problem[]}
@@ -480,7 +479,7 @@ function layoutProblems(graphs, chunks) {
   const pages = Object.entries(graphs).filter(([, graph]) => graph.kind === 'page');
   /** The chunks a page's start loads */
   const started = (/** @type {EntryGraph} */ graph) => graph.start.files.flatMap(({ file }) => byFile.get(file) || []);
-  const adapterHeld = pages.some(([name, graph]) => !OWN_PASS_PAGES.includes(name) && graph.start.modules.some((file) => ADAPTER_MODULES.includes(file)));
+  const onAdapter = ADAPTER_PAGES.length > 0 ? `only the starts of ${ADAPTER_PAGES.join(' and ')} load` : "no page's start loads, since each reads through #17's reader";
   for (const [name, graph] of pages) {
     if (OWN_PASS_PAGES.includes(name)) {
       for (const chunk of started(graph)) {
@@ -493,11 +492,8 @@ function layoutProblems(graphs, chunks) {
     }
     if (!ADAPTER_PAGES.includes(name)) {
       for (const chunk of started(graph)) {
-        if (chunk.name === 'adapter') problems.push(problem('budget/layout', name, `its start loads the adapter chunk (${chunk.fileName}), which only the starts of ${ADAPTER_PAGES.join(' and ')} load`));
+        if (chunk.name === 'adapter') problems.push(problem('budget/layout', name, `its start loads the adapter chunk (${chunk.fileName}), which ${onAdapter}`));
       }
-    }
-    if (adapterHeld && ADAPTER_PAGES.includes(name) && !started(graph).some((chunk) => chunk.name === 'adapter')) {
-      problems.push(problem('budget/layout', name, `its start doesn't load the adapter chunk, which the starts of ${ADAPTER_PAGES.join(' and ')} load`));
     }
   }
   return problems;

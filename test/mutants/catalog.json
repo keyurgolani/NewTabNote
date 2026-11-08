@@ -1120,6 +1120,16 @@
       "replace": "",
       "test": "test/editor-save.test.js",
       "name": "refuses a change too large to save with the notice's words, keeps its block on screen, retries nothing, and saves the note again once the change is smaller (#259, rule 20, R26)"
+    },
+    {
+      "id": "newtab-adapter-page-kept",
+      "behavior": "#35 port commands",
+      "protects": "No page's start may load the adapter chunk, the new tab's included, since each reads through #17's reader.",
+      "file": "scripts/build/page-chunks.js",
+      "find": "const ADAPTER_PAGES = Object.freeze([]);\n",
+      "replace": "const ADAPTER_PAGES = Object.freeze(['newtab']);\n",
+      "test": "test/budgets.test.js",
+      "name": "fails the new tab's start that loads the adapter chunk, as Popup's and Side Panel's, since it reads through #17's reader too (#35 slice 4d, P2)"
     }
   ]
 }

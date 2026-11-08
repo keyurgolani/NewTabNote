@@ -98,8 +98,12 @@ const PRELOAD_HELPER = '\0vite/preload-helper.js';
 /** The chunks' names, which no chunk of recovery.html's own pass takes */
 const PAGE_CHUNKS = Object.freeze(['host', 'adapter']);
 
-/** The pages whose start loads the adapter chunk */
-const ADAPTER_PAGES = Object.freeze(['newtab']);
+/**
+ * The pages whose start loads the adapter chunk: none, since the new tab reads through #17's reader
+ * too (#35 slice 4d)
+ * @type {readonly string[]}
+ */
+const ADAPTER_PAGES = Object.freeze([]);
 
 /**
  * The pages pass's groups for the two chunks. Each knows its modules by the sources' path and
