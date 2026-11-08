@@ -660,6 +660,38 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     );
   });
 
+  it("leaves out of the line under a problem that leads a row the user needs only by its check's status, as the header's badge counts no such row, and keeps it under a headline no problem leads: Saved keys, its key dismissed while its check still asks (round 4b)", () => {
+    const passed = entry('credentials', 'vault');
+    const asks = entry('credentials', 'vault', {
+      status: 'action-required',
+      receipt: { ...passed.receipt, status: 'action-required' },
+    });
+    const dismissedKey = /** @type {any} */ ({ ...SAVED_KEY, dismissed: true, dismissChangedAt: AT });
+    const providers = [...REPORT.providers, asks];
+    /** @param {any[]} incidents */
+    const headOf = incidents => {
+      const rows = trustSections(/** @type {any} */ ({ ...REPORT, providers, incidents }), { now: AT }).flatMap(
+        section => section.rows,
+      );
+      const summary = summarize({
+        providers: rowsOn('recovery'),
+        receipts: providers.map(provider => provider.receipt),
+        incidents,
+        copyRead: true,
+        recordsRead: true,
+        recordsState: 'open',
+        now: AT,
+      });
+      return trustHeadline(summary, rows, { now: AT, checking: false });
+    };
+    const leading = headOf([START_FAILED, dismissedKey]);
+    const plain = headOf([dismissedKey]);
+    assert.deepEqual(
+      [leading.title, leading.attention, plain.title, plain.attention.map(row => row.id)],
+      [PAGE.atRisk, [], PAGE.saving, ['credentials']],
+    );
+  });
+
   it("counts the same things as other in Settings and in the Trust Center, from the same records, whether a problem leads or not (the code review's F1)", () => {
     /** One more problem, as its producer raises it */
     const raised = (/** @type {Record<string, unknown>} */ fields) =>

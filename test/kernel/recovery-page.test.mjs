@@ -1870,23 +1870,38 @@ describe("recovery.html with the background worker's failed start, which no chec
     appliedOps: [],
   });
 
+  /** A change the journal kept and couldn't replay, a data risk the worker raises too */
+  const keptEntry = (/** @type {number} */ at) => ({
+    ...failedStart(at),
+    id: '00000000-0000-4000-8000-0000000000e2',
+    ref: '0000e2',
+    key: 'coordinator/entry-unreplayable',
+    faultCode: 'entry-unreplayable',
+    severity: 'data-risk',
+    affected: [],
+    preserved: ['capture', 'editing', 'reading'],
+  });
+
   /**
    * The page on a root whose report and problems hold the worker's failed start, which only the
-   * worker raises, and whose summary has capture at risk from it, as the worker's own would
+   * worker raises, and `more` of the worker's problems after it, and whose summary has capture
+   * at risk from it, as the worker's own would
+   * @param {Array<(at: number) => any>} [more]
    */
-  async function withFailedStart() {
+  async function withFailedStart(more = []) {
     const tab = legacyContext();
     assert.equal(await newTabOn(tab).whenReady(), null);
     const context = legacyContext(tab.env);
     const root = createRecoveryRoot({ host: hostOf(context) });
-    const failed = failedStart(Date.now());
+    const at = Date.now();
+    const raised = [failedStart(at), ...more.map(make => make(at))];
     /** @param {(answer: any) => any} change */
     const each = change =>
       Array.from({ length: 40 }, () => (/** @type {() => Promise<any>} */ call) => call().then(change));
     /** @param {any} answer */
     const withIt = answer =>
       answer && answer.data
-        ? { ...answer, data: { ...answer.data, incidents: [...answer.data.incidents, failed] } }
+        ? { ...answer, data: { ...answer.data, incidents: [...answer.data.incidents, ...raised] } }
         : answer;
     const page = openPage(root, {
       hash: '#trust',
@@ -1939,6 +1954,21 @@ describe("recovery.html with the background worker's failed start, which no chec
       assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.atRisk}`);
       assert.equal(page.doc.getElementById('row-platform').getAttribute('data-attention'), 'true');
       same(page.doc.querySelector('.trust-attention-line'), null, "no line counts the headline's own problem as other");
+    } finally {
+      close();
+    }
+  });
+
+  it("counts NewTabNote's own parts as other once it holds a problem besides the failed start the headline leads with: a change the journal kept (round 4b)", async () => {
+    const { page, close } = await withFailedStart([keptEntry]);
+    try {
+      await page.ready;
+      await until(() => page.doc.querySelector('.trust-attention-line') !== null, 'the attention line');
+      assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.atRisk}`);
+      assert.equal(
+        text(page.doc.querySelector('.trust-attention-line')),
+        "1 other thing needs your attention: NewTabNote's own parts.",
+      );
     } finally {
       close();
     }
