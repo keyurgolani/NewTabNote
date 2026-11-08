@@ -766,7 +766,7 @@ describe('the router: deadlines and cancellation (#13, "Cancellation, deadlines,
     assert.equal(answers.has('again'), false);
   });
 
-  it('stops what a closed connection asked for, except a command that began, which finishes unanswered', async () => {
+  it('stops the queries a closed connection asked for, and keeps each command it received, which runs at its turn and finishes unanswered, a begun one too (#35 slice 4d, rule 17)', async () => {
     const { scheduler, router, contexts, answers, stopped } = holding();
     const peer = await opened(router, 'newtab');
     peer.send(request('q1', { type: 'getNote', noteId: 'query' }));
@@ -775,8 +775,10 @@ describe('the router: deadlines and cancellation (#13, "Cancellation, deadlines,
     await settle();
     peer.close();
     await settle();
-    assert.deepEqual(stopped.sort(), ['query', 'waits']);
-    assert.equal(contexts.get('waits')?.begin(), false);
+    assert.deepEqual(stopped, ['query']);
+    // The command that hadn't begun still opens its transaction at its turn
+    assert.equal(contexts.get('waits')?.begin(), true);
+    answers.get('waits')?.(committed('note-pinned', ['waits']));
     answers.get('begins')?.(committed('note-pinned', ['begins']));
     await settle();
     assert.deepEqual(peer.frames, []);

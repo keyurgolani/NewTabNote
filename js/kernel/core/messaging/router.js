@@ -385,8 +385,12 @@ export function createRouter({
       timers.clear(peer.held);
       peer.held = null;
     }
+    // A command it received still runs at its turn, and its answer goes nowhere: it was checked as
+    // it came in, and it's keyed, so a trash, rename or pin clicked just before a page closes still
+    // happens, as it did in the page. Its deadline still holds while it waits. A query ends here
+    // (#35 slice 4d, rule 17).
     for (const [requestId, running] of [...peer.running]) {
-      end(peer, requestId, running, !(running.isCommand && running.begun));
+      if (!running.isCommand) end(peer, requestId, running, true);
     }
     if (peer.session) tellSessions('closed', peer.session);
   };

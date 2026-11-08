@@ -760,6 +760,26 @@
       "replace": "      const kernels = adapter;\n",
       "test": "test/kernel/worker-root.test.mjs",
       "name": "writes the new tab's settings one after another, each checked against its turn's live right before it goes: a cut turn's held set lands before the next turn's, and one cut while it waits never goes (#35 slice 4d, rule 11)"
+    },
+    {
+      "id": "router-close-ends-received-command",
+      "behavior": "#35 port commands",
+      "protects": "A command the router received before its page's port closed still runs at its turn.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "      if (!running.isCommand) end(peer, requestId, running, true);\n",
+      "replace": "      end(peer, requestId, running, !(running.isCommand && running.begun));\n",
+      "test": "test/kernel/worker-router.test.mjs",
+      "name": "lets a command it received before its port closed run at its turn, and drops its answer, while a query from that port ends and a command whose deadline comes first ends unrun (#35 slice 4d, rule 17)"
+    },
+    {
+      "id": "router-closed-command-outlives-deadline",
+      "behavior": "#35 port commands",
+      "protects": "A command still waiting at its deadline after its page's port closed ends unrun there, so nothing of it commits after a long turn.",
+      "file": "js/kernel/core/messaging/router.js",
+      "find": "      if (running.ended || (running.isCommand && running.begun)) return;\n",
+      "replace": "      if (running.ended || (running.isCommand && (running.begun || peer.phase === 'closed'))) return;\n",
+      "test": "test/background-coordinator.test.js",
+      "name": "holds a command it received before its port closed until its deadline, behind a turn of over 30 s, ends it unrun there, and commits nothing of it when that turn ends (#35 slice 4d, rule 17)"
     }
   ]
 }
