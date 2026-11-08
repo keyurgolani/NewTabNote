@@ -135,6 +135,17 @@ function manualTimers() {
 /** Timers that never run, for a case about something else */
 const INERT = Object.freeze({ setTimeout: () => 0, clearTimeout: () => {} });
 
+/**
+ * The declarations of css/editor.css's first rule whose selector is exactly `selector`
+ * @param {string} selector
+ */
+function ruleOf(selector) {
+  const sheet = fs.readFileSync(path.join(ROOT, 'css', 'editor.css'), 'utf8');
+  const start = sheet.indexOf(`\n${selector} {\n`);
+  assert.ok(start >= 0, `css/editor.css has a ${selector} rule`);
+  return sheet.slice(start, sheet.indexOf('\n}', start));
+}
+
 /** What the tab shows: the sidebar line's words, Settings' lines, the section's sentence, and its button */
 const shown = (/** @type {any} */ doc) => {
   const line = doc.querySelector('.trust-sidebar-line');
@@ -282,35 +293,49 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
   });
 
   it("tones the shapes on two tokens in the tab's own theme blocks, and gives a wrapped line and its focus ring room (the design review's S1, N1 and live check 1)", () => {
-    const sheet = fs.readFileSync(path.join(ROOT, 'css', 'editor.css'), 'utf8');
-    /** The declarations of the first rule whose selector is exactly `selector` */
-    const rule = (/** @type {string} */ selector) => {
-      const start = sheet.indexOf(`\n${selector} {\n`);
-      assert.ok(start >= 0, `css/editor.css has a ${selector} rule`);
-      return sheet.slice(start, sheet.indexOf('\n}', start));
-    };
     // Sage where saving is checked and clay where something needs the user, as recovery.html has
     // them light, and the text's color dark, in the blocks the tab already has
-    assert.match(rule(':root'), /\n {2}--trust-ok: #526f69;\n {2}--trust-action: #604c34;$/);
+    assert.match(ruleOf(':root'), /\n {2}--trust-ok: #526f69;\n {2}--trust-action: #604c34;$/);
     assert.match(
-      rule('[data-theme="dark"]'),
+      ruleOf('[data-theme="dark"]'),
       /\n {2}--trust-ok: var\(--text-primary\);\n {2}--trust-action: var\(--text-primary\);$/,
     );
     assert.match(
-      rule('.trust-glyph.trust-tone-ok'),
+      ruleOf('.trust-glyph.trust-tone-ok'),
       /^\n\.trust-glyph\.trust-tone-ok \{\n {2}color: var\(--trust-ok\);$/,
     );
     assert.match(
-      rule('.trust-glyph.trust-tone-action'),
+      ruleOf('.trust-glyph.trust-tone-action'),
       /^\n\.trust-glyph\.trust-tone-action \{\n {2}color: var\(--trust-action\);$/,
     );
     // A line that wraps keeps its words off both hairlines, and its ring shows inside the
     // sidebar, which clips what's outside it
-    assert.match(rule('.trust-sidebar-line'), /\n {2}min-height: 44px;\n {2}padding: 6px 16px;\n/);
+    assert.match(ruleOf('.trust-sidebar-line'), /\n {2}min-height: 44px;\n {2}padding: 6px 16px;\n/);
     assert.match(
-      rule('.trust-sidebar-line:focus-visible'),
+      ruleOf('.trust-sidebar-line:focus-visible'),
       /^\n\.trust-sidebar-line:focus-visible \{\n {2}outline-offset: -2px;$/,
     );
+  });
+
+  it("steps the line aside, keeping its space, while the bulk bar is up, and balances a wrapped line's two lines (the design review's round 2, S1 and N1)", () => {
+    // The bar that slides up over the sidebar's bottom edge while notes are selected sits in the
+    // sidebar, and selecting notes gives it `visible`
+    const page = fs.readFileSync(path.join(ROOT, 'newtab.html'), 'utf8');
+    const sidebar = page.slice(page.indexOf('<aside id="sidebar" class="sidebar">'), page.indexOf('</aside>'));
+    assert.match(sidebar, /<div id="sidebar-bulk-actions" class="sidebar-bulk-actions">/);
+    const controller = fs.readFileSync(path.join(ROOT, 'js', 'controllers', 'sidebar-controller.js'), 'utf8');
+    assert.match(
+      controller,
+      /getElementById\('sidebar-bulk-actions'\);\n\s+if \(bulkBar\) bulkBar\.classList\.add\('visible'\);/,
+    );
+    // While it's up, the line is hidden where it is, so nothing moves and its link leaves the Tab
+    // order, and it comes back when the selection ends
+    assert.match(
+      ruleOf('.sidebar:has(.sidebar-bulk-actions.visible) .trust-sidebar-line'),
+      /^\n\.sidebar:has\(\.sidebar-bulk-actions\.visible\) \.trust-sidebar-line \{\n {2}visibility: hidden;$/,
+    );
+    // "Saved keys need / your attention", not "Saved keys need your / attention"
+    assert.match(ruleOf('.trust-sidebar-line'), /\n {2}text-wrap: balance;\n/);
   });
 
   it('draws only the newest read started, so an older one that gets its answer later, none included, leaves what the newer drew', async () => {
