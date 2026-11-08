@@ -613,16 +613,16 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     );
   });
 
-  it("gives Backups, its check passed, a data-risk finding's Needs action, and leads its evidence with the finding (round 4b)", () => {
-    const backup = findingOver('backup', 'backup', 'auto-backup-failed', 'data-risk', []);
+  it("gives Notes database, its check passed, a data-risk finding's Needs action, and leads its evidence with the finding: the health records' failed writes, which its probe doesn't look for (round 4b, rebuilt on a check that can pass for the code review's R6-2)", () => {
+    const storage = findingOver('storage', 'storage', 'write-failed', 'data-risk', []);
     assert.deepEqual(
-      [backup.status, backup.statusText, backup.evidence.map(shownEvidence)],
+      [storage.status, storage.statusText, storage.evidence.map(shownEvidence)],
       [
         'action-required',
         'Needs action',
         [
-          ["An automatic backup didn't finish", 'Needs action', 'action', true],
-          ['Backups', 'Passed', 'ok', false],
+          ["Some health records weren't saved", 'Needs action', 'action', true],
+          ['Test read and write', 'Passed', 'ok', false],
         ],
       ],
     );
