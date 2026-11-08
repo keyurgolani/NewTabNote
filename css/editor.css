@@ -5653,6 +5653,9 @@ kbd {
   font-weight: bold;
 }
 
+/* While nothing is selected the bar has slid below the sidebar's edge, and once it has, it's
+   hidden, so its buttons leave the Tab order and the accessibility tree: focus on them scrolled
+   the sidebar, which clips, with no way back by the wheel (#20 slice 4c) */
 .sidebar-bulk-actions {
   position: absolute;
   bottom: 0;
@@ -5665,12 +5668,15 @@ kbd {
   justify-content: space-between;
   align-items: center;
   z-index: 50;
+  visibility: hidden;
   transform: translateY(100%);
-  transition: transform 0.3s ease;
+  transition: transform 0.3s ease, visibility 0s linear 0.3s;
 }
 
 .sidebar-bulk-actions.visible {
+  visibility: visible;
   transform: translateY(0);
+  transition: transform 0.3s ease, visibility 0s;
 }
 
 .bulk-actions-count {
