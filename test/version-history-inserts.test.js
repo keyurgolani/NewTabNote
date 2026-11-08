@@ -349,6 +349,35 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     assert.deepEqual(toasts.at(-1), { message: 'Added 2 AI blocks to note', kind: 'success' });
   });
 
+  it("at the cursor, though the confirm click's blur clears the focus while the save before the insert is pending: the blocks go after the block focused as it began (#276)", async () => {
+    // As page() starts it, with no frozen 1.4.1 Storage beside it: this case reads what's stored
+    // from the database itself, so the mutant review's copy of the tree, which holds no release
+    // files, runs it
+    const env = createLegacyEnv();
+    await createDatabase(env.indexedDB, { records: RECORDS });
+    env.load(...FILES);
+    await startEditorClient(env);
+    const editor = makeEditor(env);
+    await editor.loadNote('A');
+    editor.activeBlock = 'a1';
+    // The confirm click's blur clears the editor's focus 100 ms on (editor.js's onBlockBlur),
+    // which lands while the save the insert waits on is pending, once that save takes longer
+    const save = editor.save.bind(editor);
+    editor.save = (...args) => {
+      const saving = save(...args);
+      editor.activeBlock = null;
+      return saving;
+    };
+    await runUntil(env, aiChat(env, editor).appendAIResponseToNote(REPLY));
+
+    const stored = Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
+      .filter((row) => row.canvasId === 'A')
+      .sort((a, b) => (a.order || 0) - (b.order || 0) || (a.id < b.id ? -1 : 1))
+      .map((row) => row.content);
+    assert.deepEqual(stored, ['Milk', 'See [[Work]]', 'Call the bakery', 'Eggs']);
+    assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'See [[Work]]', 'Call the bakery', 'Eggs']);
+  });
+
   it('with no block focused, after the last block', async () => {
     const { env, frozen } = await page({ records: RECORDS });
     const editor = makeEditor(env);
