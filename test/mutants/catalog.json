@@ -1140,6 +1140,26 @@
       "replace": "      if (editor.noteId === noteId && editor.activeBlock) {\n        const activeIdx = editor.blocks.findIndex(b => b.id === editor.activeBlock);\n",
       "test": "test/version-history-inserts.test.js",
       "name": "at the cursor, though the confirm click's blur clears the focus while the save before the insert is pending: the blocks go after the block focused as it began (#276)"
+    },
+    {
+      "id": "fixture-rows-lifted-for-bytes",
+      "behavior": "#35 fixture byte rows",
+      "protects": "A fixture that expects budget/bytes builds against the real rows, so a start over its row still fails the build.",
+      "file": "scripts/build/verify-fixtures.js",
+      "find": "  if ((fixture.expect || []).includes('budget/bytes')) return false;\n",
+      "replace": "  if (false) return false;\n",
+      "test": "test/build-fixtures.test.js",
+      "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
+    },
+    {
+      "id": "fixture-rows-never-lifted",
+      "behavior": "#35 fixture byte rows",
+      "protects": "A fixture for another rule builds past every start byte row, so its copy's -dirty build id adds no budget/bytes to the codes it expects.",
+      "file": "scripts/build/verify-fixtures.js",
+      "find": "  if ((fixture.expect || []).includes('budget/bytes')) return false;\n",
+      "replace": "  if (true) return false;\n",
+      "test": "test/build-fixtures.test.js",
+      "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
     }
   ]
 }

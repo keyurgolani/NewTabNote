@@ -17,6 +17,12 @@
  * securityEntry: the runner adds the entry a reviewed change would, so the build reports the
  * fixture's rule and not security/drift as well (#21 slice 1b).
  *
+ * A fixture whose codes don't include budget/bytes, a package fixture's or the canary's among
+ * them, builds with every start byte row in its copy's build/budgets.json lifted, so it reports
+ * its rule alone: a copy isn't a git checkout, so its build id carries -dirty (build-info.js), six
+ * more characters on the new tab's start, and the rows have no room (#35 slice 4d). A fixture
+ * that expects budget/bytes builds against the real rows.
+ *
  *   npm run verify:fixtures                        every fixture
  *   npm run verify:fixtures -- <name>...           the ones named
  *   npm run verify:fixtures -- --jobs <n> ...      at most n at once (4 by default)
@@ -43,6 +49,9 @@ const MODES = /** @type {const} */ (['production', 'development']);
  * (#99's review)
  */
 const CANARY_NAMES = Object.freeze(['NTN_CANARY_SECRET', 'VITE_NTN_CANARY_SECRET', 'CHROME_CLIENT_ID', 'CHROME_CLIENT_SECRET', 'CHROME_REFRESH_TOKEN', 'CHROME_EXTENSION_ID', 'CHROME_PUBLISHER_ID', 'GITHUB_TOKEN', 'NPM_TOKEN']);
+
+/** A start byte row in a copy of a fixture that doesn't test the rows: 2 MiB / 1 MiB, past any start */
+const LIFTED_ROW = Object.freeze({ raw: 2097152, gzip: 1048576 });
 
 /**
  * @typedef {object} Edit
@@ -132,6 +141,33 @@ function recordSecurityEntry(dir, fixture) {
 }
 
 /**
+ * Lift every start byte row in the build/budgets.json of the tree at `dir`, a fixture's copy as
+ * edited, to LIFTED_ROW, unless the fixture expects budget/bytes, which builds against the real
+ * rows. A budgets.json that doesn't parse is the fixture's own defect, and stays as it is.
+ * @param {string} dir
+ * @param {Fixture} fixture
+ * @returns {boolean} whether it lifted them
+ */
+function liftByteRows(dir, fixture) {
+  if ((fixture.expect || []).includes('budget/bytes')) return false;
+  const file = path.join(dir, 'build', 'budgets.json');
+  /** @type {any} */
+  let budgets;
+  try {
+    budgets = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  for (const entry of Object.values(budgets.entries || {})) {
+    for (const row of Object.values(entry.start || {})) {
+      if (row && Number.isSafeInteger(row.raw) && Number.isSafeInteger(row.gzip)) Object.assign(row, LIFTED_ROW);
+    }
+  }
+  fs.writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
+  return true;
+}
+
+/**
  * The codes a failed build or package run reported, from its summary lines
  * @param {Run} run
  * @returns {string[]}
@@ -198,6 +234,7 @@ async function runFixture(fixture) {
     copyTree(ROOT, dir);
     applyEdits(dir, fixture.edits || []);
     if (fixture.securityEntry) recordSecurityEntry(dir, fixture);
+    liftByteRows(dir, fixture);
 
     if (kind === 'build') {
       for (const mode of fixture.modes || MODES) {
@@ -308,4 +345,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }
 
-module.exports = { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, runFixture, FIXTURES, CANARY_NAMES };
+module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, runFixture, FIXTURES, CANARY_NAMES };
