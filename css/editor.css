@@ -41,6 +41,11 @@
   --spacing-xl: 24px;
   --spacing-2xl: 32px;
   --spacing-3xl: 48px;
+
+  /* The status lines' shapes (#20 slice 4c): sage where saving is checked, clay where something
+     needs the user, as recovery.html draws them */
+  --trust-ok: #526f69;
+  --trust-action: #604c34;
 }
 
 /* Accessibility: Global Focus Styles */
@@ -105,6 +110,9 @@
   --code-bg: #2a2a2a;
   --selection-bg: rgba(35, 131, 226, 0.25);
   --modal-bg: rgba(0, 0, 0, 0.6);
+  /* The status lines' shapes in the text's color, as recovery.html draws them dark until #16 */
+  --trust-ok: var(--text-primary);
+  --trust-action: var(--text-primary);
 }
 
 [data-font="serif"] {
@@ -1688,7 +1696,7 @@ a.setting-link {
   align-items: center;
   gap: 8px;
   min-height: 44px;
-  padding: 0 16px;
+  padding: 6px 16px;
   color: var(--text-primary);
   font-size: 0.8125rem;
   font-weight: 500;
@@ -1728,6 +1736,21 @@ a.setting-link {
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+
+/* The shape where saving is checked, and where something needs the user */
+.trust-glyph.trust-tone-ok {
+  color: var(--trust-ok);
+}
+
+.trust-glyph.trust-tone-action {
+  color: var(--trust-action);
+}
+
+/* The page's ring sits outside the line, which the sidebar clips: it goes inside, as the block
+   menus' full-width items' does */
+.trust-sidebar-line:focus-visible {
+  outline-offset: -2px;
 }
 
 /* API Key Security (Req 38) */
