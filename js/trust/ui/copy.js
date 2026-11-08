@@ -49,12 +49,21 @@ export const PROVIDER = Object.freeze({
 });
 
 /**
- * What a row's own check tested, where the row's name is the check's: its title among the checks
- * a problem that leads a row's evidence sets apart, so a row that isn't working never reads its
- * own name beside a check that passed (signed as round 5). Every other check's label says what
- * it tested already
+ * What a row's own check tested, from the check's own sentence: its title among the checks a
+ * problem that leads a row's evidence sets apart, so a row that isn't working never reads its own
+ * name beside a check that passed (signed as round 5, and round 5's check titles). Each row here
+ * is its check's provider, so its label is the row's name. These are the rows that can reach that:
+ * a check that can pass under a problem it doesn't look for, or under the worker's, which no check
+ * on recovery.html covers. Any other row that comes to reach it takes a title here first
+ * (test/kernel/trust-problem-words.test.mjs holds it). NewTabNote's own parts' checks are named
+ * by their parts already
  */
-export const TESTED = Object.freeze({ capture: 'Test save' });
+export const TESTED = Object.freeze({
+  capture: 'Test save',
+  storage: 'Test read and write',
+  'recovery-readiness': 'Newest recovery point',
+  index: 'Search index up to date',
+});
 
 /** A receipt's verification operation, in plain words: the sentence in "How this was checked" */
 export const OPERATION = Object.freeze({
