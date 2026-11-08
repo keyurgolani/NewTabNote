@@ -514,18 +514,24 @@ export function trustSections(report, { now, checking = new Set() }) {
     // which by its title, in place of its check's sentence (round 2, S3)
     const [named] = counted.length > 0 && !ATTENTION.includes(checked) ? problemsOf(counted, new Map(), id => entryOf(id) || null) : [];
     // Each row names each problem it's counted for that its line doesn't: the line names its
-    // first problem, or says what a check that found something found, which speaks only for the
-    // faults that check looks for, never for the health records' own two, which no check looks
-    // for. So the headline's link lands on what it counted, on any row (the Design gate's review
-    // of round 4's shots, signed as round 5, and the code review's R5-2 and R6-1)
+    // first problem, or says what a check that found something found, which speaks for the
+    // faults that check looks for, and for the health records' own two, which no check looks
+    // for, only when its finding is the records themselves, as Notes database's is at can't
+    // confirm. So the headline's link lands on what it counted, on any row, and no line repeats
+    // the row's (the Design gate's review of round 4's shots, signed as round 5, and the code
+    // review's R5-2, R6-1 and R7-1)
     const spoken = named ? null : entries.find(entry => ATTENTION.includes(entry.status)) || null;
+    const found = /** @type {{consequenceKey?: unknown, evidence?: Record<string, unknown>} | null} */ (spoken && spoken.receipt);
+    const aboutRecords =
+      found !== null &&
+      (found.consequenceKey === 'storage.trust-records-unavailable' || (found.evidence !== undefined && found.evidence.subjectId === 'NewTabNoteTrust'));
     /** @param {Incident} incident */
     const spokenFor = incident =>
       spoken !== null &&
       incident.providerId === spoken.providerId &&
-      CHECKED.has(`${incident.providerId}/${incident.faultCode}`) &&
-      incident.key !== OPEN_FAILED_KEY &&
-      incident.key !== WRITE_FAILED_KEY;
+      (incident.key === OPEN_FAILED_KEY || incident.key === WRITE_FAILED_KEY
+        ? aboutRecords
+        : CHECKED.has(`${incident.providerId}/${incident.faultCode}`));
     const problemLines = problemsOf(counted, new Map(), id => entryOf(id) || null)
       .filter(problem => (named ? problem.title !== named.title : !problem.incidents.every(spokenFor)))
       .map(problem => ({
