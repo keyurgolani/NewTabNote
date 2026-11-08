@@ -43,6 +43,8 @@ const { pathToFileURL } = require('url');
 const ROOT_DIR = path.join(__dirname, '..');
 const CATALOG = 'test/mutants/catalog.json';
 const REPORTER = path.join(__dirname, 'lib', 'mutant-reporter.mjs');
+// Loaded first in a names-only run, which registers a file's tests and runs none of them (#257)
+const NAMES_ONLY = path.join(__dirname, 'lib', 'names-only.cjs');
 // The element-assert guard npm test loads first (docs/testing.md), from this tree, since a scratch
 // tree a test of this script makes has no test/helpers
 const ELEMENT_GUARD = pathToFileURL(path.join(ROOT_DIR, 'test', 'helpers', 'element-assert-guard.mjs')).href;
@@ -178,13 +180,15 @@ let running = null;
 
 /**
  * Runs one test file in `cwd` as `npm test` runs it, and reads what each test did. It runs
- * asynchronously, so a signal reaches this process while the file runs.
+ * asynchronously, so a signal reaches this process while the file runs. With `namesOnly`, the
+ * file's tests register and none of them runs (lib/names-only.cjs), so it lists them (#257).
  * @param {string} cwd
  * @param {string} testFile
  * @param {number} timeoutSeconds
+ * @param {{namesOnly?: boolean}} [options]
  * @returns {Promise<{tests: TestRun[], timedOut: boolean, status: number | null, output: string}>}
  */
-function runTestFile(cwd, testFile, timeoutSeconds) {
+function runTestFile(cwd, testFile, timeoutSeconds, { namesOnly = false } = {}) {
   const env = { ...process.env };
   for (const name of PROXY_VARS) delete env[name];
   // Set when this runs under node --test itself, which would make the child report to it
@@ -192,7 +196,7 @@ function runTestFile(cwd, testFile, timeoutSeconds) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [`--import=${ELEMENT_GUARD}`, '--experimental-vm-modules', '--test', `--test-reporter=${REPORTER}`, '--test-reporter-destination=stdout', testFile],
+      [...(namesOnly ? [`--require=${NAMES_ONLY}`] : []), `--import=${ELEMENT_GUARD}`, '--experimental-vm-modules', '--test', `--test-reporter=${REPORTER}`, '--test-reporter-destination=stdout', testFile],
       { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     running = child;
@@ -425,4 +429,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { loadCatalog, occurrences, parseArgs };
+module.exports = { loadCatalog, named, occurrences, parseArgs, runTestFile };

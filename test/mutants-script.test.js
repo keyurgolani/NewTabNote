@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { loadCatalog, occurrences } = require('../scripts/mutants.js');
+const { loadCatalog, named, occurrences, runTestFile } = require('../scripts/mutants.js');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'mutants.js');
 
@@ -51,6 +51,19 @@ const load = () => {
 test('vm adds', () => assert.equal(load().add(2, 3), 5));
 test('vm knows a positive number', () => assert.equal(load().isPositive(1), true));
 `;
+
+// Tests whose setup and bodies throw, so a names-only run that ran any of them fails them. Each
+// file takes node:test's named exports, as a CommonJS module and as an ES module.
+const BODIES = `before(() => { throw new Error('a setup hook ran'); });
+beforeEach(() => { throw new Error('a setup hook ran'); });
+it('throws', () => { throw new Error('a body ran'); });
+describe('a suite', () => {
+  it('throws too', () => { throw new Error('a body ran'); });
+  it.skip('is skipped', () => { throw new Error('a body ran'); });
+});
+`;
+const BODIES_CJS = `'use strict';\nconst { before, beforeEach, describe, it } = require('node:test');\n${BODIES}`;
+const BODIES_ESM = `import { before, beforeEach, describe, it } from 'node:test';\n${BODIES}`;
 
 /**
  * A mutant over vmlib.js
@@ -117,6 +130,41 @@ function run(root) {
     // No report: the run stopped, and stderr says why
   }
   return { status: result.status, report, stderr: result.stderr };
+}
+
+/**
+ * Each mutant whose find doesn't occur exactly once in its file, as `id: count`. The run counts
+ * such a mutant stale and never makes it, so the test that protects its behavior goes unchecked (#257).
+ * @param {Array<{id: string, file: string, find: string}>} mutants
+ * @param {string} root
+ * @returns {string[]}
+ */
+const staleFinds = (mutants, root) =>
+  mutants.flatMap((entry) => {
+    const count = occurrences(fs.readFileSync(path.join(root, entry.file), 'utf8'), entry.find);
+    return count === 1 ? [] : [`${entry.id}: ${count}`];
+  });
+
+/**
+ * Each mutant whose name doesn't match exactly one test in its test file, as `id: count`, by the
+ * run's own rule: its own name, or its suites' names and its own joined by ` > `. The run counts
+ * such a mutant stale too. Each test file runs once with its tests registered and none of them
+ * run, so this lists the names a run would, those a shared suite or a loop gives included (#257).
+ * @param {Array<{id: string, test: string, name: string}>} mutants
+ * @param {string} root
+ * @returns {Promise<string[]>}
+ */
+async function staleNames(mutants, root) {
+  const tests = new Map();
+  for (const file of new Set(mutants.map((entry) => entry.test))) {
+    const listed = await runTestFile(root, file, 120, { namesOnly: true });
+    assert.equal(listed.timedOut, false, `${file} timed out with its tests registered and none run`);
+    tests.set(file, listed.tests);
+  }
+  return mutants.flatMap((entry) => {
+    const count = named(tests.get(entry.test), entry.name).length;
+    return count === 1 ? [] : [`${entry.id}: ${count}`];
+  });
 }
 
 test('kills a mutant its named test catches, and fails the run for one that survives, is stale, or is invalid', (t) => {
@@ -241,6 +289,59 @@ test("the repository's catalog reads, and every behavior the approved test plan 
   const plan = ['commit waits', 'schema fields', 'backup inclusion', 'placeholder health', 'auth checks', 'sanitizer rules', 'conflict branches'];
   const covered = new Set([...mutants.map((entry) => entry.behavior), ...pending.map((entry) => entry.behavior)]);
   assert.deepEqual(plan.filter((behavior) => !covered.has(behavior)), []);
+});
+
+test("every mutant in the repository's catalog finds its text exactly once in its file (#257)", () => {
+  const root = path.join(__dirname, '..');
+  const { mutants } = loadCatalog(path.join(root, 'test', 'mutants', 'catalog.json'), root);
+  assert.deepEqual(staleFinds(mutants, root), []);
+});
+
+test('reports a mutant whose find is missing from its file, and one whose find is there twice (#257)', (t) => {
+  const root = tree({
+    mutants: [
+      mutant('once', '(a, b) => a + b', '(a, b) => a - b', 'adds'),
+      mutant('missing', '(a, b) => a * b', '(a, b) => a / b', 'adds'),
+      // `(n) => n` begins both isPositive and twice
+      mutant('twice', '(n) => n', '(n) => -n', 'doubles'),
+    ],
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { mutants } = loadCatalog(path.join(root, 'test', 'mutants', 'catalog.json'), root);
+  assert.deepEqual(staleFinds(mutants, root), ['missing: 0', 'twice: 2']);
+});
+
+test("every mutant in the repository's catalog names exactly one test in its test file (#257)", async () => {
+  const root = path.join(__dirname, '..');
+  const { mutants } = loadCatalog(path.join(root, 'test', 'mutants', 'catalog.json'), root);
+  assert.deepEqual(await staleNames(mutants, root), []);
+});
+
+test('reports a mutant whose test was renamed, and one whose name two tests share (#257)', async (t) => {
+  const root = tree({
+    mutants: [
+      mutant('named', '(a, b) => a + b', '(a, b) => a - b', 'adds'),
+      // Still the test's old name, as a rename of "adds" would leave it
+      mutant('renamed', '(a, b) => a + b', '(a, b) => a - b', 'sums'),
+      mutant('shared', 'n * 2', 'n * 3', 'doubles'),
+      mutant('qualified', 'n * 2', 'n * 3', 'two > doubles'),
+    ],
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { mutants } = loadCatalog(path.join(root, 'test', 'mutants', 'catalog.json'), root);
+  assert.deepEqual(await staleNames(mutants, root), ['renamed: 0', 'shared: 2']);
+});
+
+test("lists a file's tests in a names-only run, and runs none of their bodies or setup hooks (#257)", async (t) => {
+  const root = tree({ mutants: [] });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'bodies.test.js'), BODIES_CJS);
+  fs.writeFileSync(path.join(root, 'bodies.test.mjs'), BODIES_ESM);
+  for (const file of ['bodies.test.js', 'bodies.test.mjs']) {
+    const { tests } = await runTestFile(root, file, 60, { namesOnly: true });
+    const listed = tests.map((entry) => [entry.path.join(' > '), entry.outcome, entry.skipped]);
+    assert.deepEqual(listed, [['throws', 'pass', false], ['a suite > throws too', 'pass', false], ['a suite > is skipped', 'pass', true]], file);
+  }
 });
 
 test('counts every occurrence of a find, overlapping ones too', () => {
