@@ -6,6 +6,8 @@
  * The house style for a failure is "Failed to X: reason."
  */
 
+import { CAPTURE_CONSEQUENCE, GROUP } from './status-copy.js';
+
 /** What a capability is called in "Still works:" and "Not working:" lines */
 export const CAPABILITY = Object.freeze({
   capture: 'saving new notes',
@@ -99,10 +101,8 @@ export const UPDATE_SAVES = 'They save normally.';
 
 /** A receipt's consequence: a row's second line when it isn't fine, by provider/key or key */
 export const CONSEQUENCE = Object.freeze({
-  'storage.capture-at-risk': "NewTabNote couldn't save a test entry, so new notes and captures may not be saved.",
-  'storage.quota': "This device is out of space for NewTabNote, so new notes and changes can't be saved.",
-  'storage.version-too-new': "A newer version of NewTabNote changed your notes database, so this version won't write to it.",
-  'storage.unavailable': "NewTabNote couldn't open your notes database, so notes can't be read or saved here.",
+  // Capture at risk, by its cause, as the status pages say it too (status-copy.js)
+  ...CAPTURE_CONSEQUENCE,
   'storage.trust-records-unavailable':
     "Notes save normally, but NewTabNote can't keep its own health records right now, so this page may miss recent problems.",
   // The director's change 9: an update waiting, waiting for free space for its copy, or that
@@ -352,18 +352,8 @@ export const TARGET = Object.freeze({
   vectors: 'Semantic search data',
 });
 
-/** The groups trust.summary names, as every status page says them (change 6) */
-export const GROUP = Object.freeze({
-  storage: 'Notes database',
-  vault: 'Saved keys',
-  backup: 'Backups',
-  sync: 'Sync',
-  indexing: 'Search',
-  inference: 'AI',
-  permissions: 'Permissions',
-  recovery: 'Recovery points',
-  platform: "NewTabNote's own parts",
-});
+/** The groups trust.summary names, as every status page says them (change 6, status-copy.js) */
+export { GROUP };
 
 /** The page's own words: its views, headlines, and states */
 export const PAGE = Object.freeze({
