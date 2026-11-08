@@ -22,13 +22,15 @@ const NOW = Date.parse('2026-11-07T18:42:00');
 const CHECKED = NOW - 5 * 60 * 1000;
 
 /**
- * A group in a summary: verified and needing nothing unless `fields` say otherwise
+ * A group in a summary: verified, needing nothing, and with no problem that leads unless `fields`
+ * say otherwise
  * @param {string} group
  * @param {Record<string, unknown>} [fields]
  */
 const group = (group, fields = {}) => ({
   group,
   needsAction: 0,
+  leading: 0,
   checkedAt: CHECKED,
   cause: null,
   ...fields,
@@ -248,11 +250,13 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
       ],
       [cause({ providerId: 'storage', faultCode: 'scan-findings', severity: 'capture-risk' }), null],
     ])) {
+      // Its one problem leads, and a receipt's risk is no problem that needs action
+      const risk = riskCause.from === 'incident' ? { needsAction: 1, leading: 1 } : {};
       const lines = await linesOf(
         summary({
           capture: 'at-risk',
           route: 'recovery',
-          groups: [group('storage', { needsAction: 1, cause: riskCause }), group('vault', { needsAction: 1 })],
+          groups: [group('storage', { ...risk, cause: riskCause }), group('vault', { needsAction: 1 })],
         }),
       );
       assert.deepEqual(lines.sidebar, {
@@ -262,7 +266,8 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
       });
       assert.deepEqual(lines.settings, {
         first: { text: 'New notes may not be saved.', cause: sentence, tone: 'failed' },
-        // The other groups, not the one at risk, counted as other after the line that leads (round 4)
+        // The other groups, not the one whose problem leads, counted as other after the line that
+        // leads (round 4)
         second: '1 other thing needs your attention: Saved keys.',
         riskLine: 'The Recovery Center shows what went wrong and can save a copy of everything that can still be read.',
         action: { label: 'Open Recovery Center', href: 'recovery.html#recovery', primary: true },
@@ -282,6 +287,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
           }),
           group('platform', {
             needsAction: 1,
+            leading: 1,
             cause: cause({ providerId: 'coordinator', faultCode: 'start-failed', severity: 'capture-risk' }),
           }),
         ],
@@ -327,7 +333,7 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
           summary({
             ...fields,
             groups: [
-              group('storage', fields.capture === 'at-risk' ? { needsAction: 1, cause: riskCause } : {}),
+              group('storage', fields.capture === 'at-risk' ? { needsAction: 1, leading: 1, cause: riskCause } : {}),
               ...needing.map(name => group(name, { needsAction: 1 })),
             ],
           }),
@@ -368,12 +374,12 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
     assert.deepEqual(
       [
         // The worker's failed start alone, and beside a problem of its own group's that isn't it
-        await second(atRisk, [group('storage'), group('platform', { needsAction: 1, cause: startFailed })]),
-        await second(atRisk, [group('storage'), group('platform', { needsAction: 2, cause: startFailed })]),
+        await second(atRisk, [group('storage'), group('platform', { needsAction: 1, leading: 1, cause: startFailed })]),
+        await second(atRisk, [group('storage'), group('platform', { needsAction: 2, leading: 1, cause: startFailed })]),
         // The records' own problem alone, and beside a saved key
-        await second(unsure, [group('storage', { needsAction: 1, cause: recordsOwn })]),
+        await second(unsure, [group('storage', { needsAction: 1, leading: 1, cause: recordsOwn })]),
         await second(unsure, [
-          group('storage', { needsAction: 1, cause: recordsOwn }),
+          group('storage', { needsAction: 1, leading: 1, cause: recordsOwn }),
           group('vault', { needsAction: 1 }),
         ]),
       ],
@@ -382,6 +388,30 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
         "1 other thing needs your attention: NewTabNote's own parts.",
         null,
         '1 other thing needs your attention: Saved keys.',
+      ],
+    );
+  });
+
+  it("count no group as other that holds two problems the first line leads with, and one that holds a third: both probes out of space at capture risk, and NewTabNoteTrust not opening and its writes failing at can't confirm (the code review's F1)", async () => {
+    const quota = cause({ providerId: 'capture', faultCode: 'quota', errorCode: 'quota', severity: 'capture-risk' });
+    const recordsOwn = cause({ faultCode: 'open-failed', severity: 'data-risk' });
+    /** @param {Record<string, unknown>} fields @param {any[]} groups */
+    const second = async (fields, groups) => (await linesOf(summary({ ...fields, groups }))).settings.second;
+    const atRisk = { capture: 'at-risk', route: 'recovery' };
+    const unsure = { capture: 'unknown', route: 'recovery', records: 'fallback' };
+    assert.deepEqual(
+      [
+        // Both in the storage group, as the worker's read counts them, and a third beside them there
+        await second(atRisk, [group('storage', { needsAction: 2, leading: 2, cause: quota })]),
+        await second(atRisk, [group('storage', { needsAction: 3, leading: 2, cause: quota })]),
+        await second(unsure, [group('storage', { needsAction: 2, leading: 2, cause: recordsOwn })]),
+        await second(unsure, [group('storage', { needsAction: 3, leading: 2, cause: recordsOwn })]),
+      ],
+      [
+        null,
+        '1 other thing needs your attention: Notes database.',
+        null,
+        '1 other thing needs your attention: Notes database.',
       ],
     );
   });

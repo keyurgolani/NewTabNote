@@ -14,10 +14,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
-import { rowsOn } from '../../js/trust/core/providers/rows.js';
-import { summarize } from '../../js/trust/core/summary.js';
+import { PROVIDER_ROWS, rowsOn } from '../../js/trust/core/providers/rows.js';
+import { narrowStatus } from '../../js/trust/core/status-message.js';
+import { leadingOf, summarize } from '../../js/trust/core/summary.js';
+import { OPEN_FAILED_KEY, WRITE_FAILED_KEY } from '../../js/trust/core/trust-records.js';
+import { HEALTH_GROUPS } from '../../js/trust/core/vocabulary.js';
 import { INCIDENT, INCIDENT_TEXT, PAGE, RESOLVED } from '../../js/trust/ui/copy.js';
 import { attentionText, problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
+import { statusOf } from '../../js/trust/ui/status.js';
+import { GROUP } from '../../js/trust/ui/status-copy.js';
 
 const AT = new Date(2026, 10, 7, 18, 42).getTime();
 const ROOT = path.join(import.meta.dirname, '..', '..');
@@ -606,5 +611,139 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         ],
       ],
     );
+  });
+
+  it("counts the same things as other in Settings and in the Trust Center, from the same records, whether a problem leads or not (the code review's F1)", () => {
+    /** One more problem, as its producer raises it */
+    const raised = (/** @type {Record<string, unknown>} */ fields) =>
+      /** @type {any} */ ({ ...START_FAILED, affected: [], preserved: [], ...fields });
+    const quota = (/** @type {string} */ providerId, /** @type {string} */ n) =>
+      raised({
+        id: `00000000-0000-4000-8000-0000000000${n}`,
+        ref: `0000${n}`,
+        key: `${providerId}/quota/CanvasTabDB`,
+        providerId,
+        faultCode: 'quota',
+        subjectId: 'CanvasTabDB',
+        severity: 'capture-risk',
+        affected: ['capture'],
+      });
+    const CAPTURE_QUOTA = quota('capture', 'f1');
+    const STORAGE_QUOTA = quota('storage', 'f2');
+    const SCAN = raised({
+      id: '00000000-0000-4000-8000-0000000000f3',
+      ref: '0000f3',
+      key: 'storage/scan-findings/CanvasTabDB',
+      providerId: 'storage',
+      faultCode: 'scan-findings',
+      subjectId: 'CanvasTabDB',
+      severity: 'degraded',
+    });
+    const OPEN = raised({
+      id: '00000000-0000-4000-8000-0000000000f4',
+      ref: '0000f4',
+      key: OPEN_FAILED_KEY,
+      providerId: 'storage',
+      faultCode: 'open-failed',
+      subjectId: 'NewTabNoteTrust',
+      severity: 'data-risk',
+    });
+    const WRITE = raised({
+      id: '00000000-0000-4000-8000-0000000000f5',
+      ref: '0000f5',
+      key: WRITE_FAILED_KEY,
+      providerId: 'storage',
+      faultCode: 'write-failed',
+      subjectId: null,
+      severity: 'data-risk',
+    });
+    const providers = [
+      ...REPORT.providers,
+      entry('recovery-readiness', 'recovery', { status: 'unverified', receipt: null, stillWorks: [] }),
+      entry('credentials', 'vault'),
+    ];
+    const receipts = providers.filter(provider => provider.receipt).map(provider => provider.receipt);
+    /**
+     * Each surface's line after its first, over the same receipts and incidents: the Trust
+     * Center's on recovery.html's rows, and Settings' from the worker's read on the new tab's,
+     * with the groups each names
+     * @param {any[]} incidents
+     * @param {'open' | 'fallback'} recordsState
+     */
+    const lines = (incidents, recordsState) => {
+      const common = { receipts, incidents, copyRead: true, recordsRead: true, recordsState, now: AT };
+      const report = /** @type {any} */ ({ ...REPORT, records: recordsState, providers, incidents });
+      const rows = trustSections(report, { now: AT }).flatMap(section => section.rows);
+      const head = trustHeadline(summarize({ ...common, providers: rowsOn('recovery') }), rows, {
+        now: AT,
+        checking: false,
+      });
+      const workspace = { ...common, providers: rowsOn('workspace') };
+      const settings = statusOf(narrowStatus(summarize(workspace), leadingOf(workspace)), { now: AT }).settings.second;
+      // Groups and rows don't map one to one: Notes database's group holds Saving new notes'
+      // row and its own, AI's holds Local model and Cloud AI, Permissions' its own and AI access
+      // to notes, and NewTabNote's own parts folds four providers into one row. So each row
+      // stands for its group, and the states here name the same words on both surfaces
+      const groupOf = (/** @type {string} */ id) =>
+        id === 'platform' ? 'platform' : PROVIDER_ROWS.find(row => row.id === id)?.group;
+      return {
+        trust: head.attention.length > 0 ? attentionText(head.attention, head.openRecovery) : null,
+        settings,
+        groups: [
+          [...new Set(head.attention.map(row => groupOf(row.id)))],
+          HEALTH_GROUPS.filter(
+            group => settings !== null && settings.includes(/** @type {Record<string, string>} */ (GROUP)[group]),
+          ),
+        ],
+      };
+    };
+    // Each names what it counts in its own order, the Trust Center its page's and Settings its
+    // groups', so a line of two names can differ in order alone
+    for (const [
+      why,
+      incidents,
+      recordsState,
+      line,
+      inSettings = line,
+    ] of /** @type {Array<[string, any[], 'open' | 'fallback', string | null, string?]>} */ ([
+      ["the worker's failed start alone", [START_FAILED], 'open', null],
+      [
+        "the worker's failed start, a change the journal kept, and the stopped purge",
+        [START_FAILED, KEPT, PURGE],
+        'open',
+        "2 other things need your attention: Recovery points and NewTabNote's own parts.",
+      ],
+      ['both probes out of space', [CAPTURE_QUOTA, STORAGE_QUOTA], 'open', null],
+      [
+        'both probes out of space, and a scan finding in the notes database',
+        [CAPTURE_QUOTA, STORAGE_QUOTA, SCAN],
+        'open',
+        '1 other thing needs your attention: Notes database.',
+      ],
+      [
+        'both probes out of space, and a saved key',
+        [CAPTURE_QUOTA, STORAGE_QUOTA, SAVED_KEY],
+        'open',
+        '1 other thing needs your attention: Saved keys.',
+      ],
+      ['NewTabNoteTrust not opening and its writes failing', [OPEN, WRITE], 'fallback', null],
+      [
+        'NewTabNoteTrust not opening and its writes failing, and a saved key',
+        [OPEN, WRITE, SAVED_KEY],
+        'fallback',
+        '1 other thing needs your attention: Saved keys.',
+      ],
+      [
+        'a saved key and the stopped purge, with no problem leading',
+        [SAVED_KEY, PURGE],
+        'open',
+        '2 things need your attention: Recovery points and Saved keys.',
+        '2 things need your attention: Saved keys and Recovery points.',
+      ],
+    ])) {
+      const seen = lines(incidents, recordsState);
+      assert.deepEqual([seen.trust, seen.settings], [line, inSettings], why);
+      assert.deepEqual([...seen.groups[0]].sort(), [...seen.groups[1]].sort(), `${why}: the same groups`);
+    }
   });
 });
