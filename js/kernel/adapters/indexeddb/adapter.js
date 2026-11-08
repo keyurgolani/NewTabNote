@@ -99,7 +99,8 @@ import { withoutPlacement } from '../../core/domain/placement.js';
 import { digestOf, sameConflict } from '../../core/memory/fingerprint.js';
 import { IDB_SETTINGS_KEYS, LATER_STORES } from '../../core/ports/repository.js';
 import { systemClock } from '../../core/ports/runtime.js';
-import { createAutoBackup, exportFile, exportObject, prepareImport, readExport } from './backups.js';
+import { exportFile, exportObject, readExport } from './backup-file.js';
+import { createAutoBackup, prepareImport } from './backups.js';
 import { createIndexedDbCommitLog, logHead, writeChanges } from './changes.js';
 import { conflictRecord } from './conflicts.js';
 import { createConnection } from './connection.js';
@@ -180,10 +181,11 @@ import { createVersionTracker } from './versions.js';
  *   store before it opens it, as js/storage.js's page open did: the new tab's (#17 PR 4a,
  *   recovery-copies.js)
  * @property {boolean} [backups]
- *   It runs 1.4.x's backup tasks and makes the export file (backups.js): the new tab's, which
- *   passes chrome.storage.local as `settings`, for the automatic backups and the recovery copy
- *   (#17 PR 4a, the lead's Q1). Popup, Side Panel, and the service worker run none, as the
- *   policy has it, so their adapters answer each as one without the `backups` flag does.
+ *   It runs 1.4.x's backup tasks (backups.js) and makes the export file (backup-file.js): the
+ *   new tab's, which passes chrome.storage.local as `settings`, for the automatic backups and
+ *   the recovery copy (#17 PR 4a, the lead's Q1). Popup, Side Panel, and the service worker run
+ *   none, as the policy has it, so their adapters answer each as one without the `backups` flag
+ *   does.
  * @property {import('./recovery-copies.js').CopyLocks | null} [locks]
  *   Web Locks, which that copy's check and write hold so tabs that open together write one
  * @property {Clock} [clock] - when a ledger row, a conflict record, and a tombstone are written

@@ -82,9 +82,11 @@ const HOST_MODULES = Object.freeze([
 
 const ADAPTER_MODULES = Object.freeze([
   'js/kernel/adapters/indexeddb/adapter.js',
+  'js/kernel/adapters/indexeddb/backup-file.js',
   'js/kernel/adapters/indexeddb/backups.js',
   'js/kernel/adapters/indexeddb/changes.js',
   'js/kernel/adapters/indexeddb/conflicts.js',
+  'js/kernel/adapters/indexeddb/copy-reads.js',
   'js/kernel/adapters/indexeddb/data-urls.js',
   'js/kernel/adapters/indexeddb/deletion.js',
   'js/kernel/adapters/indexeddb/recovery-copies.js',

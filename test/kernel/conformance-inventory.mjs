@@ -160,12 +160,18 @@ export const NOT_IMPLEMENTATIONS = Object.freeze({
  * @type {Readonly<Record<string, readonly string[]>>}
  */
 export const HELPERS = Object.freeze({
+  // #35 slice 4d's P-a (NTN-255): the export's reads and file and the import's check, which
+  // write nothing, out of backups.js. The new tab's root loads the check too
+  'js/kernel/adapters/indexeddb/backup-file.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 4a: 1.4.x's backup tasks and export file, which #17's adapter runs where its root
   // asks (`backups`), and the kernel-adapter suite's backups checks run on it
   'js/kernel/adapters/indexeddb/backups.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 2a's conflict records and note versions, which only #17's adapter writes
   'js/kernel/adapters/indexeddb/conflicts.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   'js/kernel/adapters/indexeddb/connection.js': ['js/kernel/adapters/indexeddb/adapter.js'],
+  // #35 slice 4d's P-a (NTN-255): the read of each store for #33's recovery copy, which writes
+  // nothing, out of recovery-copies.js. The storage guard's raw export, unshared, loads it too
+  'js/kernel/adapters/indexeddb/copy-reads.js': ['js/kernel/adapters/indexeddb/adapter.js'],
   // #17 PR 4a, F10: logical 3's kept answer, which the transforms (unshared) write and a Daily
   // Note lookup on the adapter reads
   'js/kernel/adapters/indexeddb/daily-answer.js': ['js/kernel/adapters/indexeddb/adapter.js'],

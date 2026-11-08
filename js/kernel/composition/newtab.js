@@ -9,7 +9,7 @@
 
 import { createAIPort } from '../../services/ai-port.mjs';
 import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
-import { validateBackup } from '../adapters/indexeddb/backups.js';
+import { validateBackup } from '../adapters/indexeddb/backup-file.js';
 import { exportPoint, exportablePointRecord } from '../adapters/indexeddb/legacy-export.js';
 import { exportRawStores } from '../adapters/indexeddb/raw-export.js';
 import { NEWTAB_HANDLERS } from '../core/application/handlers-newtab.js';

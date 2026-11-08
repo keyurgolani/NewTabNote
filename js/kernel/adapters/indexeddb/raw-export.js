@@ -6,10 +6,10 @@
  * `settings`, which versions up to 1.1.2 kept the AI key in, through an open that never upgrades
  * the database or makes one, and changes nothing. Each store's values come with every Blob as a
  * data URL, and a store without a key path as `{key, value}` pairs, as Storage read them
- * (recovery-copies.js's readStoreForCopy).
+ * (copy-reads.js's readStoreForCopy, which writes nothing).
  */
 
-import { readStoreForCopy } from './recovery-copies.js';
+import { readStoreForCopy } from './copy-reads.js';
 import { DB_NAME } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 

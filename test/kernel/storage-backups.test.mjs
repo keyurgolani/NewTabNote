@@ -13,16 +13,18 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
 import {
+  exportFile,
+  exportObject,
+  readExport,
+  validateBackup,
+} from '../../js/kernel/adapters/indexeddb/backup-file.js';
+import {
   AUTO_BACKUP_PREFIX,
   LAST_BACKUP_KEY,
   createAutoBackup,
-  exportFile,
-  exportObject,
   importUnit,
   planImport,
   prepareImport,
-  readExport,
-  validateBackup,
 } from '../../js/kernel/adapters/indexeddb/backups.js';
 import {
   DEFAULT_LIMITS,

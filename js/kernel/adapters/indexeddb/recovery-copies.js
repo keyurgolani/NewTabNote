@@ -6,10 +6,11 @@
  *   trash (backups.js).
  * - #33's copy of a database at version 8 that lacks some of its stores, which the new tab
  *   writes before it opens one, as 1.4.1's guard does (copyMissingStores).
+ * Each store's values come through copy-reads.js, which writes nothing, so the storage guard's
+ * raw export reads them without reaching the writes here (NTN-255).
  */
 
-import { withDataUrls } from './data-urls.js';
-import { endOf } from './requests.js';
+import { readStoreForCopy } from './copy-reads.js';
 import { DB_NAME, LEGACY_VERSION, STORE_SCHEMAS } from './schema.js';
 import { openWithoutUpgrade } from './shapes.js';
 
@@ -74,31 +75,6 @@ export async function writeRecoveryCopy(settings, copy, clock, withItems) {
   const key = `${RECOVERY_COPY_PREFIX}${stamp}`;
   await settings.set({ [key]: copy, ...(withItems ? withItems(key) : {}) });
   return key;
-}
-
-/**
- * Every value of store `name`, each Blob in it as a data URL, read in a transaction of its own.
- * A store without a key path, which version 8 has none of, comes as `{key, value}` pairs. The
- * storage guard's raw export reads each store with it too (raw-export.js).
- * @param {IDBDatabase} db
- * @param {string} name
- * @returns {Promise<unknown[]>}
- */
-export function readStoreForCopy(db, name) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(name, 'readonly');
-    const store = tx.objectStore(name);
-    const values = store.getAll();
-    const keys = store.keyPath === null ? store.getAllKeys() : null;
-    endOf(tx).then(end =>
-      end.committed ? resolve({ values: values.result || [], keys: keys ? keys.result : null }) : reject(end.error),
-    );
-  }).then(async read => {
-    const { values, keys } = /** @type {{values: unknown[], keys: IDBValidKey[] | null}} */ (read);
-    const converted = [];
-    for (const value of values) converted.push(await withDataUrls(value));
-    return keys ? converted.map((value, i) => ({ key: keys[i], value })) : converted;
-  });
 }
 
 /**
