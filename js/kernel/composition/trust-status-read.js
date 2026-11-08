@@ -10,12 +10,13 @@
  * It only reads. The records are never opened, so nothing is pruned, raised or resolved; their
  * store answers no write and makes no NewTabNoteTrust where there's none yet
  * (readOnlyTrustStore), and their settings copy takes no write either. It runs no check: it reads
- * the latest receipts and the incidents and summarizes them with the rows of the providers that
- * run on the new tab (rowsOn('workspace')), the host whose checks write the receipts every
- * status page shows, narrowed to what the lines and cards read. The worker keeps one store, made
- * at the first ask, and builds the records over it at each ask, so no ask's open state reaches
- * another's. A store or records build that fails is tried again at the next ask, and an ask that
- * fails answers that it's unavailable, with nothing of why.
+ * the latest receipts, which recovery.html's checks write, and the incidents, and summarizes them
+ * with the new tab's rows (rowsOn('workspace')), narrowed to what the lines and cards read. Those
+ * are the rows that list the coordinator, whose problems the worker raises itself, so they count
+ * in their group's needs and cause; recovery.html's rows leave it out. The worker keeps one
+ * store, made at the first ask, and builds the records over it at each ask, so no ask's open
+ * state reaches another's. A store or records build that fails is tried again at the next ask,
+ * and an ask that fails answers that it's unavailable, with nothing of why.
  */
 
 import { readOnlyTrustStore } from '../adapters/indexeddb/trust.js';
@@ -34,7 +35,7 @@ import { browserTrustHost } from './trust.js';
 
 export { TRUST_STATUS_MESSAGE };
 
-/** The rows the worker summarizes with: the new tab's, whose checks every status page shows */
+/** The rows the worker summarizes with: the new tab's, the only host's that lists the coordinator */
 export const STATUS_ROWS = rowsOn('workspace');
 
 /** The pages the status read answers, by #13's names for them */
