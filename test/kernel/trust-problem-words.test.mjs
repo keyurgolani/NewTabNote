@@ -1,12 +1,15 @@
 // #20 slice 4c, PR 2 (Q4): recovery.html's words for the problems that had none, as the lead
 // signed them on 2026-11-07: a purge that stopped at a recovery point (#17 PR 2b), and the
 // background worker's two (#117), which fold into NewTabNote's own parts. At capture risk from a
-// problem no core row explains, the Trust Center's headline names it by its title.
+// problem no core row explains, the Trust Center's headline names it by its title, on
+// recovery.html's own summary too, which leaves the worker's providers out of every group.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { EVENT_CODES } from '../../js/trust/core/event-codes.js';
+import { rowsOn } from '../../js/trust/core/providers/rows.js';
+import { summarize } from '../../js/trust/core/summary.js';
 import { INCIDENT, INCIDENT_TEXT, RESOLVED } from '../../js/trust/ui/copy.js';
 import { problemsOf, trustHeadline, trustSections } from '../../js/trust/ui/model.js';
 
@@ -79,33 +82,19 @@ const REPORT = /** @type {any} */ ({
   runs: [],
 });
 
-/** Its summary: capture at risk, from the worker's problem, which is the platform group's cause */
-const SUMMARY = /** @type {any} */ ({
-  worstCore: 'verified',
-  capture: 'at-risk',
-  actionRequired: 1,
-  route: 'recovery',
-  records: 'open',
-  groups: [
-    { group: 'storage', providers: 2, needsAction: 0, worst: 'verified', checkedAt: AT, cause: null },
-    {
-      group: 'platform',
-      providers: 1,
-      needsAction: 1,
-      worst: 'verified',
-      checkedAt: AT,
-      cause: {
-        from: 'incident',
-        providerId: 'coordinator',
-        faultCode: 'start-failed',
-        errorCode: null,
-        severity: 'capture-risk',
-        consequenceKey: null,
-        incidentId: START_FAILED.id,
-        at: AT,
-      },
-    },
-  ],
+/**
+ * Its summary as recovery.html's root answers it: summarize over the providers that run there,
+ * which leave the background worker's out, so its problem puts capture at risk and is no group's
+ * cause
+ */
+const SUMMARY = summarize({
+  providers: rowsOn('recovery'),
+  receipts: REPORT.providers.map((/** @type {any} */ provider) => provider.receipt),
+  incidents: REPORT.incidents,
+  copyRead: true,
+  recordsRead: true,
+  recordsState: 'open',
+  now: AT,
 });
 
 describe("recovery.html's words for a stopped purge and the background worker's problems (#20 slice 4c, Q4)", () => {
@@ -165,7 +154,12 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual([problem.title, problem.rowId], ["The background worker couldn't start", 'platform']);
   });
 
-  it('names a capture-risk problem no core row explains in the headline, by its title', () => {
+  it("names a capture-risk problem no core row explains in the headline, by its title, from recovery.html's own summary, where it's no group's cause", () => {
+    assert.deepEqual(
+      [SUMMARY.capture, SUMMARY.groups.filter(group => group.cause !== null).map(group => group.group)],
+      ['at-risk', []],
+      "the worker's problem puts capture at risk, and no group on recovery.html has it",
+    );
     const rows = trustSections(REPORT, { now: AT }).flatMap(section => section.rows);
     const head = trustHeadline(SUMMARY, rows, { now: AT, checking: false });
     assert.deepEqual(
