@@ -992,8 +992,12 @@ describe("recovery.html's words for a stopped purge and the background worker's 
   });
 
   it("names on a row's lines each problem its own check doesn't look for, though that check found something and speaks the row's line: out of space, Notes database's probe reports the space, and the health records' own two still get their lines, and Saving new notes' probe the same beside a page capture that wasn't saved (the code review's R6-1)", () => {
-    /** A provider's entry whose probe found the device out of space, as the probe answers */
-    const full = (/** @type {string} */ providerId, /** @type {string} */ operation) =>
+    /** A provider's entry whose probe found the device out of space, as each probe answers it */
+    const full = (
+      /** @type {string} */ providerId,
+      /** @type {string} */ operation,
+      /** @type {string} */ consequenceKey,
+    ) =>
       entry(providerId, 'storage', {
         status: 'action-required',
         receipt: {
@@ -1001,7 +1005,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
           operation,
           status: 'action-required',
           capture: 'at-risk',
-          consequenceKey: 'storage.quota',
+          consequenceKey,
           evidence: { subjectId: 'CanvasTabDB' },
           preserved: ['reading'],
         },
@@ -1059,15 +1063,23 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     const rows = trustSections(
       /** @type {any} */ ({
         ...REPORT,
-        providers: [full('capture', 'capture.probe-commit'), full('storage', 'storage.probe-readwrite'), ...others],
+        providers: [
+          full('capture', 'capture.probe-commit', 'storage.capture-at-risk'),
+          full('storage', 'storage.probe-readwrite', 'storage.quota'),
+          ...others,
+        ],
         incidents,
       }),
       { now: AT },
     ).flatMap(section => section.rows);
     const row = (/** @type {string} */ id) => /** @type {any} */ (rows.find(item => item.id === id));
-    // Each row's line is its probe's finding, which speaks for the space the probe looks for
-    const space = /** @type {Record<string, string>} */ (CAPTURE_CONSEQUENCE)['storage.quota'];
-    assert.deepEqual([row('capture').text, row('storage').text], [space, space]);
+    // Each row's line is its probe's finding, which speaks for the space the probe looks for:
+    // the test save that failed, and the device out of space
+    const consequence = /** @type {Record<string, string>} */ (CAPTURE_CONSEQUENCE);
+    assert.deepEqual(
+      [row('capture').text, row('storage').text],
+      [consequence['storage.capture-at-risk'], consequence['storage.quota']],
+    );
     assert.deepEqual(row('storage').problemLines, [
       { status: 'Needs action', what: "NewTabNote can't keep its health records" },
       { status: 'Needs action', what: "some health records weren't saved" },
