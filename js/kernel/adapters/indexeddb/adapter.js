@@ -45,6 +45,13 @@
  * aborted. The adapter can tell only by which comes first, so a unit that finishes before an
  * abort reaches it is answered as any other command, retry included.
  *
+ * A commit given its turn's `live` (#247) asks it once the transaction has started, which the
+ * transaction's first answer says, then before each unit, and once more before the bookkeeping.
+ * IndexedDB starts a transaction only once the ones before it on its stores have ended, so a turn
+ * the coordinator's queue cut while the transaction waited stops there. It answers `unavailable`
+ * `coordinator` `turn-exceeded`, retryable, and the transaction aborts, so nothing of it commits.
+ * Only a commit IndexedDB had already begun lands after its cut.
+ *
  * A call whose transaction can't start on a closing or closed connection answers
  * `reload-required`, as every call after it does (connection.js), and so does one IndexedDB
  * fails in flight once the connection is gone or going, which runs no more. Chrome's forced
@@ -81,6 +88,7 @@
 import { COMMANDS } from '../../core/contracts/commands.js';
 import {
   STORAGE_EXCEPTIONS,
+  TURN_EXCEEDED,
   UnavailableError,
   committed,
   rejected,
@@ -348,17 +356,23 @@ function view(db, tx, scope, writable, tracker) {
   });
 }
 
+/** What a commit answers once the coordinator's queue has cut its turn (#247) */
+const turnCut = () => unavailable('coordinator', TURN_EXCEEDED, true);
+
 /**
- * Runs the units in order over `tx`, until one stops the command
+ * Runs the units in order over `tx`, until one stops the command, or the turn `live` answers
+ * for is cut before one of them (#247)
  * @param {IDBDatabase} db
  * @param {IDBTransaction | null} tx
  * @param {Unit[]} units
  * @param {VersionTracker} tracker
+ * @param {(() => boolean) | null} live
  * @returns {Promise<Outcome | void>}
  */
-async function runUnits(db, tx, units, tracker) {
+async function runUnits(db, tx, units, tracker, live) {
   for (const unit of units) {
     if (unit.when && !unit.when()) continue;
+    if (live && live() !== true) return turnCut();
     const stop = await unit.run(view(db, tx, unit.stores, (unit.mode || 'readwrite') === 'readwrite', tracker));
     if (stop) return stop;
   }
@@ -638,12 +652,14 @@ export function createIndexedDbAdapter({
   };
 
   /**
-   * One run of a command's units, all in one transaction, which it opens before it returns
+   * One run of a command's units, all in one transaction, which it opens before it returns, its
+   * turn asked by `live` (#247)
    * @param {Work} work
    * @param {Unit[]} units
+   * @param {(() => boolean) | null} live
    * @returns {Promise<Attempt>}
    */
-  const attempt = (work, units) => {
+  const attempt = (work, units, live) => {
     /** @type {IDBDatabase} */
     let db;
     /** @type {IDBTransaction | null} */
@@ -680,15 +696,29 @@ export function createIndexedDbAdapter({
     }
     const tracker = createVersionTracker({ scope: work.scope, sourceRevision: work.sourceRevision });
     // Asked for before any unit runs, so the units' requests still go out in the calling task
+    const asksLedger = Boolean(tx && books.ledger && isCatalogCommand(work, commands));
     /** @type {Promise<{value: unknown} | {error: unknown} | null>} */
-    const kept =
-      tx && books.ledger && isCatalogCommand(work, commands)
-        ? settled(tx.objectStore(OPERATIONS_STORE).get(work.commandId))
-        : Promise.resolve(null);
+    const kept = asksLedger
+      ? settled(/** @type {IDBTransaction} */ (tx).objectStore(OPERATIONS_STORE).get(work.commandId))
+      : Promise.resolve(null);
     const headRead =
       tx && books.log ? settled(tx.objectStore(META_STORE).get(CHANGES_KEY)) : Promise.resolve({ value: undefined });
+    // The transaction's first answer comes only once IndexedDB has started it, so with the turn's
+    // live the units wait for it and ask the turn first: one the queue cut while the transaction
+    // waited for its stores runs none of them (#247). With no ledger, a one-key read stands in.
+    /** @type {Promise<unknown> | null} */
+    let started = null;
+    if (tx && live) {
+      if (asksLedger) started = kept;
+      else if (books.log) started = headRead;
+      else started = settled(tx.objectStore(tx.objectStoreNames[0]).get(''));
+    }
     /** @type {Promise<{stop: Outcome | void} | {error: unknown}>} */
-    const running = runUnits(db, tx, units, tracker).then(
+    const running = (
+      started && live
+        ? started.then(() => (live() === true ? runUnits(db, tx, units, tracker, live) : turnCut()))
+        : runUnits(db, tx, units, tracker, live)
+    ).then(
       stop => ({ stop }),
       error => ({ error }),
     );
@@ -714,6 +744,9 @@ export function createIndexedDbAdapter({
         }
         if ('error' in first) return { error: first.error };
         const { stop } = first;
+        // Once the units have run, the turn once more, before the bookkeeping that commits them
+        // (#247): past this, only a commit IndexedDB had begun can land after a cut
+        if (live && (!stop || stop.kind === 'conflict') && live() !== true) return { abort: answered(turnCut()) };
         if (stop && stop.kind === 'conflict') {
           // A unit checks the version it expects before it writes, so this is a bug in the unit
           if (tracker.written()) return { abort: answered(unavailable('adapter', 'conflict-after-write', false)) };
@@ -758,10 +791,11 @@ export function createIndexedDbAdapter({
   /**
    * @param {Work} work
    * @param {Unit[]} units
+   * @param {(() => boolean) | null} [live] - the turn's, which each run asks (#247)
    * @returns {Promise<CommitResult>}
    */
-  const commitUnits = (work, units) =>
-    attempt(work, units).then(first => {
+  const commitUnits = (work, units, live = null) =>
+    attempt(work, units, live).then(first => {
       if (!first.transient) return { outcome: first.outcome, replayed: first.replayed };
       // Another run would queue behind every transaction opened since over its stores, so a
       // later command this context sent, such as a newer save of the same note, would land
@@ -769,7 +803,7 @@ export function createIndexedDbAdapter({
       // any store it writes. One on other stores, such as filing into a folder, can't be.
       const overtaken = first.write.names.some(name => lastWrite.get(name) !== first.write.seq);
       if (overtaken) return { outcome: unavailable('storage', 'transaction-failed', true), replayed: false };
-      return attempt(work, units).then(second =>
+      return attempt(work, units, live).then(second =>
         second.transient
           ? { outcome: unavailable('storage', 'retries-exhausted', true), replayed: false }
           : { outcome: second.outcome, replayed: second.replayed },
@@ -843,9 +877,10 @@ export function createIndexedDbAdapter({
    * `backup.auto-failed` keeps it; the import's commit answers as every command's does.
    * @param {Work} work
    * @param {import('../../core/ports/repository.js').BackupTask} task
+   * @param {(() => boolean) | null} [live] - the turn's, which the import's unit commit asks (#247)
    * @returns {Promise<CommitResult>}
    */
-  const commitBackup = async (work, task) => {
+  const commitBackup = async (work, task, live = null) => {
     // Popup, Side Panel, and the service worker run none, until #18's backup engine (the `backups` flag)
     if (!backups) return { outcome: unavailable('adapter', 'backups-need-legacy-storage', false), replayed: false };
     /** @type {IDBDatabase} */
@@ -866,7 +901,7 @@ export function createIndexedDbAdapter({
       }
       const prepared = await prepareImport({ db, settings: backupStore, clock, backup: task.backup, mode: task.mode });
       if ('refused' in prepared) return { outcome: prepared.refused, replayed: false };
-      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit]);
+      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit], live);
     } catch (error) {
       const outcome = unavailableFrom(failureIn(error));
       const name = nameOf(error);
@@ -932,15 +967,17 @@ export function createIndexedDbAdapter({
       return undefined;
     },
 
-    commit(work) {
+    commit(work, options) {
       const { effect } = work;
+      // The turn's, when the coordinator's queue runs the command (#247)
+      const live = options?.live ?? null;
       /** @type {Promise<CommitResult>} */
       let pending;
       try {
-        if (effect.kind === 'units') pending = commitUnits(work, effect.units);
+        if (effect.kind === 'units') pending = commitUnits(work, effect.units, live);
         else if (effect.kind === 'settings') {
           pending = commitSettings(work, effect.area, effect.values).then(outcome => ({ outcome, replayed: false }));
-        } else if (effect.kind === 'backup') pending = commitBackup(work, effect);
+        } else if (effect.kind === 'backup') pending = commitBackup(work, effect, live);
         else if (effect.kind === 'integrity-check') {
           // Read-only, it keeps no ledger row, as settings and maintenance keep none. Only the
           // worker's adapter has the check (worker-tasks.js), and it commits whatever it finds

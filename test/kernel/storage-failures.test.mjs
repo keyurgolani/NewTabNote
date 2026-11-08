@@ -379,3 +379,148 @@ describe('failures on the IndexedDB adapter', () => {
     });
   });
 });
+
+/**
+ * A readwrite transaction of the case's own over `store`, an IndexedDB store of `of`'s CanvasTabDB,
+ * kept open by a chain of counts until `release`, as another context's long write holds a store: a
+ * transaction the adapter opens over it waits until this one ends to start (#247)
+ * @param {Profile} of
+ * @param {string} store
+ */
+function holdStore(of, store) {
+  let held = true;
+  /** @type {() => void} */
+  let started = () => {};
+  /** @type {Promise<void>} once the hold's transaction has started */
+  const holding = new Promise(resolve => {
+    started = () => resolve();
+  });
+  /** @type {Promise<void>} once the hold's transaction has committed */
+  const done = new Promise((resolve, reject) => {
+    const open = of.real.open('CanvasTabDB');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction([store], 'readwrite');
+      const spin = () => {
+        tx.objectStore(store).count().onsuccess = () => {
+          started();
+          if (held) spin();
+        };
+      };
+      spin();
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    };
+  });
+  return { holding, done, release: () => void (held = false) };
+}
+
+/**
+ * The adapter's commit of `work` with the turn's `live`, which the port takes since #247
+ * @param {IndexedDbAdapter} adapter
+ * @param {import('../../js/kernel/core/ports/repository.js').Work} work
+ * @param {() => boolean} live
+ * @returns {Promise<import('../../js/kernel/core/ports/repository.js').CommitResult>}
+ */
+const commitIn = (adapter, work, live) => /** @type {any} */ (adapter).commit(work, { live });
+
+describe("the turn's live inside a command's transaction on the IndexedDB adapter (#247)", () => {
+  const rename = /** @type {Command} */ ({ type: 'renameNote', commandId: 'c1', noteId: 'n1', name: 'X' });
+
+  /** @type {Unit} the rename's write */
+  const renaming = {
+    stores: ['notes'],
+    async run(tx) {
+      const note = await tx.get('notes', 'n1');
+      if (note) tx.put('notes', { ...note, name: 'X' });
+    },
+  };
+
+  /** @param {Awaited<ReturnType<typeof opened>>['tab']} tab */
+  const nameOf = async tab => {
+    const note = await tab.query({ type: 'getNote', noteId: 'n1' });
+    return note.kind === 'ready' && note.data.note.name;
+  };
+
+  it('runs no unit of a command whose turn is cut while its transaction waits to start, and commits nothing', async () => {
+    const { of, adapter, tab } = await opened();
+    await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', name: 'Plan' });
+    const hold = holdStore(of, 'canvases');
+    await hold.holding;
+    let cut = false;
+    let ran = false;
+    /** @type {Unit} */
+    const unit = {
+      stores: ['notes'],
+      async run(tx) {
+        ran = true;
+        await renaming.run(tx);
+      },
+    };
+    const work = unitsWork(rename, [unit], () => committed('renamed', ['n1']));
+    const committing = commitIn(adapter, work, () => !cut);
+    // The queue cuts the turn while the commit's transaction waits behind the held store
+    await new Promise(resolve => setTimeout(resolve, 20));
+    cut = true;
+    hold.release();
+    await hold.done;
+    const { outcome } = await committing;
+    assert.deepEqual(unavailableAs(outcome), ['coordinator', 'turn-exceeded', true]);
+    assert.equal(ran, false, 'no unit ran');
+    assert.equal(await nameOf(tab), 'Plan');
+  });
+
+  it('runs no later unit once the turn is cut, and commits nothing of the ones before', async () => {
+    const { adapter, tab } = await opened();
+    await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', name: 'Plan' });
+    let cut = false;
+    let second = false;
+    /** @type {Unit[]} */
+    const units = [
+      {
+        stores: ['notes'],
+        async run(tx) {
+          await renaming.run(tx);
+          // The queue cuts the turn while this unit runs
+          cut = true;
+        },
+      },
+      {
+        stores: ['notes'],
+        async run() {
+          second = true;
+        },
+      },
+    ];
+    const work = unitsWork(rename, units, () => committed('renamed', ['n1']));
+    const { outcome } = await commitIn(adapter, work, () => !cut);
+    assert.deepEqual(unavailableAs(outcome), ['coordinator', 'turn-exceeded', true]);
+    assert.equal(second, false, 'the second unit never ran');
+    assert.equal(await nameOf(tab), 'Plan');
+  });
+
+  it('commits nothing of a command whose turn is cut while its last unit runs, since it checks once more before the bookkeeping', async () => {
+    const { adapter, tab } = await opened();
+    await tab.execute({ type: 'createNote', commandId: 'seed', noteId: 'n1', name: 'Plan' });
+    let cut = false;
+    /** @type {Unit} */
+    const unit = {
+      stores: ['notes'],
+      async run(tx) {
+        await renaming.run(tx);
+        cut = true;
+      },
+    };
+    const work = unitsWork(rename, [unit], () => committed('renamed', ['n1']));
+    const { outcome } = await commitIn(adapter, work, () => !cut);
+    assert.deepEqual(unavailableAs(outcome), ['coordinator', 'turn-exceeded', true]);
+    assert.equal(await nameOf(tab), 'Plan');
+  });
+});

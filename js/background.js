@@ -419,6 +419,61 @@ function notifyCapture(title, message) {
   chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title, message });
 }
 
+/** The longest a link's name runs in its capture's notices, before "…" (#247, the lead's words) */
+const CAPTURE_NAME_MAX = 40;
+
+/**
+ * `text` as the characters a person sees: graphemes, through Intl.Segmenter, so a cut never splits
+ * an emoji or a letter from its accent, or code points where Intl.Segmenter is missing (#247, the
+ * lead's ruling)
+ * @param {string} text
+ * @returns {string[]}
+ */
+function charactersOf(text) {
+  // Through a cast, since Intl.Segmenter is ES2022's and the legacy type check's lib is ES2020's
+  const Segmenter = typeof Intl === 'object' ? /** @type {any} */ (Intl).Segmenter : undefined;
+  if (typeof Segmenter === 'function') {
+    return Array.from(new Segmenter(undefined, { granularity: 'grapheme' }).segment(text), (part) => part.segment);
+  }
+  return Array.from(text);
+}
+
+/**
+ * What a link's capture notices call it (#247, the lead's words of 2026-11-07): the tab's title, or
+ * the URL's host when the title is missing, blank, or just the URL, with or without its scheme.
+ * Never the whole URL, which can carry a session. Past 40 characters, its first 40 and "…".
+ * Empty when there's neither a title nor a host.
+ * @param {{url?: string, title?: string}} item
+ * @returns {string}
+ */
+function linkName({ url, title }) {
+  const titled = typeof title === 'string' ? title.trim() : '';
+  const bare = typeof url === 'string' ? url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '') : '';
+  let name = titled && titled !== url && titled !== bare ? titled : '';
+  if (!name) {
+    try {
+      name = new URL(String(url)).host;
+    } catch {
+      name = '';
+    }
+  }
+  const characters = charactersOf(name);
+  return characters.length > CAPTURE_NAME_MAX ? `${characters.slice(0, CAPTURE_NAME_MAX).join('')}…` : name;
+}
+
+/**
+ * What a capture's failure notice calls it (#247): `the link "<name>"`, `the link` with no name,
+ * or `the selected text`, which is never quoted, since a selection can hold anything the page
+ * showed, and a notice leaves the browser
+ * @param {{type: 'bookmark', url?: string, title?: string} | {type: 'text', content: string, source?: string}} item
+ * @returns {string}
+ */
+function captureWords(item) {
+  if (item.type !== 'bookmark') return 'the selected text';
+  const name = linkName(item);
+  return name ? `the link "${name}"` : 'the link';
+}
+
 /**
  * Capture a page, or selected text and the page it came from, to today's Daily Note with the
  * kernel's captureToDailyNote command. Its journal entry is written first, before the
@@ -488,7 +543,7 @@ async function captureToDailyNote(item) {
       // An outcome holds its kind, cause, and code, and never what was captured
       (refusal ? console.warn : console.error)('Failed to capture to daily note:', outcome);
       const reason = CAPTURE_FAILURES[outcome.messageKey] || CAPTURE_FAILED;
-      const words = refusal || `Saving to today's note failed: ${reason}`;
+      const words = refusal || `Saving ${captureWords(item)} to today's note failed: ${reason}`;
       // Unavailable or unanswered, it may land later; refused for what it holds, it never will
       if (outcome.kind === 'unavailable' || outcome.kind === 'unknown') {
         notTaken(words, outcome);
@@ -503,13 +558,17 @@ async function captureToDailyNote(item) {
       return;
     }
     if (kept) await captureJournal.settle(command.commandId);
-    notifyCapture('Captured to New Tab Note', item.type === 'bookmark' ? `Saved link: ${item.title}` : 'Saved selected text');
+    // A link by the name its failure would give it, so one with no title isn't "undefined" (#247)
+    const name = item.type === 'bookmark' ? linkName(item) : '';
+    const saved = item.type === 'bookmark' ? (name ? `Saved link: ${name}` : 'Saved link') : 'Saved selected text';
+    notifyCapture('Captured to New Tab Note', saved);
     // A capture that committed resolves an earlier capture failure (#20); it opens NewTabNoteTrust
     // only while one may be open
     failureEvents.event('capture.committed', { commandId: command.commandId });
   } catch (error) {
     console.error('Failed to capture to daily note:', error);
-    notTaken(`Saving to today's note failed: ${error && error.message ? error.message : 'unknown error'}`, {});
+    const why = error && error.message ? error.message : 'unknown error';
+    notTaken(`Saving ${captureWords(item)} to today's note failed: ${why}`, {});
     failureEvents.event('capture.failed', {}, error);
   }
 }

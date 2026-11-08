@@ -26,6 +26,7 @@ import { isId, isRecord } from '../contracts/checks.js';
 import { clone } from '../contracts/clone.js';
 import { COMMANDS } from '../contracts/commands.js';
 import {
+  TURN_EXCEEDED,
   UnavailableError,
   failed,
   failedFrom,
@@ -78,11 +79,9 @@ import { createCommitFeed } from './feed.js';
 /** The code a command or query answers when the policy allows it and the context's table doesn't hold it */
 export const NOT_REGISTERED = 'not-registered';
 
-/**
- * The code a command answers, `unavailable` and retryable, when the coordinator's queue cut its turn
- * before it committed (#35 slice 4b-1): nothing of it landed, so it can be sent again
- */
-export const TURN_EXCEEDED = 'turn-exceeded';
+// The code a command answers when the coordinator's queue cut its turn, from the contracts, where
+// an adapter reads it too (#247)
+export { TURN_EXCEEDED };
 
 /**
  * @typedef {object} KernelOptions
@@ -301,9 +300,10 @@ export function createKernel({
   /**
    * A use case's work committed, or the outcome it answered with itself. When the command's turn on
    * the coordinator's queue gave a `live`, it's checked right before the adapter's commit (#35 slice
-   * 4b-1): once the queue has cut the turn, nothing commits, so a command the queue gave up on never
-   * lands after a later one. A commit already inside the adapter ends on its own, since an IndexedDB
-   * transaction can't be held open across anything else.
+   * 4b-1), and the adapter asks it again inside the commit, once its transaction has started, before
+   * each unit, and before its bookkeeping (#247). Once the queue has cut the turn, nothing more of it
+   * commits, so a command the queue gave up on never lands after a later one. Only a commit
+   * IndexedDB had already begun can, which the coordinator records (coordinator.js).
    * @param {UseCaseResult} result
    * @param {(() => boolean) | null} live
    * @returns {Promise<{outcome: Outcome | BulkOutcome, replayed: boolean}>}
@@ -313,7 +313,7 @@ export function createKernel({
     if (live !== null && live() !== true) {
       return Promise.resolve({ outcome: unavailable('coordinator', TURN_EXCEEDED, true), replayed: false });
     }
-    return Promise.resolve(adapter.commit(result)).then(commitResultOf);
+    return Promise.resolve(adapter.commit(result, live === null ? undefined : { live })).then(commitResultOf);
   };
 
   /**

@@ -10,7 +10,7 @@ import { createKernel } from './test-kernel.mjs';
 import { unitsWork } from '../../js/kernel/core/application/work.js';
 import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { newCommand } from '../../js/kernel/core/contracts/commands.js';
-import { committed } from '../../js/kernel/core/contracts/outcomes.js';
+import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
 import { WORKER_COMMAND_TYPES } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { noteSaveMetadata } from '../../js/kernel/core/domain/note.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
@@ -268,6 +268,20 @@ export function runContractSuite(fixture) {
      */
     const idsInStore = async store =>
       (await ctx.adapter.read([store], tx => tx.getAll(store))).map(record => record.id).sort();
+
+    describe("the turn's live, inside the commit (#247)", () => {
+      it('commits nothing of a command whose turn is cut once the kernel has checked it, and answers turn-exceeded, as the cut does', async () => {
+        let asked = 0;
+        // True for the kernel's own check before the commit, then false, as for a turn the
+        // coordinator's queue cuts while the commit waits
+        const live = () => ++asked === 1;
+        const noteId = ctx.ids.next();
+        const outcome = await kernel.execute(cmd('createNote', { noteId, name: 'Cut' }), { live });
+        assert.deepEqual(outcome, unavailable('coordinator', 'turn-exceeded', true));
+        assert.equal(await noteOf(noteId), undefined, 'nothing of it committed');
+        assert.ok(asked > 1, 'the commit asked the turn again');
+      });
+    });
 
     describe('notes', () => {
       it('createNote stores the record Storage.createNote has always written, its group in Unfiled beside it (#17 PR 3a), and a search entry', async () => {

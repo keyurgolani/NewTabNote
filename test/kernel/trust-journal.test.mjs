@@ -169,6 +169,10 @@ describe('the event registry and the evidence allowlist (#20, "Diagnostic journa
     }
   });
 
+  it("lists coordinator.turn-landed-late with the command's type and its age alone, as the cut's, and no incident (#247, the lead's ruling)", () => {
+    assert.deepEqual(EVENT_CODES['coordinator.turn-landed-late'], { fields: ['commandType', 'ageMs'] });
+  });
+
   it('holds only ids, codes, counts, enums, durations, versions, times, revisions, seq, and hashes', () => {
     assert.deepEqual(EVIDENCE_FIELD_NAMES, [
       'ageMs',

@@ -1137,6 +1137,37 @@ describe("the coordinator's bound on a turn (#35 slice 4b-1, F4)", () => {
     );
   });
 
+  it("journals coordinator.turn-landed-late, by the command's type and its age, when a cut turn's command commits after its cut, and nothing when one fails after it (#247)", async () => {
+    const kernel = heldKernel();
+    const time = steppedTime(1000);
+    const { seen, events } = recordedEvents();
+    const { coordinator } = coordinatorOn(kernel, { clock: time.clock, timers: time.timers, events });
+    await coordinator.start();
+    const landing = coordinator.client().execute(captureOf('c-1'));
+    const failing = coordinator.client().execute(captureOf('c-2'));
+    await turns();
+    time.advance(TURN_LIMIT_MS);
+    await turns();
+    assert.deepEqual(await landing, TURN_EXCEEDED);
+    time.advance(TURN_LIMIT_MS);
+    await turns();
+    assert.deepEqual(await failing, TURN_EXCEEDED);
+    const late = () => seen.filter(([code]) => code === 'coordinator.turn-landed-late');
+    assert.deepEqual(late(), [], 'nothing before a cut command settles');
+    // c-1's commit, which IndexedDB had begun, lands 5 s after c-2's cut; c-2's fails then
+    time.advance(5000);
+    kernel.release('c-1');
+    kernel.fail('c-2');
+    await turns();
+    assert.deepEqual(late(), [
+      [
+        'coordinator.turn-landed-late',
+        { commandType: 'captureToDailyNote', ageMs: 2 * TURN_LIMIT_MS + 5000 },
+        undefined,
+      ],
+    ]);
+  });
+
   it("leaves the queue idle when it cuts a turn with nothing behind it, so the health names no running turn (#224's review, T2)", async () => {
     const kernel = heldKernel();
     const time = steppedTime(1000);

@@ -53,18 +53,22 @@
  * A turn has a bound of its own, TURN_LIMIT_MS from its start (#35 slice 4b-1): past it the queue
  * cuts the turn and starts the next, so one command that never settles can't hold every later one
  * for the worker's life. The cut command answers `unavailable`, retryable, `turn-exceeded`, and
- * commits nothing from the cut on (the kernel's fence, core/application/kernel.js), so no later
- * command is overtaken by an older one landing late. A caller with a client deadline had its answer
- * from that client long before, since a client gives up 31 s after it sends. One that sends with
- * none, as the journal drain's replays and js/background.js's rerun of a capture with no entry do,
- * gets its answer from the cut (contracts/limits.js, TURN_LIMIT_MS), and a journaled one replays at
- * the next drain. Each cut is `coordinator.turn-stuck`, by the command's type and how long it ran.
+ * commits nothing from the cut on (the kernel's fence, core/application/kernel.js, which the
+ * adapter asks again inside the commit's transaction, #247), so no later command is overtaken by
+ * an older one landing late. Only a commit IndexedDB had already begun can land after its cut, and
+ * each that does is `coordinator.turn-landed-late`, by the command's type and its age then. A
+ * caller with a client deadline had its answer from that client long before, since a client gives
+ * up 31 s after it sends. One that sends with none, as the journal drain's replays and
+ * js/background.js's rerun of a capture with no entry do, gets its answer from the cut
+ * (contracts/limits.js, TURN_LIMIT_MS), and a journaled one replays at the next drain. Each cut is
+ * `coordinator.turn-stuck`, by the command's type and how long it ran.
  * system.coordinatorHealth says which command holds the queue (`running`), and how many turns it
  * cut in this worker's life (`cutTurns`).
  */
 
 import { TURN_EXCEEDED } from '../core/application/kernel.js';
 import { WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
+import { isRecord } from '../core/contracts/checks.js';
 import { TURN_LIMIT_MS } from '../core/contracts/limits.js';
 import { HELD_NOTES_NAMED } from '../core/contracts/operations/system-coordinator-health.js';
 import { failed, ready, unavailable } from '../core/contracts/outcomes.js';
@@ -255,9 +259,16 @@ const reportUnbuilt = error => console.error("NewTabNote: the background coordin
  * A turn that hasn't settled `limitMs` after it began, by `timers`, is cut (#35 slice 4b-1): the
  * next one starts, the task's `live()` answers false from then on, the turn answers `unavailable`,
  * retryable, `turn-exceeded`, and `onCut` hears the turn's type and how long it ran. What the task
- * settles with after its cut changes nothing. `running()` is the turn that holds the queue: its
- * type, when it began, and how many wait behind it, or null while the queue is idle.
- * @param {{timers?: Timers, clock?: {now(): number}, limitMs?: number, onCut?: (type: string, ageMs: number) => void}} [options]
+ * settles with after its cut changes nothing, but `onLate` hears the type and the turn's age when
+ * that's a commit (#247). `running()` is the turn that holds the queue: its type, when it began,
+ * and how many wait behind it, or null while the queue is idle.
+ * @param {{
+ *   timers?: Timers,
+ *   clock?: {now(): number},
+ *   limitMs?: number,
+ *   onCut?: (type: string, ageMs: number) => void,
+ *   onLate?: (type: string, ageMs: number) => void,
+ * }} [options]
  * @returns {{
  *   run: <T>(task: Task<T>, begin?: () => boolean, type?: string) => Promise<T | Unavailable | null>,
  *   running: () => RunningTurn | null,
@@ -268,6 +279,7 @@ export function commandQueue({
   clock = systemClock,
   limitMs = TURN_LIMIT_MS,
   onCut = () => {},
+  onLate = () => {},
 } = {}) {
   /** @type {Promise<unknown>} */
   let tail = Promise.resolve();
@@ -310,7 +322,11 @@ export function commandQueue({
       }
       ran.then(
         value => {
-          if (cut) return;
+          if (cut) {
+            // A commit IndexedDB had begun before the cut, which no check inside it could stop
+            if (isRecord(value) && value.kind === 'committed') onLate(type, Math.max(0, clock.now() - since));
+            return;
+          }
           end();
           timers.clear(bound);
           resolve(value);
@@ -452,6 +468,9 @@ export function createCoordinator({
       cutTurns++;
       journal(events, 'coordinator.turn-stuck', { commandType: type, ageMs });
     },
+    // A cut command that landed anyway, journaled as each cut is, with no incident and no count
+    // (#247, the lead's ruling)
+    onLate: (type, ageMs) => journal(events, 'coordinator.turn-landed-late', { commandType: type, ageMs }),
   });
   /** @type {Client | null} the kernel with each command on the queue: what client() hands out and the drain runs on */
   let queued = null;

@@ -826,10 +826,14 @@ const KEPT_BUSY = Object.freeze([
 
 /**
  * What a capture says whose turn the coordinator's queue cut (#35 slice 4c, the lead's words of
- * 2026-11-07 04:45:59 PST): with no journal entry, that it failed because it took too long; kept,
- * that it's added later, since only the drain after the cut adds it and no time can be named
+ * 2026-11-07 04:45:59 PST): with no journal entry, that saving it failed because it took too long,
+ * naming the link by the harness tab's title (#247, the lead's words of 13:36:18 PST); kept, that
+ * it's added later, since only the drain after the cut adds it and no time can be named
  */
-const CUT_NOT_CAPTURED = Object.freeze(['Not captured', "Saving to today's note failed: it took too long"]);
+const CUT_NOT_CAPTURED = Object.freeze([
+  'Not captured',
+  `Saving the link "Example page" to today's note failed: it took too long`,
+]);
 const KEPT_CUT = Object.freeze([
   "Kept for today's note",
   "NewTabNote couldn't save this to your notes yet. It's kept on this device and will be added later.",
@@ -855,6 +859,50 @@ function unwritableJournal(env) {
     if (name === 'NewTabNoteJournal') throw new DOMException('test: the disk is gone', 'UnknownError');
     return open(name, ...rest);
   };
+}
+
+/**
+ * A readwrite transaction of the case's own over the worker's ledger store, kept open by a chain
+ * of counts until `release`, as another context's long write would hold it. Every command's
+ * commit spans that store and a capture's reads don't, so a capture's commit then waits to start
+ * (#247). While it's held the worker is never idle, so a case moves on with whileHeld, not drain.
+ * @param {IDBFactory} factory
+ */
+function holdLedger(factory) {
+  let held = true;
+  let started = () => {};
+  const holding = new Promise((resolve) => {
+    started = resolve;
+  });
+  const done = new Promise((resolve, reject) => {
+    const open = factory.open('CanvasTabDB');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction(['operations'], 'readwrite');
+      const spin = () => {
+        tx.objectStore('operations').count().onsuccess = () => {
+          started();
+          if (held) spin();
+        };
+      };
+      spin();
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    };
+  });
+  return { holding, done, release: () => { held = false; } };
+}
+
+/** Lets the worker run `rounds` setImmediate rounds, while a hold keeps it from being idle */
+async function whileHeld(rounds = 400) {
+  for (let round = 0; round < rounds; round++) await new Promise((resolve) => setImmediate(resolve));
 }
 
 /** The urls of the blocks in the worker's Daily Notes */
@@ -1053,6 +1101,160 @@ describe("a turn the coordinator's queue cuts, through the worker (#35 slice 4b-
     worker.env.clock.tick(11_000);
     await worker.drain();
     assert.deepEqual(await dailyUrls(worker), []);
+  });
+
+  it("lands nothing of a capture with no entry whose commit waited to start past both its cuts, so the Not captured it said holds (#247)", async () => {
+    // The journal can't open, so the capture has no entry. The case holds the ledger store, so
+    // the capture's commit waits to start, as behind another context's long write. The worker's
+    // client gives up at 31 s and the rerun waits its turn; the queue cuts the first turn at 120 s
+    // and the rerun's at 240 s, which says Not captured. Then the hold ends, and the two commits
+    // start, after their cuts.
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env) });
+    const hold = holdLedger(worker.indexedDB);
+    try {
+      await hold.holding;
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+      await whileHeld();
+      for (const step of [31_000, 89_000, 119_000, 1_000]) {
+        worker.env.clock.tick(step);
+        await whileHeld();
+      }
+      assert.deepEqual(
+        plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]),
+        [[...CUT_NOT_CAPTURED]],
+        "the rerun's cut says Not captured, and why",
+      );
+    } finally {
+      // Released whatever the case found, so no later case runs behind a held store
+      hold.release();
+      await hold.done.catch(() => {});
+    }
+    await worker.drain();
+    assert.deepEqual(await dailyUrls(worker), [], "today's note never gets it, so capturing it again adds it once");
+  });
+
+  it("lands a kept capture once, by its replay, when its first commit waited to start past its cut (#247)", async () => {
+    // The capture's entry is kept. Its first commit waits behind the held ledger store, its client
+    // gives up at 31 s, and the drain's replay waits its turn until the queue cuts the first one
+    // at 120 s. The hold ends within the replay's turn, so the first commit starts after its cut
+    // and the replay's within its turn.
+    const worker = await loadBackground();
+    const hold = holdLedger(worker.indexedDB);
+    try {
+      await hold.holding;
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, worker.tab);
+      await whileHeld();
+      for (const step of [31_000, 89_000, 10_000]) {
+        worker.env.clock.tick(step);
+        await whileHeld();
+      }
+    } finally {
+      hold.release();
+      await hold.done.catch(() => {});
+    }
+    await worker.drain();
+    assert.deepEqual(await dailyUrls(worker), [worker.tab.url], 'it lands once');
+    assert.deepEqual(await journalOf(worker.indexedDB), [], 'its entry goes');
+  });
+});
+
+/**
+ * Every capture the worker's kernel is sent answers unavailable, storage, transaction-failed, as
+ * one the notes database couldn't store: a `rewrite` for loadBackground
+ */
+const CAPTURES_FAIL = Object.freeze({
+  'js/kernel/core/application/kernel.js': (source) => source.replace(
+    '  function execute(input, options) {\n',
+    [
+      '  function execute(input, options) {',
+      "    if (isRecord(input) && input.type === 'captureToDailyNote') return Promise.resolve(unavailable('storage', 'transaction-failed', true));",
+      '',
+    ].join('\n'),
+  ),
+});
+
+/** The worker's notices so far, each as [title, message] */
+const noticesOf = (worker) => plain(worker.env.chrome.notifications).map((shown) => [shown.title, shown.message]);
+
+describe("what a capture's notices call it (#247, the lead's words of 2026-11-07 13:36:18 PST)", () => {
+  const FAILED = "the notes database couldn't store it";
+
+  it("names selected text without quoting it, when its rerun's turn is cut", async () => {
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env), rewrite: slowCapture(130_000) });
+    const info = { menuItemId: 'capture-selection', selectionText: 'a key the page showed' };
+    await worker.dispatch('contextMenus.onClicked', info, worker.tab);
+    await worker.drain();
+    for (const step of [31_000, 89_000, 119_000, 1_000]) {
+      worker.env.clock.tick(step);
+      await worker.drain();
+    }
+    assert.deepEqual(noticesOf(worker), [
+      ['Not captured', "Saving the selected text to today's note failed: it took too long"],
+    ]);
+  });
+
+  it("names a link with no title, or one that's just its URL, by its host, and one with no host either by nothing", async () => {
+    // The worker reads a link's host with URL, which legacy-env's sandbox leaves out (withUrl)
+    const setup = (env) => {
+      unwritableJournal(env);
+      withUrl(env);
+    };
+    const worker = await loadBackground({ setup, rewrite: CAPTURES_FAIL });
+    const { url } = worker.tab;
+    const tabs = [
+      { ...worker.tab, title: undefined },
+      { ...worker.tab, title: '  ' },
+      { ...worker.tab, title: url },
+      { ...worker.tab, title: url.replace('https://', '') },
+      { ...worker.tab, url: 'file:///notes/page.html', title: undefined },
+    ];
+    for (const tab of tabs) {
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, tab);
+      await worker.drain();
+    }
+    const byHost = ['Not captured', `Saving the link "example.test" to today's note failed: ${FAILED}`];
+    assert.deepEqual(noticesOf(worker), [
+      byHost,
+      byHost,
+      byHost,
+      byHost,
+      ['Not captured', `Saving the link to today's note failed: ${FAILED}`],
+    ]);
+  });
+
+  it('cuts a long title to its first 40 characters and "…", so the longest notice, with the longest reason, is 120 characters', async () => {
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env), rewrite: CAPTURES_FAIL });
+    const title = 'A page title that runs on well past the forty characters a notice names';
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, { ...worker.tab, title });
+    await worker.drain();
+    const message = `Saving the link "${title.slice(0, 40)}…" to today's note failed: ${FAILED}`;
+    assert.deepEqual(noticesOf(worker), [['Not captured', message]]);
+    assert.equal(message.length, 120);
+  });
+
+  it('cuts by what a person sees as one character, so an emoji at the cut stays whole (the lead\'s ruling of 14:11:31 PST)', async () => {
+    const worker = await loadBackground({ setup: (env) => unwritableJournal(env), rewrite: CAPTURES_FAIL });
+    // A family, five code points, as the title's 40th character
+    const family = '\u{1F469}\u200D\u{1F469}\u200D\u{1F467}';
+    const title = `${'x'.repeat(39)}${family} and more after it`;
+    await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, { ...worker.tab, title });
+    await worker.drain();
+    assert.deepEqual(noticesOf(worker), [
+      ['Not captured', `Saving the link "${'x'.repeat(39)}${family}…" to today's note failed: ${FAILED}`],
+    ]);
+  });
+
+  it('names a saved link as its failure would, so one with no title no longer says undefined', async () => {
+    const worker = await loadBackground({ setup: withUrl });
+    const untitled = [{ ...worker.tab, title: undefined }, { ...worker.tab, url: 'file:///notes/page.html', title: undefined }];
+    for (const tab of untitled) {
+      await worker.dispatch('contextMenus.onClicked', { menuItemId: 'capture-page' }, tab);
+      await worker.drain();
+    }
+    assert.deepEqual(noticesOf(worker), [
+      ['Captured to New Tab Note', 'Saved link: example.test'],
+      ['Captured to New Tab Note', 'Saved link'],
+    ]);
   });
 });
 
