@@ -345,3 +345,82 @@ describe('white over the accent sits on the fill', () => {
     assert.deepEqual(misses, []);
   });
 });
+
+// The engine injects the built-in themes' values inline. A switch takes off what it set for the
+// theme before, so the root reads as on a page opened on the new theme, and leaves the inline
+// styles other code set. A theme saved before the split has no fill, and draws its fills in its
+// own accent.
+describe("the theme engine's switch (js/theme-engine.js)", () => {
+  /**
+   * The engine on a page whose root records its inline properties
+   * @param {object[]} [themes] the custom themes the settings port holds
+   */
+  function page(themes = []) {
+    const env = createLegacyEnv();
+    env.load('js/theme-engine.js');
+    /** @type {Map<string, string>} */
+    const inline = new Map();
+    const root = env.document.documentElement;
+    // Listed as a CSSStyleDeclaration lists them, so an engine that cleared every inline property would run here
+    root.style = {
+      get length() { return inline.size; },
+      item: (/** @type {number} */ index) => [...inline.keys()][index] || '',
+      setProperty: (/** @type {string} */ key, /** @type {string} */ value) => { inline.set(key, String(value)); },
+      removeProperty: (/** @type {string} */ key) => { const value = inline.get(key) || ''; inline.delete(key); return value; },
+      getPropertyValue: (/** @type {string} */ key) => inline.get(key) || '',
+    };
+    const Themes = env.get('Themes');
+    Themes.connect({ settings: { themes: async () => themes, preferencesOr: async (/** @type {object} */ fallback) => fallback } });
+    // The theme the stylesheets draw: the data-theme the engine left on the root
+    const scheme = () => /** @type {'light' | 'dark'} */ (root.attributes['data-theme'] === 'dark' ? 'dark' : 'light');
+    return { Themes, inline, scheme };
+  }
+  const EMBER = { id: 'custom-ember', name: 'Ember', properties: { '--bg-primary': '#fffaf5', '--accent-color': '#b5442b', '--sidebar-tint': '#f3e9e0' } };
+  const MOSS = { id: 'custom-moss', name: 'Moss', properties: { '--bg-primary': '#1b1f1a', '--accent-color': '#8fbf7a', '--accent-fill': '#2f6b3a' } };
+
+  it("injects the stylesheets' own value for each key, in light and dark", () => {
+    const { Themes } = page();
+    const misses = [];
+    for (const [theme, set] of /** @type {const} */ ([['light', Themes.defaultProperties], ['dark', Themes.darkProperties]])) {
+      for (const [key, value] of Object.entries(set)) {
+        const sheet = PAGE[theme][key];
+        if (sheet === undefined || !sameColor(colorOf(value), colorOf(resolve(sheet, theme)))) misses.push(`${theme}: ${key} is ${value}, the stylesheets' ${sheet}`);
+      }
+    }
+    assert.deepEqual(misses, []);
+  });
+
+  it('leaves the root as a page opened on the new theme has it, with the inline styles other code set', async () => {
+    const misses = [];
+    for (const [from, to] of [['light', 'dark'], ['dark', 'light'], [EMBER.id, 'light'], ['light', EMBER.id], [EMBER.id, MOSS.id]]) {
+      const { Themes, inline } = page([EMBER, MOSS]);
+      inline.set('--set-before', '12px');
+      await Themes.applyTheme(from);
+      inline.set('--set-between', '1.25');
+      await Themes.applyTheme(to);
+      const opened = page([EMBER, MOSS]);
+      await opened.Themes.applyTheme(to);
+      const want = new Map([...opened.inline, ['--set-before', '12px'], ['--set-between', '1.25']]);
+      const left = [...inline.keys()].filter((key) => !want.has(key));
+      const lost = [...want.keys()].filter((key) => inline.get(key) !== want.get(key));
+      if (left.length || lost.length) misses.push(`${from} then ${to}: left ${left.join(', ') || 'nothing'}; lost or changed ${lost.join(', ') || 'nothing'}`);
+    }
+    assert.deepEqual(misses, []);
+  });
+
+  it('draws the fills of a saved theme without --accent-fill in its own accent, and keeps a saved fill', async () => {
+    const button = ruleFor('css/editor.css', '.primary-btn');
+    assert.ok(button, '.primary-btn');
+    const misses = [];
+    for (const [theme, want] of /** @type {const} */ ([[EMBER, '#b5442b'], [MOSS, '#2f6b3a']])) {
+      const saved = JSON.stringify(theme);
+      const { Themes, inline, scheme } = page([theme]);
+      await Themes.applyTheme(theme.id);
+      const drawn = colorOf(resolve(valueOf(button, 'background') || '', scheme(), Object.fromEntries(inline)));
+      if (inline.get('--accent-fill') !== want) misses.push(`${theme.name}: --accent-fill is ${inline.get('--accent-fill')} inline, not ${want}`);
+      if (!sameColor(drawn, colorOf(want))) misses.push(`${theme.name}: .primary-btn draws rgb(${drawn.r}, ${drawn.g}, ${drawn.b}), not ${want}`);
+      if (JSON.stringify(theme) !== saved) misses.push(`${theme.name}: the saved theme changed`);
+    }
+    assert.deepEqual(misses, []);
+  });
+});
