@@ -357,6 +357,34 @@ describe("the new tab's sidebar line and Settings' Trust Center lines (#20 slice
     );
   });
 
+  it("count no group as other that holds only the problems the first line leads with: the worker's failed start at capture risk, and the records' own at can't confirm (round 4b)", async () => {
+    const startFailed = cause({ providerId: 'coordinator', faultCode: 'start-failed', severity: 'capture-risk' });
+    const recordsOwn = cause({ faultCode: 'open-failed', severity: 'data-risk' });
+    /** @param {Record<string, unknown>} fields @param {any[]} groups */
+    const second = async (fields, groups) => (await linesOf(summary({ ...fields, groups }))).settings.second;
+    const atRisk = { capture: 'at-risk', route: 'recovery' };
+    const unsure = { capture: 'unknown', route: 'recovery', records: 'fallback' };
+    assert.deepEqual(
+      [
+        // The worker's failed start alone, and beside a problem of its own group's that isn't it
+        await second(atRisk, [group('storage'), group('platform', { needsAction: 1, cause: startFailed })]),
+        await second(atRisk, [group('storage'), group('platform', { needsAction: 2, cause: startFailed })]),
+        // The records' own problem alone, and beside a saved key
+        await second(unsure, [group('storage', { needsAction: 1, cause: recordsOwn })]),
+        await second(unsure, [
+          group('storage', { needsAction: 1, cause: recordsOwn }),
+          group('vault', { needsAction: 1 }),
+        ]),
+      ],
+      [
+        null,
+        "1 other thing needs your attention: NewTabNote's own parts.",
+        null,
+        '1 other thing needs your attention: Saved keys.',
+      ],
+    );
+  });
+
   it('say saving is not verified yet before any check, and not checked recently once the last check is old', async () => {
     const unchecked = await linesOf(
       summary({

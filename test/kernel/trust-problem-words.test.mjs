@@ -466,4 +466,38 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       /^\n\.trust-incident-actions > \.trust-crosslink:only-child \{\n {2}min-height: 0;$/,
     );
   });
+
+  it("counts as other only a row that holds a problem besides the ones the headline leads with: none for the worker's failed start alone, and none for the records' own at can't confirm (round 4b)", () => {
+    const withRows = (/** @type {any[]} */ providers, /** @type {any[]} */ incidents) =>
+      trustSections(/** @type {any} */ ({ ...REPORT, providers: [...REPORT.providers, ...providers], incidents }), {
+        now: AT,
+      }).flatMap(section => section.rows);
+    const ids = (/** @type {any} */ head) => head.attention.map((/** @type {any} */ row) => row.id);
+    const readiness = entry('recovery-readiness', 'recovery', { status: 'unverified', receipt: null, stillWorks: [] });
+    // At capture risk: NewTabNote's own parts holds only the failed start the headline names
+    const alone = trustHeadline(SUMMARY, withRows([], [START_FAILED]), { now: AT, checking: false });
+    const beside = trustHeadline(SUMMARY, withRows([readiness], [START_FAILED, PURGE]), { now: AT, checking: false });
+    assert.deepEqual([ids(alone), ids(beside)], [[], ['recovery-readiness']]);
+    // At can't confirm: Notes database holds only the records' own problem, which the headline names
+    const RECORDS = /** @type {any} */ ({
+      ...START_FAILED,
+      id: '00000000-0000-4000-8000-0000000000e7',
+      ref: '0000e7',
+      key: 'storage/open-failed/NewTabNoteTrust',
+      providerId: 'storage',
+      faultCode: 'open-failed',
+      subjectId: 'NewTabNoteTrust',
+      severity: 'data-risk',
+      affected: [],
+      preserved: [],
+    });
+    const blind = /** @type {any} */ ({ ...SUMMARY, capture: 'unknown', route: 'recovery', records: 'fallback' });
+    const keys = entry('credentials', 'vault');
+    const records = trustHeadline(blind, withRows([keys], [RECORDS]), { now: AT, checking: false });
+    const andKeys = trustHeadline(blind, withRows([keys], [RECORDS, SAVED_KEY]), { now: AT, checking: false });
+    assert.deepEqual(
+      [records.title, ids(records), ids(andKeys)],
+      ["NewTabNote can't confirm your notes are saving", [], ['credentials']],
+    );
+  });
 });

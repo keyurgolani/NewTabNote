@@ -1804,6 +1804,23 @@ describe("recovery.html while its health records can't be saved (#115's review)"
       })
     );
 
+  it("draws no attention line under can't confirm for the records' own problem, which the headline names (round 4b)", async () => {
+    const tab = legacyContext();
+    assert.equal(await newTabOn(tab).whenReady(), null);
+    const context = legacyContext(tab.env);
+    const root = createRecoveryRoot({ host: hostOf(context, { indexedDB: trustStoreDown(context.env.indexedDB) }) });
+    const page = openPage(root);
+    try {
+      await page.ready;
+      control(page.doc, PAGE.trust).click();
+      await until(() => headline(page.doc) === `${PAGE.trust}: ${PAGE.cantConfirm}`, 'the Trust Center');
+      same(page.doc.querySelector('.trust-attention-line'), null, "no line counts the records' own problem as other");
+    } finally {
+      root.close();
+      closeAll([tab, context]);
+    }
+  });
+
   it("shows what this visit's checks found, the storage row in its provider's words, and no promise over the cards", async () => {
     const tab = legacyContext();
     assert.equal(await newTabOn(tab).whenReady(), null);
@@ -1910,13 +1927,18 @@ describe("recovery.html with the background worker's failed start, which no chec
     }
   });
 
-  it('counts the rest as other under the headline the failed start leads (round 4)', async () => {
+  it("draws no attention line under the headline the worker's failed start leads alone: NewTabNote's own parts holds only that problem (round 4b)", async () => {
     const { page, close } = await withFailedStart();
     try {
       await page.ready;
-      const line = () => text(page.doc.querySelector('.trust-attention-line'));
-      await until(() => /NewTabNote's own parts/.test(line()), "the headline's attention line");
-      assert.match(line(), /^(1 other thing needs|\d other things need) your attention: /);
+      // Settled: the open check has answered, so Saving new notes draws its own check after the failed start
+      await until(
+        () => page.doc.getElementById('row-capture')?.querySelectorAll('.trust-sub').length === 2,
+        "Saving new notes' two checks",
+      );
+      assert.equal(headline(page.doc), `${PAGE.trust}: ${PAGE.atRisk}`);
+      assert.equal(page.doc.getElementById('row-platform').getAttribute('data-attention'), 'true');
+      same(page.doc.querySelector('.trust-attention-line'), null, "no line counts the headline's own problem as other");
     } finally {
       close();
     }
