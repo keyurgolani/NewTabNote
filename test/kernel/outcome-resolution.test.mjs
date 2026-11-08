@@ -14,7 +14,6 @@ import {
   COMMAND_DEADLINE_MS,
   DEADLINE_GRACE_MS,
   LEDGER_READ_TIMEOUT_MS,
-  MAX_MESSAGE_BYTES,
   RECONNECT_DELAYS_MS,
 } from '../../js/kernel/core/contracts/limits.js';
 import { committed, conflict, rejected, UnavailableError, unknown } from '../../js/kernel/core/contracts/outcomes.js';
@@ -591,7 +590,16 @@ describe('the client: resuming in journal order, by the record first', { timeout
   });
 
   it('reads the record before anything could refuse it: a committed command answers committed once the client is closed, unsupported, or the command too large, and one with none stays unknown', async () => {
-    const big = { type: 'createNote', commandId: 'big', noteId: 'n9', name: 'x'.repeat(MAX_MESSAGE_BYTES) };
+    // createNote at a 64 KiB stand-in entry, so the command too large to send needs no ceiling's worth of text (#259)
+    const small = createLookup({
+      ...OPERATIONS,
+      setPinned: journaled('setPinned'),
+      createNote: operationOf(
+        /** @type {CommandEntry} */ ({ ...journaled('createNote').entry, maxBytes: 64 * 1024 }),
+        OPERATIONS.createNote,
+      ),
+    });
+    const big = { type: 'createNote', commandId: 'big', noteId: 'n9', name: 'x'.repeat(64 * 1024) };
     const created = committed('note-created', ['n9'], { commitSeq: 2 });
     for (const recorded of [true, false]) {
       const spy = spyLedger();
@@ -610,7 +618,7 @@ describe('the client: resuming in journal order, by the record first', { timeout
       await settle();
       assert.equal(unsupported.client.state(), 'unsupported');
       // Too large to send
-      const large = resuming([{ v: 1, command: big }], { ledger: spy.ledger });
+      const large = resuming([{ v: 1, command: big }], { ledger: spy.ledger, lookup: small });
       assert.deepEqual(
         await Promise.all([closed.client.resume(), unsupported.client.resume(), large.client.resume()]),
         recorded

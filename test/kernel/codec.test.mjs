@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
+import * as codec from '../../js/kernel/core/contracts/codec.js';
 import { CodecError, canonicalJson, decode, encode, encodedBytes } from '../../js/kernel/core/contracts/codec.js';
 import { MAX_DEPTH } from '../../js/kernel/core/contracts/limits.js';
 
@@ -184,6 +185,38 @@ describe('codec', () => {
       const units = Array.from({ length: 1 + Math.floor(random() * 40) }, () => Math.floor(random() * 0x10000));
       const text = String.fromCharCode(...units);
       assert.equal(encodedBytes(text), Buffer.byteLength(text, 'utf8'), `seed round ${round}`);
+    }
+  });
+
+  it('counts a text as the port sends it, the UTF-8 bytes of its JSON encoding, without building that encoding (#259)', () => {
+    const wireBytes = /** @type {(text: string) => number} */ (
+      /** @type {Record<string, unknown>} */ (codec).wireBytes
+    );
+    assert.equal(typeof wireBytes, 'function', 'codec.js counts the frame');
+    const onPort = (/** @type {string} */ text) => Buffer.byteLength(JSON.stringify(text), 'utf8');
+    for (const text of [
+      '',
+      'abc',
+      '"',
+      '\\',
+      '"q"',
+      '\n\t\r\b\f',
+      '\u0000\u001f',
+      'é€😀',
+      '\ud83d',
+      '\ude00x',
+      '\ud83d\ud83d\ude00',
+      '{"frame":"request"}',
+    ]) {
+      assert.equal(wireBytes(text), onPort(text), JSON.stringify(text));
+    }
+    // The same count as Chrome's encoding, for every code unit, lone surrogates and controls included
+    let seed = 29;
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+    for (let round = 0; round < 200; round++) {
+      const units = Array.from({ length: 1 + Math.floor(random() * 40) }, () => Math.floor(random() * 0x10000));
+      const text = String.fromCharCode(...units);
+      assert.equal(wireBytes(text), onPort(text), `seed round ${round}`);
     }
   });
 

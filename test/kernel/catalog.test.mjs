@@ -14,7 +14,8 @@ import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMANDS, COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import * as envelope from '../../js/kernel/core/contracts/envelope.js';
 import { ENTITY_TYPES } from '../../js/kernel/core/contracts/fields.js';
-import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
+import * as limits from '../../js/kernel/core/contracts/limits.js';
+import { MAX_MESSAGE_BYTES, SMALL_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { QUERIES, QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
 import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { SURFACES } from '../../js/kernel/core/contracts/surfaces.js';
@@ -240,6 +241,29 @@ function undefinedFields(value) {
 }
 
 describe('the catalog (#13, "Desired behavior")', () => {
+  it("gives the ceiling to every command it doesn't size small, the chat's two saves among them, since their message lists are never trimmed (#259)", () => {
+    const ceiling = /** @type {Record<string, unknown>} */ (limits).COMMAND_CEILING_BYTES;
+    const large = Object.entries(WORKER_COMMANDS).filter(([, entry]) => entry.maxBytes !== SMALL_MESSAGE_BYTES);
+    assert.deepEqual(
+      large.filter(([, entry]) => entry.maxBytes !== ceiling).map(([name]) => name),
+      [],
+      'none at another size',
+    );
+    for (const type of [
+      'saveChatHistory',
+      'savePromptTemplates',
+      'importBackup',
+      'createNote',
+      'applyCloseDraft',
+      'keepJournalEntry',
+    ]) {
+      assert.ok(
+        large.some(([name]) => name === type),
+        type,
+      );
+    }
+  });
+
   it('names every operation once, as a command or as a query', () => {
     assert.deepEqual(
       WORKER_COMMAND_TYPES.filter(type => Object.hasOwn(WORKER_QUERIES, type)),
@@ -373,14 +397,19 @@ describe('the catalog (#13, "Desired behavior")', () => {
     }
   });
 
-  it('holds every entry to the limits: versions from 1, sizes up to 1 MiB, journaled ones exactly that', () => {
+  it('holds every entry to the limits: versions from 1, a command small or at the ceiling, the journaled ones at it, a query up to 1 MiB (#259)', () => {
+    // Half the largest frame Chrome's port carried in #259's measure, 67,108,864 bytes (the lead's O3)
+    const ceiling = /** @type {Record<string, unknown>} */ (limits).COMMAND_CEILING_BYTES;
+    assert.equal(ceiling, 33554432, "the ceiling is half the measure's largest frame");
     /** @type {Array<[string, CommandEntry | QueryEntry]>} */
     const entries = ENTRIES;
     for (const [name, entry] of entries) {
       assert.ok(Number.isSafeInteger(entry.version) && entry.version >= 1, name);
       assert.ok(Number.isSafeInteger(entry.maxBytes) && entry.maxBytes > 0, name);
-      assert.ok(entry.maxBytes <= MAX_MESSAGE_BYTES, name);
-      if (entry.journaled) assert.equal(entry.maxBytes, MAX_MESSAGE_BYTES, name);
+      if (entry.kind === 'command')
+        assert.ok(entry.maxBytes === SMALL_MESSAGE_BYTES || entry.maxBytes === ceiling, name);
+      else assert.ok(entry.maxBytes <= MAX_MESSAGE_BYTES, name);
+      if (entry.journaled) assert.equal(entry.maxBytes, ceiling, name);
       assert.ok(Number.isSafeInteger(entry.deadlineMs) && entry.deadlineMs > 0, name);
       assert.ok(entry.surfaces.length > 0 && entry.surfaces.every(surface => SURFACES.includes(surface)), name);
       assert.ok(

@@ -9,13 +9,20 @@ import * as v from '../../js/lib/valibot/index.mjs';
 import { welcomeSchema } from '../../js/kernel/core/contracts/envelope.js';
 import { entityId, id } from '../../js/kernel/core/contracts/fields.js';
 import * as limits from '../../js/kernel/core/contracts/limits.js';
-import { PROTOCOL_VERSION, QUERY_DEADLINE_MS, SMALL_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
+import {
+  MAX_MESSAGE_BYTES,
+  PROTOCOL_VERSION,
+  QUERY_DEADLINE_MS,
+  SMALL_MESSAGE_BYTES,
+} from '../../js/kernel/core/contracts/limits.js';
 import { committed, ready } from '../../js/kernel/core/contracts/outcomes.js';
 import { queryStateSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
+import { encode } from '../../js/kernel/core/contracts/codec.js';
 import { check } from '../../js/kernel/core/contracts/validate.js';
 import { createLookup, operationOf } from '../../js/kernel/core/messaging/operations.js';
 import { createRouter } from '../../js/kernel/core/messaging/router.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
+import { COMMAND_SAMPLES } from './command-samples.mjs';
 import { NOW } from './support.mjs';
 import {
   OPERATIONS,
@@ -27,6 +34,9 @@ import {
   settle,
   testScheduler,
 } from './messaging-support.mjs';
+
+/** The ceiling #259 sets (limits.js), read off the namespace so this file loads before it's there */
+const CEILING = /** @type {number} */ (/** @type {Record<string, unknown>} */ (limits).COMMAND_CEILING_BYTES);
 
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Handler} Handler */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Dispatch} Dispatch */
@@ -168,6 +178,97 @@ describe('the router: handshake (#13, "Handshake and compatibility")', () => {
 });
 
 describe('the router: checks before dispatch (#13, AC4)', () => {
+  it("reads a request up to the ceiling and holds it to its own entry, so a 2 MiB createNote runs and a 2 MiB archiveNote doesn't (#259)", async () => {
+    /** @type {string[]} */
+    const ran = [];
+    const router = makeRouter({
+      handlers: {
+        createNote: () => {
+          ran.push('createNote');
+          return committed('note-created', ['n1']);
+        },
+        archiveNote: () => {
+          ran.push('archiveNote');
+          return committed('note-archived', ['n1']);
+        },
+      },
+    });
+    const peer = await opened(router, 'newtab');
+    const content = 'x'.repeat(2 * MAX_MESSAGE_BYTES);
+    peer.send(
+      request('r1', {
+        type: 'createNote',
+        commandId: 'c1',
+        ...COMMAND_SAMPLES.createNote,
+        blocks: [{ id: 'b1', type: 'text', content }],
+      }),
+    );
+    peer.send(request('r2', { type: 'archiveNote', commandId: 'c2', noteId: 'n1', padding: content }));
+    await settle();
+    // A refusal answers at once and a handler's answer once it has run, so they're read by request
+    assert.deepEqual(
+      peer.frames
+        .map(frame => [frame.frame, frame.requestId, frame.code ?? frame.result?.kind])
+        .sort((one, other) => String(one[1]).localeCompare(String(other[1]))),
+      [
+        ['response', 'r1', 'committed'],
+        ['error', 'r2', 'payload-too-large'],
+      ],
+    );
+    assert.deepEqual(ran, ['createNote']);
+  });
+
+  it("counts a request as the port sent it, as the client does: one whose codec text fits but whose frame doesn't is refused, and runs no handler (#259)", async () => {
+    assert.ok(Number.isSafeInteger(CEILING) && CEILING > MAX_MESSAGE_BYTES, 'the ceiling is over 1 MiB');
+    /** @type {string[]} */
+    const ran = [];
+    const router = makeRouter({
+      handlers: {
+        createNote: () => {
+          ran.push('createNote');
+          return committed('note-created', ['n1']);
+        },
+        archiveNote: () => {
+          ran.push('archiveNote');
+          return committed('note-archived', ['n1']);
+        },
+      },
+    });
+    const peer = await opened(router, 'newtab');
+    /** @param {unknown} frame */
+    const sizes = frame => {
+      const text = encode(frame);
+      return [Buffer.byteLength(text, 'utf8'), Buffer.byteLength(JSON.stringify(text), 'utf8')];
+    };
+    // A quote is two bytes in the codec's text, and four once Chrome encodes that text as JSON again
+    const small = request('r1', {
+      type: 'archiveNote',
+      commandId: 'c1',
+      noteId: 'n1',
+      padding: '"'.repeat(SMALL_MESSAGE_BYTES / 3),
+    });
+    const [smallText, smallFrame] = sizes(small);
+    assert.ok(smallText < SMALL_MESSAGE_BYTES && smallFrame > SMALL_MESSAGE_BYTES);
+    const quotes = Math.floor(CEILING * 0.3);
+    const large = request('r2', {
+      type: 'createNote',
+      commandId: 'c2',
+      ...COMMAND_SAMPLES.createNote,
+      blocks: [{ id: 'b1', type: 'text', content: '"'.repeat(quotes) }],
+    });
+    const [largeText, largeFrame] = sizes(large);
+    assert.ok(largeText < CEILING && largeFrame > CEILING);
+    peer.send(small);
+    peer.send(large);
+    await settle();
+    // Over its entry, an error frame; over the ceiling, nothing, since the read refuses it before it names a request
+    assert.deepEqual(
+      peer.frames.map(answer => [answer.frame, answer.requestId, answer.code]),
+      [['error', 'r1', 'payload-too-large']],
+    );
+    assert.deepEqual(ran, []);
+  });
+
   it('refuses what the validators refuse, each with its code, and runs no handler', async () => {
     let ran = 0;
     const router = makeRouter({

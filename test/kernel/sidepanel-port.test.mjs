@@ -258,18 +258,18 @@ describe("Side Panel's writes, over #13's port (#35 slice 4c)", () => {
     }
   });
 
-  it("sends nothing for a closing tab's edit over the port's 1 MiB, which stays for the new tab (rule 6)", async () => {
+  it("sends a closing tab's edit of 2 MiB to the worker, under the ceiling, and it commits there (#259)", async () => {
     const tab = await profile();
-    const key = writeDraft(tab, { content: 'x'.repeat(MAX_MESSAGE_BYTES) });
+    const key = writeDraft(tab, { content: 'x'.repeat(2 * MAX_MESSAGE_BYTES) });
     const { stand, client } = sidePanelOn(tab);
     try {
-      assert.deepEqual((await client.applied())?.kept, ['A'], "Side Panel's start applied it, and kept it");
+      assert.deepEqual((await client.applied())?.saved, ['A']);
       assert.deepEqual(
-        stand.frames.filter(frame => frame.operation === 'applyCloseDraft'),
-        [],
-        'nothing went on the port',
+        stand.handed.map(one => [one.surface, one.type, one.commandId]),
+        [['sidepanel', 'applyCloseDraft', 'draft-a-apply']],
+        'the worker committed it, for Side Panel',
       );
-      assert.notEqual(tab.env.global.localStorage.getItem(key), null, 'the draft stays');
+      assert.equal(tab.env.global.localStorage.getItem(key), null, 'and the draft went');
     } finally {
       stand.close();
     }

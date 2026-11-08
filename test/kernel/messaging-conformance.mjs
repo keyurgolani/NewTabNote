@@ -16,7 +16,6 @@ import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
 import {
   COMMAND_DEADLINE_MS,
   DEADLINE_GRACE_MS,
-  MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   QUERY_DEADLINE_MS,
 } from '../../js/kernel/core/contracts/limits.js';
@@ -163,6 +162,18 @@ const newKernel = (/** @type {Clock} */ clock) =>
     clock,
   });
 
+/** createNote's size, 64 KiB, in a stand-in entry, so a case on it needs no ceiling's worth of text (#259) */
+const SMALL_CREATE_BYTES = 64 * 1024;
+const smallCreateNote = operationOf(
+  /** @type {import('../../js/kernel/core/contracts/commands.js').CommandEntry} */ ({
+    ...OPERATIONS.createNote.entry,
+    maxBytes: SMALL_CREATE_BYTES,
+  }),
+  OPERATIONS.createNote,
+);
+/** @type {typeof lookup} */
+const smallLookup = operation => (operation === 'createNote' ? smallCreateNote : lookup(operation));
+
 /**
  * Runs the suite against one transport
  * @param {string} name
@@ -224,9 +235,9 @@ export function describeConformance(name, connect) {
     });
 
     it('carries a payload up to its size, and refuses a larger one before it goes', async () => {
-      const { client } = await start();
-      const remote = client();
-      const text = 'x'.repeat(MAX_MESSAGE_BYTES - 1024);
+      const { client } = await start({}, { lookup: smallLookup });
+      const remote = client('newtab', { lookup: smallLookup });
+      const text = 'x'.repeat(SMALL_CREATE_BYTES - 1024);
       const fits = { type: 'createNote', commandId: 'c1', noteId: 'n1', blocks: [{ id: 'b1', content: text }] };
       assert.equal((await remote.execute(fits)).kind, 'committed');
       const blocks = /** @type {any} */ (await remote.query({ type: 'getNoteBlocks', noteId: 'n1' })).data;

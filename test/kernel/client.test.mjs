@@ -20,6 +20,7 @@ import {
   WELCOME_WAIT_MS,
 } from '../../js/kernel/core/contracts/limits.js';
 import { committed, failed, ready, rejected, unavailable, unknown } from '../../js/kernel/core/contracts/outcomes.js';
+import * as limits from '../../js/kernel/core/contracts/limits.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
 import { createInProcessTransport } from '../../js/kernel/core/messaging/in-process.js';
 import { createRouter } from '../../js/kernel/core/messaging/router.js';
@@ -27,6 +28,9 @@ import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { CALLERS, NOW, testIds } from './support.mjs';
 import { VERSION, lookup, scriptedCoordinator, settle, testScheduler } from './messaging-support.mjs';
+
+/** The ceiling #259 sets (limits.js), read off the namespace so this file loads before it's there */
+const CEILING = /** @type {number} */ (/** @type {Record<string, unknown>} */ (limits).COMMAND_CEILING_BYTES);
 
 /** @typedef {import('../../js/kernel/core/messaging/link.js').Transport} Transport */
 /** @typedef {import('../../js/kernel/core/messaging/client.js').ClientOptions} ClientOptions */
@@ -174,6 +178,34 @@ describe('the client: requests (#13, "Topology")', () => {
       failed('validation', 'payload-too-large'),
     ]);
     assert.equal(coordinator.attempts, 0);
+  });
+
+  it('measures a command as the port sends it: a 2 MiB one goes, and one whose codec text is under the ceiling but whose frame on the port is over it is refused before it goes (#259)', async () => {
+    const { coordinator, client } = await welcomed();
+    const big = {
+      type: 'createNote',
+      commandId: 'c-big',
+      noteId: 'n2',
+      blocks: [{ id: 'b1', content: 'x'.repeat(2 * MAX_MESSAGE_BYTES) }],
+    };
+    void client.execute(big);
+    await settle();
+    const sent = () => coordinator.last.requests().map(frame => frame.payload.commandId);
+    assert.deepEqual(sent(), ['c-big'], 'the 2 MiB command went');
+    assert.ok(Number.isSafeInteger(CEILING) && CEILING > MAX_MESSAGE_BYTES, 'the ceiling is over 1 MiB');
+    // A quote is two bytes in the codec's text, and four once Chrome encodes that text as JSON again
+    const quotes = Math.floor(CEILING * 0.3);
+    assert.ok(2 * quotes < CEILING && 4 * quotes > CEILING);
+    const quoted = {
+      type: 'createNote',
+      commandId: 'c-quoted',
+      noteId: 'n3',
+      blocks: [{ id: 'b1', content: '"'.repeat(quotes) }],
+    };
+    const answer = client.execute(quoted);
+    await settle();
+    assert.deepEqual(sent(), ['c-big'], 'it never went');
+    assert.deepEqual(await answer, rejected('validation', 'payload-too-large'));
   });
 
   it("turns the router's refusals into the outcome or state of a request that never started", async () => {
@@ -324,7 +356,15 @@ describe('the client: requests (#13, "Topology")', () => {
   it('sends what a call held when it was made, whatever its caller changes before the welcome', async () => {
     const scheduler = testScheduler();
     const coordinator = scriptedCoordinator();
-    const client = makeClient(coordinator.transport, scheduler);
+    // createNote at a 64 KiB stand-in entry, so growing the save past it needs no ceiling's worth of text (#259)
+    /** @type {typeof lookup} */
+    const small = name => {
+      const operation = lookup(name);
+      return name === 'createNote' && operation
+        ? { ...operation, entry: { ...operation.entry, maxBytes: 64 * 1024 } }
+        : operation;
+    };
+    const client = makeClient(coordinator.transport, scheduler, { lookup: small });
     /** @type {Record<string, any>} */
     const command = pin('n1');
     /** @type {Record<string, any>} */
@@ -341,7 +381,7 @@ describe('the client: requests (#13, "Topology")', () => {
     command.pinned = false;
     command.at = new Date(NOW);
     query.noteId = 'n2';
-    save.blocks[0].content = 'x'.repeat(MAX_MESSAGE_BYTES);
+    save.blocks[0].content = 'x'.repeat(64 * 1024);
     await settle();
     coordinator.last.welcome();
     await settle();

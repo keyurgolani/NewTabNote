@@ -1,7 +1,7 @@
 // #35 slice 4b-2: Popup's send chunk (js/kernel/composition/popup-send-chunk.js), on the Chrome
 // fake. Its client sends the worker Popup's two commands as `popup` over the runtime port, and
 // refuses any other operation before it goes. It keeps #13's caps, so a close-time draft over
-// 1 MiB never goes (rule 10). Its popupWrites starts Popup's journal on the client's session, the
+// the ceiling never goes (rule 10, #259). Its popupWrites starts Popup's journal on the client's session, the
 // one the worker's router knows the page by (rule 7), and answers ready only once that journal holds
 // its owner lock (rule 3). Popup's root sends through it once its writes move.
 
@@ -78,12 +78,15 @@ describe("Popup's send chunk (composition/popup-send-chunk.js)", () => {
     client.close();
   });
 
-  it('refuses a close-time draft over 1 MiB as payload-too-large before it goes, so it stays for a page that applies it in-process (rule 10)', async () => {
+  it('sends a close-time draft of 2 MiB, under the ceiling, and it commits (#259)', async () => {
     const { handed, client } = popupAndWorker();
     const [block] = COMMAND_SAMPLES.applyCloseDraft.draft.blocks;
-    const big = { ...DRAFT, draft: { ...DRAFT.draft, blocks: [{ ...block, content: 'x'.repeat(MAX_MESSAGE_BYTES) }] } };
-    assert.deepEqual(await client.execute(big), rejected('validation', 'payload-too-large'));
-    assert.deepEqual(handed, []);
+    const big = {
+      ...DRAFT,
+      draft: { ...DRAFT.draft, blocks: [{ ...block, content: 'x'.repeat(2 * MAX_MESSAGE_BYTES) }] },
+    };
+    assert.deepEqual(await client.execute(big), committed('close-draft-saved', ['n1']));
+    assert.deepEqual(handed, [{ surface: 'popup', type: 'applyCloseDraft' }]);
     client.close();
   });
 

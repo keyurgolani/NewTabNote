@@ -1,7 +1,7 @@
 // #35 slice 4c: Side Panel's send chunk (js/kernel/composition/sidepanel-send-chunk.js), on the
 // Chrome fake. Its client sends the worker Side Panel's one command, applyCloseDraft, as
 // `sidepanel` over the runtime port, and refuses any other operation before it goes. It keeps #13's
-// caps, so a close-time draft over 1 MiB never goes (rule 6). Side Panel's root sends through it
+// caps, so a close-time draft over the ceiling never goes (rule 6, #259). Side Panel's root sends through it
 // once its writes move.
 
 import { describe, it } from 'node:test';
@@ -70,12 +70,15 @@ describe("Side Panel's send chunk (composition/sidepanel-send-chunk.js)", () => 
     client.close();
   });
 
-  it('refuses a close-time draft over 1 MiB as payload-too-large before it goes, so it stays for the new tab (rule 6)', async () => {
+  it('sends a close-time draft of 2 MiB, under the ceiling, and it commits (#259)', async () => {
     const { handed, client } = sidePanelAndWorker();
     const [block] = COMMAND_SAMPLES.applyCloseDraft.draft.blocks;
-    const big = { ...DRAFT, draft: { ...DRAFT.draft, blocks: [{ ...block, content: 'x'.repeat(MAX_MESSAGE_BYTES) }] } };
-    assert.deepEqual(await client.execute(big), rejected('validation', 'payload-too-large'));
-    assert.deepEqual(handed, []);
+    const big = {
+      ...DRAFT,
+      draft: { ...DRAFT.draft, blocks: [{ ...block, content: 'x'.repeat(2 * MAX_MESSAGE_BYTES) }] },
+    };
+    assert.deepEqual(await client.execute(big), committed('close-draft-saved', ['n1']));
+    assert.deepEqual(handed, [{ surface: 'sidepanel', type: 'applyCloseDraft' }]);
     client.close();
   });
 });
