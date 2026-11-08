@@ -35,7 +35,7 @@ import { WORKER_TASKS } from '../adapters/indexeddb/worker-tasks.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
 import { WORKER_HANDLERS, WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
 import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
-import { UnavailableError, unavailable } from '../core/contracts/outcomes.js';
+import { TURN_EXCEEDED, UnavailableError, unavailable } from '../core/contracts/outcomes.js';
 import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
 import { createLookup } from '../core/messaging/operations.js';
 import { createRouter } from '../core/messaging/router.js';
@@ -398,6 +398,37 @@ async function record(settings, outcome, stored, now, version, costly) {
  * and the purge after it
  * @typedef {Client & {migration: WorkerMigration, transforms: WorkerTransforms, recordsCatchUp: WorkerRecordsCatchUp, purge: WorkerPurge}} WorkerClient
  */
+
+/**
+ * `adapter`, with every settings write its kernels hand it going one after another, each checked
+ * against its own turn's `live` right before its set goes (#35 slice 4d, rule 11). One context's
+ * chrome.storage.local calls apply in the order they're made, so a cut turn's set that has gone
+ * lands before a later turn's; what the chain adds is that a set cut while it waits for the one
+ * before never goes. It's the worker's alone, where the coordinator's queue gives each turn its
+ * `live`: a page's own settings writes, which have none, go as they always have.
+ * @param {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter} adapter
+ * @returns {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter}
+ */
+function settingsInTurns(adapter) {
+  /** @type {Promise<unknown>} */
+  let writes = Promise.resolve();
+  /** @type {import('../adapters/indexeddb/adapter.js').IndexedDbAdapter['commit']} */
+  const commit = (work, options) => {
+    if (work.effect.kind !== 'settings') return adapter.commit(work, options);
+    const live = options?.live ?? null;
+    const write = writes.then(() =>
+      live === null || live() === true
+        ? adapter.commit(work, options)
+        : { outcome: unavailable('coordinator', TURN_EXCEEDED, true), replayed: false },
+    );
+    writes = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    return write;
+  };
+  return Object.freeze(Object.create(adapter, { commit: { value: commit, enumerable: true } }));
+}
 
 /**
  * The worker's kernel and its client. It starts a migration attempt now: a run, unless one of
@@ -799,8 +830,10 @@ export function createWorkerClient(host = workerHost()) {
         copiesMissingStores: !upgraded,
       });
       if (replaced) replaced.close();
+      // The kernels on it, the worker's own and each page's, write their settings in turn order
+      const kernels = settingsInTurns(adapter);
       const built = kernelClient({
-        adapter,
+        adapter: kernels,
         surface: 'worker-internal',
         handlers: WORKER_HANDLERS,
         maintainOnOpen: upgraded,
@@ -814,7 +847,7 @@ export function createWorkerClient(host = workerHost()) {
         requestCatchUp(adapter, built);
         requestPurge();
       }
-      const opened = adapter;
+      const opened = kernels;
       /** @type {Map<Surface, Client>} */
       const pages = new Map();
       /** @param {Surface} surface */

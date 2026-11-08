@@ -750,6 +750,16 @@
       "replace": "      return commitUnits({ ...work, done: () => work.done(prepared.receipt()) }, [prepared.unit]);\n",
       "test": "test/kernel/worker-root.test.mjs",
       "name": "commits no unit of a Replace all import whose turn the queue cut after the kernel's check, on #247's check inside its commit, and commits one whose turn it didn't cut (#35 slice 4d, rule 11)"
+    },
+    {
+      "id": "worker-settings-not-in-turns",
+      "behavior": "#35 port commands",
+      "protects": "The worker's settings writes go one after another, each checked against its turn right before it goes, so one cut while it waits never goes.",
+      "file": "js/kernel/composition/background.js",
+      "find": "      const kernels = settingsInTurns(adapter);\n",
+      "replace": "      const kernels = adapter;\n",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "writes the new tab's settings one after another, each checked against its turn's live right before it goes: a cut turn's held set lands before the next turn's, and one cut while it waits never goes (#35 slice 4d, rule 11)"
     }
   ]
 }
