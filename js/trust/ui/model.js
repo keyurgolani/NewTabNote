@@ -86,8 +86,11 @@ const ATTENTION = Object.freeze(['action-required', 'degraded', 'failed', 'locke
 /** The statuses a compact row folds to one line for, its reason not needed in sight (change 8) */
 const FOLDED = Object.freeze(['verified', 'not-configured', 'off', 'unsupported']);
 
-/** The providers the "NewTabNote's own parts" row folds into one */
-export const PLATFORM = Object.freeze(['messaging', 'contributions', 'block-types']);
+/**
+ * The providers the "NewTabNote's own parts" row folds into one: the background worker's own
+ * problems (#117) fold there too, with its row's words (Q4, #20 slice 4c)
+ */
+export const PLATFORM = Object.freeze(['coordinator', 'messaging', 'contributions', 'block-types']);
 
 /** The interim providers, which read only legacy facts and never record `verified` (legacy.js) */
 const INTERIM = Object.freeze(['backup', 'sync', 'remote-ai', 'ai-scope-grants']);
@@ -479,6 +482,17 @@ export function trustSections(report, { now, checking = new Set() }) {
  */
 
 /**
+ * The title of the capture-risk problem the summary names as a group's cause, or null
+ * @param {TrustSummary} summary
+ * @returns {string | null}
+ */
+function riskTitle(summary) {
+  const cause = (summary.groups || []).map(group => group.cause).find(item => item && item.severity === 'capture-risk');
+  if (!cause || cause.faultCode === null) return null;
+  return /** @type {Record<string, string>} */ (INCIDENT)[`${cause.providerId}/${cause.faultCode}`] || null;
+}
+
+/**
  * The Trust Center's headline, from the summary and the two core rows
  * @param {TrustSummary} summary
  * @param {Row[]} rows
@@ -493,9 +507,14 @@ export function trustHeadline(summary, rows, { now, checking }) {
     .map(row => ({ id: row.id, label: row.label }));
   const verified = core.filter(row => row.status === 'verified' && row.time !== null).map(row => /** @type {number} */ (row.time));
   if (atRisk) {
-    const worst = core.find(row => row.id === 'storage' && row.attention) || core.find(row => row.attention) || core[0];
-    const checkedAt = worst && worst.time !== null ? ` Checked ${whenText(worst.time, now)}.` : '';
-    return { tone: 'failed', title: PAGE.atRisk, proof: `${worst ? worst.text : ''}${checkedAt}`.trim(), openRecovery: true, attention };
+    const worst = core.find(row => row.id === 'storage' && row.attention) || core.find(row => row.attention);
+    // At risk from a problem no core row explains, such as the background worker's: the proof
+    // names it, by its title (#20 slice 4c)
+    const named = worst ? null : riskTitle(summary);
+    if (named) return { tone: 'failed', title: PAGE.atRisk, proof: `${named}.`, openRecovery: true, attention };
+    const shown = worst || core[0];
+    const checkedAt = shown && shown.time !== null ? ` Checked ${whenText(shown.time, now)}.` : '';
+    return { tone: 'failed', title: PAGE.atRisk, proof: `${shown ? shown.text : ''}${checkedAt}`.trim(), openRecovery: true, attention };
   }
   if (checking && verified.length === 0) {
     return { tone: 'checking', title: PAGE.checkingNotes, proof: PAGE.checkingProof, openRecovery: false, attention };

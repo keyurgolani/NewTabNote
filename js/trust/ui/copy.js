@@ -189,6 +189,11 @@ export const INCIDENT = Object.freeze({
   'permissions/grant-missing': 'Site access is limited',
   'permissions/permission-changed': 'Chrome grants NewTabNote more than it asks for',
   'recovery-readiness/point-unverified': 'A recovery point failed its check',
+  // A purge that stopped at a point (#17 PR 2b), and the background worker's own two (#117), as
+  // the lead signed them for #20 slice 4c
+  'recovery-readiness/purge-stopped': 'Something you deleted is still in a recovery point',
+  'coordinator/start-failed': "The background worker couldn't start",
+  'coordinator/entry-unreplayable': "A change NewTabNote kept isn't in your notes yet",
   'messaging/unreachable': "The background worker didn't answer",
   'contributions/contribution-unavailable': "Part of NewTabNote didn't load",
   'block-types/contribution-unavailable': "A block type didn't load",
@@ -220,6 +225,9 @@ export const RESOLVED = Object.freeze({
   'permissions/grant-missing': 'Site access is back',
   'permissions/permission-changed': 'Chrome grants NewTabNote only what it asks for',
   'recovery-readiness/point-unverified': 'Every recovery point passes its check',
+  'recovery-readiness/purge-stopped': 'What you deleted is out of every recovery point',
+  'coordinator/start-failed': 'The background worker starts again',
+  'coordinator/entry-unreplayable': 'Every kept change is in your notes',
   'messaging/unreachable': 'The background worker answers again',
   'contributions/contribution-unavailable': 'Every part of NewTabNote loads again',
   'block-types/contribution-unavailable': 'Every block type loads again',
@@ -231,6 +239,10 @@ export const INCIDENT_TEXT = Object.freeze({
   'index/lagging': 'Recent changes may not show up in search.',
   'index/stalled': 'It has to start over, so recent notes may not show up in search until it does.',
   'index/indexer-start-failed': 'Search may miss notes you changed until indexing starts again.',
+  'recovery-readiness/purge-stopped':
+    "NewTabNote takes what you delete for good out of its recovery points too. It stopped at a point that didn't pass its check, so what you deleted is still in that point. Nothing else changed.",
+  'coordinator/start-failed': 'New notes and changes may not be saved until it starts.',
+  'coordinator/entry-unreplayable': "NewTabNote kept it, so nothing is lost, but it couldn't add it to your notes as it was written.",
   'credentials/legacy-secret':
     "Other software on this computer, or anyone with a copy of this browser profile, could read it. It's kept in {count} places:",
 });
