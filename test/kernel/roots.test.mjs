@@ -10,7 +10,7 @@
 // its writes to the worker over #13's port (#35 slice 4b-2), here a stand-in for it
 // (popup-worker.mjs).
 
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { webcrypto } from 'node:crypto';
@@ -21,8 +21,6 @@ import { UPGRADE_RECORD_KEY, createWorkerClient } from '../../js/kernel/composit
 import { PURGE_MESSAGE, waitForWorkerUpgrade, wakeWorkerToPurge } from '../../js/kernel/composition/host.js';
 import {
   connectNewTabStorage,
-  createNewTabAdapter,
-  createNewTabClient,
   createNewTabLegacyStores,
   createNewTabStorageState,
   withPurgeWake,
@@ -32,6 +30,8 @@ import { createRecoveryRoot, recoveryReadersOf } from '../../js/kernel/compositi
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { committed } from '../../js/kernel/core/contracts/outcomes.js';
 import { closeAll, legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { newTabTestAdapter } from '../helpers/newtab-kernel.mjs';
+import { newTabOn } from './newtab-root.mjs';
 import { popupWorker } from './popup-worker.mjs';
 import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
 import { realTimers } from './trust-support.mjs';
@@ -59,17 +59,24 @@ const hostOf = context => ({
   storage: context.storage,
 });
 
+/** The new tabs a case opened, which its end closes */
+/** @type {Array<ReturnType<typeof newTabOn>>} */
+const newTabs = [];
+afterEach(() => {
+  for (const one of newTabs.splice(0)) one.close();
+});
+
 /**
- * The new tab's adapter and client, as its root builds them, with the Storage global's shell
- * connected to the client
+ * The new tab's reader and client, as its root builds them since #35 slice 4d, its writes to a
+ * stand-in for the worker (newtab-root.mjs), with the Storage global's shell connected to the client
  * @param {LegacyContext} context
  */
 const newTabOf = context => {
   const host = hostOf(context);
-  const adapter = createNewTabAdapter(host);
-  const client = createNewTabClient(adapter);
-  connectNewTabStorage(client, host, createNewTabStorageState(adapter));
-  return { adapter, client };
+  const one = newTabOn(context.env, { awaitUpgrade: host.awaitUpgrade });
+  newTabs.push(one);
+  connectNewTabStorage(one.client, host, createNewTabStorageState(one.reader));
+  return { adapter: one.reader, client: one.client };
 };
 
 /**
@@ -229,11 +236,11 @@ describe('each composition root', () => {
     assert.equal(created.kind, 'committed');
     const entry = { type: 'saveNoteContent', commandId: 'c-entry', noteId: 'n1', blocks: [] };
     const capture = /** @type {const} */ ({ type: 'text', content: 'From a page' });
-    // A page's kernel and policy are on the shared catalog, which doesn't have them, so each is
-    // refused as unknown before any handler. Popup's and Side Panel's clients, which send the
-    // worker their own commands alone, refuse them before they go (#35 slices 4b-2 and 4c)
+    // A page's kernel and policy are on the shared catalog, which doesn't have them, so a query is
+    // refused as unknown before any handler. The pages' clients, which send the worker their own
+    // commands alone, refuse the commands before they go (#35 slices 4b-2, 4c and 4d)
     for (const [page, client, refusal] of /** @type {Array<[string, Client, string[]]>} */ ([
-      ['the new tab', newtab, ['policy', 'unknown-command']],
+      ['the new tab', newtab, ['validation', 'unknown-operation']],
       ['Popup', popup, ['validation', 'unknown-operation']],
       ['Side Panel', panel, ['validation', 'unknown-operation']],
     ])) {
@@ -373,7 +380,7 @@ describe('each composition root', () => {
       // A fresh profile's run read no store, so it never holds back another (costly: false)
       { status: 'migrated', code: null, at: 0, version: null, costly: false },
     );
-    // And a new tab that wakes it then opens the database as it is, and maintains it
+    // And a new tab that wakes it then opens the database as it is, and maintains nothing (#35 slice 4d)
     const next = legacyContext(fresh.env);
     const opened = newTabOf(next);
     assert.equal(await opened.client.whenReady(), null);
@@ -458,7 +465,7 @@ describe('each composition root', () => {
         capture: { type: 'text', content: id },
       });
     assert.equal((await capture('first')).kind, 'committed');
-    // A newer build's upgrade: the new tab's one connection doesn't block it, #17's adapter's,
+    // A newer build's upgrade: the new tab's one connection doesn't block it, #17's reader's,
     // since the Storage global's shell opens none (#17 PR 4b), nor the worker's, and the
     // worker's next open finds it too new
     const upgraded = await new Promise((resolve, reject) => {
@@ -539,11 +546,11 @@ describe('each composition root', () => {
     closeAll([tab, profile]);
   });
 
-  it("gives the new tab's adapter none of the worker's own storage tasks: an integrity check answers integrity-check-needs-worker, and a sweep rejects with ledger-sweep-needs-worker (#35 slice 3c)", async () => {
+  it("gives #17's adapter in a page none of the worker's own storage tasks, as the new tab's had none before #35 slice 4d: an integrity check answers integrity-check-needs-worker, and a sweep rejects with ledger-sweep-needs-worker (#35 slice 3c)", async () => {
     const tab = legacyContext();
     await legacyEnv.createDatabase(tab.env.indexedDB, { records: { elements: [legacyEnv.block('orphan', 'missing-note', 0)] } });
-    const { adapter, client } = newTabOf(tab);
-    assert.equal(await client.whenReady(), null);
+    const adapter = newTabTestAdapter(hostOf(tab));
+    await adapter.open();
     /** @type {import('../../js/kernel/core/ports/repository.js').Work} */
     const check = {
       commandId: 'check-1',

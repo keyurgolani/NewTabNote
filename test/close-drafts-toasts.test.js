@@ -38,16 +38,9 @@ async function pageWith({ recovered = [], savedInTrash = [] } = {}) {
   if (recovered.length > 0) storage.setItem(UNTOLD, JSON.stringify(recovered));
   if (savedInTrash.length > 0) storage.setItem(SAVED_UNTOLD, JSON.stringify(savedInTrash));
   env.load('js/utils.js', 'js/app.js');
-  const newTab = await import('../js/kernel/composition/newtab.js');
-  const kernel = newTab.createNewTabPageClient(
-    newTab.createNewTabAdapter({
-      indexedDB: env.indexedDB,
-      settings: env.chrome.api.storage.local,
-      awaitUpgrade: async () => {},
-      locks: env.global.navigator.locks,
-    }),
-    { drafts: { storage, locks: env.global.navigator.locks }, wake: () => {} },
-  );
+  // The new tab's root, its writes to a stand-in for the worker (#35 slice 4d)
+  const { newTabOn } = await import('./kernel/newtab-root.mjs');
+  const kernel = newTabOn(env).client;
   assert.equal(await kernel.whenReady(), null);
   const toasts = [];
   env.get('Utils').showToast = (message, type, duration) => toasts.push([message, type, duration]);

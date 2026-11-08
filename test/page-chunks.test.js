@@ -46,14 +46,12 @@ describe('the pages pass\'s host and adapter chunks (scripts/build/page-chunks.j
     assert.deepEqual(shared.filter((file) => !HOST_MODULES.includes(file) && !ADAPTER_MODULES.includes(file)).sort(), []);
   });
 
-  it("keeps Popup's start off the adapter's list, since it reads through #17's reader (#35 slice 4b-2)", async () => {
-    const [, popup] = await starts();
-    assert.deepEqual(ADAPTER_MODULES.filter((file) => popup.has(file)), []);
-  });
-
-  it("keeps Side Panel's start off the adapter's list too, since it reads through #17's reader (#35 slice 4c)", async () => {
-    const [, , sidepanel] = await starts();
-    assert.deepEqual(ADAPTER_MODULES.filter((file) => sidepanel.has(file)), []);
+  it("keeps every page's start off the adapter's list, since each reads through #17's reader (#35 slices 4b-2, 4c and 4d)", async () => {
+    const [newtab, popup, sidepanel] = await starts();
+    for (const [page, start] of /** @type {const} */ ([['the new tab', newtab], ['Popup', popup], ['Side Panel', sidepanel]])) {
+      assert.deepEqual(ADAPTER_MODULES.filter((file) => start.has(file)), [], page);
+      assert.ok(start.has('js/kernel/adapters/indexeddb/reader.js'), `${page}'s start holds the reader`);
+    }
   });
 
   it("lists in host only what the new tab's start and Popup's reach share, its start and what it loads with import()", async () => {
@@ -72,7 +70,8 @@ describe('the pages pass\'s host and adapter chunks (scripts/build/page-chunks.j
         assert.ok(ADAPTER_MODULES.every((file) => adapter.test(path.join(at, file)) && !host.test(path.join(at, file))));
       }
       assert.deepEqual([host.test(PRELOAD_HELPER), adapter.test(PRELOAD_HELPER)], [true, false]);
-      assert.equal(host.test(path.join(dir, 'js/kernel/adapters/indexeddb/reader.js')), false);
+      // The reader is host's since all three starts read through it (#35 slice 4d)
+      assert.equal(host.test(path.join(dir, 'js/kernel/adapters/indexeddb/reader.js')), true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

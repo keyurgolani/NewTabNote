@@ -38,6 +38,7 @@ const HOST_MODULES = Object.freeze([
   'js/kernel/adapters/indexeddb/daily-answer.js',
   'js/kernel/adapters/indexeddb/failures.js',
   'js/kernel/adapters/indexeddb/ledger.js',
+  'js/kernel/adapters/indexeddb/reader.js',
   'js/kernel/adapters/indexeddb/reads.js',
   'js/kernel/adapters/indexeddb/registry-names.js',
   'js/kernel/adapters/indexeddb/requests.js',
@@ -47,6 +48,7 @@ const HOST_MODULES = Object.freeze([
   'js/kernel/composition/close-drafts.js',
   'js/kernel/composition/host.js',
   'js/kernel/composition/ids.js',
+  'js/kernel/composition/page-reads.js',
   'js/kernel/core/application/feed.js',
   'js/kernel/core/application/handlers.js',
   'js/kernel/core/application/kernel.js',
@@ -64,7 +66,6 @@ const HOST_MODULES = Object.freeze([
   'js/kernel/core/contracts/codec.js',
   'js/kernel/core/contracts/commands.js',
   'js/kernel/core/contracts/limits.js',
-  'js/kernel/core/contracts/op-fields.js',
   'js/kernel/core/contracts/outcomes.js',
   'js/kernel/core/contracts/queries.js',
   'js/kernel/core/contracts/surfaces.js',
@@ -82,16 +83,12 @@ const HOST_MODULES = Object.freeze([
 
 const ADAPTER_MODULES = Object.freeze([
   'js/kernel/adapters/indexeddb/adapter.js',
-  'js/kernel/adapters/indexeddb/backup-file.js',
   'js/kernel/adapters/indexeddb/backups.js',
   'js/kernel/adapters/indexeddb/changes.js',
   'js/kernel/adapters/indexeddb/conflicts.js',
-  'js/kernel/adapters/indexeddb/copy-reads.js',
-  'js/kernel/adapters/indexeddb/data-urls.js',
   'js/kernel/adapters/indexeddb/deletion.js',
   'js/kernel/adapters/indexeddb/recovery-copies.js',
   'js/kernel/adapters/indexeddb/versions.js',
-  'js/kernel/core/application/close-drafts-on-demand.js',
   'js/kernel/core/domain/changes.js',
 ]);
 

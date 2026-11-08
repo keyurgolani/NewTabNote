@@ -22,10 +22,7 @@ import { CATCH_UP_KEY, DRAFTS_LOCK, SAVED_UNTOLD_KEY, UNTOLD_KEY } from '../../j
 import { applyingCloseDrafts } from '../../js/kernel/composition/close-drafts.js';
 import { waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import {
-  createNewTabAdapter,
-  createNewTabClient,
   createNewTabNoteList,
-  createNewTabPageClient,
   withCloseDraftClears,
 } from '../../js/kernel/composition/newtab.js';
 import { createPopupClient } from '../../js/kernel/composition/popup.js';
@@ -33,6 +30,8 @@ import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js'
 import { blockDigest, recoveredIdOf } from '../../js/kernel/core/domain/close-draft.js';
 import { legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { popupWorker } from './popup-worker.mjs';
+import { newTabTestAdapter, newTabTestClient } from '../helpers/newtab-kernel.mjs';
+import { newTabOn as newTabRoot } from './newtab-root.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('../../js/kernel/composition/host.js').Client} Client */
@@ -126,7 +125,7 @@ const applyIn = (context, client) =>
  */
 async function profileWithA(extra = []) {
   const tab = legacyContext();
-  const client = createNewTabClient(createNewTabAdapter(hostOf(tab)));
+  const client = newTabTestClient(newTabTestAdapter(hostOf(tab)));
   assert.equal(await client.whenReady(), null);
   /** @param {Command} command */
   const run = async command => {
@@ -280,13 +279,17 @@ const PAGES = [
 
 /**
  * The new tab's page client over `tab`'s profile, as its root builds it, with `drafts` and the
- * applier `load` hands over
+ * applier `load` hands over, its writes to a stand-in for the worker there (#35 slice 4d), which
+ * the case's end closes
  * @param {LegacyContext} tab
  * @param {ReturnType<typeof draftsOf>} drafts
- * @param {() => Promise<Applier>} load
+ * @param {() => Promise<Applier>} [load]
  */
-const newTabOn = (tab, drafts, load) =>
-  createNewTabPageClient(createNewTabAdapter(hostOf(tab)), { drafts, wake: () => {}, load });
+const newTabOn = (tab, drafts, load) => {
+  const one = newTabRoot(tab.env, { drafts, load, awaitUpgrade: hostOf(tab).awaitUpgrade });
+  standIns.push(/** @type {any} */ (one));
+  return one.client;
+};
 
 /**
  * An applier that loads late, counting its loads in `counts`, and puts 'applied' on `order` once
@@ -321,7 +324,7 @@ describe('the close-time drafts at each start', () => {
   it("the new tab applies them before its note list's first read, and removes them", async () => {
     const { tab } = await profileWithA();
     write(tab, draftOfA());
-    const client = createNewTabPageClient(createNewTabAdapter(hostOf(tab)), { drafts: draftsOf(tab), wake: () => {} });
+    const client = newTabOn(tab, draftsOf(tab));
     const noteList = createNewTabNoteList(client);
     await noteList.settled();
     assert.equal(noteList.note('A')?.preview, 'alpha, edited as the tab closed', 'the first read has the edit in');
@@ -542,7 +545,7 @@ describe('the close-time drafts at each start', () => {
     }
     const { tab } = await profileWithA();
     tab.env.global.localStorage.setItem(CATCH_UP_KEY, JSON.stringify({ dropped: [], gone: ['Z'] }));
-    const newTab = createNewTabPageClient(createNewTabAdapter(hostOf(tab)), { drafts: draftsOf(tab), wake: () => {} });
+    const newTab = newTabOn(tab, draftsOf(tab));
     assert.deepEqual((await newTab.applied())?.catchUp, { dropped: [], gone: ['Z'] });
     assert.deepEqual(keysOf(tab), []);
   });
@@ -888,7 +891,7 @@ describe("every delete for good, under the drafts' lock (the lead's Q7)", () => 
     await assert.rejects(applyCloseDrafts({ client, store: cut, locks: tab.env.global.navigator.locks }), /the page went/);
     const R = recoveredIdOf(draft);
     // The new tab's own client, as its root builds it
-    const page = createNewTabPageClient(createNewTabAdapter(hostOf(tab)), { drafts: draftsOf(tab), wake: () => {} });
+    const page = newTabOn(tab, draftsOf(tab));
     await page.applied();
     // The page's own start found R made already and removed the draft; put it back as a page that went leaves it
     write(tab, draft);
@@ -902,7 +905,7 @@ describe("every delete for good, under the drafts' lock (the lead's Q7)", () => 
   it("the new tab's own client holds the drafts' lock around a delete for good, on a page with a key (n07)", async () => {
     const { tab, client, run } = await profileWithA();
     await run({ type: 'trashNote', commandId: client.ids.next(), noteId: 'B' });
-    const page = createNewTabPageClient(createNewTabAdapter(hostOf(tab)), { drafts: draftsOf(tab), wake: () => {} });
+    const page = newTabOn(tab, draftsOf(tab));
     assert.equal(await page.whenReady(), null);
     // A key here, B's untold entry, so Empty Trash, which names its notes only in its outcome, takes the lock
     tab.env.global.localStorage.setItem(SAVED_UNTOLD_KEY, JSON.stringify([{ id: 'B' }]));

@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 
+import { NEWTAB_SENDS } from '../../js/kernel/composition/newtab-send-chunk.js';
 import { POPUP_SENDS } from '../../js/kernel/composition/popup-send-chunk.js';
 import { SIDEPANEL_SENDS } from '../../js/kernel/composition/sidepanel-send-chunk.js';
 import { ALL_HANDLERS, NEWTAB_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
@@ -74,8 +75,8 @@ const APPLIER_MODULES =
  * the kernel itself (kernel.js, maintain), and whether it writes notes, so its root applies a
  * closing tab's edits and journals what it sends (#33, #35 slice 3b). recovery.html reads only
  * its theme through its kernel, so it does neither (#20 slice 4b). `sends` looks up the commands a
- * page's root sends the worker over #13's port, not its kernel, as Popup's and Side Panel's do
- * (#35 slices 4b-2 and 4c). `forPages` is the worker's table for its kernels of a page's surface,
+ * page's root sends the worker over #13's port, not its kernel, as Popup's, Side Panel's and the
+ * new tab's do (#35 slices 4b-2, 4c and 4d). `forPages` is the worker's table for its kernels of a page's surface,
  * which run what pages send it over the port (#35 slice 4d): what the worker's code sends that only
  * that table holds, as the remote apply's parts, runs there.
  * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, sends?: (type: string) => unknown, forPages?: HandlerTable, maintains: boolean, writesNotes: boolean}>}
@@ -113,7 +114,8 @@ const PAGES = [
     entries: ['js/entries/newtab.js'],
     surface: 'newtab',
     table: NEWTAB_HANDLERS,
-    maintains: true,
+    sends: NEWTAB_SENDS,
+    maintains: false,
     writesNotes: true,
   },
   {
@@ -383,12 +385,23 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
         `${page} sends what its table and its sends to the worker don't hold`,
       );
       if (surface === 'newtab') {
-        // The new tab's facade sends types the scan can't read, so its table holds every one
-        // the catalog allows there
-        assert.deepEqual(
-          [...registered(table)].sort(),
-          [...CATALOG_TYPES].filter(type => allowedOn(type, 'newtab', table)).sort(),
+        // The new tab's facade sends types the scan can't read, so its table and its sends to the
+        // worker hold every one the catalog allows there but startup maintenance, the worker's own
+        // (#35 slice 4d, G2): its queries and its session's write in its table, which it commits
+        // itself, and every other command in its sends
+        const allowed = [...CATALOG_TYPES].filter(
+          type => allowedOn(type, 'newtab', table) && type !== 'runStartupMaintenance',
         );
+        assert.deepEqual(
+          allowed.filter(type => registered(table).has(type) === !!sends?.(type)),
+          [],
+          'each in one of the two',
+        );
+        assert.deepEqual(
+          [...registered(table)].filter(type => !allowed.includes(type)),
+          [],
+        );
+        assert.deepEqual(Object.keys(table.commands), ['saveWorkspaceSession'], 'its one command in the page');
       } else {
         assert.deepEqual(unread, [], `${page} sends what the scan can't read`);
       }

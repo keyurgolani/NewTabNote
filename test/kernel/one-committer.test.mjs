@@ -229,8 +229,32 @@ const planted = plants => (/** @type {string} */ file) => {
 };
 
 describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
-  it('finds nothing wrong in the tree: the worker commits, three pages move in their slices, and each page write is one the list names', () => {
+  it('finds nothing wrong in the tree: the worker commits, recovery.html moves in its slice, and each page write is one the list names', () => {
     assert.deepEqual(problemsOf(), []);
+  });
+
+  it("reaches #17's reader from the new tab's start, with its untilMoved row gone: no writer but recovery-points.js, which its reads row names, and no write but the reader's open, which the list reads on the new tab too (#35 slice 4d, R12)", () => {
+    assert.deepEqual(
+      LIST.untilMoved.map(/** @param {{root: string}} row */ row => row.root),
+      ['recovery'],
+    );
+    assert.deepEqual(
+      problemsOf().filter(problem => problem.startsWith('newtab ')),
+      [],
+    );
+    // Without the new tab on the reader's open, its start's one write is one the list doesn't name
+    const connection = 'js/kernel/adapters/indexeddb/connection.js';
+    const list = {
+      ...LIST,
+      reads: [
+        ...LIST.reads.filter(/** @param {{file: string}} row */ row => row.file !== connection),
+        { file: connection, roots: ['popup', 'sidepanel'], why: "the reader's open, in existing mode", owner: 35 },
+      ],
+    };
+    assert.ok(
+      problemsOf({ list }).some(problem => problem.startsWith(`newtab writes in ${connection}`)),
+      problemsOf({ list }).join('\n'),
+    );
   });
 
   it("reads every page the build has, the worker, and the scripts each page's HTML loads", () => {

@@ -217,8 +217,6 @@ export const COMPOSERS = Object.freeze({
     port: 'messaging-transport',
     of: ['js/kernel/core/messaging/in-process.js', 'js/kernel/adapters/messaging/runtime-port.js'],
   },
-  // #17 PR 4a: the new tab's root opens #17's adapter with the new tab's options
-  'js/kernel/composition/newtab.js': { port: 'kernel-adapter', of: ['js/kernel/adapters/indexeddb/adapter.js'] },
   // #35 slice 3: each context opens its journal here, once
   'js/kernel/adapters/in-context.js': { port: 'journal-store', of: ['js/kernel/adapters/indexeddb/journal.js'] },
   // #20 slice 1b: a context's failure events, on NewTabNoteTrust (js/kernel/composition/
