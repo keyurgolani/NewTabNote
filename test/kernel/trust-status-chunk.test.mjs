@@ -338,6 +338,19 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     assert.match(ruleOf('.trust-sidebar-line'), /\n {2}text-wrap: balance;\n/);
   });
 
+  it("takes the bulk bar out of the Tab order and the accessibility tree once it has slid away, so Tab from the last note goes to the line and the sidebar doesn't scroll (the coordinator's look at round 2, finding 1)", () => {
+    // Hidden only after its slide out, and shown as its slide in starts; e2e/trust-status-line.spec.js
+    // tabs from the last note in the packaged extension
+    assert.match(
+      ruleOf('.sidebar-bulk-actions'),
+      /\n {2}visibility: hidden;\n[^]*\n {2}transition: transform 0\.3s ease, visibility 0s linear 0\.3s;$/,
+    );
+    assert.match(
+      ruleOf('.sidebar-bulk-actions.visible'),
+      /\n {2}visibility: visible;\n[^]*\n {2}transition: transform 0\.3s ease, visibility 0s;$/,
+    );
+  });
+
   it('draws only the newest read started, so an older one that gets its answer later, none included, leaves what the newer drew', async () => {
     const { startTrustStatus } = await import('../../js/kernel/composition/trust-status.js');
     const doc = tabDocument();
