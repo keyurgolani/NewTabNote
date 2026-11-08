@@ -41,7 +41,9 @@ export const PROVIDER = Object.freeze({
   'local-inference': { label: ROW_LABEL['local-inference'], about: 'The model semantic search runs on this device.' },
   index: { label: 'Search', about: 'What makes your notes searchable.' },
   platform: { label: "NewTabNote's own parts", about: 'Its background worker, built-in features, and block types.' },
-  messaging: { label: 'Background worker', about: "Passes saves and captures between NewTabNote's pages." },
+  // The worker's connections, which its router answers for whether or not its kernel was built,
+  // so not the part that saves (signed as round 5)
+  messaging: { label: 'Connections to the background worker', about: "Passes saves and captures between NewTabNote's pages." },
   contributions: { label: 'Built-in features', about: 'The parts of NewTabNote that load when it starts.' },
   'block-types': { label: 'Block types', about: 'Text, to-dos, headings, and the other blocks a note holds.' },
 });
@@ -193,9 +195,10 @@ export const INCIDENT = Object.freeze({
   'permissions/permission-changed': 'Chrome grants NewTabNote more than it asks for',
   'recovery-readiness/point-unverified': 'A recovery point failed its check',
   // A purge that stopped at a point (#17 PR 2b), and the background worker's own two (#117), as
-  // signed for #20 slice 4c
+  // signed for #20 slice 4c. Its failed start says what failed, saving, apart from its connections
+  // (round 5)
   'recovery-readiness/purge-stopped': 'Something you deleted is still in a recovery point',
-  'coordinator/start-failed': "The background worker couldn't start",
+  'coordinator/start-failed': "The background worker couldn't start saving",
   'coordinator/entry-unreplayable': "A change NewTabNote kept isn't in your notes yet",
   'messaging/unreachable': "The background worker didn't answer",
   'contributions/contribution-unavailable': "Part of NewTabNote didn't load",
@@ -229,7 +232,7 @@ export const RESOLVED = Object.freeze({
   'permissions/permission-changed': 'Chrome grants NewTabNote only what it asks for',
   'recovery-readiness/point-unverified': 'Every recovery point passes its check',
   'recovery-readiness/purge-stopped': 'What you deleted is out of every recovery point',
-  'coordinator/start-failed': 'The background worker starts again',
+  'coordinator/start-failed': 'The background worker saves again',
   'coordinator/entry-unreplayable': 'Every kept change is in your notes',
   'messaging/unreachable': 'The background worker answers again',
   'contributions/contribution-unavailable': 'Every part of NewTabNote loads again',
