@@ -320,6 +320,21 @@ describe('the client: requests (#13, "Topology")', () => {
     assert.deepEqual(answers, [failed('coordinator', 'deadline-exceeded'), unknown('deadline-exceeded', 'c-n1')]);
   });
 
+  it('waits 121 s for an import and an automatic backup, their 120 s and the grace, before it gives up on either as unknown (#35 slice 4d, N7, R27)', async () => {
+    const { scheduler, client } = await welcomed();
+    /** @type {unknown[]} */
+    const answers = [];
+    void client.execute({ type: 'createAutoBackup', commandId: 'c-backup' }).then(answer => answers.push(answer));
+    const backup = { version: 1, exportedAt: 1, canvases: [], elements: [] };
+    void client
+      .execute({ type: 'importBackup', commandId: 'c-import', mode: 'merge', backup })
+      .then(answer => answers.push(answer));
+    await scheduler.advance(limits.MAINTENANCE_DEADLINE_MS + DEADLINE_GRACE_MS - 1);
+    assert.deepEqual(answers, []);
+    await scheduler.advance(1);
+    assert.deepEqual(answers, [unknown('deadline-exceeded', 'c-backup'), unknown('deadline-exceeded', 'c-import')]);
+  });
+
   it('reconnects for a call that found its connection closing under it, and sends it on the next', async () => {
     const { coordinator, connection, client } = await welcomed();
     // The coordinator went, and the client hasn't heard yet, so the send fails and the call waits

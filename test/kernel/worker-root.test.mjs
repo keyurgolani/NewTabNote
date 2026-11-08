@@ -1524,6 +1524,46 @@ describe("the new tab's commands on the worker, on a kernel of its surface (#35 
     assert.equal((await named('n-kept')).length, 1);
   });
 
+  it("writes nothing of an automatic backup whose turn the queue cut after the kernel's check, on its own check before its first set, and writes one whose turn it didn't cut (#35 slice 4d, rule 11, S2's backup half of R20)", async () => {
+    const of = newProfile();
+    const local = of.chrome.api.storage.local;
+    // The backup lists the ones kept before its first set, so a cut there comes between
+    let atList = () => {};
+    const settings = {
+      get: (/** @type {any} */ keys) => {
+        if (keys === null) atList();
+        return local.get(keys);
+      },
+      remove: (/** @type {any} */ keys) => local.remove(keys),
+      set: (/** @type {Record<string, unknown>} */ items) => local.set(items),
+    };
+    const worker = /** @type {any} */ (createWorkerClient({ ...hostOf(of), settings }));
+    assert.equal(await worker.whenReady(), null);
+    const written = () => Object.keys(legacyEnv.plain(of.chrome.local)).filter(key => key.startsWith('auto_backup_'));
+    let cut = false;
+    atList = () => {
+      cut = true;
+    };
+    const cutOne = await worker.execute(
+      { type: 'createAutoBackup', commandId: 'c-cut' },
+      { surface: 'newtab', live: () => !cut },
+    );
+    assert.deepEqual(
+      [cutOne.kind, cutOne.cause, cutOne.code],
+      ['unavailable', 'coordinator', 'turn-exceeded'],
+      JSON.stringify(cutOne),
+    );
+    assert.equal(cut, true, 'cut as it listed the backups kept');
+    assert.deepEqual(written(), [], 'no backup');
+    atList = () => {};
+    const kept = await worker.execute(
+      { type: 'createAutoBackup', commandId: 'c-kept' },
+      { surface: 'newtab', live: () => true },
+    );
+    assert.equal(kept.kind, 'committed', JSON.stringify(kept));
+    assert.equal(written().length, 1);
+  });
+
   it("lets a capture's open of a database at 8 that lacks a store go on when #33's copy can't be written: the capture commits, with no copy or marker left (#35 slice 4d, rule 9)", async () => {
     const of = newProfile();
     await legacyEnv.createDatabase(of.real, {
