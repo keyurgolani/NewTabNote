@@ -814,9 +814,8 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       // only on recovery.html
       if (Object.prototype.hasOwnProperty.call(INTERIM, provider.id) || !place || !place.hosts.includes('recovery'))
         continue;
-      const unlooked = [...(holds.get(provider.id) || new Map())].filter(
-        ([fault]) => !provider.observes.includes(fault),
-      );
+      const observes = /** @type {readonly string[]} */ (provider.observes);
+      const unlooked = [...(holds.get(provider.id) || new Map())].filter(([fault]) => !observes.includes(fault));
       const problems = unlooked.map(([faultCode, severity]) => ({
         ...START_FAILED,
         id: '00000000-0000-4000-8000-0000000000ec',
