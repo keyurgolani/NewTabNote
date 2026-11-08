@@ -369,7 +369,7 @@ export function mountRecoveryPage({
   /** @param {Row} row */
   function evidenceBody(row) {
     const parts = [];
-    // The folded row's parts, and a row a problem no check covers leads: each by its title and status
+    // The folded row's parts, and a row a problem leads: each by its title and status
     if (row.id === 'platform' || row.evidence.some(evidence => evidence.problem)) {
       for (const evidence of row.evidence) {
         parts.push(

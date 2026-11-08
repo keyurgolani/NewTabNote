@@ -254,8 +254,9 @@ function updateText(key, receipt) {
  * @property {string} tone
  * @property {string} sentence - what the check did, or what the problem means
  * @property {Fact[]} facts
- * @property {boolean} [problem] - a problem no check on the page covers, which leads the row's
- *   evidence, its own checks after it as they read (round 4)
+ * @property {boolean} [problem] - a problem that makes the row worse than its checks found, or
+ *   that no check on the page covers, which leads the row's evidence, its own checks after it as
+ *   they read (round 4, and the code review's R4-2)
  */
 
 /**
@@ -350,8 +351,9 @@ function evidenceOf(entry, now) {
 const ROW_IS = Object.freeze(/** @type {Record<string, string>} */ ({ capture: 'capture' }));
 
 /**
- * A problem no check on the page covers, as a row's evidence: its title, its severity's status
- * and shape, what it means, and when it was seen
+ * A problem that leads a row's evidence, one that makes the row worse than its checks found or
+ * that no check on the page covers: its title, its severity's status and shape, what it means,
+ * and when it was seen
  * @param {Problem} problem
  * @param {number} now
  * @returns {Evidence}
@@ -499,10 +501,14 @@ export function trustSections(report, { now, checking = new Set() }) {
     const stillWorks = [...new Set(entries.flatMap(entry => (attention ? entry.stillWorks : [])))];
     // Saving new notes doesn't list saving new notes, which its name and status already say (round 4)
     const notWorking = [...new Set(open.flatMap(incident => incident.affected))].filter(capability => ROW_IS[rowId] !== capability);
-    // A problem no check here covers leads the row's evidence, so a row it fails never offers a
-    // check that passed as its evidence: those come after it, as they read (round 4)
-    const problemsFirst = counted.some(uncovered)
-      ? problemsOf(counted.filter(uncovered), new Map(), id => entryOf(id) || null).map(problem => problemEvidence(problem, now))
+    // A problem that makes the row worse than its checks found, or that no check here covers,
+    // leads the row's evidence, so a row it fails never offers a check that passed as its
+    // evidence: those come after it, as they read (round 4, and the code review's R4-2)
+    /** @param {Incident} incident */
+    const leads = incident =>
+      uncovered(incident) || worstOf([checked, /** @type {Record<string, string>} */ (SEVERITY_STATUS)[incident.severity]]) !== checked;
+    const problemsFirst = counted.some(leads)
+      ? problemsOf(counted.filter(leads), new Map(), id => entryOf(id) || null).map(problem => problemEvidence(problem, now))
       : [];
     return {
       id: rowId,
