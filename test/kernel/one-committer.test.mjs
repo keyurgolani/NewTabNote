@@ -329,6 +329,41 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     assert.deepEqual(reached, Object.fromEntries(files.map(file => [file, []])));
   });
 
+  it("reaches no writer from the export reads and the import's check the new tab keeps, or from its raw export (#35 slice 4d's P-a, NTN-255)", () => {
+    const writers = new Set(
+      Object.entries(LIST.indexeddb)
+        .filter(([, role]) => role === 'writer')
+        .map(([file]) => `${INDEXEDDB}/${file}`),
+    );
+    const modules = fs.readdirSync(path.join(ROOT, INDEXEDDB)).filter(file => file.endsWith('.js'));
+    /** @param {string} name - a function some module under INDEXEDDB exports */
+    const exporterOf = name => {
+      const declares = new RegExp(`^export (?:async )?function ${name}\\(`, 'm');
+      const found = modules.filter(file => declares.test(defaultRead(path.join(ROOT, INDEXEDDB, file))));
+      assert.equal(found.length, 1, `one module exports ${name}: ${found.join(', ')}`);
+      return found[0];
+    };
+    const reads = ['readExport', 'exportObject', 'exportFile', 'validateBackup', 'readStoreForCopy'];
+    /** Each export read by the module that has it, and the raw export */
+    const from = [
+      ...reads.map(name => [`${name} (${exporterOf(name)})`, exporterOf(name)]),
+      ['raw-export.js', 'raw-export.js'],
+    ];
+    const reached = Object.fromEntries(
+      from.map(([what, file]) => [
+        what,
+        [...reachGraph([path.join(ROOT, INDEXEDDB, file)], { readFile: defaultRead }).modules]
+          .map(relative)
+          .filter(module => writers.has(module)),
+      ]),
+    );
+    assert.deepEqual(
+      reached,
+      Object.fromEntries(from.map(([what]) => [what, []])),
+      'no export read, the check or the raw export reaches a module that writes CanvasTabDB',
+    );
+  });
+
   it("reaches the registry's steps from no page: registry.js is in the worker's graph alone, every page's adapter takes none (#35 slice 4b-0b)", () => {
     const registry = `${INDEXEDDB}/registry.js`;
     const pages = rootsOf({ pages: PAGES, readFile: defaultRead }).filter(root => !root.worker);
