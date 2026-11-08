@@ -398,6 +398,17 @@ function rowAction(rowId, entries, counted) {
 }
 
 /**
+ * What the unfixed problems among `incidents` list as not working. No Still works list on a page
+ * that shows them claims any of it, so no card or row there says a capability works while
+ * another problem says it doesn't (the design review's round 2, S2). Dismissing a problem
+ * doesn't fix it, so a dismissed one counts too.
+ * @param {readonly Incident[]} incidents
+ * @returns {Set<string>}
+ */
+const notWorkingOn = incidents =>
+  new Set(incidents.filter(incident => incident.state !== 'resolved').flatMap(incident => incident.affected));
+
+/**
  * The Trust Center's rows, in its four groups' order. `checking` names the providers whose
  * checks are running now, which read as checking until they answer.
  * @param {TrustReport} report
@@ -407,6 +418,8 @@ function rowAction(rowId, entries, counted) {
 export function trustSections(report, { now, checking = new Set() }) {
   /** @param {string} id */
   const entryOf = id => report.providers.find(entry => entry.providerId === id);
+  // The rows keep the cards' rule, so both views keep one list (change 6)
+  const down = notWorkingOn(report.incidents);
   /**
    * @param {string} rowId
    * @returns {Row | null}
@@ -453,7 +466,7 @@ export function trustSections(report, { now, checking = new Set() }) {
       folded:
         !attention &&
         (status === 'checking' || (FOLDED.includes(status) && !(rowId === 'remote-ai' && status !== 'not-configured'))),
-      stillWorks: stillWorks.filter(capability => !notWorking.includes(capability)),
+      stillWorks: stillWorks.filter(capability => !down.has(capability)),
       notWorking,
       open,
       action: rowAction(rowId, entries, counted),
@@ -629,7 +642,8 @@ export function incidentTitle(incident, evidence = {}, why = { ...evidence, ...(
  * The problems `incidents` make, worst first and then most recently seen. `next` is each open
  * incident's card action from recovery.incidents, so no view picks its own. `providerOf` is a
  * provider's row in trust.report: its latest receipt's evidence holds the counts a check's
- * incidents don't, and its `stillWorks` is the one Still works list both views show (change 6).
+ * incidents don't, and its `stillWorks` is the one Still works list both views show (change 6),
+ * less what an unfixed problem among `incidents` lists as not working.
  * @param {readonly Incident[]} incidents
  * @param {ReadonlyMap<string, {kind: string, remediationId?: string} | null>} [next]
  * @param {(providerId: string) => ProviderEntry | null} [providerOf]
@@ -646,6 +660,8 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
     const entry = providerOf(incident.providerId);
     return whyOf(entry ? entry.receipt : null, incident.evidence || {});
   };
+  // What any unfixed problem here lists as not working, which no card's Still works claims
+  const down = notWorkingOn(incidents);
   /** @type {Map<string, Incident[]>} */
   const byTitle = new Map();
   for (const incident of incidents) {
@@ -665,10 +681,11 @@ export function problemsOf(incidents, next = new Map(), providerOf = () => null)
     const subjectKey = `${key}/${first.subjectId}`;
     const severity = SEVERITY_ORDER.find(name => list.some(incident => incident.severity === name)) || first.severity;
     const affected = [...new Set(list.flatMap(incident => incident.affected))];
-    // The provider row's own list where the report has one, else what these incidents preserve
+    // The provider row's own list where the report has one, else what these incidents preserve,
+    // less what they or any other unfixed problem here affects
     const entry = providerOf(first.providerId);
     const preserved = (entry && Array.isArray(entry.stillWorks) ? [...entry.stillWorks] : [...new Set(list.flatMap(incident => incident.preserved))]).filter(
-      name => !affected.includes(name),
+      name => !affected.includes(name) && !down.has(name),
     );
     const evidence = /** @type {Record<string, any>} */ ({ ...evidenceOf(first.providerId), ...(first.evidence || {}) });
     const action = list.map(incident => next.get(incident.id)).find(Boolean) || null;
