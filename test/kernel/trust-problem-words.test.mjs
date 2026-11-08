@@ -857,7 +857,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.deepEqual([...reached].sort(), ['capture', 'index', 'platform', 'recovery-readiness', 'storage']);
   });
 
-  it("names every problem each row is counted for, in its line or a line of its own, and no line of its own repeats what its line says, over each state a check on recovery.html can come to: each answer it gives, as it gives it, under every problem its row can hold besides, and under each older finding of its own the answer doesn't look at, which stays open beside it, as an update waiting for free space does beside a probe that fails on the space (the code review's R7-1 and R8-1)", () => {
+  it("names every problem each row is counted for, in its line or a line of its own, and no line of its own repeats what its line says, over each state a check on recovery.html can come to: each answer it gives, as it gives it, under every problem its row can hold besides, and under each older finding of its own the answer doesn't look at, which stays open beside it, as an update waiting for free space does beside a probe that fails on the space, with every problem the background worker raises on NewTabNote's own parts and two of its checks at once, counting what it checks (the code review's R7-1, R8-1, R8-2 and R8-3)", () => {
     /** @type {Map<string, Map<string, Record<string, any>>>} The faults each provider's events raise, as they raise them */
     const raisedBy = new Map();
     for (const code of Object.values(EVENT_CODES)) {
@@ -1195,23 +1195,32 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       return [...byFault.values()];
     };
     /**
-     * What the row can hold besides what its check looks for: its events' faults, the worker's
-     * where no check covers it, and on Notes database the records' own two
+     * What the row can hold besides what its check looks for: its events' faults, the worker's,
+     * which no check here covers, and on Notes database the records' own two. The worker's are
+     * each its events raise on NewTabNote's own parts, its kept change as well as its failed
+     * start, and on Saving new notes those that stop saving new notes (the code review's R8-2)
      * @param {string} providerId
      */
     const besides = providerId => [
       ...[...(raisedBy.get(providerId) || new Map()).values()]
         .filter(incident => !observesOf(providerId).includes(incident.faultCode))
         .map(incident => problem({ ...incident })),
-      ...(providerId === 'capture' || PLATFORM.includes(providerId) ? [{ ...START_FAILED }] : []),
+      ...[...(raisedBy.get('coordinator') || new Map()).values()]
+        .filter(
+          incident =>
+            PLATFORM.includes(providerId) ||
+            (providerId === 'capture' && (incident.affected || []).includes('capture')),
+        )
+        .map(incident => problem({ ...incident })),
       ...(providerId === 'storage' ? records() : []),
     ];
-    /** @type {Array<{why: string, answer: Answer, incidents: any[]}>} */
+    /** @param {Answer} answer */
+    const own = answer => answer.found.map(fault => problem({ providerId: answer.providerId, ...fault }));
+    /** @type {Array<{why: string, answers: Answer[], incidents: any[]}>} */
     const states = [];
     for (const answer of answers) {
-      const own = () => answer.found.map(fault => problem({ providerId: answer.providerId, ...fault }));
       const add = (/** @type {string} */ why, /** @type {any[]} */ more) =>
-        states.push({ why: `${answer.why}${why}`, answer, incidents: [...own(), ...more] });
+        states.push({ why: `${answer.why}${why}`, answers: [answer], incidents: [...own(answer), ...more] });
       add('', []);
       const all = besides(answer.providerId);
       for (const one of all) add(`, under ${one.key}`, [one]);
@@ -1232,19 +1241,39 @@ describe("recovery.html's words for a stopped purge and the background worker's 
           ...besides(answer.providerId),
         ]);
     }
+    // NewTabNote's own parts with two of its checks finding something at once: the first in the
+    // row's order speaks its line, so the other's problem takes a line of its own
+    const parts = answers.filter(answer => PLATFORM.includes(answer.providerId) && answer.found.length > 0);
+    for (const [i, first] of parts.entries()) {
+      for (const second of parts.slice(i + 1)) {
+        states.push({
+          why: `${first.why}, and ${second.why}`,
+          answers: [first, second],
+          incidents: [...own(first), ...own(second)],
+        });
+      }
+    }
+    // What the states checked: the problems the rows are counted for, and the lines they need
+    let checked = 0;
+    let needed = 0;
     for (const state of states) {
-      const { answer } = state;
+      // The row's line is the first answer's, by the row's order
+      const [answer] = state.answers;
       const rowId = PLATFORM.includes(answer.providerId) ? 'platform' : answer.providerId;
-      const group = /** @type {any} */ (PROVIDER_ROWS.find(row => row.id === answer.providerId)).group;
-      const base = entry(answer.providerId, group);
-      const own = /** @type {any} */ ({
-        ...base,
-        status: answer.receipt.status,
-        receipt: { ...base.receipt, ...answer.receipt },
-      });
+      const ids = state.answers.map(item => item.providerId);
       const providers = [
-        ...REPORT.providers.filter((/** @type {any} */ item) => item.providerId !== answer.providerId),
-        own,
+        ...REPORT.providers.filter((/** @type {any} */ item) => !ids.includes(item.providerId)),
+        ...state.answers.map(item => {
+          const base = entry(
+            item.providerId,
+            /** @type {any} */ (PROVIDER_ROWS.find(row => row.id === item.providerId)).group,
+          );
+          return /** @type {any} */ ({
+            ...base,
+            status: item.receipt.status,
+            receipt: { ...base.receipt, ...item.receipt },
+          });
+        }),
       ];
       const report = /** @type {any} */ ({ ...REPORT, providers, incidents: state.incidents });
       const row = /** @type {any} */ (
@@ -1280,8 +1309,13 @@ describe("recovery.html's words for a stopped purge and the background worker's 
         problems.filter(item => !said(item)).length,
         `${state.why}: ${row.label}'s own lines name only what it's counted for`,
       );
+      checked += problems.length;
+      needed += added.length;
     }
-    assert.ok(states.length > 150, `${states.length} states`);
+    // So no state passes for want of anything to check (the code review's R8-3)
+    assert.ok(states.length > 170, `${states.length} states`);
+    assert.ok(checked > 320, `${checked} problems checked`);
+    assert.ok(needed > 180, `${needed} lines of their own`);
   });
 
   it("gives every line recovery.html's rows can show its entry in the table of the faults it states, each a fault a check, an event or the health records raise, and states each capture-risk cause by the words Settings' line gives it (the code review's R8-1)", async () => {
