@@ -299,9 +299,10 @@ describe("the status read's check of an answer (#20 slice 4c, plainlyClear)", ()
     const EXT = 'abcdefghijklmnopabcdefghijklmnop';
     const profile = trustProfile();
     const read = workerStatusRead({
-      records: () =>
+      store: () => readOnlyTrustStore({ indexedDB: profile.real, keyRange: fakeKeyRange }),
+      records: store =>
         createTrustRecords({
-          store: readOnlyTrustStore({ indexedDB: profile.real, keyRange: fakeKeyRange }),
+          store,
           settings: profile.settings,
           clock: manualClock(),
           ids: hexIds('d4e5'),

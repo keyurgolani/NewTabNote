@@ -306,15 +306,19 @@ export function createTrustDatabase({ indexedDB, keyRange, openWithinMs = TRUST_
 }
 
 /**
- * Whether NewTabNoteTrust exists yet, by indexedDB.databases(); true where the factory can't say,
- * so a reader asks the database itself then, which readOnlyTrustStore's makes no database for
+ * Whether NewTabNoteTrust exists yet, by indexedDB.databases(): one listed at this build's
+ * version or past it. One listed below it, as Chrome may list it once an open that would have
+ * made it aborted its upgrade, is none. True where the factory can't say, so a reader asks the
+ * database itself then, which readOnlyTrustStore's makes no database for.
  * @param {IDBFactory} indexedDB
  * @returns {Promise<boolean>}
  */
 export async function trustDatabaseExists(indexedDB) {
   try {
     if (typeof indexedDB.databases !== 'function') return true;
-    return (await indexedDB.databases()).some(database => database.name === TRUST_DB_NAME);
+    return (await indexedDB.databases()).some(
+      database => database.name === TRUST_DB_NAME && /** @type {number} */ (database.version) >= TRUST_DB_VERSION,
+    );
   } catch {
     return true;
   }
