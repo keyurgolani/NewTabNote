@@ -27,6 +27,7 @@ import {
   STATUS_BY_PROVIDER,
   STEP,
   SUBJECT,
+  TESTED,
   UPDATE_SAVES,
   UPDATE_STATUS,
 } from './copy.js';
@@ -257,6 +258,8 @@ function updateText(key, receipt) {
  * @property {boolean} [problem] - a problem that makes a row a check has read worse than its
  *   checks found, or that no check on the page covers, which leads the row's evidence, its own
  *   checks after it as they read (round 4, and the code review's R4-2)
+ * @property {boolean} [also] - a check of the row's that passed, under a problem that leads its
+ *   evidence: set apart after the rest, as what it tested and Passed (signed as round 5)
  */
 
 /**
@@ -514,6 +517,20 @@ export function trustSections(report, { now, checking = new Set() }) {
     const problemsFirst = counted.some(leads)
       ? problemsOf(counted.filter(leads), new Map(), id => entryOf(id) || null).map(problem => problemEvidence(problem, now))
       : [];
+    const checks = entries.filter(entry => entry.receipt);
+    // Under a problem that leads, the row's checks that passed come last, set apart, each as what
+    // it tested and Passed, so Saving new notes never reads beside Verified while it isn't
+    // working. A check that didn't pass reads where it did, and with no problem leading each
+    // reads as it does (the Design gate's review of round 4's shots, signed as round 5)
+    const apart = problemsFirst.length > 0 ? checks.filter(entry => entry.status === 'verified') : [];
+    const tested = /** @type {Record<string, string>} */ (TESTED);
+    const ownEvidence = [
+      ...checks.filter(entry => !apart.includes(entry)).map(entry => /** @type {Evidence} */ (evidenceOf(entry, now))),
+      ...apart.map(entry => {
+        const evidence = /** @type {Evidence} */ (evidenceOf(entry, now));
+        return { ...evidence, title: tested[entry.providerId] || evidence.title, statusText: PAGE.passed, also: true };
+      }),
+    ];
     return {
       id: rowId,
       label: /** @type {Record<string, {label: string}>} */ (PROVIDER)[rowId].label,
@@ -540,7 +557,7 @@ export function trustSections(report, { now, checking = new Set() }) {
       open,
       counted,
       action: rowAction(rowId, entries, counted),
-      evidence: [...problemsFirst, .../** @type {Evidence[]} */ (entries.map(entry => evidenceOf(entry, now)).filter(Boolean))],
+      evidence: [...problemsFirst, ...ownEvidence],
       destinations: rowId === 'permissions',
       pending:
         rowId === 'permissions' && entries[0].receipt && typeof entries[0].receipt.evidence.pending === 'number'

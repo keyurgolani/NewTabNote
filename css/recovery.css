@@ -563,6 +563,19 @@ html {
   gap: var(--space-compact);
 }
 
+/* Under a problem that leads a row's evidence, the row's checks that passed sit apart, after a
+   seam, under "Also checked" (#20 slice 4c) */
+.trust-also {
+  margin: var(--space-control) 0 0;
+  padding-top: var(--space-control);
+  border-top: 1px solid var(--seam);
+  color: var(--text-secondary);
+}
+
+.trust-also + .trust-sub {
+  margin-top: var(--space-compact);
+}
+
 .trust-dest {
   width: 100%;
   border-collapse: collapse;

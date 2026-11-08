@@ -48,6 +48,14 @@ export const PROVIDER = Object.freeze({
   'block-types': { label: 'Block types', about: 'Text, to-dos, headings, and the other blocks a note holds.' },
 });
 
+/**
+ * What a row's own check tested, where the row's name is the check's: its title among the checks
+ * a problem that leads a row's evidence sets apart, so a row that isn't working never reads its
+ * own name beside a check that passed (signed as round 5). Every other check's label says what
+ * it tested already
+ */
+export const TESTED = Object.freeze({ capture: 'Test save' });
+
 /** A receipt's verification operation, in plain words: the sentence in "How this was checked" */
 export const OPERATION = Object.freeze({
   'capture.probe-commit': 'Saved a test entry where new notes go, read it back, and removed it.',
@@ -412,6 +420,10 @@ export const PAGE = Object.freeze({
   siteAccessHow: 'Chrome opens its extensions page. Choose Details under NewTabNote, then Site access.',
   howChecked: 'How this was checked',
   howCheckedAll: 'How these were checked',
+  // Under a problem that leads a row's evidence, the row's checks that passed, set apart, each as
+  // "{what it tested}: Passed" (signed as round 5)
+  alsoChecked: 'Also checked',
+  passed: 'Passed',
   connect: 'Where NewTabNote can connect',
   connectLead: 'Places NewTabNote can reach without asking Chrome for a permission:',
   connectNote:

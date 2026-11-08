@@ -369,9 +369,11 @@ export function mountRecoveryPage({
   /** @param {Row} row */
   function evidenceBody(row) {
     const parts = [];
-    // The folded row's parts, and a row a problem leads: each by its title and status
+    // The folded row's parts, and a row a problem leads: each by its title and status, and under
+    // "Also checked" the row's checks that passed, which a problem that leads sets apart (round 5)
     if (row.id === 'platform' || row.evidence.some(evidence => evidence.problem)) {
-      for (const evidence of row.evidence) {
+      for (const [index, evidence] of row.evidence.entries()) {
+        if (evidence.also && !(index > 0 && row.evidence[index - 1].also)) parts.push(h('p', { class: 'trust-also' }, PAGE.alsoChecked));
         parts.push(
           h(
             'div',
