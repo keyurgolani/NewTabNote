@@ -2499,35 +2499,24 @@ describe('BlockEditor when the page has to reload (#12)', () => {
     assert.ok(editor.root.querySelector('.reload-notice'), 'the reload notice says so');
   });
 
-  it('a save under way when another context upgrades is reported saved, and the next edit gets the notice', async () => {
+  it("a save answered reload-required is never taken as stored, though the connection was open as it began: the editor shows the reload notice, not Saved, since over the port nothing went (#35 slice 4d, rule 12, R6)", async () => {
     const { env, editor, feedback } = await newTabOnA();
-    // The upgrade comes in the same task the save opens its transaction in
-    const client = env.documentClient;
-    const realSave = client.saveContent;
-    let upgraded = null;
-    client.saveContent = (save) => {
-      const answer = realSave(save);
-      client.saveContent = realSave;
-      upgraded = upgradeElsewhere(env);
-      return answer;
-    };
-    type(editor, 'typed and saving as the upgrade comes');
-    env.clock.tick(500);
-    env.frames();
-    await runUntil(env, editor.flushSave());
-    await upgraded;
-    assert.equal(env.adapter.openState(), 'version-changed');
+    // The page's writes can't reach the worker, as when its send chunk can't load
+    env.documentClient.saveContent = async () => ({
+      kind: 'unavailable',
+      cause: 'coordinator',
+      code: 'reload-required',
+      retryable: false,
+    });
+    assert.equal(env.adapter.openState(), 'open');
+    type(editor, 'typed as the writes went');
+    assert.equal(await runUntil(env, editor.flushSave()), false);
 
-    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed and saving as the upgrade comes' });
-    assert.equal(feedback.statuses.at(-1), 'Saved', 'what was stored is not reported as unsaved');
-    assert.ok(editor.root.querySelector('.reload-notice') === null, 'no reload notice');
-    assert.equal(editor._retryPending, false);
-
-    type(editor, 'typed after it');
-    await runUntil(env, editor.flushSave());
-    assert.ok(editor.root.querySelector('.reload-notice'));
+    assert.ok(editor.root.querySelector('.reload-notice'), 'the reload notice shows');
     assert.equal(feedback.statuses.at(-1), 'Not saved');
-    assert.equal(editor._retryPending, false);
+    assert.equal(feedback.statuses.includes('Saved'), false, 'never Saved');
+    assert.equal(editor._retryPending, false, 'and nothing retries');
+    assert.equal(editor.blocks[0].content, 'typed as the writes went', 'the text stays on screen');
   });
 
   it('switching notes after another context upgraded keeps the note on screen and shows the reload notice', async () => {

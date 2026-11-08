@@ -17,8 +17,13 @@ import { createNewTabDocumentClient, createNewTabNoteList } from '../../js/kerne
 import { WORKER_PAGE_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
 import { COMMANDS } from '../../js/kernel/core/contracts/commands.js';
 import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
+import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
+import { blockDigest } from '../../js/kernel/core/domain/close-draft.js';
+import { DRAFTS_LOCK, DRAFT_PREFIX } from '../../js/kernel/core/domain/close-draft-keys.js';
+import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { COMMAND_SAMPLES } from './command-samples.mjs';
 import { legacyContext, legacyEnv } from './legacy-fixture.mjs';
+import { settle } from './messaging-support.mjs';
 import { newTabOn } from './newtab-root.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
@@ -119,6 +124,51 @@ const saveOfA = blocks => ({
   linkedNames: [],
 });
 
+/** When the closing tabs wrote what they left */
+const AT = Date.UTC(2026, 10, 8, 9, 0);
+
+/**
+ * A closing tab's edit of A, a1 changed, on the base the tab saw
+ * @param {{id?: string, page?: string, at?: number, content?: string}} [options]
+ */
+function draftOf({ id = 'draft-a', page = 'page-1', at = AT, content = 'alpha, edited as the tab closed' } = {}) {
+  return {
+    v: 1,
+    id,
+    page,
+    noteId: 'A',
+    at,
+    base: {
+      revision: 0,
+      updatedAt: null,
+      issued: [],
+      name: 'Alpha plan',
+      blocks: {
+        a1: blockDigest(block('a1', 'A', 0, 'alpha'), 'A'),
+        a2: blockDigest(block('a2', 'A', 1, 'alpha two'), 'A'),
+      },
+      issuedSaves: [],
+    },
+    blocks: [block('a1', 'A', 0, content)],
+    deletedBlockIds: [],
+    preview: content.slice(0, 80),
+    todoProgress: null,
+    linkedNames: [],
+  };
+}
+
+/**
+ * Puts a closing tab's edit of A in the page's localStorage, and answers its key
+ * @param {LegacyContext} tab
+ * @param {string} [content]
+ * @param {{id?: string, page?: string, at?: number}} [options]
+ */
+function writeDraft(tab, content = 'alpha, edited as the tab closed', options = {}) {
+  const draft = draftOf({ ...options, content });
+  tab.env.global.localStorage.setItem(`${DRAFT_PREFIX}${draft.id}`, JSON.stringify(draft));
+  return `${DRAFT_PREFIX}${draft.id}`;
+}
+
 describe("the new tab's writes, over #13's port (#35 slice 4d)", () => {
   for (const [welcome, status] of /** @type {const} */ ([
     ['ready', undefined],
@@ -211,5 +261,189 @@ describe("the new tab's writes, over #13's port (#35 slice 4d)", () => {
       'in the page, through its settings handle',
     );
     assert.equal(stand.frames.filter(frame => frame.operation === 'saveWorkspaceSession').length, 0, 'with no frame');
+  });
+
+  it("holds the drafts' lock around a delete for good's send, clears its note's draft after the reply, and wakes the purge (R3)", async () => {
+    const tab = await profile();
+    const storage = tab.env.global.localStorage;
+    /** @type {Array<[boolean, boolean]>} */
+    const held = [];
+    let wakes = 0;
+    const key = `${DRAFT_PREFIX}draft-b`;
+    const { client } = newTab(tab, {
+      wake: () => {
+        wakes += 1;
+      },
+      before: async one => {
+        if (one.type !== 'deleteNotePermanently') return;
+        const locks = await tab.env.global.navigator.locks.query();
+        held.push([
+          (locks.held || []).some((/** @type {{name?: string}} */ lock) => lock.name === DRAFTS_LOCK),
+          storage.getItem(key) !== null,
+        ]);
+      },
+    });
+    assert.equal(await client.whenReady(), null);
+    assert.equal((await client.execute({ type: 'trashNote', commandId: 'c-trash', noteId: 'B' })).kind, 'committed');
+    // A closing tab's edit of B, written after the start's apply, which the delete clears
+    storage.setItem(key, JSON.stringify({ ...draftOf({ id: 'draft-b' }), noteId: 'B' }));
+    const deleted = await client.execute({ type: 'deleteNotePermanently', commandId: 'c-delete', noteId: 'B' });
+    assert.deepEqual(deleted.kind === 'committed' && [deleted.code, deleted.changedIds], ['note-deleted', ['B']]);
+    assert.deepEqual(
+      held,
+      [[true, true]],
+      'the lock held, and the draft still there, while the worker held the delete',
+    );
+    assert.equal(storage.getItem(key), null, 'the draft went once the reply came');
+    assert.equal(wakes, 1, 'and the purge was woken');
+  });
+});
+
+/**
+ * An editor save of A's a1 that a page journaled and closed before its answer, under `id`, by the
+ * page `session`
+ * @param {LegacyContext} tab
+ * @param {{id?: string, session?: string, at?: number}} [options]
+ */
+async function leaveSave(tab, { id = 'c-save', session = 'page-gone', at = AT } = {}) {
+  const content = 'alpha, saved as its page closed';
+  const blocks = [{ id: 'a1', type: 'text', content, order: 0 }];
+  const command = { type: 'saveNoteContent', commandId: id, noteId: 'A', blocks, deriveFromStored: true };
+  /** @type {any} the edit the page journaled with its save */
+  const draft = {
+    ...draftOf({ id, page: session, at, content }),
+    blocks: blocks.map(saved => ({ ...saved, canvasId: 'A' })),
+  };
+  const writer = inContextStores({ indexedDB: tab.env.indexedDB }).journal();
+  await writer.open();
+  await writer.put(
+    journalEntry({
+      command,
+      v: 1,
+      noteId: 'A',
+      surface: 'newtab',
+      ownerSessionId: session,
+      seq: 1,
+      createdAt: at,
+      draft,
+      pane: 'main',
+    }),
+  );
+  writer.close();
+}
+
+/** The worker's answer when it can't take a command */
+const notTaken = () => unavailable('coordinator', 'unavailable', true);
+
+describe("the new tab's sends keep their order, its runs fail fast, and an upgrade gates them (#35 slice 4d)", () => {
+  it('loads the send chunk once for every command, and sends each, in order, once it is in and its journal holds the owner lock (rule 3, R5)', async () => {
+    const tab = await profile();
+    /** @type {Array<() => void>} */
+    const loads = [];
+    /** @type {(value: boolean) => void} */
+    let lockHeld = () => {};
+    /** @type {Promise<boolean>} */
+    const ready = new Promise(resolve => {
+      lockHeld = resolve;
+    });
+    /** @type {string[]} */
+    const went = [];
+    const chunk = {
+      newTabWrites: () => ({
+        ready,
+        execute: async (/** @type {{commandId: string, noteId: string}} */ command) => {
+          went.push(command.commandId);
+          return committed('note-renamed', [command.noteId]);
+        },
+      }),
+    };
+    // Each load answers once the case lets it, the last asked first
+    const { client } = newTab(tab, { send: () => new Promise(resolve => loads.push(() => resolve(chunk))) });
+    const answers = [
+      client.execute({ type: 'renameNote', commandId: 'c-1', noteId: 'A', name: 'One' }),
+      client.execute({ type: 'setPinned', commandId: 'c-2', noteId: 'A', pinned: true }),
+    ];
+    await settle();
+    for (const load of [...loads].reverse()) load();
+    await settle();
+    assert.deepEqual(went, [], 'nothing goes before the owner lock');
+    answers.push(client.execute({ type: 'archiveNote', commandId: 'c-3', noteId: 'B' }));
+    lockHeld(true);
+    await Promise.all(answers);
+    assert.equal(loads.length, 1, 'one load');
+    assert.deepEqual(went, ['c-1', 'c-2', 'c-3']);
+  });
+
+  it("answers each command unavailable, reload-required, not retryable, when the send chunk can't load, and sends nothing (R6)", async () => {
+    const tab = await profile();
+    const { stand, client } = newTab(tab, {
+      send: () => Promise.reject(new TypeError('Failed to fetch dynamically imported module')),
+    });
+    const reload = unavailable('coordinator', 'reload-required', false);
+    assert.deepEqual(
+      await client.execute({ type: 'setPinned', commandId: 'c-pin', noteId: 'A', pinned: true }),
+      reload,
+    );
+    const save = {
+      type: /** @type {const} */ ('saveNoteContent'),
+      commandId: 'c-save',
+      ...saveOfA([block('a1', 'A', 0, 'alpha, typed')]),
+    };
+    assert.deepEqual(await client.execute(save), reload);
+    assert.deepEqual(stand.frames, []);
+  });
+
+  it("sends the start's apply over the port, waits for all of it, and sends no more of it once the worker didn't take one (rule 6, R7)", async () => {
+    const tab = await profile();
+    const keys = [
+      writeDraft(tab, 'alpha, from a first tab', { id: 'draft-a', page: 'page-1', at: AT }),
+      writeDraft(tab, 'alpha, from a second tab', { id: 'draft-b', page: 'page-2', at: AT + 1 }),
+      writeDraft(tab, 'alpha, from a third tab', { id: 'draft-c', page: 'page-3', at: AT + 2 }),
+    ];
+    const { stand, client } = newTab(tab, { answer: one => (one.type === 'applyCloseDraft' ? notTaken() : undefined) });
+    let applied = false;
+    client.applied().then(() => {
+      applied = true;
+    });
+    assert.equal(await client.whenReady(), null);
+    assert.equal(applied, true, 'whenReady waited for the whole apply');
+    assert.deepEqual((await client.applied())?.kept, ['A', 'A', 'A'], 'all three stay for the next start');
+    assert.deepEqual(
+      stand.handed.map(one => [one.type, one.commandId]),
+      [['applyCloseDraft', 'draft-a-apply']],
+      'the other two never went',
+    );
+    for (const key of keys) assert.notEqual(tab.env.global.localStorage.getItem(key), null);
+    const pinned = await client.execute({ type: 'setPinned', commandId: 'c-pin', noteId: 'B', pinned: true });
+    assert.equal(pinned.kind, 'committed', "the page's own command still goes");
+  });
+
+  it("starts the journal's run afresh after the start's run stopped, so its first save still goes (rule 6, R7)", async () => {
+    const tab = await profile();
+    writeDraft(tab);
+    await leaveSave(tab);
+    /** @type {(value?: unknown) => void} */
+    let chunkIn = () => {};
+    const loaded = new Promise(resolve => {
+      chunkIn = resolve;
+    });
+    const { stand, client } = newTab(tab, {
+      answer: one => (one.commandId === 'draft-a-apply' ? notTaken() : undefined),
+      send: () => loaded.then(() => import('../../js/kernel/composition/newtab-send-chunk.js')),
+    });
+    const applied = client.applied();
+    // The start's run takes the drafts' lock before the send chunk is in, so it goes first
+    const holdsDraftsLock = async () =>
+      ((await tab.env.global.navigator.locks.query()).held || []).some(
+        (/** @type {{name?: string}} */ lock) => lock.name === DRAFTS_LOCK,
+      );
+    assert.equal(await until(holdsDraftsLock), true, "the start's run holds the drafts' lock");
+    chunkIn();
+    assert.deepEqual((await applied)?.kept, ['A']);
+    assert.equal(await until(() => stand.handed.length === 2), true, "the journal's run sent its own");
+    assert.deepEqual(
+      stand.handed.map(one => one.commandId),
+      ['draft-a-apply', 'c-save-apply'],
+    );
   });
 });
