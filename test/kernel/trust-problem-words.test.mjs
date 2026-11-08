@@ -156,7 +156,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     }
   });
 
-  it('says them in the signed words', () => {
+  it("says them in the signed words, the stopped purge's text as round 3 has it", () => {
     assert.deepEqual(
       ['recovery-readiness/purge-stopped', 'coordinator/start-failed', 'coordinator/entry-unreplayable'].map(key => [
         /** @type {Record<string, string>} */ (INCIDENT)[key],
@@ -166,7 +166,7 @@ describe("recovery.html's words for a stopped purge and the background worker's 
       [
         [
           'Something you deleted is still in a recovery point',
-          "NewTabNote takes what you delete for good out of its recovery points too. It stopped at a point that didn't pass its check, so what you deleted is still in that point. Nothing else changed.",
+          "When you delete something for good, NewTabNote also removes it from its recovery points. One recovery point didn't pass its check, so what you deleted is still in it. Nothing else changed.",
           'What you deleted is out of every recovery point',
         ],
         [
