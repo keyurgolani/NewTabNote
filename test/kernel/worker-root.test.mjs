@@ -1523,4 +1523,48 @@ describe("the new tab's commands on the worker, on a kernel of its surface (#35 
     assert.equal(kept.kind, 'committed', JSON.stringify(kept));
     assert.equal((await named('n-kept')).length, 1);
   });
+
+  it("lets a capture's open of a database at 8 that lacks a store go on when #33's copy can't be written: the capture commits, with no copy or marker left (#35 slice 4d, rule 9)", async () => {
+    const of = newProfile();
+    await legacyEnv.createDatabase(of.real, {
+      omit: ['themes'],
+      records: {
+        canvases: [legacyEnv.note('n1', { name: 'Kept' })],
+        elements: [legacyEnv.block('b1', 'n1', 0, 'Kept text')],
+      },
+    });
+    const local = of.chrome.api.storage.local;
+    /** @type {string[][]} */
+    const thrown = [];
+    // The copy's write throws, as a full chrome.storage.local's does, and every other write goes on
+    const settings = {
+      get: (/** @type {any} */ keys) => local.get(keys),
+      remove: (/** @type {any} */ keys) => local.remove(keys),
+      set: (/** @type {Record<string, unknown>} */ items) => {
+        if (Object.keys(items).some(key => key.startsWith('recovery_backup_'))) {
+          thrown.push(Object.keys(items));
+          throw new Error('QUOTA_BYTES quota exceeded');
+        }
+        return local.set(items);
+      },
+    };
+    // Short of space, so its run leaves the database as it is, and the capture waits on the open
+    const worker = /** @type {any} */ (createWorkerClient({ ...hostOf(of, { estimate: CRAMPED }), settings }));
+    const captured = await capture(worker, 'copy-failed');
+    assert.equal(captured.kind, 'committed', JSON.stringify(captured));
+    assert.deepEqual(
+      thrown.map(keys => keys.slice(1)),
+      [[MISSING_STORES_COPY_KEY]],
+      'the copy was tried once, with its marker in the same write',
+    );
+    const stored = legacyEnv.plain(of.chrome.local);
+    assert.equal(stored[MISSING_STORES_COPY_KEY], undefined);
+    assert.deepEqual(
+      Object.keys(stored).filter(key => key.startsWith('recovery_backup_')),
+      [],
+    );
+    assert.equal((await worker.migration.done).status, 'space-blocked');
+    assert.equal((await recordsOf(of, 'elements')).filter(block => block.id === 'b-copy-failed').length, 1);
+    assert.equal((await inspect(of.real)).version, 8, 'the database as it was');
+  });
 });

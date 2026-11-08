@@ -800,6 +800,16 @@
       "replace": "  const all = [...page];\n",
       "test": "test/perf-probe.test.js",
       "name": "waits for the worker's readwrite transactions too, as a page that sends its writes over the port saves in the worker (#35 slice 4d)"
+    },
+    {
+      "id": "open-refused-after-failed-copy",
+      "behavior": "#35 port commands",
+      "protects": "A capture's open on the worker of a database at 8 that lacks a store goes on when #33's copy can't be written: the copy's failure never fails the open.",
+      "file": "js/kernel/adapters/indexeddb/connection.js",
+      "find": "                .then(beforeOpen)\n                .then(\n                  () => undefined,\n                  () => undefined,\n                ),\n",
+      "replace": "                .then(beforeOpen)\n                .then(copied => {\n                  if (copied === 'failed') throw new UnavailableError('storage', 'copy-failed', true);\n                }),\n",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "lets a capture's open of a database at 8 that lacks a store go on when #33's copy can't be written: the capture commits, with no copy or marker left (#35 slice 4d, rule 9)"
     }
   ]
 }
