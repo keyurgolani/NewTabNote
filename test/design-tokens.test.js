@@ -129,6 +129,7 @@ const CANDIDATES = {
   '--tint-urgent': '#F6EEE9',
   '--tint-pending': '#F7F4E8',
   '--control-boundary': '#778179',
+  '--seam-tint': '#CBD5D1',
   '--selection-bg': '#7184A34D',
   '--mark-bg': '#DED7BA',
   '--surface-code': '#F4F6F3',
@@ -145,25 +146,29 @@ const CANDIDATES = {
 };
 
 // "Required states": until owner input 2, each dark token takes the legacy dark
-// value for its role, anchors stay fills, and dark charts use this order
+// value for its role, anchors stay fills, and dark charts use this order. #267 sets
+// #16's provisional values where the legacy value doesn't serve: the tone inks keep their hue,
+// the hover fill follows the dark hover, the tone and attention tints keep #2F2F2F as their own,
+// and a seam on a tinted row has its own value
 const DARK = {
   '--surface-paper': '#191919',
   '--surface-app': '#252525',
   '--surface-collection': '#252525',
   '--surface-intelligence': '#252525',
-  '--surface-muted': '#2F2F2F',
+  '--surface-muted': '#2A2A2A',
   '--tint-local': '#2F2F2F',
   '--tint-info': '#2F2F2F',
   '--tint-urgent': '#2F2F2F',
   '--tint-pending': '#2F2F2F',
   '--surface-code': '#2A2A2A',
   '--text-primary': '#E0E0E0',
-  '--ink-local': '#E0E0E0',
+  '--ink-local': '#7A9D95',
   '--ink-info': '#E0E0E0',
-  '--ink-urgent': '#E0E0E0',
+  '--ink-urgent': '#AF916C',
   '--ink-pending': '#E0E0E0',
   '--text-on-dark': '#E0E0E0',
   '--seam': '#333333',
+  '--seam-tint': '#414141',
   '--control-boundary': '#9B9B9B',
   '--focus-ring': '#315F8A',
   '--focus-ring-inner': '#E0E0E0',
