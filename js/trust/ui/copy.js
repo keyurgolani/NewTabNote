@@ -243,7 +243,7 @@ export const INCIDENT_TEXT = Object.freeze({
   'index/stalled': 'It has to start over, so recent notes may not show up in search until it does.',
   'index/indexer-start-failed': 'Search may miss notes you changed until indexing starts again.',
   'recovery-readiness/purge-stopped':
-    "NewTabNote takes what you delete for good out of its recovery points too. It stopped at a point that didn't pass its check, so what you deleted is still in that point. Nothing else changed.",
+    "When you delete something for good, NewTabNote also removes it from its recovery points. One recovery point didn't pass its check, so what you deleted is still in it. Nothing else changed.",
   'coordinator/start-failed': 'New notes and changes may not be saved until it starts.',
   'coordinator/entry-unreplayable': "NewTabNote kept it, so nothing is lost, but it couldn't add it to your notes as it was written.",
   'credentials/legacy-secret':
