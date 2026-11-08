@@ -613,6 +613,53 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     );
   });
 
+  it("leads a row's evidence with a finding only where a check has read the row, besides the worker's own problem: Recovery points and Local model, unchecked, keep their finding's status and no evidence (round 4b)", () => {
+    const LOAD_FAILED = /** @type {any} */ ({
+      ...START_FAILED,
+      id: '00000000-0000-4000-8000-0000000000ea',
+      ref: '0000ea',
+      key: 'local-inference/load-failed',
+      providerId: 'local-inference',
+      faultCode: 'load-failed',
+      severity: 'degraded',
+      affected: [],
+      preserved: [],
+    });
+    const unchecked = (/** @type {string} */ providerId, /** @type {string} */ group) =>
+      entry(providerId, group, { status: 'unverified', receipt: null, stillWorks: [] });
+    const report = /** @type {any} */ ({
+      ...REPORT,
+      providers: [
+        ...REPORT.providers,
+        unchecked('recovery-readiness', 'recovery'),
+        unchecked('local-inference', 'inference'),
+      ],
+      incidents: [START_FAILED, PURGE, LOAD_FAILED],
+    });
+    const rows = trustSections(report, { now: AT }).flatMap(section => section.rows);
+    const row = (/** @type {string} */ id) => /** @type {any} */ (rows.find(item => item.id === id));
+    assert.deepEqual(
+      ['recovery-readiness', 'local-inference', 'capture'].map(id => [
+        id,
+        row(id).statusText,
+        row(id).evidence.map(shownEvidence),
+      ]),
+      [
+        ['recovery-readiness', 'Partly working', []],
+        ['local-inference', 'Partly working', []],
+        // The worker's failed start still leads where no check covers it
+        [
+          'capture',
+          'Not working',
+          [
+            ["The background worker couldn't start", 'Not working', 'failed', true],
+            ['Saving new notes', 'Verified', 'ok', false],
+          ],
+        ],
+      ],
+    );
+  });
+
   it("counts the same things as other in Settings and in the Trust Center, from the same records, whether a problem leads or not (the code review's F1)", () => {
     /** One more problem, as its producer raises it */
     const raised = (/** @type {Record<string, unknown>} */ fields) =>
