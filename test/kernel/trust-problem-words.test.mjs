@@ -467,26 +467,52 @@ describe("recovery.html's words for a stopped purge and the background worker's 
     assert.match(rule('.trust-row-actions'), /^\n\.trust-row-actions \{\n {2}margin-left: auto;$/);
     // A card with no Dismiss: its link alone on a line of text at the card's far end, so no
     // button-high band, and 16px below the card's facts, so its focus ring clears them
+    // A card with no Dismiss also keeps 3px more below its link, so the ring keeps 4px from the
+    // card's border (round 5)
     assert.match(
       rule('.trust-incident-actions:has(> .trust-crosslink:only-child)'),
-      /^\n\.trust-incident-actions:has\(> \.trust-crosslink:only-child\) \{\n {2}display: block;\n {2}margin-top: var\(--space-region\);\n {2}text-align: end;$/,
+      /^\n\.trust-incident-actions:has\(> \.trust-crosslink:only-child\) \{\n {2}display: block;\n {2}margin-top: var\(--space-region\);\n {2}padding-bottom: 3px;\n {2}text-align: end;$/,
     );
     /** A rule's declarations, after its selector */
     const declarations = (/** @type {string} */ selector) => rule(selector).slice(rule(selector).indexOf('{') + 1);
     // Each target at least 44px tall in its own box. The lone link, an <a>, inline on its
     // baseline: half of 44px less 1em above and below its text's own box, 1em tall or more,
     // which leaves its line as tall as the text's. Undo, a <button>, whose inline is
-    // inline-block: 0.7rem above and below the button's 24px line (the fix check's ruling)
+    // inline-block: 0.7rem above and below the button's 24px line (the fix check's ruling).
+    // Each says only what's above and below it, and the text actions' rule the room beside it
+    // (round 5)
     assert.deepEqual(
       [
         declarations('.trust-incident-actions > .trust-crosslink:only-child'),
         declarations('.trust-notice .trust-linkbtn'),
       ],
       [
-        '\n  display: inline;\n  min-height: 0;\n  padding: calc((var(--target-min) - 1em) / 2) 0;\n  vertical-align: baseline;',
-        '\n  display: inline;\n  min-height: 0;\n  padding: 0.7rem 0;\n  vertical-align: baseline;',
+        '\n  display: inline;\n  min-height: 0;\n  padding-block: calc((var(--target-min) - 1em) / 2);\n  vertical-align: baseline;',
+        '\n  display: inline;\n  margin-inline-start: 4px;\n  min-height: 0;\n  padding-block: 0.7rem;\n  vertical-align: baseline;',
       ],
     );
+  });
+
+  it("gives recovery.html's text actions, the headline's links, the facts and the rows' status the room and alignment the Design gate's review of round 4's shots asked for: 4px beside each text action's words, the link at a card's far end where its words were, Undo 4px further from its sentence, a headline link never split across lines, a fact's last line never alone, and a row's status on its label's first baseline (round 5)", () => {
+    const sheet = fs.readFileSync(path.join(ROOT, 'css', 'recovery.css'), 'utf8');
+    /** The declarations of the first rule whose selector is exactly `selector`, after it */
+    const declarations = (/** @type {string} */ selector) => {
+      const start = sheet.indexOf(`\n${selector} {\n`);
+      assert.ok(start >= 0, `css/recovery.css has a ${selector} rule`);
+      return sheet.slice(sheet.indexOf('{', start) + 1, sheet.indexOf('\n}', start));
+    };
+    // The "See ... in Trust Center" links and Undo: 4px of room beside their words, so a focus
+    // ring keeps 4px from them, the inner ring in dark too
+    assert.equal(declarations('.trust-crosslink,\n.trust-notice .trust-linkbtn'), '\n  padding-inline: 4px;');
+    // The link at a card's far end reaches 4px past it, so its words stay where they were
+    assert.equal(declarations('.trust-crosslink'), '\n  margin-left: auto;\n  margin-inline-end: -4px;');
+    // A link in the headline's line wraps whole, never "Recovery / points"
+    assert.equal(declarations('.trust-attention-line .trust-link'), '\n  white-space: nowrap;');
+    // A fact's value doesn't leave its last word alone, as "page." was
+    assert.equal(declarations('.trust-facts dd'), '\n  margin: 0;\n  text-wrap: pretty;');
+    // The status's words give it its baseline, its shape beside them still centered, so the
+    // status sits on its label's first baseline in a row with a line under it
+    assert.equal(declarations('.trust-row-status > :not(.trust-glyph)'), '\n  align-self: baseline;');
   });
 
   it("counts as other only a row that holds a problem besides the ones the headline leads with: none for the worker's failed start alone, and none for the records' own at can't confirm (round 4b)", () => {
