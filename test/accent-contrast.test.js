@@ -4,7 +4,7 @@
 // under white text and white marks. In the built-in light and dark themes each meets WCAG 2.2 AA
 // where it's drawn, judged unrounded: the ink at 4.5:1 on the four surfaces and on any accent tint
 // under it, the focus ring at 3:1 on the surfaces, and white at 4.5:1 on the fill and on its
-// hover.
+// hover. Every rule that paints white over the accent paints it on the fill.
 
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { parse, splitTopLevel } = require('../scripts/css-parser.js');
+const { createLegacyEnv } = require('./helpers/legacy-env');
 
 const ROOT = path.join(__dirname, '..');
 const read = (/** @type {string} */ file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -115,6 +116,7 @@ function colorOf(text) {
 /** The ratio of `fg` on `bg`, with `bg` over `under` where it's translucent */
 const ratio = (fg, bg, under = WHITE) => C.contrastRatio(fg, C.compositeOver(bg, under));
 const token = (/** @type {string} */ name, /** @type {'light' | 'dark'} */ theme) => colorOf(resolve(`var(${name})`, theme));
+const sameColor = (a, b) => ['r', 'g', 'b', 'a'].every((k) => Math.abs(a[k] - b[k]) < 1e-6);
 // Floored, as js/design/contrast.js prints ratios, so a failing one never prints as the bar
 const shown = (/** @type {number} */ value) => (Math.floor(value * 100) / 100).toFixed(2);
 
@@ -260,5 +262,86 @@ describe('the accent on the built-in themes (css/editor.css, css/premium-chat.cs
         for (const value of copies) assert.equal(value, want, `${file}, ${theme}`);
       }
     }
+  });
+});
+
+// The rules that paint white text or a white mark over the accent: each paints it on the fill
+const FILLS = [
+  ['css/editor.css', '.skip-to-content'],
+  ['css/editor.css', '.block[data-type="todo"].checked .todo-checkbox'],
+  ['css/editor.css', '.toggle-switch input:checked+.toggle-slider'],
+  ['css/editor.css', '.block[data-type="file"] .file-download:hover'],
+  ['css/editor.css', '.primary-btn'],
+  ['css/editor.css', '.width-selector-header .width-option.active'],
+  ['css/editor.css', '.calendar-day.selected'],
+  ['css/editor.css', '.sidebar-tab-badge'],
+  ['css/editor.css', '.ai-chat-message.user'],
+  ['css/editor.css', '.ai-retry-btn'],
+  ['css/editor.css', '.ai-chat-send-btn'],
+  ['css/editor.css', '.ai-floating-btn'],
+  ['css/editor.css', '.onboarding-btn-next'],
+  ['css/editor.css', '.global-chat-source-tag:hover'],
+  ['css/editor.css', '.note-insights-tag:hover'],
+  ['css/editor.css', '.sidebar-note-checkbox.checked'],
+  ['css/editor.css', '.export-notice .primary-btn.export-notice-btn'],
+  ['css/premium-chat.css', '.scroll-fab-badge'],
+];
+// The ink as a background, by its token or its channels, or today's blue
+const ON_INK = /var\(--accent-color\b|rgb\(var\(--accent-rgb\)\)|#2383e2/i;
+const isWhite = (/** @type {string | undefined} */ value) => /^(?:white|#fff|#ffffff)$/i.test(value || '');
+
+describe('white over the accent sits on the fill', () => {
+  it('paints each fill that carries white with --accent-fill, edges included', () => {
+    const misses = [];
+    for (const [file, selector] of FILLS) {
+      const rule = ruleFor(file, selector);
+      assert.ok(rule, `${file}: ${selector}`);
+      for (const { property, value } of rule.declarations) {
+        if (/^(?:background(?:-color)?|border-color)$/.test(property) && !/^var\(--accent-fill\b/.test(value)) misses.push(`${file}: ${selector} ${property}: ${value}`);
+      }
+    }
+    assert.deepEqual(misses, []);
+  });
+
+  it('has no other rule that paints white on the ink', () => {
+    const listed = new Set(FILLS.map(([file, selector]) => `${file} ${selector}`));
+    const found = [];
+    for (const file of SHEETS) {
+      for (const rule of RULES[file]) {
+        if (isWhite(valueOf(rule, 'color')) && ON_INK.test(valueOf(rule, 'background') || '') && !rule.selectors.some((s) => listed.has(`${file} ${s}`))) found.push(`${file}: ${rule.selectors.join(', ')}`);
+      }
+    }
+    assert.deepEqual(found, []);
+  });
+
+  it("draws the continue button as the app's filled button, its rules painting none of it", () => {
+    const classes = /continueBtn\.className = '([^']*)'/.exec(read('js/controllers/ai-chat-controller.js'));
+    assert.ok(classes, "the continue button's classes");
+    assert.ok(classes[1].split(' ').includes('primary-btn'), `the continue button's classes are ${classes[1]}`);
+    const own = TOP['css/premium-chat.css'].filter((r) => r.selectors.some((s) => s.startsWith('.response-incomplete .continue-btn')));
+    assert.ok(own.length, "the continue button's rules");
+    const painted = own.flatMap((r) => r.declarations.filter((d) => /^(?:background(?:-color)?|color|border(?:-color)?)$/.test(d.property)).map((d) => `${r.selectors.join(', ')} ${d.property}: ${d.value}`));
+    assert.deepEqual(painted, []);
+  });
+
+  it("paints the confirm dialog's and the toolbar's white on the fill, each fallback the light theme's value", () => {
+    const env = createLegacyEnv();
+    env.load('js/ui/confirm-dialog.js', 'js/ui/formatting-toolbar.js');
+    const misses = [];
+    for (const id of ['confirm-dialog-styles', 'formatting-toolbar-styles']) {
+      const sheet = env.document.getElementById(id);
+      assert.ok(sheet, id);
+      for (const rule of rulesOf(sheet.textContent)) {
+        const where = `${id}: ${rule.selectors.join(', ')}`;
+        if (isWhite(valueOf(rule, 'color')) && ON_INK.test(valueOf(rule, 'background') || '')) misses.push(`${where} paints white on ${valueOf(rule, 'background')}`);
+        for (const { value } of rule.declarations) {
+          for (const [, name, fallback] of value.matchAll(/var\((--accent-[\w-]+),\s*([^)]+)\)/g)) {
+            if (!(name in PAGE.light)) misses.push(`${where}: ${name} has no light value`);
+            else if (!sameColor(colorOf(fallback), token(name, 'light'))) misses.push(`${where}: ${name} falls back to ${fallback.trim()}, light's is ${PAGE.light[name]}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(misses, []);
   });
 });
