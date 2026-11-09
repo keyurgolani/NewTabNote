@@ -5654,8 +5654,9 @@ kbd {
 }
 
 /* While nothing is selected the bar has slid below the sidebar's edge, and once it has, it's
-   hidden, so its buttons leave the Tab order and the accessibility tree: focus on them scrolled
-   the sidebar, which clips, with no way back by the wheel (#20 slice 4c) */
+   hidden. Its buttons leave the Tab order and the accessibility tree before that, as the
+   selection ends, by the bar's inert (sidebar-controller.js): focus on them scrolled the
+   sidebar, which clips, with no way back by the wheel (#20 slice 4c, #282) */
 .sidebar-bulk-actions {
   position: absolute;
   bottom: 0;
