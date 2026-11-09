@@ -154,6 +154,17 @@ function ruleOf(selector) {
   return sheet.slice(start, sheet.indexOf('\n}', start));
 }
 
+/**
+ * The source of the sidebar controller's method `name`, from its name to its closing brace
+ * @param {string} name
+ */
+function methodOf(name) {
+  const controller = fs.readFileSync(path.join(ROOT, 'js', 'controllers', 'sidebar-controller.js'), 'utf8');
+  const start = controller.indexOf(`\n  ${name}(`);
+  assert.ok(start >= 0, `the sidebar controller has a ${name} method`);
+  return controller.slice(start, controller.indexOf('\n  }\n', start));
+}
+
 /** What the tab shows: the sidebar line's words, Settings' lines, the section's sentence, and its button */
 const shown = (/** @type {any} */ doc) => {
   const line = doc.querySelector('.trust-sidebar-line');
@@ -330,12 +341,8 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     // sidebar, and selecting notes gives it `visible`
     const page = fs.readFileSync(path.join(ROOT, 'newtab.html'), 'utf8');
     const sidebar = page.slice(page.indexOf('<aside id="sidebar" class="sidebar">'), page.indexOf('</aside>'));
-    assert.match(sidebar, /<div id="sidebar-bulk-actions" class="sidebar-bulk-actions">/);
-    const controller = fs.readFileSync(path.join(ROOT, 'js', 'controllers', 'sidebar-controller.js'), 'utf8');
-    assert.match(
-      controller,
-      /getElementById\('sidebar-bulk-actions'\);\n\s+if \(bulkBar\) bulkBar\.classList\.add\('visible'\);/,
-    );
+    assert.match(sidebar, /<div id="sidebar-bulk-actions" class="sidebar-bulk-actions"[ >]/);
+    assert.match(methodOf('enterSelectionMode'), /\bbulkBar\.classList\.add\('visible'\);/);
     // While it's up, the line is hidden where it is, so nothing moves and its link leaves the Tab
     // order, and it comes back when the selection ends
     assert.match(
@@ -356,6 +363,23 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
     assert.match(
       ruleOf('.sidebar-bulk-actions.visible'),
       /\n {2}visibility: visible;\n[^]*\n {2}transition: transform 0\.3s ease, visibility 0s;$/,
+    );
+  });
+
+  it("takes the bulk bar's buttons out of the Tab order and the accessibility tree the moment a selection ends, while the bar still slides away, so Tab from the last note goes to the line even then (#282)", () => {
+    // The bar starts inert. A selection takes that away as it shows the bar, and its end puts it
+    // back with the class the bar slides away by, so no button outlasts the selection, whatever
+    // its own transition does; e2e/trust-status-line.spec.js tabs from the last note with that
+    // slide held
+    const page = fs.readFileSync(path.join(ROOT, 'newtab.html'), 'utf8');
+    assert.match(page, /<div id="sidebar-bulk-actions" class="sidebar-bulk-actions" inert>/);
+    assert.match(
+      methodOf('enterSelectionMode'),
+      /\n {6}bulkBar\.inert = false;\n {6}bulkBar\.classList\.add\('visible'\);\n/,
+    );
+    assert.match(
+      methodOf('exitSelectionMode'),
+      /\n {6}bulkBar\.inert = true;\n {6}bulkBar\.classList\.remove\('visible'\);\n/,
     );
   });
 
