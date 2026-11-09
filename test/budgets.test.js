@@ -578,14 +578,12 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
 
   it('holds the approved rows exactly', () => {
     const { entries } = BUDGETS;
-    // The new tab's start JS: its raw row its start with #284 in, 667,874, as build job 128945655369 of
-    // PR checks run 42550782378 read it, and its gzip row 188,731, CI's 188,720 before #284 (build job
-    // 128853943289 of PR checks run 42520909498) plus 11, until that build reports the start's gzip,
-    // which then sets it the same way: the build id spreads this row over 11 bytes (lazy.js 1,504 to
-    // 1,515 gzip, measured over 500 build ids), since js/runtime/lazy.js:385 holds the id, which
-    // scripts/build/build-info.js:116 makes the SHA-256 of the commit's tree, package-lock.json, the
-    // toolchain's versions and the mode (2026-11-08)
-    assert.deepEqual(entries.newtab.start, { js: { raw: 667874, gzip: 188731 }, css: { raw: 105 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
+    // The new tab's start JS: its start on #35 slice 4d with #284 in as build job 129294977694 of PR
+    // checks run 42656127979 read it, 667,874 / 188,730, and its gzip row 188,741: the build id spreads
+    // this row over 11 bytes (lazy.js 1,504 to 1,515 gzip, measured over 500 build ids), since
+    // js/runtime/lazy.js:385 holds the id, which scripts/build/build-info.js:116 makes the SHA-256 of the
+    // commit's tree, package-lock.json, the toolchain's versions and the mode (2026-11-09)
+    assert.deepEqual(entries.newtab.start, { js: { raw: 667874, gzip: 188741 }, css: { raw: 105 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
     // The workspace loads at boot, so it's start; nothing the root loads is named lazy
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
