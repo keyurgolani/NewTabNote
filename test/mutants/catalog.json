@@ -1160,6 +1160,16 @@
       "replace": "  if (true) return false;\n",
       "test": "test/build-fixtures.test.js",
       "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
+    },
+    {
+      "id": "newtab-closing-save-sent",
+      "behavior": "#35 closing save",
+      "protects": "A closing save its page's close-time draft holds stays in the page, so the next start applies the draft by #33's rules: one recovered note where another tab saved the block since, kept and told.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "    if (!options || options.covered !== true || command.type !== 'saveNoteContent' || !storage) return false;\n",
+      "replace": "    if (true) return false;\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "keeps a closing save its close-time draft holds in the page, so the next start makes one recovered note of the edit where another tab saved the block since, keeps that tab's text, and tells it"
     }
   ]
 }

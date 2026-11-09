@@ -12,6 +12,8 @@
  * - The journal's chunk (journal-chunk.js), started on the client's session, with the tab's
  *   failure events, so the owner lock the journal holds and each entry it writes name the session
  *   the worker's router knows the page by.
+ * - The closing save a page's close-time draft holds (#33), which it keeps in the page, so the
+ *   draft carries the edit to the next start (newTabWrites).
  *
  * The client keeps #13's message caps: a command over its operation's maxBytes, as the port sends
  * it, is refused as payload-too-large before it goes (#259).
@@ -24,6 +26,8 @@ import { inContextStores } from '../adapters/in-context.js';
 import { createRuntimePortTransport } from '../adapters/messaging/runtime-port.js';
 import { COMMANDS } from '../core/contracts/commands.js';
 import { bulkResultSchema, outcomeSchema } from '../core/contracts/outcome-schemas.js';
+import { unavailable } from '../core/contracts/outcomes.js';
+import { DRAFT_PREFIX } from '../core/domain/close-draft-keys.js';
 import { createClient } from '../core/messaging/client.js';
 import { createLookup } from '../core/messaging/operations.js';
 import { systemClock } from '../core/ports/runtime.js';
@@ -80,6 +84,13 @@ const SENT = Object.freeze(
 export const NEWTAB_SENDS = createLookup(SENT);
 
 /**
+ * What a closing save its page's close-time draft holds is answered, unsent (newTabWrites): nothing
+ * went, as a send that can't go is answered, and it isn't retryable, since its page is going
+ * @returns {Outcome}
+ */
+const keptInDraft = () => unavailable('coordinator', 'reload-required', false);
+
+/**
  * What the client warns of, with an operation's name and an error at most, never a payload
  * @type {import('../core/ports/runtime.js').Logger}
  */
@@ -112,7 +123,8 @@ export function newTabSender({ runtime, extensionVersion, ledger }) {
  * The new tab's writes (rule 3): its client, and the page's journal on the client's session, so the
  * worker's drain on a closed port waits on this page's owner lock. `ready` resolves once the journal
  * holds that lock, or can't, since until then it sends a journaled command unjournaled. `execute`
- * gives a journaled command its entry and then sends it, and sends any other as it is. The journal's
+ * gives a journaled command its entry and then sends it, and sends any other as it is, but a closing
+ * save its page's close-time draft holds, which it keeps in the page (heldByDraft). The journal's
  * apply of the editor saves closed pages left sends through `failingFast`, as a run of its own, so a
  * worker that doesn't answer holds the drafts' lock one wait for it (#246). Each reply, the apply's
  * too, goes to `published` before its sender hears it, so the page's feed hears of what it committed
@@ -162,11 +174,35 @@ export function newTabWrites({
     runtime,
     events,
   });
+  /**
+   * Whether `command` is a closing save its page's close-time draft holds (#33): a save its editor
+   * covered, under the id of the draft it wrote for the same edit at the page's own close
+   * (js/editor.js, _writeCloseDraft), which the page's localStorage holds under that id. The worker
+   * outlives the page, so sent, the save would commit after the page went, and the next start would
+   * drop the draft for that commit (application/close-drafts.js, applyCloseDraft), whatever another
+   * tab did to the note since. Kept in the page, it goes with the page, as it did on the page's own
+   * connection, whose transaction Chrome aborts with the page (application/notes.js,
+   * saveNoteContent), and the draft carries the edit to the next start, which applies it by #33's
+   * rules.
+   * @param {Command} command
+   * @param {JournalingOptions} [options]
+   * @returns {boolean}
+   */
+  const heldByDraft = (command, options) => {
+    if (!options || options.covered !== true || command.type !== 'saveNoteContent' || !storage) return false;
+    try {
+      return storage.getItem(`${DRAFT_PREFIX}${command.commandId}`) !== null;
+    } catch {
+      // A page that can't read its localStorage wrote no draft there
+      return false;
+    }
+  };
   return Object.freeze({
     client,
     ready: journal.ready,
     applied: journal.applied,
     /** @type {(command: Command, options?: JournalingOptions) => Promise<Outcome | BulkOutcome>} */
-    execute: (command, options) => journal.execute(command, send, options),
+    execute: (command, options) =>
+      heldByDraft(command, options) ? Promise.resolve(keptInDraft()) : journal.execute(command, send, options),
   });
 }
