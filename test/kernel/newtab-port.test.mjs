@@ -759,3 +759,109 @@ describe('the answers only the port gives a save (#35 slice 4d)', () => {
     assert.equal((await storedBlocks(tab, 'A')).a1, 'alpha', 'and nothing was stored');
   });
 });
+
+describe("the new tab's closing save, which its close-time draft holds, goes with its page (#33, #35 slice 4d)", () => {
+  /** What the closing tab typed into a1 just before it closed */
+  const CLOSING = 'alpha, typed as the tab closed';
+
+  /**
+   * The tab that closes and another one, both open before the close, so neither start has a draft
+   * to apply
+   * @param {LegacyContext} tab
+   */
+  async function twoTabs(tab) {
+    const closing = newTab(tab);
+    const other = newTab(tab);
+    assert.equal(await closing.client.whenReady(), null);
+    assert.equal(await other.client.whenReady(), null);
+    return { closing, other };
+  }
+
+  /**
+   * The closing tab's close, as its editor makes it at the page's own pagehide (js/editor.js): its
+   * close-time draft of A, a1 changed, then its closing save under the draft's id, covered by it.
+   * Answers the save's answer.
+   * @param {LegacyContext} tab
+   * @param {ReturnType<typeof newTabOn>} closing
+   */
+  function closeAfterTyping(tab, closing) {
+    writeDraft(tab, CLOSING, { id: 'draft-a', page: 'page-1' });
+    const storage = tab.env.global.localStorage;
+    const editor = createNewTabDocumentClient(closing.client, closing.reader, { storage });
+    return editor.saveContent(saveOfA([block('a1', 'A', 0, CLOSING)]), {
+      commandId: 'draft-a',
+      covered: true,
+      pane: 'main',
+    });
+  }
+
+  /**
+   * The next new tab's start, which applies the draft, and the toasts it shows for it
+   * @param {LegacyContext} tab
+   */
+  async function nextStart(tab) {
+    const next = newTab(tab);
+    assert.equal(await next.client.whenReady(), null);
+    return next.client.closeDraftToasts();
+  }
+
+  it("keeps a closing save its close-time draft holds in the page, so the next start makes one recovered note of the edit where another tab saved the block since, keeps that tab's text, and tells it", async () => {
+    const tab = await profile();
+    const { closing, other } = await twoTabs(tab);
+    const answer = await closeAfterTyping(tab, closing);
+    // Another tab's save of a1 since, with no expected revision, as an editor's save is
+    const theirs = block('a1', 'A', 0, 'alpha, saved in another tab');
+    const saved = await other.client.execute(
+      { type: 'saveNoteContent', commandId: 'c-other', ...saveOfA([theirs]) },
+      { pane: 'other' },
+    );
+    assert.equal(saved.kind, 'committed');
+    assert.deepEqual(await nextStart(tab), [
+      'Kept your changes to “Alpha plan” from a closed tab in a recovered note.',
+    ]);
+    assert.equal((await storedBlocks(tab, 'A')).a1, 'alpha, saved in another tab', "the other tab's text stays");
+    assert.ok(
+      Object.values(await storedBlocks(tab, 'draft-a-recovered')).includes(CLOSING),
+      "the closed tab's edit is in the recovered note",
+    );
+    assert.deepEqual(
+      closing.stand.handed.map(one => one.commandId),
+      [],
+      'the closing save never went',
+    );
+    assert.deepEqual(answer, unavailable('coordinator', 'reload-required', false), 'unsent, and not retryable');
+  });
+
+  it('keeps a closing save its close-time draft holds in the page, so the next start saves the edit into the note another tab moved to the Trash since, and tells where it went', async () => {
+    const tab = await profile();
+    const { closing, other } = await twoTabs(tab);
+    const answer = await closeAfterTyping(tab, closing);
+    const trashed = await other.client.execute({ type: 'trashNote', commandId: 'c-trash', noteId: 'A' });
+    assert.equal(trashed.kind, 'committed');
+    assert.deepEqual(await nextStart(tab), [
+      "Saved your changes to “Alpha plan” from a closed tab. It's in the Trash.",
+    ]);
+    assert.equal((await storedBlocks(tab, 'A')).a1, CLOSING, 'saved into the note in the Trash');
+    assert.deepEqual(await storedBlocks(tab, 'draft-a-recovered'), {}, 'with no recovered note');
+    assert.deepEqual(
+      closing.stand.handed.map(one => one.commandId),
+      [],
+      'the closing save never went',
+    );
+    assert.deepEqual(answer, unavailable('coordinator', 'reload-required', false), 'unsent, and not retryable');
+  });
+
+  it('sends a covered save no close-time draft holds, as a save with nothing to keep since its base, though another draft is stored', async () => {
+    const tab = await profile();
+    const { stand, reader, client } = newTab(tab);
+    assert.equal(await client.whenReady(), null);
+    writeDraft(tab, CLOSING, { id: 'draft-other', page: 'page-2' });
+    const editor = createNewTabDocumentClient(client, reader, { storage: tab.env.global.localStorage });
+    const answer = await editor.saveContent(saveOfA([block('a1', 'A', 0, 'alpha')]), { covered: true, pane: 'main' });
+    assert.equal(answer.kind, 'committed');
+    assert.deepEqual(
+      stand.handed.map(one => one.type),
+      ['saveNoteContent'],
+    );
+  });
+});
