@@ -52,9 +52,9 @@
     "newtab": {
       "page": "newtab.html",
       "startChunks": ["workspace"],
-      "reason": "The new tab. Until #2 builds Moment, the workspace chunk is the whole tab and loads at boot, so it counts as start (#27 slice 3). Its forbidden list is what's enforceable today: the four libraries and the trust code, which slice 3 made lazy. The full list waits for the moment row. Its start JS row is its start once #35 slice 4d moved its reads to #17's reader and its writes to the worker, 667,848 / 188,720 bytes as build job 128853943289 of PR checks run 42520909498 read it, with no headroom, and its gzip row 188,731: the build id spreads this row over 11 bytes (lazy.js 1,504 to 1,515 gzip, measured over 500 build ids), since js/runtime/lazy.js:385, on the start, holds the id, which scripts/build/build-info.js:116 makes the SHA-256 of the commit's tree, package-lock.json, the toolchain's versions and the mode (2026-11-08; it was 700 / 200 KiB).",
+      "reason": "The new tab. Until #2 builds Moment, the workspace chunk is the whole tab and loads at boot, so it counts as start (#27 slice 3). Its forbidden list is what's enforceable today: the four libraries and the trust code, which slice 3 made lazy. The full list waits for the moment row. Its start JS row is its start once #35 slice 4d moved its reads to #17's reader and its writes to the worker: its raw row 667,874 bytes, the start with #284 in as build job 128945655369 of PR checks run 42550782378 read it, with no headroom, and its gzip row 188,731, CI's 188,720 before #284 as build job 128853943289 of PR checks run 42520909498 read it, plus 11, until that build reports the start's gzip, which then sets the row the same way: the build id spreads this row over 11 bytes (lazy.js 1,504 to 1,515 gzip, measured over 500 build ids), since js/runtime/lazy.js:385, on the start, holds the id, which scripts/build/build-info.js:116 makes the SHA-256 of the commit's tree, package-lock.json, the toolchain's versions and the mode (2026-11-08; it was 700 / 200 KiB).",
       "start": {
-        "js": { "raw": 667848, "gzip": 188731 },
+        "js": { "raw": 667874, "gzip": 188731 },
         "css": { "raw": 107520, "gzip": 19456 },
         "html": { "raw": 73728, "gzip": 12288 },
         "fonts": null
