@@ -1760,7 +1760,10 @@ class SidebarController {
     this.selectedNoteIds.clear();
     if (noteId) this.selectedNoteIds.add(noteId);
     const bulkBar = document.getElementById('sidebar-bulk-actions');
-    if (bulkBar) bulkBar.classList.add('visible');
+    if (bulkBar) {
+      bulkBar.inert = false;
+      bulkBar.classList.add('visible');
+    }
     this.updateSelectionUI();
     this.renderNotesList();
   }
@@ -1769,7 +1772,12 @@ class SidebarController {
     this.selectionMode = false;
     this.selectedNoteIds.clear();
     const bulkBar = document.getElementById('sidebar-bulk-actions');
-    if (bulkBar) bulkBar.classList.remove('visible');
+    // Its buttons leave the Tab order and the accessibility tree now, while the bar still slides
+    // away, and not when it hides: each button's own transition can outlast the bar's (#282)
+    if (bulkBar) {
+      bulkBar.inert = true;
+      bulkBar.classList.remove('visible');
+    }
     this.renderNotesList();
   }
 

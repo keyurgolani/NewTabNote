@@ -5,7 +5,9 @@
  * Tab order: Tab from the last note reaches the line, and the sidebar, which clips with
  * `overflow: hidden` and so can't be scrolled back by the wheel, stays where it was. While notes
  * are selected the bar owns the sidebar's bottom edge and the line steps aside for it, keeping
- * its place. The test also fails on an uncaught exception test/known-defects.json doesn't list.
+ * its place. Once the selection ends, the bar's buttons leave the Tab order at once, while the
+ * bar still slides away and before it hides (#282). The test also fails on an uncaught exception
+ * test/known-defects.json doesn't list.
  */
 
 const path = require('node:path');
@@ -47,7 +49,14 @@ const boxOf = line =>
     return { top, left, width, height };
   });
 
-test('Tab from the last note reaches the status line with the sidebar unscrolled, and the line steps aside while notes are selected (#20 slice 4c)', async ({ extension }) => {
+/** The element with focus, by its id or else its class, so a miss names what took the Tab */
+const focusedIn = page =>
+  page.evaluate(() => {
+    const element = document.activeElement;
+    return element.id ? `#${element.id}` : `.${element.className}`;
+  });
+
+test('Tab from the last note reaches the status line with the sidebar unscrolled, also while the bulk bar slides away after a selection, and the line steps aside while notes are selected (#20 slice 4c, #282)', async ({ extension }) => {
   await extension.seedOnboarded();
   await driver.seedNotes(extension, NOTES);
   await pastThisBuild(extension);
@@ -71,13 +80,34 @@ test('Tab from the last note reaches the status line with the sidebar unscrolled
   await expect(page.locator('#bulk-cancel-btn')).toBeVisible();
   await expect(line).toBeHidden();
   expect(await boxOf(line)).toEqual(box);
-  // The selection ended: the line is back, and the bar leaves the Tab order once it slides away
-  await page.locator('#bulk-cancel-btn').click();
+  // The selection ended: the line is back, and the bar's buttons leave the Tab order at once, not
+  // once the bar has hidden. Cancel ends it, and in the same task the bar's slide is finished and
+  // its hide held, so the bar sits below the sidebar's edge still showing, as at the end of its
+  // slide away: no frame passes and no timing enters (#282)
+  const held = await page.evaluate(() => {
+    document.getElementById('bulk-cancel-btn').click();
+    const bar = document.getElementById('sidebar-bulk-actions');
+    for (const animation of bar.getAnimations()) {
+      if (animation.transitionProperty === 'transform') animation.finish();
+      else animation.pause();
+    }
+    const edge = document.getElementById('sidebar').getBoundingClientRect().bottom;
+    const paused = bar.getAnimations().filter(animation => animation.playState === 'paused');
+    return {
+      held: paused.map(animation => animation.transitionProperty),
+      visibility: getComputedStyle(bar).visibility,
+      belowTheEdge: Math.round(bar.getBoundingClientRect().top - edge),
+    };
+  });
+  expect(held, 'the bar has slid away, and its hide is held').toEqual({
+    held: ['visibility'],
+    visibility: 'visible',
+    belowTheEdge: 0,
+  });
   await expect(line).toBeVisible();
-  await expect(page.locator('#bulk-cancel-btn')).toBeHidden();
   await page.locator('#sidebar-notes-list .sidebar-note-item').last().locator('button').last().focus();
   await page.keyboard.press('Tab');
-  await expect(line).toBeFocused();
+  expect(await focusedIn(page), "the line takes the Tab, and none of the bar's buttons").toBe('.trust-sidebar-line');
   expect(await sidebar.evaluate(element => element.scrollTop)).toBe(0);
   await expectNoUncaught(extension, page);
 });
