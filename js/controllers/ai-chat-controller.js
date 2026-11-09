@@ -2222,6 +2222,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     }
     // The note is taken before anything is awaited, and the blocks go to it
     const noteId = editor.noteId;
+    // So is the focused block: the confirm click's blur clears the editor's focus 100 ms on
+    // (editor.js's onBlockBlur), which can land while the save below is pending (#276)
+    const focusedBlockId = editor.activeBlock;
 
     try {
       const parsedBlocks = Array.isArray(blocksOrContent)
@@ -2233,10 +2236,11 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       // below is the stored one
       await editor.save();
 
-      // Insert at cursor position if a block is focused, otherwise append at end (Req 19.3)
+      // Insert after the block focused as the insert began, otherwise append at end (Req 19.3),
+      // at its index once the save is in
       let atOrder;
-      if (editor.noteId === noteId && editor.activeBlock) {
-        const activeIdx = editor.blocks.findIndex(b => b.id === editor.activeBlock);
+      if (editor.noteId === noteId && focusedBlockId) {
+        const activeIdx = editor.blocks.findIndex(b => b.id === focusedBlockId);
         if (activeIdx !== -1) atOrder = activeIdx + 1;
       }
 

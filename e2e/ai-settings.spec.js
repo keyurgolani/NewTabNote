@@ -206,8 +206,9 @@ const REFUSE = 'ntn-test-refuse';
 
 /**
  * Runs in each page the context opens from here on: while the extension's localStorage has
- * REFUSE set to `read` or `write`, the page's chrome.storage.local refuses a read or a write that
- * names the one-time switch-off's marker. It can use nothing from this file but itself.
+ * REFUSE set to `read`, the page's chrome.storage.local refuses a read that names the one-time
+ * switch-off's marker, which the new tab reads in the page. Its write is the worker's since #35
+ * slice 4d, where refuseMarkerWrites refuses it. It can use nothing from this file but itself.
  */
 function refuseMarker() {
   let mode = null;
@@ -224,10 +225,35 @@ function refuseMarker() {
     const get = local.get.bind(local);
     local.get = (keys, ...rest) => (names(keys).includes(MARKER) ? Promise.reject(new Error('refused by the test')) : get(keys, ...rest));
   }
-  if (mode === 'write') {
+}
+
+/**
+ * In the worker, where the new tab's settings writes commit since #35 slice 4d: its
+ * chrome.storage.local refuses a set that names the one-time switch-off's marker, and counts each
+ * one it refuses, until `lift`. The worker's adapter reads chrome.storage.local.set as each write
+ * reaches it (js/kernel/composition/host.js, chromeBackupSettings), so the patch takes. A restart
+ * of the worker would drop it, so it goes in right before the tab under test opens, with the call
+ * the worker's own keepalive makes, which restarts Chrome's idle clock, and `refused` reads the
+ * count in the worker that took the write.
+ */
+async function refuseMarkerWrites(extension) {
+  await extension.worker.evaluate(async () => {
+    const local = chrome.storage.local;
     const set = local.set.bind(local);
-    local.set = (items, ...rest) => (Object.keys(items || {}).includes(MARKER) ? Promise.reject(new Error('refused by the test')) : set(items, ...rest));
-  }
+    self.ntnTestRefused = 0;
+    local.set = (items, ...rest) => {
+      if (typeof self.ntnTestRefused !== 'number' || !Object.keys(items || {}).includes('setting_backgroundJobsOffOnce')) return set(items, ...rest);
+      self.ntnTestRefused += 1;
+      return Promise.reject(new Error('refused by the test'));
+    };
+    await chrome.runtime.getPlatformInfo();
+  });
+  return {
+    refused: () => extension.worker.evaluate(() => self.ntnTestRefused),
+    lift: () => extension.worker.evaluate(() => {
+      self.ntnTestRefused = null;
+    }),
+  };
 }
 
 for (const [refused, what] of [['read', "can't read whether the switch-off ran"], ['write', "can't write the switch-off"]]) {
@@ -241,10 +267,13 @@ for (const [refused, what] of [['read', "can't read whether the switch-off ran"]
     const setter = await extension.openSurface('popup');
     await setter.evaluate(([key, mode]) => localStorage.setItem(key, mode), [REFUSE, refused]);
     await setter.close();
+    // The marker's write is the worker's, so its refusal goes there, right before the tab opens
+    const workerRefusal = refused === 'write' ? await refuseMarkerWrites(extension) : null;
 
     const page = await driver.openNewTab(extension, { wait: false });
     await page.waitForFunction(() => window.__ntnAppInit !== undefined, null, { timeout: 30_000 });
     await page.evaluate(() => window.__ntnAppInit);
+    if (workerRefusal) expect(await workerRefusal.refused(), 'the worker that took the write refused it').toBeGreaterThan(0);
     await expect(page.locator('#app h2', { hasText: 'Failed to initialize' }), 'the error state').toBeVisible();
     // The sidebar's controller is the first one App builds, so neither it nor the NotesManager means none
     expect(await page.evaluate(() => [Boolean(window.app && window.app.sidebarController), Boolean(window.app && window.app.notesManager)]), 'the first controller, and a NotesManager')
@@ -256,6 +285,7 @@ for (const [refused, what] of [['read', "can't read whether the switch-off ran"]
 
     // The next start, with nothing refused, runs the switch-off
     await page.evaluate(key => localStorage.removeItem(key), REFUSE);
+    if (workerRefusal) await workerRefusal.lift();
     const again = await recordRequests(extension);
     await driver.reload(page);
     await startSettled(page);

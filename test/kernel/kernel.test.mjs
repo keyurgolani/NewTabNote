@@ -516,6 +516,54 @@ describe('the kernel', () => {
     );
   });
 
+  it("commits no item of a bulk command once the queue cut its turn: each item's commit takes the turn's live (#35 slice 4d, rule 11, R4w)", async () => {
+    const memory = createMemoryAdapter();
+    let cut = false;
+    /** @type {string[]} */
+    const landed = [];
+    // The queue cuts the turn once the first item has committed
+    const adapter = /** @type {KernelAdapter} */ ({
+      ...memory,
+      commit: async (/** @type {any} */ work, /** @type {any} */ options) => {
+        const result = await memory.commit(work, options);
+        if (result.outcome.kind === 'committed') {
+          landed.push(...result.outcome.changedIds);
+          cut = true;
+        }
+        return result;
+      },
+    });
+    const kernel = createKernel({
+      adapter,
+      policy: createBaselinePolicy(),
+      caller: CALLERS.newtab,
+      ids: testIds(),
+      clock: testClock(),
+    });
+    for (const noteId of ['n1', 'n2', 'n3']) {
+      assert.equal(
+        (await kernel.execute({ type: 'createNote', commandId: `make-${noteId}`, noteId })).kind,
+        'committed',
+      );
+    }
+    landed.length = 0;
+    cut = false;
+    const outcome = await kernel.execute(
+      { type: 'runBulkAction', commandId: 'c-bulk', action: 'archive', noteIds: ['n1', 'n2', 'n3'] },
+      { live: () => !cut },
+    );
+    assert.deepEqual(
+      outcome.kind === 'bulk' &&
+        outcome.items.map(item => [item.id, item.outcome.kind, /** @type {any} */ (item.outcome).code]),
+      [
+        ['n1', 'committed', 'note-archived'],
+        ['n2', 'unavailable', 'turn-exceeded'],
+        ['n3', 'unavailable', 'turn-exceeded'],
+      ],
+    );
+    assert.deepEqual(landed, ['n1'], 'nothing after the cut committed');
+  });
+
   it("fails closed on a live that is neither null nor a function, a falsy one too: the command answers unavailable and commits nothing (#224's review)", async () => {
     for (const live of [false, 0, '']) {
       /** @type {string[]} */

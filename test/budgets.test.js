@@ -313,18 +313,19 @@ describe('the budget gate', () => {
     }
   });
 
-  // #35 slice 4b-2's chunk layout, as 4c leaves it. The first page pass has two named groups:
+  // #35 slice 4b-2's chunk layout, as 4d leaves it. The first page pass has two named groups:
   // host, which every page's start shares and which holds Vite's preload helper, and adapter, the
-  // half of #17's adapter only the new tab's start loads. Recovery's own pass takes neither.
+  // half of #17's adapter no page's start loads, since each reads through #17's reader. Recovery's
+  // own pass takes neither.
   const HELPER = '\0vite/preload-helper.js';
   /**
-   * The pages after 4c, with `changes` applied: the new tab boots the workspace chunk, which
-   * imports host and adapter, or with `newTabAdapterInline` holds the adapter's module itself;
-   * Popup imports host and loads its send chunk, which holds valibot, with import(); Side Panel
-   * imports host; recovery has its own entry and its own copy of the helper
-   * @param {{helperChunk?: boolean, newTabAdapterInline?: boolean, popupAdapter?: boolean, popupValibot?: boolean, sidePanelAdapter?: boolean, recoveryAdapter?: boolean}} [changes]
+   * The pages after 4d, with `changes` applied: the new tab boots the workspace chunk, which
+   * imports host, and with `newTabAdapter` the adapter chunk too; Popup imports host and loads its
+   * send chunk, which holds valibot, with import(); Side Panel imports host; recovery has its own
+   * entry and its own copy of the helper
+   * @param {{helperChunk?: boolean, newTabAdapter?: boolean, popupAdapter?: boolean, popupValibot?: boolean, sidePanelAdapter?: boolean, recoveryAdapter?: boolean}} [changes]
    */
-  function layoutFixture({ helperChunk = false, newTabAdapterInline = false, popupAdapter = false, popupValibot = false, sidePanelAdapter = false, recoveryAdapter = false } = {}) {
+  function layoutFixture({ helperChunk = false, newTabAdapter = false, popupAdapter = false, popupValibot = false, sidePanelAdapter = false, recoveryAdapter = false } = {}) {
     const helperFile = helperChunk ? ['assets/preload-helper.js'] : [];
     const files = new Map([
       ['newtab.html', Buffer.from('<link rel="modulepreload" href="/js/runtime/lazy.js"><script type="module" src="/assets/newtab.js"></script>')],
@@ -334,7 +335,7 @@ describe('the budget gate', () => {
       ['js/background.js', Buffer.from('self.x = 1;')],
       ['js/runtime/lazy.js', Buffer.from('export const loader = 1;')],
       ['assets/newtab.js', Buffer.from('import "../js/runtime/lazy.js"; import("./workspace.js");')],
-      ['assets/workspace.js', Buffer.from('import "./host.js"; import "./adapter.js";')],
+      ['assets/workspace.js', Buffer.from(newTabAdapter ? 'import "./host.js"; import "./adapter.js";' : 'import "./host.js";')],
       ['assets/host.js', Buffer.from('export const host = 1;')],
       ['assets/adapter.js', Buffer.from('export const adapter = 1;')],
       ['assets/popup.js', Buffer.from('import "./host.js"; import("./popup-send-chunk.js");')],
@@ -351,8 +352,8 @@ describe('the budget gate', () => {
       chunk({
         fileName: 'assets/workspace.js',
         isDynamicEntry: true,
-        imports: ['assets/host.js', ...(newTabAdapterInline ? [] : ['assets/adapter.js'])],
-        moduleIds: [id('js/workspace.js'), ...(newTabAdapterInline ? [id('js/kernel/adapters/indexeddb/adapter.js')] : [])],
+        imports: ['assets/host.js', ...(newTabAdapter ? ['assets/adapter.js'] : [])],
+        moduleIds: [id('js/workspace.js')],
       }),
       chunk({ fileName: 'assets/host.js', moduleIds: helperChunk ? kernel : [...kernel, HELPER] }),
       chunk({ fileName: 'assets/adapter.js', moduleIds: [id('js/kernel/adapters/indexeddb/adapter.js')] }),
@@ -389,7 +390,7 @@ describe('the budget gate', () => {
   };
   const layout = (/** @type {string} */ page, /** @type {string} */ message) => `budget/layout ${page}: ${message}`;
 
-  it("passes the pages' layout: Vite's preload helper in host, the adapter chunk on the new tab's start alone, and valibot in Popup's send chunk (#35 slices 4b-2 and 4c)", () => {
+  it("passes the pages' layout: Vite's preload helper in host, no page's start on the adapter chunk, and valibot in Popup's send chunk (#35 slices 4b-2, 4c and 4d)", () => {
     assert.deepEqual(run(layoutBudgets(), layoutFixture()), []);
     // The chunk graph names the helper on each start that holds it
     const graphs = analyze({ ...layoutFixture(), budgets: layoutBudgets() });
@@ -409,27 +410,24 @@ describe('the budget gate', () => {
     );
   });
 
+  /** P2's words, since no page's start loads the adapter chunk (#35 slice 4d) */
+  const onAdapter = "its start loads the adapter chunk (assets/adapter.js), which no page's start loads, since each reads through #17's reader";
+
   it("fails Popup's start that loads the adapter chunk (#35 slice 4b-2, P2)", () => {
-    assert.deepEqual(run(layoutBudgets(), layoutFixture({ popupAdapter: true })), [
-      layout('popup', 'its start loads the adapter chunk (assets/adapter.js), which only the starts of newtab load'),
-    ]);
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ popupAdapter: true })), [layout('popup', onAdapter)]);
   });
 
   it("fails Side Panel's start that loads the adapter chunk, as Popup's (#35 slice 4c, P2)", () => {
-    assert.deepEqual(run(layoutBudgets(), layoutFixture({ sidePanelAdapter: true })), [
-      layout('sidepanel', 'its start loads the adapter chunk (assets/adapter.js), which only the starts of newtab load'),
-    ]);
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ sidePanelAdapter: true })), [layout('sidepanel', onAdapter)]);
+  });
+
+  it("fails the new tab's start that loads the adapter chunk, as Popup's and Side Panel's, since it reads through #17's reader too (#35 slice 4d, P2)", () => {
+    assert.deepEqual(run(layoutBudgets(), layoutFixture({ newTabAdapter: true })), [layout('newtab', onAdapter)]);
   });
 
   it("fails valibot on Popup's start, which its row allows lazy only (#35 slice 4b-2, P3, Q8)", () => {
     assert.deepEqual(run(layoutBudgets(), layoutFixture({ popupValibot: true })), [
       'budget/dependency popup: its start holds valibot, which its row allows lazy only',
-    ]);
-  });
-
-  it("fails the new tab's start without the adapter chunk while it holds the adapter's modules (#35 slices 4b-2 and 4c, P4)", () => {
-    assert.deepEqual(run(layoutBudgets(), layoutFixture({ newTabAdapterInline: true })), [
-      layout('newtab', "its start doesn't load the adapter chunk, which the starts of newtab load"),
     ]);
   });
 
@@ -580,17 +578,21 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
 
   it('holds the approved rows exactly', () => {
     const { entries } = BUDGETS;
-    assert.deepEqual(entries.newtab.start, { js: { raw: 700 * KIB, gzip: 200 * KIB }, css: { raw: 105 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
+    // The new tab's start JS: its start on #35 slice 4d with #284 in as build job 129294977694 of PR
+    // checks run 42656127979 read it, 667,874 / 188,730, and its gzip row 188,741: the build id spreads
+    // this row over 11 bytes (lazy.js 1,504 to 1,515 gzip, measured over 500 build ids), since
+    // js/runtime/lazy.js:385 holds the id, which scripts/build/build-info.js:116 makes the SHA-256 of the
+    // commit's tree, package-lock.json, the toolchain's versions and the mode (2026-11-09)
+    assert.deepEqual(entries.newtab.start, { js: { raw: 667874, gzip: 188741 }, css: { raw: 105 * KIB, gzip: 19 * KIB }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
     // The workspace loads at boot, so it's start; nothing the root loads is named lazy
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
     assert.deepEqual(entries.background.dependencies, ['valibot']);
-    // Popup: 93,235 / 31,405 bytes in CI's strict build of fd6dc2c9, once #35 slice 4b-2 moved it,
-    // plus 5%, rounded up (2026-11-06)
-    assert.deepEqual(entries.popup.start.js, { raw: 97900, gzip: 33000 });
-    // Side Panel: 90,066 / 30,643 bytes in CI's strict build of 0fdd7039, once #35 slice 4c moved
-    // it, plus 5%, rounded up (2026-11-07)
-    assert.deepEqual(entries.sidepanel.start.js, { raw: 94600, gzip: 32200 });
+    // Popup's and Side Panel's start JS rows: their starts on #35 slice 4d as build job 128853943289 of
+    // PR checks run 42520909498 read them, with no headroom, since neither start loads js/runtime/lazy.js
+    // (2026-11-08)
+    assert.deepEqual(entries.popup.start.js, { raw: 76913, gzip: 26638 });
+    assert.deepEqual(entries.sidepanel.start.js, { raw: 73534, gzip: 25555 });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
     assert.equal(BUDGETS.timing.rounds, 12);

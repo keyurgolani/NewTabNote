@@ -419,20 +419,21 @@ function chunkFileName(root) {
 }
 
 /**
- * The files of close-drafts-applier, close-drafts-chunk, journal-chunk and Side Panel's send
- * chunk, which the pages import only with import()
+ * The files of close-drafts-applier, close-drafts-chunk, journal-chunk and Side Panel's and the
+ * new tab's send chunks, which the pages import only with import()
  */
 const UNPRELOADED_CHUNKS =
-  /(?:^|\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk|sidepanel-send-chunk)-[A-Za-z0-9_-]+\.js$/;
+  /(?:^|\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk|sidepanel-send-chunk|newtab-send-chunk)-[A-Za-z0-9_-]+\.js$/;
 
 /**
  * The files the bundler preloads beside a dynamic import, or beside a page's entry: none beside
  * close-drafts-applier, which the new tab, Popup and Side Panel import on a start that finds work
- * for it (#33, #6, composition/close-drafts.js), or beside close-drafts-chunk, which it imports
- * and applyCloseDraft's wrapper imports at first use, or beside journal-chunk, which they import
- * on their first journaled command or at idle (#35 slice 3b, composition/host.js), or beside Side
- * Panel's send chunk, which it imports at its first command (#35 slice 4c), so no page's start
- * carries a preload list for any of them, and every other import's own (the lead's trim 2).
+ * for it (#33, #6, composition/close-drafts.js), or beside close-drafts-chunk, which it imports,
+ * or beside journal-chunk, which Side Panel imports at idle (#35 slice 3b, composition/host.js)
+ * and the send chunks with them, or beside Side Panel's send chunk, which it imports at its first
+ * command (#35 slice 4c), or beside the new tab's, which it imports at its first command or at
+ * idle (#35 slice 4d), so no page's start carries a preload list for any of them, and every other
+ * import's own (the lead's trim 2).
  * A start that loads one then loads its files one after another, which the lead takes.
  * @param {string} filename - the file imported, or the page's entry
  * @param {string[]} deps

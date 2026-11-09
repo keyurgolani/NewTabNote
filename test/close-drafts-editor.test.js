@@ -140,22 +140,15 @@ function drafts(env) {
  * covered journal entries reads the profile's journal (#6). Answers what it applied.
  */
 async function nextStart(env) {
-  const newTab = await import('../js/kernel/composition/newtab.js');
+  // Its writes to a stand-in for the worker (#35 slice 4d)
+  const { newTabOn } = await import('./kernel/newtab-root.mjs');
   const { inContextStores } = await import('../js/kernel/adapters/in-context.js');
   const load = async () => {
     const applier = await import('../js/kernel/composition/close-drafts-applier.js');
     const { forgetCovered } = await import('../js/kernel/composition/journal-chunk.js');
     return { ...applier, forgetCovered: (draft) => forgetCovered(draft, inContextStores({ indexedDB: env.indexedDB })) };
   };
-  const client = newTab.createNewTabPageClient(
-    newTab.createNewTabAdapter({
-      indexedDB: env.indexedDB,
-      settings: env.chrome.api.storage.local,
-      awaitUpgrade: async () => {},
-      locks: env.global.navigator.locks,
-    }),
-    { drafts: { storage: env.global.localStorage, locks: env.global.navigator.locks }, wake: () => {}, load },
-  );
+  const { client } = newTabOn(env, { load });
   const failure = await client.whenReady();
   if (failure) throw new Error(`the next start's kernel didn't start: ${failure.code}`);
   return plain(await client.applied());
@@ -502,35 +495,21 @@ describe("the stack's close-time draft writer", () => {
     assert.deepEqual(drafts(saved), [], 'every edit committed, so no draft');
   });
 
-  it("an edit the page couldn't save once its connection went comes back at the next start, read by its digests with no revision known (V7, d20)", async () => {
+  it("an edit the page couldn't save once its writes went comes back at the next start, read by its digests, though the connection was open as its save began (V7, d20; #35 slice 4d, rule 12)", async () => {
     const env = await setup();
     const editor = makeEditor(env);
     await editor.loadNote('A');
-    const client = env.documentClient;
-    const real = client.saveContent;
-    let open = true;
-    client.connectionOpen = () => open;
-    let calls = 0;
-    // The first save commits, then the connection closes for another context's upgrade, so it
-    // answers reload-required, which the editor takes as 'stored', with no revision. Every save
-    // after that is refused.
-    client.saveContent = async (save, options) => {
-      calls += 1;
-      if (calls === 1) {
-        await real(save, options);
-        open = false;
-      }
-      return { kind: 'unavailable', cause: 'storage', code: 'reload-required', retryable: false };
-    };
-    type(editor, 'stored as the connection closed');
-    assert.equal(await runUntil(env, editor.flushSave()), true);
-    type(editor, 'typed after the connection went');
+    // Every save answers reload-required, as over the port once the page's writes can't reach
+    // the worker, and nothing is stored: none is taken as stored any more
+    env.documentClient.saveContent = async () => ({ kind: 'unavailable', cause: 'storage', code: 'reload-required', retryable: false });
+    type(editor, 'typed as the writes went');
     assert.equal(await runUntil(env, editor.flushSave()), false);
     assert.equal(editor.reloadRequired, true, 'the reload notice shows');
+    type(editor, 'typed after the connection went');
+    assert.equal(await runUntil(env, editor.flushSave()), false);
     // The user reloads: the page's own close
     closePage(env);
     const [draft] = drafts(env);
-    assert.equal(draft.base.revision, null, "the 'stored' save gave no revision");
     assert.equal(typeof draft.base.blocks.a1, 'string', 'a stack draft, told by its digests');
     assert.deepEqual(draft.blocks.map((b) => b.content), ['typed after the connection went']);
     const result = await nextStart(env);

@@ -432,6 +432,17 @@ describe('the catalog (#13, "Desired behavior")', () => {
     assert.deepEqual(journaledIn(WORKER_ONLY_COMMANDS), ['captureToDailyNote']);
   });
 
+  it('gives an import and an automatic backup the 120 s deadline startup maintenance has, and every other page command 30 s (#35 slice 4d, N7, R27)', () => {
+    const long = Object.entries(COMMANDS)
+      .filter(([, entry]) => entry.deadlineMs === limits.MAINTENANCE_DEADLINE_MS)
+      .map(([type]) => type)
+      .sort();
+    assert.deepEqual(long, ['createAutoBackup', 'importBackup', 'runStartupMaintenance']);
+    for (const [type, entry] of Object.entries(COMMANDS)) {
+      if (!long.includes(type)) assert.equal(entry.deadlineMs, limits.COMMAND_DEADLINE_MS, type);
+    }
+  });
+
   it("gives the worker's drain each journaled command it replays as an operation, with its own entry and schemas (#35 slice 3)", () => {
     // An editor's save is the pages' to apply, as a close-time draft by #33's rules (slice 3b)
     assert.deepEqual(

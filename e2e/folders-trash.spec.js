@@ -247,11 +247,16 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
     active: app.tabController.activeTabIndex,
   }));
   const before = await panes();
-  await page.evaluate(() => {
+  await extension.worker.evaluate(async () => {
     // Fault injection: every write that would trash a note fails, as a broken database's do, on
-    // the page's every connection: the tab's kernel is on #17's adapter since #17 PR 4a, which
-    // runs a transaction an UnknownError aborted once more, and that fails too
+    // the worker's every connection: the new tab's writes commit there since #35 slice 4d, on
+    // #17's adapter, which runs a transaction an UnknownError aborted once more, and that fails
+    // too. The adapter asks its connection for each transaction (adapter.js), so the patch takes
+    // on the one already open. A restart of the worker would drop it, so it goes in right before
+    // the trash, with the call the worker's own keepalive makes, which restarts Chrome's idle
+    // clock, and the case reads its count in the worker that took the trash
     const transaction = IDBDatabase.prototype.transaction;
+    self.ntnTestRefused = 0;
     IDBDatabase.prototype.transaction = function failingTrash(names, mode, options) {
       const tx = transaction.call(this, names, mode, options);
       const objectStore = tx.objectStore.bind(tx);
@@ -260,16 +265,21 @@ test('harness pass: folders, filing and templates with the note open, bulk actio
         if (name !== 'canvases') return store;
         const put = store.put.bind(store);
         store.put = (record, key) => {
-          if (record && record.trashed === true) throw new DOMException('A write the test made fail', 'UnknownError');
+          if (record && record.trashed === true) {
+            self.ntnTestRefused += 1;
+            throw new DOMException('A write the test made fail', 'UnknownError');
+          }
           return key === undefined ? put(record) : put(record, key);
         };
         return store;
       };
       return tx;
     };
+    await chrome.runtime.getPlatformInfo();
   });
   await driver.openNoteMenu(page, 'Beta');
   await page.locator('#ctx-delete-note').click();
+  await expect.poll(() => extension.worker.evaluate(() => self.ntnTestRefused), { message: 'the worker that took the trash refused it' }).toBeGreaterThan(0);
   await expect(page.locator('.toast.error').last()).toHaveText('Failed to move note to trash. Please try again.');
   expect(await panes()).toEqual(before);
   expect((await stored(page, 'Beta')).trashed).toBe(false);

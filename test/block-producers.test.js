@@ -544,7 +544,8 @@ describe('sync inbound (#14 slice 2)', () => {
 
   it("the kernel's applyRemoteChanges, which #19's sync will call (#17 PR 4b): every block is kept as the remote holds it, in each state decode reads", async () => {
     const { createKernel } = await kernelModule('js/kernel/core/application/kernel.js');
-    const { NEWTAB_HANDLERS } = await kernelModule('js/kernel/core/application/handlers-all.js');
+    // The in-page kernel's table the tests build, as the new tab's was before #35 slice 4d
+    const { IN_PAGE_HANDLERS } = await kernelModule('test/helpers/newtab-kernel.mjs');
     const { createMemoryAdapter } = await kernelModule('js/kernel/core/memory/adapter.js');
     const { createBaselinePolicy } = await kernelModule('js/kernel/core/ports/policy.js');
     const { decodeBlock } = await kernelModule('js/kernel/core/blocks/index.js');
@@ -553,7 +554,7 @@ describe('sync inbound (#14 slice 2)', () => {
       adapter: createMemoryAdapter(),
       policy: createBaselinePolicy(),
       caller: CALLERS.newtab,
-      handlers: NEWTAB_HANDLERS,
+      handlers: IN_PAGE_HANDLERS,
       ids: testIds(),
       clock: testClock(),
     });

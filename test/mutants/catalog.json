@@ -810,6 +810,366 @@
       "replace": "                .then(beforeOpen)\n                .then(copied => {\n                  if (copied === 'failed') throw new UnavailableError('storage', 'copy-failed', true);\n                }),\n",
       "test": "test/kernel/worker-root.test.mjs",
       "name": "lets a capture's open of a database at 8 that lacks a store go on when #33's copy can't be written: the capture commits, with no copy or marker left (#35 slice 4d, rule 9)"
+    },
+    {
+      "id": "bulk-items-unfenced",
+      "behavior": "#35 port commands",
+      "protects": "Once the coordinator's queue cuts a bulk command's turn, no item after the cut commits.",
+      "file": "js/kernel/core/application/kernel.js",
+      "find": "        live === null\n          ? context\n          : { ...context, run: item => /** @type {Promise<Outcome>} */ (dispatch(clone(item), live)) },\n",
+      "replace": "        context,\n",
+      "test": "test/kernel/kernel.test.mjs",
+      "name": "commits no item of a bulk command once the queue cut its turn: each item's commit takes the turn's live (#35 slice 4d, rule 11, R4w)"
+    },
+    {
+      "id": "auto-backup-set-unchecked",
+      "behavior": "#35 port commands",
+      "protects": "An automatic backup whose turn the queue cut writes nothing: it checks its turn's live right before its first set.",
+      "file": "js/kernel/adapters/indexeddb/backups.js",
+      "find": "  if (live !== null && live() !== true) throw new UnavailableError('coordinator', TURN_EXCEEDED, true);\n",
+      "replace": "",
+      "test": "test/kernel/worker-root.test.mjs",
+      "name": "writes nothing of an automatic backup whose turn the queue cut after the kernel's check, on its own check before its first set, and writes one whose turn it didn't cut (#35 slice 4d, rule 11, S2's backup half of R20)"
+    },
+    {
+      "id": "auto-backup-short-deadline",
+      "behavior": "#35 port commands",
+      "protects": "The automatic backup has startup maintenance's 120 s deadline, so a client that gave up at 31 s never sends a second one.",
+      "file": "js/kernel/core/contracts/commands.js",
+      "find": "  createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], {\n    entityTypes: [],\n    deadlineMs: MAINTENANCE_DEADLINE_MS,\n  }),\n",
+      "replace": "  createAutoBackup: entry('create-auto-backup', 'backup', ['newtab'], {\n    entityTypes: [],\n  }),\n",
+      "test": "test/kernel/catalog.test.mjs",
+      "name": "gives an import and an automatic backup the 120 s deadline startup maintenance has, and every other page command 30 s (#35 slice 4d, N7, R27)"
+    },
+    {
+      "id": "newtab-writes-on-page-kernel",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's commands, an editor's save among them, go to the worker over the port and commit there, not on the page's kernel.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "    /** @type {Promise<Outcome | BulkOutcome>} */ (client.execute(command)).then(outcome => {\n",
+      "replace": "    /** @type {Promise<Outcome | BulkOutcome>} */ (reads.execute(command)).then(outcome => {\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends an editor's save, a 2 MiB file block's among them, and a pop-out editor's, to the worker as newtab, journaled first, on a ready welcome, and its note list reads the note again (R1)"
+    },
+    {
+      "id": "newtab-hello-as-popup",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's client says hello as newtab, so the worker's router runs its commands as the new tab's.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "    surface: 'newtab',\n",
+      "replace": "    surface: 'popup',\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends an editor's save, a 2 MiB file block's among them, and a pop-out editor's, to the worker as newtab, journaled first, on a ready welcome, and its note list reads the note again (R1)"
+    },
+    {
+      "id": "newtab-reply-not-published",
+      "behavior": "#35 port commands",
+      "protects": "Each committed reply from the worker feeds the new tab's commit feed, so its note list reads the note again.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "      published(command, outcome);\n",
+      "replace": "",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends an editor's save, a 2 MiB file block's among them, and a pop-out editor's, to the worker as newtab, journaled first, on a ready welcome, and its note list reads the note again (R1)"
+    },
+    {
+      "id": "newtab-send-left-out",
+      "behavior": "#35 port commands",
+      "protects": "Every command the worker serves the new tab is in its send lookup, so none is refused before it goes.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "const KEPT = Object.freeze(['saveWorkspaceSession', 'runStartupMaintenance']);\n",
+      "replace": "const KEPT = Object.freeze(['saveWorkspaceSession', 'runStartupMaintenance', 'setPinned']);\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends each of the 46 commands the worker serves the new tab as newtab, and commits its session in the page, with no frame (R2)"
+    },
+    {
+      "id": "newtab-journal-own-session",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's journal holds its owner lock and writes its entries under the session its hello names, so the worker's drain waits on this page.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "  const journal = startPageJournal(sender, client.sessionId, 'newtab', {\n",
+      "replace": "  const journal = startPageJournal(sender, randomIds.next(), 'newtab', {\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "names the journal's owner lock and each entry for the session its hello says (rule 3, R8)"
+    },
+    {
+      "id": "newtab-sender-without-ledger",
+      "behavior": "#35 port commands",
+      "protects": "A command whose reply was lost on the way back from the worker resolves by its key, from the ledger the new tab's reader reads.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "    ...(ledger ? { ledger } : {}),\n",
+      "replace": "",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "resolves a restore whose reply was lost by its key, from the ledger the reader reads (rule 3, R9)"
+    },
+    {
+      "id": "newtab-connects-at-start",
+      "behavior": "#35 port commands",
+      "protects": "The new tab opens no port to the worker before its first command, though its send chunk loads at idle.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "  const client = newTabSender({ runtime, extensionVersion, ledger });\n",
+      "replace": "  const client = newTabSender({ runtime, extensionVersion, ledger });\n  client.retry();\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "opens no port before its first command, though its first read loads the send chunk at idle (Q6 a, G1)"
+    },
+    {
+      "id": "newtab-sends-queries",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's send lookup holds commands alone, so its reads stay on its reader.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "import { COMMANDS } from '../core/contracts/commands.js';\n",
+      "replace": "import { COMMANDS as COMMAND_ENTRIES } from '../core/contracts/commands.js';\nimport { QUERIES } from '../core/contracts/queries.js';\n\nconst COMMANDS = Object.freeze({ ...COMMAND_ENTRIES, ...QUERIES });\n",
+      "test": "test/kernel/handlers.test.mjs",
+      "name": "the new tab's sends to the worker hold commands alone, so its reads stay on its reader (#35 slice 4d, G3)"
+    },
+    {
+      "id": "newtab-send-result-schema",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's send lookup checks each answer against the worker's result schema for its command, a bulk action's against the bulk one.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "result: entry.bulk ? bulkResultSchema : outcomeSchema",
+      "replace": "result: outcomeSchema",
+      "test": "test/kernel/handlers.test.mjs",
+      "name": "the new tab's send lookup holds, for each command the worker's lookup holds for the new tab, the catalog's entry and the worker's result schema, and no payload schema (#35 slice 4d, S4, R23)"
+    },
+    {
+      "id": "newtab-session-write-sent",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's workspace session commits in the page, through its settings handle, and never goes to the worker.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "    if (Object.hasOwn(NEWTAB_HANDLERS.commands, command.type)) return reads.execute(command);\n",
+      "replace": "    if (Object.hasOwn(NEWTAB_HANDLERS.commands, command.type) && command.type !== 'saveWorkspaceSession') return reads.execute(command);\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends each of the 46 commands the worker serves the new tab as newtab, and commits its session in the page, with no frame (R2)"
+    },
+    {
+      "id": "newtab-loads-per-command",
+      "behavior": "#35 port commands",
+      "protects": "The new tab loads its send chunk once, and its commands wait for it and the journal's owner lock, then go first to last.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "      start().then(\n        started => started.execute(command, journaling),\n",
+      "replace": "      load().then(chunk => chunk.newTabWrites(options)).then(\n        started => started.execute(command, journaling),\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "loads the send chunk once for every command, and sends each, in order, once it is in and its journal holds the owner lock (rule 3, R5)"
+    },
+    {
+      "id": "newtab-unloaded-chunk-retryable",
+      "behavior": "#35 port commands",
+      "protects": "A command whose send chunk can't load answers reload-required, not retryable, since only a reload loads it, and nothing goes.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "        () => unavailable('coordinator', 'reload-required', false),\n",
+      "replace": "        () => unavailable('coordinator', 'reload-required', true),\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "answers each command unavailable, reload-required, not retryable, when the send chunk can't load, and sends nothing (R6)"
+    },
+    {
+      "id": "newtab-start-apply-not-fail-fast",
+      "behavior": "#35 port commands",
+      "protects": "The start's apply of closing tabs' edits stops sending once the worker didn't take one, so a worker that doesn't answer holds the drafts' lock one wait.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "  const run = failingFast(/** @type {(command: Command) => Promise<Outcome>} */ (execute));\n",
+      "replace": "  const run = /** @type {(command: Command) => Promise<Outcome>} */ (execute);\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "sends the start's apply over the port, waits for all of it, and sends no more of it once the worker didn't take one (rule 6, R7)"
+    },
+    {
+      "id": "newtab-runs-share-wrapper",
+      "behavior": "#35 port commands",
+      "protects": "The journal's apply of the saves closed pages left fails fast as a run of its own, so the start's stopped run doesn't stop it.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "      failingFast,\n      published,\n",
+      "replace": "      failingFast: () => run,\n      published,\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "starts the journal's run afresh after the start's run stopped, so its first save still goes (rule 6, R7)"
+    },
+    {
+      "id": "newtab-no-upgrade-gate",
+      "behavior": "#35 port commands",
+      "protects": "Once the new tab's reader closes for another context's upgrade, a command answers reload-required unsent, while the save its close's flush sent goes.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "    if (GONE.includes(reader.openState())) return Promise.resolve(unavailable('storage', 'reload-required', false));\n",
+      "replace": "",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "answers reload-required, unsent, once the reader's connection closed for an upgrade, while the save its close's flush sent still goes (rule 12, R11)"
+    },
+    {
+      "id": "newtab-reads-maintain",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's kernel runs no startup maintenance as it starts, since the worker's open runs it.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "    handlers: NEWTAB_HANDLERS,\n  });\n  const feed = createCommitFeed(feedLogger);\n",
+      "replace": "    handlers: NEWTAB_HANDLERS,\n    maintainOnOpen: true,\n  });\n  const feed = createCommitFeed(feedLogger);\n",
+      "test": "test/kernel/roots.test.mjs",
+      "name": "runs no startup maintenance as the new tab starts: its kernel writes no first-run setting, which the worker's versioned open writes (#35 slice 4d, rule 8, R17)"
+    },
+    {
+      "id": "newtab-bulk-reply-published-whole",
+      "behavior": "#35 port commands",
+      "protects": "Each committed item of a bulk action the worker ran feeds the new tab's commit feed under its own ids, as the kernel's run of the items publishes them.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "        for (const { outcome: item } of outcome.items) {\n          if (item.kind === 'committed' && item.changedIds.length > 0) {\n            feed.publish({ aggregate: COMMANDS[type].aggregate, ids: item.changedIds });\n          }\n        }\n",
+      "replace": "        const ids = outcome.items.flatMap(({ outcome: item }) => (item.kind === 'committed' ? item.changedIds : []));\n        if (ids.length > 0) feed.publish({ aggregate: COMMANDS[type].aggregate, ids });\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "publishes each committed item of a bulk action under its own id, as the kernel's run of the items does (R4p)"
+    },
+    {
+      "id": "newtab-draft-cleared-before-reply",
+      "behavior": "#35 port commands",
+      "protects": "A delete for good clears its note's close-time draft only once the worker's reply says it deleted the note, under the drafts' lock it holds around the send.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "    const outcome = /** @type {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} */ (\n",
+      "replace": "    store.clearNotes(notesNamedBy(command) || []);\n    const outcome = /** @type {import('../core/contracts/outcomes.js').Outcome | import('../core/contracts/outcomes.js').BulkOutcome} */ (\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "holds the drafts' lock around a delete for good's send, clears its note's draft after the reply, and wakes the purge (R3)"
+    },
+    {
+      "id": "daily-note-read-before-ensure",
+      "behavior": "#35 port commands",
+      "protects": "The Daily Note's read waits for the ensure's answer, so over the port it reads the note the worker made.",
+      "file": "js/kernel/composition/document.js",
+      "find": "      const outcome = await client.execute({\n        type: 'ensureDailyNote',\n        commandId: client.ids.next(),\n        noteId: client.ids.next(),\n        ...(dateStr === undefined ? { at } : { dateStr }),\n      });\n      if (outcome.kind !== 'committed') return { outcome, note: null };\n      const found = await read({ type: 'findDailyNote', dateStr: day }, null).catch(() => null);\n",
+      "replace": "      const reading = read({ type: 'findDailyNote', dateStr: day }, null).catch(() => null);\n      const outcome = await client.execute({\n        type: 'ensureDailyNote',\n        commandId: client.ids.next(),\n        noteId: client.ids.next(),\n        ...(dateStr === undefined ? { at } : { dateStr }),\n      });\n      if (outcome.kind !== 'committed') return { outcome, note: null };\n      const found = await reading;\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "reads the Daily Note an ensure over the port made, once its answer is in (#74, R10)"
+    },
+    {
+      "id": "journal-retry-leaves-stale-entry",
+      "behavior": "#35 port commands",
+      "protects": "A save's commit takes its pane's earlier entries for the note with it, so an unknown save's entry goes once its retry commits.",
+      "file": "js/kernel/core/application/journaling.js",
+      "find": "        const going = [record.opId, ...(outcome.kind === 'committed' ? coveredBy(type, noteId, pane, record.seq) : [])];\n",
+      "replace": "        const going = [record.opId];\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "keeps the entry of a save whose answer stays unknown, and its retry under a new key commits the latest text, makes no conflict record, and takes that entry with it (N3, R24)"
+    },
+    {
+      "id": "journal-unavailable-ends-entry",
+      "behavior": "#35 port commands",
+      "protects": "A save answered unavailable keeps its journal entry, so its edit stays for the next save or the worker's drain.",
+      "file": "js/kernel/core/application/journaling.js",
+      "find": "const ENDS = Object.freeze(['committed', 'conflict', 'rejected']);\n",
+      "replace": "const ENDS = Object.freeze(['committed', 'conflict', 'rejected', 'unavailable']);\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "keeps the entry of a save answered deadline-exceeded, as one the worker held past its deadline, and the next save commits the text (S3, R25)"
+    },
+    {
+      "id": "newtab-root-full-adapter",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's start reaches no IndexedDB writer but #17's reader's open, so the worker alone commits its writes.",
+      "file": "js/kernel/composition/newtab.js",
+      "find": "import { createIndexedDbReader } from '../adapters/indexeddb/reader.js';\n",
+      "replace": "import { createIndexedDbAdapter as createIndexedDbReader } from '../adapters/indexeddb/adapter.js';\n",
+      "test": "test/kernel/one-committer.test.mjs",
+      "name": "reaches #17's reader from the new tab's start, with its untilMoved row gone: no writer but recovery-points.js, which its reads row names, and no write but the reader's open, which the list reads on the new tab too (#35 slice 4d, R12)"
+    },
+    {
+      "id": "newtab-send-chunk-preloaded",
+      "behavior": "#35 port commands",
+      "protects": "The new tab's send chunk preloads nothing, so #13's client and Valibot load only at idle or at its first command.",
+      "file": "scripts/build/vite-config.js",
+      "find": "  /(?:^|\\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk|sidepanel-send-chunk|newtab-send-chunk)-[A-Za-z0-9_-]+\\.js$/;\n",
+      "replace": "  /(?:^|\\/)(?:close-drafts-applier|close-drafts-chunk|journal-chunk|sidepanel-send-chunk)-[A-Za-z0-9_-]+\\.js$/;\n",
+      "test": "test/bundler.test.js",
+      "name": "preloads nothing beside close-drafts-applier, which the pages import on a start that finds a draft, or close-drafts-chunk under it, or beside journal-chunk, which they import on their first journaled command or at idle, or beside Side Panel's or the new tab's send chunk, which each imports at its first command, the new tab's at idle too, and every other import's own list (#33, the lead's trim 2; #35 slices 3b, 4c and 4d; #6)"
+    },
+    {
+      "id": "editor-reload-taken-as-stored",
+      "behavior": "#35 port commands",
+      "protects": "A save answered reload-required shows the reload notice, never Saved, since over the port nothing was stored.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return 'reload';\n",
+      "replace": "      if (outcome.kind === 'unavailable' && outcome.code === 'reload-required') return typeof this.documentClient.connectionOpen !== 'function' || this.documentClient.connectionOpen() ? 'stored' : 'reload';\n",
+      "test": "test/editor-save.test.js",
+      "name": "a save answered reload-required is never taken as stored, though the connection was open as it began: the editor shows the reload notice, not Saved, since over the port nothing went (#35 slice 4d, rule 12, R6)"
+    },
+    {
+      "id": "editor-unknown-revert-unsettled",
+      "behavior": "#35 port commands",
+      "protects": "A revert whose answer stays unknown reads the note as stored, and says Reverted to snapshot when it holds the snapshot's blocks.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'unknown') {\n        const stored = await this._storedRevert(noteId, snap.blocks || []);\n",
+      "replace": "      if (false) {\n        const stored = await this._storedRevert(noteId, snap.blocks || []);\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "shows the snapshot and says Reverted to snapshot when the note as stored holds its blocks"
+    },
+    {
+      "id": "editor-unread-revert-releases-saves",
+      "behavior": "#35 port commands",
+      "protects": "A revert that neither its answer nor the note as stored settles keeps saves held, so no save lands on a note it may have restored.",
+      "file": "js/editor.js",
+      "find": "      if (holding && !keepHeld) this.releaseSaves();\n",
+      "replace": "      if (holding) this.releaseSaves();\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "keeps saves held and shows the reload notice when the note as stored can't be read either, so no save lands on a note the revert may have restored"
+    },
+    {
+      "id": "editor-migrating-as-failure",
+      "behavior": "#35 port commands",
+      "protects": "A save the worker answered migrating waits calmly and goes again, never shown as a failure.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'unavailable' && outcome.code === 'migrating') return 'migrating';\n",
+      "replace": "",
+      "test": "test/editor-save.test.js",
+      "name": "waits calmly on a save answered migrating, with no toast or notice, and goes again every few seconds until it commits (rule 18, S7, R22)"
+    },
+    {
+      "id": "editor-too-large-retried",
+      "behavior": "#35 port commands",
+      "protects": "A save over the ceiling says so in its notice's words and keeps its text on screen, and nothing retries it.",
+      "file": "js/editor.js",
+      "find": "      if (outcome.kind === 'rejected' && outcome.code === 'payload-too-large') return 'too-large';\n",
+      "replace": "",
+      "test": "test/editor-save.test.js",
+      "name": "refuses a change too large to save with the notice's words, keeps its block on screen, retries nothing, and saves the note again once the change is smaller (#259, rule 20, R26)"
+    },
+    {
+      "id": "newtab-adapter-page-kept",
+      "behavior": "#35 port commands",
+      "protects": "No page's start may load the adapter chunk, the new tab's included, since each reads through #17's reader.",
+      "file": "scripts/build/page-chunks.js",
+      "find": "const ADAPTER_PAGES = Object.freeze([]);\n",
+      "replace": "const ADAPTER_PAGES = Object.freeze(['newtab']);\n",
+      "test": "test/budgets.test.js",
+      "name": "fails the new tab's start that loads the adapter chunk, as Popup's and Side Panel's, since it reads through #17's reader too (#35 slice 4d, P2)"
+    },
+    {
+      "id": "ai-insert-focus-read-after-save",
+      "behavior": "#276 insert at the cursor",
+      "protects": "The AI chat's blocks go after the block focused as the insert began, though the confirm click's blur clears the editor's focus while the save before the insert is pending.",
+      "file": "js/controllers/ai-chat-controller.js",
+      "find": "      if (editor.noteId === noteId && focusedBlockId) {\n        const activeIdx = editor.blocks.findIndex(b => b.id === focusedBlockId);\n",
+      "replace": "      if (editor.noteId === noteId && editor.activeBlock) {\n        const activeIdx = editor.blocks.findIndex(b => b.id === editor.activeBlock);\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "at the cursor, though the confirm click's blur clears the focus while the save before the insert is pending: the blocks go after the block focused as it began (#276)"
+    },
+    {
+      "id": "fixture-rows-lifted-for-bytes",
+      "behavior": "#35 fixture byte rows",
+      "protects": "A fixture that expects budget/bytes builds against the real rows, so a start over its row still fails the build.",
+      "file": "scripts/build/verify-fixtures.js",
+      "find": "  if ((fixture.expect || []).includes('budget/bytes')) return false;\n",
+      "replace": "  if (false) return false;\n",
+      "test": "test/build-fixtures.test.js",
+      "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
+    },
+    {
+      "id": "fixture-rows-never-lifted",
+      "behavior": "#35 fixture byte rows",
+      "protects": "A fixture for another rule builds past every start byte row, so its copy's -dirty build id adds no budget/bytes to the codes it expects.",
+      "file": "scripts/build/verify-fixtures.js",
+      "find": "  if ((fixture.expect || []).includes('budget/bytes')) return false;\n",
+      "replace": "  if (true) return false;\n",
+      "test": "test/build-fixtures.test.js",
+      "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
+    },
+    {
+      "id": "newtab-closing-save-sent",
+      "behavior": "#35 closing save",
+      "protects": "A closing save its page's close-time draft holds stays in the page, so the next start applies the draft by #33's rules: one recovered note where another tab saved the block since, kept and told.",
+      "file": "js/kernel/composition/newtab-send-chunk.js",
+      "find": "    if (!options || options.covered !== true || command.type !== 'saveNoteContent' || !storage) return false;\n",
+      "replace": "    if (true) return false;\n",
+      "test": "test/kernel/newtab-port.test.mjs",
+      "name": "keeps a closing save its close-time draft holds in the page, so the next start makes one recovered note of the edit where another tab saved the block since, keeps that tab's text, and tells it"
     }
   ]
 }

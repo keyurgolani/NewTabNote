@@ -53,8 +53,8 @@ export const WORKER_HANDLERS = handlerTable(
  * maintenance, which the worker's own start runs (#35 slice 4d), with the two bulk commands'
  * refusals, so Popup's quick note and Popup's and Side Panel's applies of a close-time draft (#35
  * slice 4c) are among them. It's on the shared catalog, so each page's kernel in the worker allows
- * only what that page may send. The applier is imported, not loaded at its first use as a page's
- * is (close-drafts-on-demand.js), since a service worker can't import()
+ * only what that page may send. The applier is imported, since a service worker can't import(),
+ * and the pages run it only here, over the port (#35 slice 4d)
  */
 export const WORKER_PAGE_HANDLERS = handlerTable({
   commands: {

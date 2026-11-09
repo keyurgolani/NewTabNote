@@ -1310,23 +1310,27 @@ async function releaseStorage(env) {
 }
 
 /**
- * Start the page's kernel the way the new tab's root does (js/kernel/composition/newtab.js),
- * from the page's globals: #17's adapter, opened as the database is, with startup maintenance,
- * the tab's one connection. Its document client becomes the one makeEditor gives editors, and
- * `env.adapter` the adapter. The page's clients are the root's, as startEditorClient sets them:
- * `env.kernel`, `env.noteList`, `env.settingsClient`, and what App gives its controllers of the
- * database (`env.storageState`, `env.recovery`, `env.validateBackup`), with the narrow handles
- * App gives NotesManager, GraphView and SyncService (`env.stores`). js/storage.js's shell, on a
- * page that loads it, is connected as the root connects it (#17 PR 4b).
+ * Start the page's kernel the way the new tab's root did before its writes went to the worker
+ * (#35 slice 4d), from the page's globals: the in-page kernel the tests build
+ * (test/helpers/newtab-kernel.mjs), #17's adapter, opened as the database is, with startup
+ * maintenance, the tab's one connection. Its document client becomes the one makeEditor gives
+ * editors, and `env.adapter` the adapter. The page's clients are the root's, as startEditorClient
+ * sets them: `env.kernel`, `env.noteList`, `env.settingsClient`, and what App gives its
+ * controllers of the database (`env.storageState`, `env.recovery`, `env.validateBackup`), with the
+ * narrow handles App gives NotesManager, GraphView and SyncService (`env.stores`). js/storage.js's
+ * shell, on a page that loads it, is connected as the root connects it (#17 PR 4b).
  * @param {ReturnType<typeof createLegacyEnv>} env
  * @returns {Promise<Object>} the document client, once the kernel is ready
  */
 async function startNewTabKernel(env) {
   const { loadPageModule } = require('./page-module');
   const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
-  const host = root.newTabHost();
-  const adapter = root.createNewTabAdapter(host);
-  const kernel = root.createNewTabClient(adapter);
+  const { newTabTestAdapter, newTabTestClient } = await loadPageModule(env, 'test/helpers/newtab-kernel.mjs');
+  const { chromeBackupSettings } = await loadPageModule(env, 'js/kernel/composition/host.js');
+  // With remove, which the automatic backup prunes the oldest with, as the root's host had it
+  const host = { ...root.newTabHost(), settings: chromeBackupSettings() };
+  const adapter = newTabTestAdapter(host);
+  const kernel = newTabTestClient(adapter);
   const failure = await kernel.whenReady();
   if (failure) throw new Error(`the new tab's kernel didn't start: ${failure.code}`);
   env.adapter = adapter;

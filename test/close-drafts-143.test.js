@@ -179,10 +179,10 @@ describe("the stack's first start after the update, on what 1.4.3 left", () => {
   const { webcrypto } = require('node:crypto');
   const { IDBKeyRange } = require('fake-indexeddb');
 
-  /** The stack's roots: the worker's, and the new tab's */
+  /** The stack's roots: the worker's, and the new tab's, its writes to a stand-in for the worker (#35 slice 4d) */
   const roots = async () => ({
     worker: await import('../js/kernel/composition/background.js'),
-    newTab: await import('../js/kernel/composition/newtab.js'),
+    newTab: await import('./kernel/newtab-root.mjs'),
   });
 
   /** The worker's host on the page's profile */
@@ -196,16 +196,7 @@ describe("the stack's first start after the update, on what 1.4.3 left", () => {
   });
 
   /** The new tab on the page, opening the database as it finds it, without waiting for the worker */
-  const openNewTab = ({ newTab }, env) =>
-    newTab.createNewTabPageClient(
-      newTab.createNewTabAdapter({
-        indexedDB: env.indexedDB,
-        settings: env.chrome.api.storage.local,
-        awaitUpgrade: async () => {},
-        locks: env.global.navigator.locks,
-      }),
-      { drafts: { storage: env.global.localStorage, locks: env.global.navigator.locks }, wake: () => {} },
-    );
+  const openNewTab = ({ newTab }, env) => newTab.newTabOn(env).client;
 
   /**
    * Each draft as the stack applies it: A's and C's saved, B's already recovered by 1.4.3, and the

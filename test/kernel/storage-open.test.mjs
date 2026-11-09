@@ -17,7 +17,7 @@ import { DB_VERSION } from '../../js/kernel/adapters/indexeddb/schema.js';
 import { detectShape, inspect } from '../../js/kernel/adapters/indexeddb/shapes.js';
 import { FIRST_RUN_SETTINGS, INITIALIZED_KEY } from '../../js/kernel/adapters/indexeddb/settings.js';
 import { MIGRATE_MESSAGE, MIGRATE_WAIT_MS, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
-import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
+import { createNewTabReader } from '../../js/kernel/composition/newtab.js';
 import { createKernel } from './test-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { adapterOn, closeAll, kernelOn, legacyEnv, profile } from './storage-fixture.mjs';
@@ -114,18 +114,17 @@ const SHAPES = /** @type {const} */ ({
 const AT_9 = SHAPES['version 9 (#17 PR 1b)'];
 
 /**
- * The new tab's open of `of`'s profile, as its root opens #17's adapter since #17 PR 4a, with
+ * The new tab's open of `of`'s profile, as its root opens #17's reader since #35 slice 4d, with
  * no worker to wake (#17 PR 1b: it waits on the worker's run, here at once). Resolves what it
  * threw, or null, and closes it.
  * @param {Profile} of
  * @returns {Promise<unknown>}
  */
 async function newTabOpen(of) {
-  const adapter = createNewTabAdapter({
+  const adapter = createNewTabReader({
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     awaitUpgrade: async () => {},
-    locks: null,
   });
   try {
     await adapter.open();
@@ -148,8 +147,8 @@ const recordsIn = dump =>
 describe('opening CanvasTabDB on the IndexedDB adapter', () => {
   it("leaves each shape as it was in the new tab's open and in the worker's versioned open, which makes this build's version only where there's no database (review R79)", async () => {
     for (const [name, spec] of Object.entries(SHAPES)) {
-      // The new tab's open upgrades nothing, and makes no database (#17 PR 1b), on #17's adapter
-      // as its root opens it since #17 PR 4a
+      // The new tab's open upgrades nothing, and makes no database (#17 PR 1b), on #17's reader
+      // as its root opens it since #35 slice 4d
       const page = await made(spec);
       const before = spec ? await legacyEnv.dumpDatabase(page.real) : null;
       const thrown = /** @type {any} */ (await newTabOpen(page));
@@ -191,6 +190,12 @@ describe('opening CanvasTabDB on the IndexedDB adapter', () => {
       }
       assert.deepEqual(of.chrome.writes(), [], `${name}: no copy, and no setting`);
     }
+  });
+
+  it("writes no missing-stores copy as the new tab opens a version-8 database that lacks a store, which the worker's open writes (#35 slice 4d, rule 9)", async () => {
+    const of = await made(SHAPES['version 8 without themes, holding a note, a setting, and an image']);
+    assert.equal(await newTabOpen(of), null);
+    assert.deepEqual(of.chrome.writes(), [], 'no copy, and no setting');
   });
 
   it('opens a database as it is for Popup and Side Panel: no upgrade, and no database made on a profile without one', async () => {
@@ -676,20 +681,19 @@ describe('a page that finds no database, or an older one, waits on the worker fi
   });
 
   it("the new tab's open wakes the worker below this build's version, waits for its answer at most 5 seconds, then opens what's there (#17 PR 4a)", async () => {
-    // The page's wait, as the new tab's root gives it to #17's adapter (host.js's pageHost)
+    // The page's wait, as the new tab's root gives it to #17's reader (host.js's pageHost)
     assert.equal(MIGRATE_WAIT_MS, 5000);
     /**
-     * #17's adapter as the new tab's root opens it, on `of`, waiting on `runtime` as the page does
+     * #17's reader as the new tab's root opens it, on `of`, waiting on `runtime` as the page does
      * @param {Profile} of
      * @param {{sendMessage: (message: unknown) => Promise<unknown>}} runtime
      * @param {number} [waitMs]
      */
     const opening = (of, runtime, waitMs) =>
-      createNewTabAdapter({
+      createNewTabReader({
         indexedDB: of.faults.factory,
         settings: of.chrome.api.storage.local,
         awaitUpgrade: () => waitForWorkerUpgrade({ runtime, ...(waitMs === undefined ? {} : { waitMs }) }),
-        locks: null,
       });
     /** The versions of `of`'s CanvasTabDB, as it is on disk @param {Profile} of */
     const versionOf = async of => (await legacyEnv.dumpDatabase(of.real)).version;

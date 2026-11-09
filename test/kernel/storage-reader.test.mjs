@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
+import { exportFile, exportObject, readExport } from '../../js/kernel/adapters/indexeddb/backup-file.js';
 import { createIndexedDbReader } from '../../js/kernel/adapters/indexeddb/reader.js';
 import { OPERATIONS_STORE } from '../../js/kernel/adapters/indexeddb/registry-names.js';
 import { DB_VERSION, IDB_STORES } from '../../js/kernel/adapters/indexeddb/schema.js';
@@ -580,6 +581,23 @@ describe("#17's read-only reader (#35 slice 4b-0b)", () => {
       assert.deepEqual(await reader.ledger.read(command), await adapter.ledger.read(command), label);
     }
     assert.deepEqual(await reader.ledger.read({ ...create, name: 'Another' }), { status: 'key-reuse' });
+  });
+
+  it("answers the exports as #17's adapter does once its root passes the export reads, as the new tab's does, and leaves the database as it was (#35 slice 4d)", async () => {
+    const of = await made({
+      records: { canvases: [legacyEnv.note('n1')], elements: [legacyEnv.block('b1', 'n1', 0, 'One')] },
+    });
+    const clock = { now: () => Date.UTC(2026, 10, 8, 9, 0) };
+    const reader = readerOn(of, { exports: { readExport, exportFile, exportObject }, clock });
+    const adapter = adapterOn(of, { mode: 'existing', backups: true, clock });
+    await reader.open();
+    await adapter.open();
+    const before = await legacyEnv.dumpDatabase(of.real);
+    const extra = { backupName: 'Before the move' };
+    assert.deepEqual(await reader.exportBackup?.(extra), await adapter.exportBackup(extra));
+    assert.deepEqual(await reader.exportBackup?.(), await /** @type {any} */ (adapter).exportBackup());
+    assert.deepEqual(await reader.exportData?.(), await adapter.exportData());
+    assert.deepEqual(await legacyEnv.dumpDatabase(of.real), before);
   });
 
   it("answers every read, Popup's queries, every settings read and the ledger as #17's adapter in existing mode does, on every synthesized fixture, and leaves each as it was", async () => {

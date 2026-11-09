@@ -161,17 +161,19 @@ function recoveryCopies(env) {
 }
 
 /**
- * The new tab started on `env`'s profile as its root starts it (#17 PR 4a): #17's adapter, which
- * writes #33's copy before it opens the database, and its one connection, since the Storage
- * global's shell opens none (#17 PR 4b). Answers the state App reads from the adapter, and why
- * the tab can't start, or null.
+ * The new tab started on `env`'s profile as its root started it from #17 PR 4a to #35 slice 4d,
+ * the in-page kernel the tests build (test/helpers/newtab-kernel.mjs): #17's adapter, which
+ * writes #33's copy before it opens the database, as the worker's does since #35 slice 4d, and its
+ * one connection, since the Storage global's shell opens none (#17 PR 4b). Answers the state App
+ * reads from the adapter, and why the tab can't start, or null.
  */
 async function startPage(env) {
   env.load(...STORAGE_FILES);
   const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  const { newTabTestAdapter, newTabTestClient } = await loadPageModule(env, 'test/helpers/newtab-kernel.mjs');
   const host = root.newTabHost();
-  const adapter = root.createNewTabAdapter(host);
-  const client = root.createNewTabClient(adapter);
+  const adapter = newTabTestAdapter(host);
+  const client = newTabTestClient(adapter);
   const failure = plain(await client.whenReady());
   return { state: root.createNewTabStorageState(adapter), failure, adapter, client };
 }
@@ -872,14 +874,16 @@ describe('background capture on a version-8 database', () => {
 });
 
 /**
- * The new tab's kernel and its adapter, as its root makes them from the page's globals (#17's
- * adapter since #17 PR 4a, the tab's one connection since #17 PR 4b), once it's ready
+ * The new tab's kernel and its adapter, as its root made them from the page's globals from #17 PR
+ * 4a to #35 slice 4d (#17's adapter, the tab's one connection since #17 PR 4b), the in-page kernel
+ * the tests build (test/helpers/newtab-kernel.mjs), once it's ready
  */
 async function newTabRootOn(env) {
   const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
+  const { newTabTestAdapter, newTabTestClient } = await loadPageModule(env, 'test/helpers/newtab-kernel.mjs');
   const host = root.newTabHost();
-  const adapter = root.createNewTabAdapter(host);
-  const client = root.createNewTabClient(adapter);
+  const adapter = newTabTestAdapter(host);
+  const client = newTabTestClient(adapter);
   const failure = await client.whenReady();
   assert.equal(failure, null, `the new tab's kernel didn't start: ${JSON.stringify(plain(failure))}`);
   return { root, adapter, client };
@@ -894,13 +898,14 @@ function listed(state) {
 }
 
 /**
- * The database's state App reads, as the new tab's root makes it from its adapter (#17's since
- * #17 PR 4a), which opens the page's database as it is
+ * The database's state App reads, as the new tab's root made it from its adapter from #17 PR 4a
+ * to #35 slice 4d, the in-page kernel's the tests build, which opens the page's database as it is
  * @returns {Promise<{openState: string, missingStores: readonly string[]}>}
  */
 async function storageStateOf(env) {
   const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
-  const adapter = root.createNewTabAdapter(root.newTabHost());
+  const { newTabTestAdapter } = await loadPageModule(env, 'test/helpers/newtab-kernel.mjs');
+  const adapter = newTabTestAdapter(root.newTabHost());
   await adapter.open();
   return root.createNewTabStorageState(adapter);
 }

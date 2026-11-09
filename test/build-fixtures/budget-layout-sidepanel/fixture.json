@@ -1,5 +1,5 @@
 {
-  "rule": "Side Panel's root reads through #17's full adapter again, in place of its read-only reader, so its start loads the adapter chunk (#35 slice 4c, P2, as budget-layout-popup has it for Popup). The fixture names close-drafts-chunk in Side Panel's row, which the adapter chunk's close-drafts-on-demand.js loads with import() from that start, and raises the row in its own build, so its lazy chunks and bytes break no other rule",
+  "rule": "Side Panel's root reads through #17's full adapter again, in place of its read-only reader, so its start loads the adapter chunk (#35 slice 4c, P2, as budget-layout-popup has it for Popup). The fixture raises the row in its own build, so its bytes break no other rule",
   "expect": [
     "budget/layout"
   ],
@@ -14,12 +14,7 @@
     },
     {
       "file": "build/budgets.json",
-      "replace": "\"lazyChunks\": [\"close-drafts-applier\", \"journal-chunk\", \"sidepanel-send-chunk\"]",
-      "with": "\"lazyChunks\": [\"close-drafts-applier\", \"close-drafts-chunk\", \"journal-chunk\", \"sidepanel-send-chunk\"]"
-    },
-    {
-      "file": "build/budgets.json",
-      "replace": "\"js\": { \"raw\": 94600, \"gzip\": 32200 }",
+      "replace": "\"js\": { \"raw\": 73534, \"gzip\": 25555 }",
       "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
     }
   ]

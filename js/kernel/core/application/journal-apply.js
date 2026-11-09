@@ -10,8 +10,9 @@
  * so of two pages starting together the second finds each entry the first applied gone.
  *
  * It runs at a page's start once the journal's chunk (composition/journal-chunk.js) finds an
- * entry for it, from the `close-drafts-chunk` chunk, which the apply's own handler loads anyway
- * (close-drafts-on-demand.js), so a start with nothing to apply loads none of it.
+ * entry for it, from the `close-drafts-chunk` chunk, which the page's start loads anyway to apply
+ * its close-time drafts (composition/close-drafts-applier.js), so a start with nothing to apply
+ * loads none of it.
  *
  * - It takes the entries of pages whose owner lock is free, and leaves its own page's, a live
  *   page's, every one when it can't tell which pages are alive, and each that isn't an editor

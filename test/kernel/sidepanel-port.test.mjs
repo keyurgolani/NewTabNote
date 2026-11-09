@@ -9,7 +9,6 @@ import assert from 'node:assert/strict';
 
 import { inContextStores } from '../../js/kernel/adapters/in-context.js';
 import { waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
-import { createNewTabAdapter, createNewTabClient } from '../../js/kernel/composition/newtab.js';
 import { createSidePanelClient } from '../../js/kernel/composition/sidepanel.js';
 import { MAX_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { committed, unavailable } from '../../js/kernel/core/contracts/outcomes.js';
@@ -19,6 +18,7 @@ import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { settle, testScheduler } from './messaging-support.mjs';
 import { popupWorker } from './popup-worker.mjs';
+import { newTabTestAdapter, newTabTestClient } from '../helpers/newtab-kernel.mjs';
 
 /** @typedef {import('./legacy-fixture.mjs').LegacyContext} LegacyContext */
 /** @typedef {import('./popup-worker.mjs').Handed} Handed */
@@ -37,8 +37,8 @@ const block = (id, canvasId, order, content) => legacyEnv.block(id, canvasId, or
 /** A profile with note A and its blocks a1 and a2, which a new tab made */
 async function profile() {
   const tab = legacyContext();
-  const newtab = createNewTabClient(
-    createNewTabAdapter({
+  const newtab = newTabTestClient(
+    newTabTestAdapter({
       indexedDB: tab.env.indexedDB,
       settings: tab.env.chrome.api.storage.local,
       awaitUpgrade: () => waitForWorkerUpgrade({ runtime: tab.env.chrome.api.runtime }),

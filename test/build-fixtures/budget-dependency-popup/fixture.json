@@ -19,7 +19,7 @@
     },
     {
       "file": "build/budgets.json",
-      "replace": "\"js\": { \"raw\": 97900, \"gzip\": 33000 }",
+      "replace": "\"js\": { \"raw\": 76913, \"gzip\": 26638 }",
       "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
     }
   ]

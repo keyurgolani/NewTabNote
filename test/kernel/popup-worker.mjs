@@ -1,11 +1,13 @@
-// A stand-in for the service worker that Popup's and Side Panel's roots send their writes to (#35
-// slices 4b-2 and 4c), for the kernel tests that build those roots on a legacy-env profile. It is
-// the worker's own port router, installed as js/background.js installs it
+// A stand-in for the service worker that the new tab's, Popup's and Side Panel's roots send their
+// writes to (#35 slices 4b-2, 4c and 4d), for the kernel tests that build those roots on a
+// legacy-env profile. It is the worker's own port router, installed as js/background.js installs it
 // (composition/background.js, installWorkerRouter), on the Chrome fake's runtime
-// (chrome-fake.mjs), with handlers for the pages' two commands, createNote and applyCloseDraft.
-// Each runs on a kernel of the caller's surface, on the shared catalog, over the profile's
-// CanvasTabDB through #17's adapter, so Side Panel's createNote is refused as the worker refuses
-// it. The coordinator's queue is all it leaves out, so it's a stand-in: the worker's own path, its
+// (chrome-fake.mjs), with a handler for every command the worker serves a page
+// (handlers-worker.js, WORKER_PAGE_HANDLERS), each checked on its way in against the worker's own
+// lookup. Each runs on a kernel of the caller's surface, on the shared catalog, over the profile's
+// CanvasTabDB through #17's adapter, which runs the backup tasks as the worker's does, so Side
+// Panel's createNote is refused as the worker refuses it. The coordinator's queue is all it leaves
+// out, so it's a stand-in: the worker's own path, its
 // queue and its kernel per surface, is held by test/kernel/worker-root.test.mjs,
 // test/kernel/worker-router.test.mjs and test/background-coordinator.test.js, and by
 // test/popup-sidepanel.test.js's quick note, which runs js/popup.js against js/background.js
@@ -16,9 +18,7 @@
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { installWorkerRouter } from '../../js/kernel/composition/background.js';
 import { kernelClient } from '../../js/kernel/composition/host.js';
-import { closeDraftCommands } from '../../js/kernel/core/application/close-drafts.js';
-import { handlerTable } from '../../js/kernel/core/application/handlers.js';
-import { noteCommands } from '../../js/kernel/core/application/notes.js';
+import { WORKER_PAGE_HANDLERS } from '../../js/kernel/core/application/handlers-worker.js';
 import { rejected } from '../../js/kernel/core/contracts/outcomes.js';
 import { createChromeFake } from './chrome-fake.mjs';
 
@@ -29,11 +29,6 @@ import { createChromeFake } from './chrome-fake.mjs';
 /** @typedef {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} CoordinatorStatus */
 /** @typedef {import('../../js/kernel/core/messaging/router.js').Dispatch} Dispatch */
 
-/** The pages' two commands, as the worker serves them a page, on the shared catalog */
-const PAGE_COMMANDS = handlerTable({
-  commands: { createNote: noteCommands.createNote, applyCloseDraft: closeDraftCommands.applyCloseDraft },
-});
-
 /**
  * One command a handler was handed: who sent it, by the router's verified caller, and its type
  * and id
@@ -41,15 +36,15 @@ const PAGE_COMMANDS = handlerTable({
  */
 
 /**
- * The stand-in, and a page's runtime to it: popup.html, unless a case names sidepanel.html, on
- * the same fake, whose first send starts the worker
+ * The stand-in, and a page's runtime to it: popup.html, unless a case names sidepanel.html or
+ * newtab.html, on the same fake, whose first send starts the worker
  * @param {{
  *   indexedDB: IDBFactory,
  *   settings: SettingsStore,
  *   status?: () => CoordinatorStatus,
  *   before?: (handed: Handed) => unknown,
  *   answer?: (handed: Handed) => Outcome | undefined,
- *   page?: 'popup' | 'sidepanel',
+ *   page?: 'popup' | 'sidepanel' | 'newtab',
  * }} profile - `status`: what each welcome says, ready unless a case says otherwise. `before`:
  *   what a handler awaits once it's handed a command, before it begins it. `answer`: what a
  *   handler answers in the kernel's place, for a command it gives an answer
@@ -60,20 +55,20 @@ export function popupWorker({ indexedDB, settings, status, before, answer, page:
   const frames = [];
   /** @type {Handed[]} */
   const handed = [];
-  const adapter = createIndexedDbAdapter({ indexedDB, settings, mode: 'existing' });
+  const adapter = createIndexedDbAdapter({ indexedDB, settings, mode: 'existing', backups: true });
   /** @type {Map<Surface, Client>} each caller surface's kernel, on the one adapter */
   const kernels = new Map();
   /** @param {Surface} surface */
   const kernelOf = surface => {
     let kernel = kernels.get(surface);
     if (!kernel) {
-      kernel = kernelClient({ adapter, surface, handlers: PAGE_COMMANDS });
+      kernel = kernelClient({ adapter, surface, handlers: WORKER_PAGE_HANDLERS });
       kernels.set(surface, kernel);
     }
     return kernel;
   };
   /**
-   * A handler for either command, as the router calls it
+   * A handler for any of them, as the router calls it
    * @param {unknown} payload
    * @param {Dispatch} context
    */
@@ -99,7 +94,9 @@ export function popupWorker({ indexedDB, settings, status, before, answer, page:
       runtime: chrome.runtime,
       coordinatorId: 'coordinator-stand-in',
       ...(status ? { status } : {}),
-      handlers: Object.freeze({ createNote: serve, applyCloseDraft: serve }),
+      handlers: Object.freeze(
+        Object.fromEntries(Object.keys(WORKER_PAGE_HANDLERS.commands).map(type => [type, serve])),
+      ),
     });
   });
   const page = fake.page(which);

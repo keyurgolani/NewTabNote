@@ -1,48 +1,32 @@
 /**
- * The new tab's table (handlers.js): the part the catalog allows on the new tab of every handler
- * the page and its storage maintenance run, since the new tab sends nearly every command and
- * query. The close-time drafts' apply loads its handler at its first use
- * (close-drafts-on-demand.js), as on Popup and Side Panel, so the new tab's start holds none of
- * the applier (#33). The service worker's own handlers aren't here: its capture (capture.js), its
- * journal drain's (journal.js, #35 slice 3), the records' catch-up (record-catch-up.js) and the
- * integrity check's command (integrity-check.js, #35 slice 3c). A spread here would put one on the
- * new tab's start even where the catalog's filter drops it at run time, so the start loads none of
- * them, and handlers-all.js adds them to the table the tests run on.
+ * The new tab's table (handlers.js), since its writes go to the worker (#35 slice 4d): every query
+ * the catalog allows on the new tab, which it runs in the page on #17's read-only reader, and its
+ * workspace session's write, the one command that commits in the page (rule 2), since the list names
+ * #17's session-state keys in-context (docs/architecture/committers.json). Every other command goes
+ * to the worker over #13's port, through the send chunk (composition/newtab-send-chunk.js), and runs
+ * there on the worker's page table (handlers-worker.js), so the new tab's start holds none of their
+ * handlers. Its startup maintenance is the worker's now (rule 8), and the close-time drafts' apply
+ * sends applyCloseDraft to the worker, as Popup's and Side Panel's do.
  */
 
-import { applyCloseDraftOnDemand } from './close-drafts-on-demand.js';
-import { folderCommands, folderQueries } from './folders.js';
+import { folderQueries } from './folders.js';
 import { forSurface, handlerTable } from './handlers.js';
-import { indexCommands, indexQueries } from './indexing.js';
-import { jobCommands, jobQueries } from './jobs.js';
-import { maintenanceCommands } from './maintenance.js';
-import { bulkRefusal, noteCommands, noteQueries } from './notes.js';
-import { preferenceCommands, preferenceQueries } from './preferences.js';
-import { remoteChangesRefusal, remoteCommands } from './remote.js';
+import { indexQueries } from './indexing.js';
+import { jobQueries } from './jobs.js';
+import { noteQueries } from './notes.js';
+import { preferenceQueries } from './preferences.js';
 import { sessionCommands, sessionQueries } from './session.js';
-import { snapshotCommands, snapshotQueries } from './snapshots.js';
-import { workspaceDataCommands, workspaceDataQueries } from './workspace-data.js';
+import { snapshotQueries } from './snapshots.js';
+import { workspaceDataQueries } from './workspace-data.js';
 
 /** @typedef {import('./handlers.js').HandlerTable} HandlerTable */
 
 /**
- * Every handler the new tab's start holds: all but the service worker's own
+ * Every handler the new tab's start holds: its queries, and its session's write
  * @type {HandlerTable}
  */
 export const CONTEXT_HANDLERS = handlerTable({
-  commands: {
-    ...noteCommands,
-    applyCloseDraft: applyCloseDraftOnDemand,
-    ...folderCommands,
-    ...preferenceCommands,
-    ...sessionCommands,
-    ...maintenanceCommands,
-    ...jobCommands,
-    ...snapshotCommands,
-    ...workspaceDataCommands,
-    ...indexCommands,
-    ...remoteCommands,
-  },
+  commands: { ...sessionCommands },
   queries: {
     ...noteQueries,
     ...folderQueries,
@@ -53,8 +37,7 @@ export const CONTEXT_HANDLERS = handlerTable({
     ...workspaceDataQueries,
     ...indexQueries,
   },
-  refusals: { runBulkAction: bulkRefusal, applyRemoteChanges: remoteChangesRefusal },
 });
 
-/** The new tab's: every handler the catalog allows on the new tab */
+/** The new tab's: every query the catalog allows on the new tab, and its session's write */
 export const NEWTAB_HANDLERS = forSurface(CONTEXT_HANDLERS, 'newtab');

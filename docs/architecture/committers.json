@@ -4,13 +4,6 @@
   "writeAdapter": "js/kernel/adapters/indexeddb/adapter.js",
   "untilMoved": [
     {
-      "root": "newtab",
-      "builds": "js/kernel/composition/newtab.js",
-      "writes": "CanvasTabDB and its settings, through #17's adapter, for the new tab and the PiP editor in its realm",
-      "owner": 35,
-      "removeWhen": "#35 slice 4d moves the new tab's and PiP's writes onto #13's port"
-    },
-    {
       "root": "recovery",
       "builds": "js/kernel/composition/recovery.js",
       "writes": "CanvasTabDB and its settings, through #17's adapter, for #20's Trust Center and Recovery Center, rebuild-index's inline write included",
@@ -36,15 +29,15 @@
     },
     {
       "file": "js/kernel/composition/host.js",
-      "writes": "chrome.storage.local, through its settings handles: #11's and #19's holder settings and #17's session-state keys, with #17's adapter's settings until each page moves",
+      "writes": "chrome.storage.local, through its settings handles: #11's and #19's holder settings and #17's session-state keys, which the new tab's root commits itself (#35 slice 4d), with #17's adapter's settings on recovery.html until it moves",
       "owner": 17
     }
   ],
   "reads": [
     {
       "file": "js/kernel/adapters/indexeddb/connection.js",
-      "roots": ["popup", "sidepanel"],
-      "why": "Popup and Side Panel read through #17's read-only reader (reader.js), whose open in existing mode makes and upgrades nothing: its indexedDB.open is the one write the scan sees; their writes go to the worker over #13's port (#35 slices 4b-2 and 4c)",
+      "roots": ["popup", "sidepanel", "newtab"],
+      "why": "Popup, Side Panel and the new tab read through #17's read-only reader (reader.js), whose open in existing mode makes and upgrades nothing: its indexedDB.open is the one write the scan sees; their writes go to the worker over #13's port (#35 slices 4b-2, 4c and 4d), all but the new tab's session-state keys, which host.js's handles write",
       "owner": 35
     },
     {

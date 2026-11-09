@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { CODES } = require('../scripts/build/diagnostics.js');
 const os = require('node:os');
-const { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, CANARY_NAMES } = require('../scripts/build/verify-fixtures.js');
+const { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, liftByteRows, CANARY_NAMES } = require('../scripts/build/verify-fixtures.js');
 const { checkSecurityBaseline, firstPartyScripts, SOURCES, CHANGES_FILE } = require('../scripts/build/security-baseline.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -60,6 +60,37 @@ describe('test/build-fixtures/', () => {
         assert.equal(text.split(edit.replace).length, 2, `${fixture.name}: ${edit.file} doesn't hold ${JSON.stringify(edit.replace)} exactly once`);
       }
     }
+  });
+
+  it("lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)", () => {
+    const bytes = fixtures.filter((fixture) => (fixture.expect || []).includes('budget/bytes')).map((fixture) => fixture.name);
+    assert.deepEqual(bytes.sort(), ['budget-bytes', 'budget-start-chunk']);
+    for (const fixture of fixtures) {
+      // The copy's build/budgets.json alone, with the fixture's own edits to it
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-fixture-rows-'));
+      try {
+        fs.mkdirSync(path.join(dir, 'build'));
+        fs.copyFileSync(path.join(ROOT, 'build', 'budgets.json'), path.join(dir, 'build', 'budgets.json'));
+        applyEdits(dir, (fixture.edits || []).filter((edit) => edit.file === 'build/budgets.json'));
+        const edited = fs.readFileSync(path.join(dir, 'build', 'budgets.json'), 'utf8');
+        const lifted = liftByteRows(dir, fixture);
+        const text = fs.readFileSync(path.join(dir, 'build', 'budgets.json'), 'utf8');
+        if (bytes.includes(fixture.name) || fixture.name === 'budget-file') {
+          // A bytes fixture builds against the real rows, and budget-file's file doesn't parse, its rule
+          assert.equal(lifted, false, fixture.name);
+          assert.equal(text, edited, `${fixture.name} keeps its copy's rows`);
+          continue;
+        }
+        assert.equal(lifted, true, fixture.name);
+        const rows = Object.values(JSON.parse(text).entries).flatMap((entry) => Object.values(entry.start || {})).filter(Boolean);
+        assert.ok(rows.length >= 3, `${fixture.name}: the pages' rows`);
+        for (const row of rows) assert.deepEqual(row, { raw: 2097152, gzip: 1048576 }, fixture.name);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    // The real tree's rows stay as they are
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'budgets.json'), 'utf8')).entries.newtab.start.js, { raw: 667874, gzip: 188741 });
   });
 
   it("a fixture that sets securityEntry is one for another rule, and its entry records the edited tree", () => {

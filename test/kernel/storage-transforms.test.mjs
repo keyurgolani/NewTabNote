@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
 import { exportPoint } from '../../js/kernel/adapters/indexeddb/legacy-export.js';
-import { createNewTabAdapter } from '../../js/kernel/composition/newtab.js';
+import { newTabTestAdapter } from '../helpers/newtab-kernel.mjs';
 import {
   DEFAULT_LIMITS,
   POINTS_LOCK,
@@ -300,13 +300,13 @@ function filledNote(before) {
 }
 
 /**
- * #17's adapter over `of` as the new tab's root opens it since #17 PR 4a (createNewTabAdapter):
+ * #17's adapter over `of` as the new tab's root opened it from #17 PR 4a to #35 slice 4d (newTabTestAdapter):
  * the database as it is, with its maintenance, #33's copy and the backup tasks, and no wait on
  * the worker, whose run the case has already run or left out
  * @param {Profile} of
  */
 function newTabAdapterOn(of) {
-  return createNewTabAdapter({
+  return newTabTestAdapter({
     indexedDB: of.faults.factory,
     settings: of.chrome.api.storage.local,
     awaitUpgrade: async () => {},

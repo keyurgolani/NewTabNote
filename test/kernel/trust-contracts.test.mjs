@@ -330,12 +330,10 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
     assert.ok(!newtab.includes('js/kernel/composition/trust-status-ask.js'));
     assert.ok(!newtab.includes('js/kernel/composition/trust-status.js'));
     // The tab's import()s: the root's of the workspace chunk, the loader's retry, the failure
-    // events' own, of ./trust.js, the close-time drafts' two: the start's of
-    // close-drafts-applier.js, when localStorage gives it work, and applyCloseDraft's wrapper's
-    // of close-drafts-chunk.js, at first use (#33, option 1), the root's of the journal's chunk,
-    // on the first journaled command or at idle (#35 slice 3b), and App's two: the status read's
-    // ask, first in its deferred work (#20 slice 4c), and the block menus' keys, at a menu's first
-    // open (#14 slice 4)
+    // events' own, of ./trust.js, the start's of close-drafts-applier.js, when localStorage gives
+    // it work (#33, option 1), the root's of its send chunk, which holds the journal's, at its
+    // first command or at idle (#35 slice 4d), and App's two: the status read's ask, first in its
+    // deferred work (#20 slice 4c), and the block menus' keys, at a menu's first open (#14 slice 4)
     const dynamic = dynamicImportsIn(newtab.map(file => path.join(ROOT, file)))
       .map(at => path.relative(ROOT, at).split(path.sep).join('/').replace(/:\d+:\d+$/, ''))
       .sort();
@@ -346,17 +344,15 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
       'js/kernel/composition/lazy-failure-events.js',
       'js/kernel/composition/newtab.js',
       'js/kernel/composition/newtab.js',
-      'js/kernel/core/application/close-drafts-on-demand.js',
       'js/runtime/lazy.js',
     ]);
     const source = fs.readFileSync(path.join(ROOT, 'js', 'kernel', 'composition', 'lazy-failure-events.js'), 'utf8');
     assert.ok(source.includes("import('./trust.js')"));
     // Each close-time drafts' import() loads the chunk and nothing else, as the root's import() of
-    // the journal's chunk does, and what each chunk reaches, through its imports and import()s,
-    // holds no trust code
+    // its send chunk does, and what each chunk reaches, through its imports and import()s, holds
+    // no trust code
     for (const [file, specifiers] of /** @type {Array<[string, string[]]>} */ ([
-      ['js/kernel/composition/newtab.js', ['./close-drafts-applier.js', './journal-chunk.js']],
-      ['js/kernel/core/application/close-drafts-on-demand.js', ['./close-drafts-chunk.js']],
+      ['js/kernel/composition/newtab.js', ['./close-drafts-applier.js', './newtab-send-chunk.js']],
       // The forget beside the applier loads the journal's chunk, for a draft that names its pane (#6)
       ['js/kernel/composition/close-drafts-applier.js', ['./journal-chunk.js']],
       ['js/app.js', ['./kernel/composition/trust-status-ask.js', './ui/menu-keys.js']],
@@ -398,6 +394,7 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
       'js/kernel/composition/close-drafts-applier.js',
       'js/kernel/core/application/close-drafts-chunk.js',
       'js/kernel/composition/journal-chunk.js',
+      'js/kernel/composition/newtab-send-chunk.js',
     ]) {
       const graph = reachGraph([path.join(ROOT, ...chunk.split('/'))]);
       const reached = [...graph.modules].map(file => path.relative(ROOT, file).split(path.sep).join('/'));

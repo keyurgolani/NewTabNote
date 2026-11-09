@@ -75,7 +75,7 @@ async function startReads() {
   const { createIndexedDbAdapter } = await import('/js/kernel/adapters/indexeddb/adapter.js');
   const { pendingStructural } = await import('/js/kernel/adapters/indexeddb/registry.js');
   const { createKernel } = await import('/js/kernel/core/application/kernel.js');
-  const { NEWTAB_HANDLERS } = await import('/js/kernel/core/application/handlers-all.js');
+  const { WORKER_PAGE_HANDLERS } = await import('/js/kernel/core/application/handlers-worker.js');
   const { createBaselinePolicy } = await import('/js/kernel/core/ports/policy.js');
   const deadline = Date.now() + 5_000;
   const db = await new Promise((resolve, reject) => {
@@ -152,11 +152,14 @@ async function startReads() {
   });
   await adapter.open();
   let count = 0;
+  // And the kernel on it for the worker's kernel of the new tab, on the worker's page table, where
+  // the new tab's commands run since #35 slice 4d (composition/background.js), so its createNote
+  // runs on the adapter as the new tab's does
   const kernel = createKernel({
     adapter,
     policy: createBaselinePolicy(),
     caller: { surface: 'newtab', contextId: 'connection-closing' },
-    handlers: NEWTAB_HANDLERS,
+    handlers: WORKER_PAGE_HANDLERS,
     ids: { next: () => `pin-${Date.now()}-${(count += 1)}` },
     clock: { now: () => Date.now() },
   });

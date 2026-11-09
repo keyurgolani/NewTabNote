@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 
+import { NEWTAB_SENDS } from '../../js/kernel/composition/newtab-send-chunk.js';
 import { POPUP_SENDS } from '../../js/kernel/composition/popup-send-chunk.js';
 import { SIDEPANEL_SENDS } from '../../js/kernel/composition/sidepanel-send-chunk.js';
 import { ALL_HANDLERS, NEWTAB_HANDLERS } from '../../js/kernel/core/application/handlers-all.js';
@@ -74,8 +75,8 @@ const APPLIER_MODULES =
  * the kernel itself (kernel.js, maintain), and whether it writes notes, so its root applies a
  * closing tab's edits and journals what it sends (#33, #35 slice 3b). recovery.html reads only
  * its theme through its kernel, so it does neither (#20 slice 4b). `sends` looks up the commands a
- * page's root sends the worker over #13's port, not its kernel, as Popup's and Side Panel's do
- * (#35 slices 4b-2 and 4c). `forPages` is the worker's table for its kernels of a page's surface,
+ * page's root sends the worker over #13's port, not its kernel, as Popup's, Side Panel's and the
+ * new tab's do (#35 slices 4b-2, 4c and 4d). `forPages` is the worker's table for its kernels of a page's surface,
  * which run what pages send it over the port (#35 slice 4d): what the worker's code sends that only
  * that table holds, as the remote apply's parts, runs there.
  * @type {ReadonlyArray<{page: string, entries: string[], surface: Surface, table: HandlerTable, sends?: (type: string) => unknown, forPages?: HandlerTable, maintains: boolean, writesNotes: boolean}>}
@@ -113,7 +114,8 @@ const PAGES = [
     entries: ['js/entries/newtab.js'],
     surface: 'newtab',
     table: NEWTAB_HANDLERS,
-    maintains: true,
+    sends: NEWTAB_SENDS,
+    maintains: false,
     writesNotes: true,
   },
   {
@@ -383,12 +385,23 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
         `${page} sends what its table and its sends to the worker don't hold`,
       );
       if (surface === 'newtab') {
-        // The new tab's facade sends types the scan can't read, so its table holds every one
-        // the catalog allows there
-        assert.deepEqual(
-          [...registered(table)].sort(),
-          [...CATALOG_TYPES].filter(type => allowedOn(type, 'newtab', table)).sort(),
+        // The new tab's facade sends types the scan can't read, so its table and its sends to the
+        // worker hold every one the catalog allows there but startup maintenance, the worker's own
+        // (#35 slice 4d, G2): its queries and its session's write in its table, which it commits
+        // itself, and every other command in its sends
+        const allowed = [...CATALOG_TYPES].filter(
+          type => allowedOn(type, 'newtab', table) && type !== 'runStartupMaintenance',
         );
+        assert.deepEqual(
+          allowed.filter(type => registered(table).has(type) === !!sends?.(type)),
+          [],
+          'each in one of the two',
+        );
+        assert.deepEqual(
+          [...registered(table)].filter(type => !allowed.includes(type)),
+          [],
+        );
+        assert.deepEqual(Object.keys(table.commands), ['saveWorkspaceSession'], 'its one command in the page');
       } else {
         assert.deepEqual(unread, [], `${page} sends what the scan can't read`);
       }
@@ -428,6 +441,37 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       sent.filter(type => COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)].journaled),
       [],
       'a journaled one would need the journal on the client session, as Popup has it',
+    );
+  });
+
+  it("the new tab's start runs no startup maintenance: its kernel doesn't maintain, and its table and its sends to the worker hold no runStartupMaintenance (#35 slice 4d, rule 8, R17)", async () => {
+    const { NEWTAB_SENDS } = await import('../../js/kernel/composition/newtab-send-chunk.js');
+    assert.equal(PAGES.find(row => row.surface === 'newtab')?.maintains, false, 'its kernel maintains nothing');
+    assert.equal(registered(NEWTAB_HANDLERS).has('runStartupMaintenance'), false, 'its table');
+    assert.equal(NEWTAB_SENDS('runStartupMaintenance'), undefined, 'its sends');
+  });
+
+  it("the new tab's send lookup holds, for each command the worker's lookup holds for the new tab, the catalog's entry and the worker's result schema, and no payload schema (#35 slice 4d, S4, R23)", async () => {
+    const { NEWTAB_SENDS } = await import('../../js/kernel/composition/newtab-send-chunk.js');
+    const { PAGE_OPERATIONS } = await import('../../js/kernel/composition/page-operations.js');
+    const served = Object.entries(PAGE_OPERATIONS).filter(([, operation]) =>
+      operation.entry.surfaces.includes('newtab'),
+    );
+    assert.ok(served.length > 0);
+    for (const [type, operation] of served) {
+      const sent = /** @type {any} */ (NEWTAB_SENDS(type));
+      assert.ok(sent, `${type} is sent`);
+      assert.equal(sent.entry, COMMANDS[/** @type {keyof typeof COMMANDS} */ (type)], `${type}: the catalog's entry`);
+      assert.equal(sent.result, operation.result, `${type}: the worker's result schema`);
+      assert.equal(sent.payload, undefined, `${type}: no payload schema`);
+    }
+  });
+
+  it("the new tab's sends to the worker hold commands alone, so its reads stay on its reader (#35 slice 4d, G3)", async () => {
+    const { NEWTAB_SENDS } = await import('../../js/kernel/composition/newtab-send-chunk.js');
+    assert.deepEqual(
+      [...WORKER_QUERY_TYPES].filter(type => NEWTAB_SENDS(type)),
+      [],
     );
   });
 
@@ -586,7 +630,8 @@ describe("each page's kernel registers what its page sends (#17 PR 4b)", () => {
       'js/kernel/core/domain/close-draft.js',
       'js/kernel/core/domain/recovered-note.js',
     ]);
-    // And the new tab still loads all five, at its first apply (close-drafts-on-demand.js)
+    // And the new tab still loads all five, for its start's apply, which reads the drafts and
+    // sends each to the worker (close-drafts-applier.js)
     const newtab = pageModules(['js/entries/newtab.js']).map(file => path.relative(ROOT, file));
     assert.equal(newtab.filter(file => APPLIER_MODULES.test(file)).length, 5);
   });

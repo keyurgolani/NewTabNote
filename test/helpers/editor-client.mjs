@@ -1,16 +1,16 @@
 // The document client a test page's editors read and write through: a new tab's kernel on #17's
-// adapter, opened as js/kernel/composition/newtab.js's root opens it since #17 PR 4a, once the
-// worker's run has had its turn, as the root waits on it (legacy-env answers it). The narrow
-// handles NotesManager, GraphView and SyncService take are the root's, on the same kernel (#17 PR
-// 4b). test/helpers/legacy-env.js loads it into the page with test/helpers/page-module.js, so
-// the kernel runs in the page as it does in Chrome.
+// adapter in the page, the in-page kernel the tests build (newtab-kernel.mjs, #35 slice 4d's Q10),
+// opened as js/kernel/composition/newtab.js's root opened it before its writes went to the worker,
+// once the worker's run has had its turn, as the root waits on it (legacy-env answers it). The
+// narrow handles NotesManager, GraphView and SyncService take are the root's, on the same kernel
+// (#17 PR 4b). test/helpers/legacy-env.js loads it into the page with test/helpers/page-module.js,
+// so the kernel runs in the page as it does in Chrome.
 
 import { closeDraftWriter } from '../../js/kernel/composition/close-draft-writer.js';
 import { createDocumentClient } from '../../js/kernel/composition/document.js';
 import { chromeSettingsChanges, waitForWorkerUpgrade } from '../../js/kernel/composition/host.js';
 import {
   connectNewTabStorage,
-  createNewTabAdapter,
   createNewTabBackupCheck,
   createNewTabLegacyStores,
   createNewTabNoteList,
@@ -20,6 +20,7 @@ import {
 import { createNoteRemoval } from '../../js/kernel/composition/removal.js';
 import { createSettingsClient } from '../../js/kernel/composition/settings.js';
 import { createKernel } from '../kernel/test-kernel.mjs';
+import { newTabTestAdapter } from './newtab-kernel.mjs';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
 
@@ -55,7 +56,7 @@ import { legacyIds, systemClock } from '../../js/kernel/core/ports/runtime.js';
  */
 export function pageClientsFor({ settings, onListQuery = () => {}, kernelNow, pageNow, zone, onExecute, through }) {
   // The page waits on the worker's run first, as the new tab's root does
-  const adapter = createNewTabAdapter({
+  const adapter = newTabTestAdapter({
     indexedDB: globalThis.indexedDB,
     settings,
     awaitUpgrade: () => waitForWorkerUpgrade({ runtime: /** @type {any} */ (globalThis).chrome?.runtime }),

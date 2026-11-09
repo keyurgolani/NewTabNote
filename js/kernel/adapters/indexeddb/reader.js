@@ -3,8 +3,10 @@
  * once its writes go to the worker (4b-2 on). It opens the database as it is, as #17's adapter's
  * `existing` mode does, with no registry steps, so it never makes a database or upgrades one
  * (connection.js). It reads through the read view #17's adapter reads through (reads.js), with a
- * tracker for a read alone. It holds nothing that writes: no commit, no recall, no export, and no
- * module the architecture list (docs/architecture/committers.json) gives the role `writer`.
+ * tracker for a read alone. It holds nothing that writes: no commit, no recall, and no module the
+ * architecture list (docs/architecture/committers.json) gives the role `writer`. It exports only
+ * when its root passes the export reads (backup-file.js), which write nothing either: the new
+ * tab's does, once its writes go to the worker (#35 slice 4d).
  *
  * Its failure mapping, read, readSettings and readIdbSettings are copies of #17's adapter's, so a
  * page's start keeps the adapter as it is (the lead's ruling, amending 4b-0b's 2d). Each copy
@@ -15,6 +17,7 @@
 
 import { UnavailableError } from '../../core/contracts/outcomes.js';
 import { IDB_SETTINGS_KEYS } from '../../core/ports/repository.js';
+import { systemClock } from '../../core/ports/runtime.js';
 import { createConnection } from './connection.js';
 import { failureOf, nameOf, settingsFailureOf } from './failures.js';
 import { createIndexedDbLedger } from './ledger.js';
@@ -41,6 +44,19 @@ import { settingKey } from './settings.js';
  * @property {(() => Promise<unknown>) | null} [awaitUpgrade]
  *   What the open waits on first when there's no database or an older one: a page's wait on the
  *   worker's migration run (connection.js)
+ * @property {ExportReads | null} [exports]
+ *   The export reads (backup-file.js), which only the new tab's root passes (#35 slice 4d): with
+ *   them the reader answers exportBackup and exportData on its connection, as #17's adapter does,
+ *   so Popup's and Side Panel's starts carry no export code
+ * @property {{now(): number}} [clock] - what an export's time reads, the system's unless a test passes one
+ */
+
+/**
+ * The export reads a reader runs, backup-file.js's, which write nothing
+ * @typedef {object} ExportReads
+ * @property {typeof import('./backup-file.js').readExport} readExport
+ * @property {typeof import('./backup-file.js').exportFile} exportFile
+ * @property {typeof import('./backup-file.js').exportObject} exportObject
  */
 
 /**
@@ -59,6 +75,10 @@ import { settingKey } from './settings.js';
  * @property {<T>(stores: StoreName[], body: (tx: ReadTx) => Promise<T>) => Promise<T>} read
  * @property {(area: ReadableSettingsArea, keys: readonly string[]) => Promise<Record<string, unknown>>} readSettings
  * @property {IdempotencyLedger} ledger - #13's ledger over the records #17's adapter keeps
+ * @property {(extra?: Record<string, unknown>) => Promise<Blob>} [exportBackup]
+ *   Export JSON's file, with the export reads alone
+ * @property {() => Promise<import('../../core/ports/repository.js').ExportData>} [exportData]
+ *   The export as one object, what sync uploads, with the export reads alone
  */
 
 /**
@@ -66,7 +86,15 @@ import { settingKey } from './settings.js';
  * @param {IndexedDbReaderOptions} options
  * @returns {IndexedDbReader}
  */
-export function createIndexedDbReader({ indexedDB, settings, openWithinMs, requireCore, awaitUpgrade }) {
+export function createIndexedDbReader({
+  indexedDB,
+  settings,
+  openWithinMs,
+  requireCore,
+  awaitUpgrade,
+  exports = null,
+  clock = systemClock,
+}) {
   /** @type {OpenMode} */
   const mode = 'existing';
   const connection = createConnection({ indexedDB, mode, openWithinMs, requireCore, awaitUpgrade });
@@ -155,6 +183,28 @@ export function createIndexedDbReader({ indexedDB, settings, openWithinMs, requi
     return values;
   };
 
+  // A copy of adapter.js's exported, its twin, but for its backups check: the export reads are
+  // there only when the root passed them
+  /**
+   * @template T
+   * @param {(db: IDBDatabase) => Promise<T>} read
+   * @returns {Promise<T>}
+   */
+  const exported = async read => {
+    /** @type {IDBDatabase} */
+    let db;
+    try {
+      db = connection.database();
+    } catch (error) {
+      throw startFailure(error);
+    }
+    try {
+      return await read(db);
+    } catch (error) {
+      throw failureIn(error);
+    }
+  };
+
   return Object.freeze({
     name: 'indexeddb-reader',
     mode,
@@ -218,5 +268,23 @@ export function createIndexedDbReader({ indexedDB, settings, openWithinMs, requi
     },
 
     ledger: createIndexedDbLedger({ database, failure: failureIn }),
+
+    // The new tab's export reads, when its root passes them (#35 slice 4d): copies of adapter.js's
+    // exportBackup and exportData, their twins, on this connection.
+    // storage-reader.test.mjs's "answers the exports as #17's adapter does" holds the two to one
+    // answer, so change them together.
+    ...(exports
+      ? {
+          /** @param {Record<string, unknown>} [extra] */
+          exportBackup: (extra = {}) =>
+            exported(db =>
+              exports.readExport(db, { conflicts: true }).then(rows => exports.exportFile(rows, clock.now(), extra)),
+            ),
+          exportData: () =>
+            /** @type {Promise<import('../../core/ports/repository.js').ExportData>} */ (
+              exported(db => exports.readExport(db).then(rows => exports.exportObject(rows, clock.now())))
+            ),
+        }
+      : {}),
   });
 }

@@ -894,7 +894,7 @@ export function createIndexedDbAdapter({
     }
     try {
       if (task.action === 'auto') {
-        await createAutoBackup({ db, settings: backupStore, clock });
+        await createAutoBackup({ db, settings: backupStore, clock, live });
         return { outcome: work.done(), replayed: false };
       }
       if (task.mode === 'replace') {

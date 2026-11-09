@@ -1,0 +1,21 @@
+{
+  "rule": "the new tab's root reads through #17's full adapter again, in place of its read-only reader, so its start loads the adapter chunk, which no page's start may now that the new tab reads through #17's reader too (#35 slice 4d, P2, as budget-layout-popup has it for Popup). The fixture raises the row in its own build, so its bytes break no other rule",
+  "expect": [
+    "budget/layout"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "js/kernel/composition/newtab.js",
+      "replace": "import { createIndexedDbReader } from '../adapters/indexeddb/reader.js';",
+      "with": "import { createIndexedDbAdapter as createIndexedDbReader } from '../adapters/indexeddb/adapter.js';"
+    },
+    {
+      "file": "build/budgets.json",
+      "replace": "\"js\": { \"raw\": 667874, \"gzip\": 188741 }",
+      "with": "\"js\": { \"raw\": 2097152, \"gzip\": 1048576 }"
+    }
+  ]
+}

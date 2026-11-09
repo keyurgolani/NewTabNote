@@ -2499,35 +2499,24 @@ describe('BlockEditor when the page has to reload (#12)', () => {
     assert.ok(editor.root.querySelector('.reload-notice'), 'the reload notice says so');
   });
 
-  it('a save under way when another context upgrades is reported saved, and the next edit gets the notice', async () => {
+  it("a save answered reload-required is never taken as stored, though the connection was open as it began: the editor shows the reload notice, not Saved, since over the port nothing went (#35 slice 4d, rule 12, R6)", async () => {
     const { env, editor, feedback } = await newTabOnA();
-    // The upgrade comes in the same task the save opens its transaction in
-    const client = env.documentClient;
-    const realSave = client.saveContent;
-    let upgraded = null;
-    client.saveContent = (save) => {
-      const answer = realSave(save);
-      client.saveContent = realSave;
-      upgraded = upgradeElsewhere(env);
-      return answer;
-    };
-    type(editor, 'typed and saving as the upgrade comes');
-    env.clock.tick(500);
-    env.frames();
-    await runUntil(env, editor.flushSave());
-    await upgraded;
-    assert.equal(env.adapter.openState(), 'version-changed');
+    // The page's writes can't reach the worker, as when its send chunk can't load
+    env.documentClient.saveContent = async () => ({
+      kind: 'unavailable',
+      cause: 'coordinator',
+      code: 'reload-required',
+      retryable: false,
+    });
+    assert.equal(env.adapter.openState(), 'open');
+    type(editor, 'typed as the writes went');
+    assert.equal(await runUntil(env, editor.flushSave()), false);
 
-    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed and saving as the upgrade comes' });
-    assert.equal(feedback.statuses.at(-1), 'Saved', 'what was stored is not reported as unsaved');
-    assert.ok(editor.root.querySelector('.reload-notice') === null, 'no reload notice');
-    assert.equal(editor._retryPending, false);
-
-    type(editor, 'typed after it');
-    await runUntil(env, editor.flushSave());
-    assert.ok(editor.root.querySelector('.reload-notice'));
+    assert.ok(editor.root.querySelector('.reload-notice'), 'the reload notice shows');
     assert.equal(feedback.statuses.at(-1), 'Not saved');
-    assert.equal(editor._retryPending, false);
+    assert.equal(feedback.statuses.includes('Saved'), false, 'never Saved');
+    assert.equal(editor._retryPending, false, 'and nothing retries');
+    assert.equal(editor.blocks[0].content, 'typed as the writes went', 'the text stays on screen');
   });
 
   it('switching notes after another context upgraded keeps the note on screen and shows the reload notice', async () => {
@@ -2580,5 +2569,149 @@ describe('BlockEditor when the page has to reload (#12)', () => {
 
     notice.querySelector('.note-gone-btn').click();
     assert.deepEqual(navigation.calls.filter(([method]) => method === 'reloadPage'), [['reloadPage']]);
+  });
+});
+
+describe('BlockEditor on the answers only the port gives a save (#35 slice 4d)', () => {
+  let env;
+  let editor;
+
+  beforeEach(async () => {
+    // As setup() starts it, with no frozen 1.4.1 Storage beside it: these cases read what's stored
+    // from the database itself, so the mutant review's copy of the tree, which holds no release
+    // files, runs them
+    env = createLegacyEnv();
+    await createDatabase(env.indexedDB, {
+      records: { canvases: [note('A'), note('B')], elements: [block('a1', 'A', 0, 'alpha'), block('b1', 'B', 0, 'bravo')] },
+    });
+    env.load(...FILES);
+    await startEditorClient(env);
+    editor = makeEditor(env);
+    await editor.loadNote('A');
+  });
+
+  /**
+   * The page's next `times` saves answer `answer`, as the worker's over the port, and the rest go
+   * to the page's kernel. `calls` counts them all.
+   */
+  function answering(answer, times) {
+    const client = env.documentClient;
+    const real = client.saveContent;
+    const counted = { calls: 0 };
+    let left = times;
+    client.saveContent = (save, options) => {
+      counted.calls += 1;
+      if (left > 0) {
+        left -= 1;
+        return Promise.resolve(answer);
+      }
+      return real(save, options);
+    };
+    return counted;
+  }
+
+  /** Runs the page's frames until `check` holds, a few hundred rounds at most */
+  async function framesUntil(check) {
+    for (let round = 0; round < 400 && !check(); round++) {
+      env.frames();
+      await settle(2);
+    }
+    return check();
+  }
+
+  /** Runs the page's frames for a few rounds, so what's due goes */
+  async function rounds(count = 20) {
+    for (let round = 0; round < count; round++) {
+      env.frames();
+      await settle(2);
+    }
+  }
+
+  it("waits calmly on a save answered migrating, with no toast or notice, and goes again every few seconds until it commits (rule 18, S7, R22)", async () => {
+    const { statuses, toasts } = watchFeedback(env, editor);
+    const migrating = answering({ kind: 'unavailable', cause: 'coordinator', code: 'migrating', retryable: true }, 2);
+    type(editor, 'typed as it upgrades');
+    env.clock.tick(500);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Saving after update...'), true, JSON.stringify(statuses));
+    env.clock.tick(2999);
+    await rounds();
+    assert.equal(migrating.calls, 1, 'not again before a few seconds');
+    env.clock.tick(1);
+    assert.equal(await framesUntil(() => migrating.calls === 2), true, 'again after 3 s');
+    env.clock.tick(3000);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Saved'), true, 'it commits once the worker is done');
+    assert.deepEqual(statuses.filter((status) => status === 'Retrying...' || status === 'Error saving'), []);
+    assert.deepEqual(toasts, []);
+    assert.equal(editor.root.querySelector('.note-gone-notice'), null, 'no notice');
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed as it upgrades' });
+  });
+
+  it('retries a save whose answer stayed unknown as a save of its own, which commits the latest text (N3, R24)', async () => {
+    const { statuses, toasts } = watchFeedback(env, editor);
+    const unknown = answering({ kind: 'unknown', code: 'outcome-unknown', commandId: 'c-lost' }, 1);
+    type(editor, 'typed as its reply was lost');
+    env.clock.tick(500);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Retrying...'), true, JSON.stringify(statuses));
+    env.clock.tick(1000);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Saved'), true, JSON.stringify(statuses));
+    assert.equal(unknown.calls, 2, 'one retry');
+    assert.deepEqual(toasts, []);
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed as its reply was lost' });
+  });
+
+  it('shows Retrying..., then Error saving with its toast, for a save the worker answered deadline-exceeded twice, and the next save commits the text (S3, R25)', async () => {
+    const { statuses, toasts } = watchFeedback(env, editor);
+    answering({ kind: 'unavailable', cause: 'coordinator', code: 'deadline-exceeded', retryable: true }, 2);
+    type(editor, 'typed behind a long turn');
+    env.clock.tick(500);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Retrying...'), true, JSON.stringify(statuses));
+    env.clock.tick(1000);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Error saving'), true, JSON.stringify(statuses));
+    assert.deepEqual(plain(toasts), [{ message: 'Failed to save note. Please try again.', kind: 'error' }]);
+    type(editor, 'typed behind a long turn, and after it');
+    env.clock.tick(500);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Saved'), true, JSON.stringify(statuses));
+    assert.deepEqual((await elementsById(env)).a1, { canvasId: 'A', content: 'typed behind a long turn, and after it' });
+  });
+
+  it("refuses a change too large to save with the notice's words, keeps its block on screen, retries nothing, and saves the note again once the change is smaller (#259, rule 20, R26)", async () => {
+    const { statuses, toasts } = watchFeedback(env, editor);
+    const refused = answering({ kind: 'rejected', reason: 'validation', code: 'payload-too-large' }, 1);
+    type(editor, 'a change too large to save');
+    env.clock.tick(500);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Not saved'), true, JSON.stringify(statuses));
+    const notice = editor.root.querySelector('.too-large-notice');
+    assert.ok(notice, 'the notice shows');
+    assert.equal(notice.getAttribute('role'), 'alert');
+    assert.equal(
+      notice.querySelector('.note-gone-text').textContent,
+      'This change is too large to save. Remove or shrink a large file, image or video, and the note saves again.',
+    );
+    assert.equal(notice.querySelector('button'), null, 'with no button');
+    assert.equal(editor.blocks[0].content, 'a change too large to save', 'the block stays on screen');
+    env.clock.tick(5000);
+    await rounds();
+    assert.equal(refused.calls, 1, 'nothing retried it');
+    assert.equal(editor._retryPending, false);
+    assert.deepEqual(statuses.filter((status) => status === 'Retrying...' || status === 'Error saving'), []);
+    assert.deepEqual(toasts, []);
+    type(editor, 'smaller');
+    env.clock.tick(500);
+    assert.equal(await framesUntil(() => statuses.at(-1) === 'Saved'), true, 'the note saves again');
+    assert.equal(editor.root.querySelector('.too-large-notice'), null, 'and the notice goes');
+  });
+
+  it("tells of a change too large to save in a note the editor has left with its toast (#259, rule 20, R26)", async () => {
+    const { toasts } = watchFeedback(env, editor);
+    answering({ kind: 'rejected', reason: 'validation', code: 'payload-too-large' }, 1);
+    const load = editor.loadNote('B');
+    type(editor, 'too large, typed while switching');
+    env.frames();
+    await load;
+    await runUntil(env, editor.flushSave());
+    assert.equal(editor.noteId, 'B');
+    assert.deepEqual(plain(toasts), [
+      { message: "A change to a note you were editing is too large to save, so it isn't saved.", kind: 'error' },
+    ]);
   });
 });
