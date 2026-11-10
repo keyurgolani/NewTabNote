@@ -559,6 +559,24 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
       await runUntil(env, chat.confirmAIInsertPreview());
       assert.deepEqual(await stored('A'), ['Milk', 'From the chat', 'Eggs', 'Bread']);
     });
+
+    it("takes the person's focus in the first block as a caret after a second load, whose own focus of that block, focused already, sends no focus event", async () => {
+      const { env, editor, chat, text, input, confirm, focus, wait, stored } = await chatPage();
+      // The note loads again while the first load's focus holds its first block, as two loads close together do
+      await editor.loadNote('A');
+      wait(100);
+      focus(input);
+      wait(150);
+      // The person comes back to the first block with the keys, then goes to the chat
+      focus(text.a1);
+      wait(150);
+      focus(input);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk', 'From the chat', 'Eggs', 'Bread']);
+    });
   });
 
   it('with no block focused, after the last block', async () => {
