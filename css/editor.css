@@ -9,12 +9,18 @@
   --text-muted: #9b9b9b;
   --text-placeholder: #c4c4c4;
   --border-color: #e5e5e5;
-  --accent-color: #2383e2;
-  --accent-rgb: 35, 131, 226;
-  --accent-hover: #1a6fc4;
+  /* The accent is two blues (#268): the ink, for text, icons, rings and marks, 4.5:1 on each of
+     the four surfaces, and the fill, under white text and white marks, white at 5.10:1. The fill's
+     hover darkens in light */
+  --accent-color: #1869ba;
+  --accent-rgb: 24, 105, 186;
+  --accent-hover: #155a9f;
+  --accent-fill: #1a6fc4;
+  /* The tint under accent text: as strong as the ink keeps 4.5:1 on it over the sidebar */
+  --accent-tint: color-mix(in srgb, var(--accent-color) 10%, transparent);
   --danger-color: #e03e3e;
   --code-bg: #f4f4f4;
-  --selection-bg: rgba(35, 131, 226, 0.15);
+  --selection-bg: rgba(24, 105, 186, 0.15);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
@@ -64,7 +70,7 @@
   overflow: hidden;
   z-index: 10000;
   padding: 8px 16px;
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: #fff;
   font-size: 14px;
   font-weight: 500;
@@ -108,7 +114,13 @@
   --text-placeholder: #4a4a4a;
   --border-color: #333;
   --code-bg: #2a2a2a;
-  --selection-bg: rgba(35, 131, 226, 0.25);
+  /* The ink lifts for the dark surfaces, 4.5:1 on bg-active. The fill stays :root's, and its hover
+     lifts too, where a darker one would lose its edge on the sidebar (#268) */
+  --accent-color: #64a8eb;
+  --accent-rgb: 100, 168, 235;
+  --accent-hover: #1d74cb;
+  --accent-tint: color-mix(in srgb, var(--accent-color) 15%, transparent);
+  --selection-bg: rgba(100, 168, 235, 0.25);
   --modal-bg: rgba(0, 0, 0, 0.6);
   /* The status lines' shapes in the text's color, as recovery.html draws them dark until #16 */
   --trust-ok: var(--text-primary);
@@ -557,7 +569,7 @@ body.focus-mode .block:focus-within {
   padding: 10px 12px;
   border: 2px dashed var(--accent-color);
   border-radius: 8px;
-  background: var(--selection-bg);
+  background: var(--accent-tint);
   color: var(--accent-color);
   font-size: 13px;
   font-weight: 500;
@@ -565,8 +577,10 @@ body.focus-mode .block:focus-within {
   transition: background var(--transition);
 }
 
+/* The hover keeps the tint, where a stronger one would put the ink under 4.5:1, and turns the
+   edge solid (#268) */
 .sidebar-drop-zone-new:hover {
-  background: rgba(35, 131, 226, 0.2);
+  border-style: solid;
 }
 
 .sidebar-note-item.sidebar-drop-target {
@@ -992,8 +1006,8 @@ body.focus-mode .block:focus-within {
 }
 
 .block[data-type="todo"].checked .todo-checkbox {
-  background: var(--accent-color);
-  border-color: var(--accent-color);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
 }
 
 .block[data-type="todo"].checked .todo-checkbox svg {
@@ -1480,7 +1494,7 @@ body.focus-mode .block:focus-within {
 }
 
 .settings-nav-item.active {
-  background: var(--selection-bg);
+  background: var(--accent-tint);
   color: var(--accent-color);
   font-weight: 500;
 }
@@ -1974,7 +1988,7 @@ a.setting-link {
 }
 
 .toggle-switch input:checked+.toggle-slider {
-  background-color: var(--accent-color);
+  background-color: var(--accent-fill);
 }
 
 .toggle-switch input:checked+.toggle-slider:before {
@@ -2524,8 +2538,8 @@ a.setting-link {
 }
 
 .block[data-type="file"] .file-download:hover {
-  background: var(--accent-color);
-  border-color: var(--accent-color);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
   color: white;
 }
 
@@ -2729,7 +2743,7 @@ a.setting-link {
   padding: 10px 20px;
   border: none;
   border-radius: 6px;
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
   font-size: 14px;
   font-family: inherit;
@@ -2817,7 +2831,7 @@ a.setting-link {
 }
 
 .width-selector-header .width-option.active {
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
 }
 
@@ -2970,7 +2984,7 @@ a.setting-link {
 }
 
 .calendar-day.selected {
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
 }
 
@@ -3103,7 +3117,7 @@ a.setting-link {
   font-size: 10px;
   font-weight: 600;
   padding: 2px 6px;
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
   border-radius: 10px;
   min-width: 18px;
@@ -3170,6 +3184,13 @@ a.setting-link {
   text-overflow: ellipsis;
 }
 
+/* On the selection's tint the secondary gray falls under 4.5:1, so the preview takes the gray
+   halfway to the text's (#268) */
+.sidebar-note-item.active .sidebar-note-preview,
+.sidebar-note-item.sidebar-drop-target .sidebar-note-preview {
+  color: color-mix(in srgb, var(--text-primary) 50%, var(--text-secondary));
+}
+
 .sidebar-note-footer {
   display: flex;
   flex-wrap: wrap;
@@ -3190,8 +3211,9 @@ a.setting-link {
   text-overflow: ellipsis;
 }
 
+/* Opaque on the sidebar, so a hovered or active row under it can't take its ink under 4.5:1 (#268) */
 .sidebar-note-progress {
-  background: rgba(35, 131, 226, 0.1);
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-secondary));
   color: var(--accent-color);
 }
 
@@ -3943,7 +3965,7 @@ a.setting-link {
 
 .ai-chat-message.user {
   align-self: flex-end;
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
   border-bottom-right-radius: 4px;
 }
@@ -4075,7 +4097,7 @@ a.setting-link {
   font-size: 12px;
   padding: 2px 10px;
   border-radius: 4px;
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: #fff;
   border: none;
   cursor: pointer;
@@ -4174,7 +4196,7 @@ a.setting-link {
   height: 40px;
   border: none;
   border-radius: 50%;
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
   cursor: pointer;
   display: flex;
@@ -4248,7 +4270,7 @@ a.setting-link {
   height: 56px;
   border: none;
   border-radius: 50%;
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
   cursor: pointer;
   display: flex;
@@ -4262,7 +4284,7 @@ a.setting-link {
 .ai-floating-btn:hover {
   background: var(--accent-hover);
   transform: scale(1.05);
-  box-shadow: 0 8px 32px rgba(35, 131, 226, 0.3);
+  box-shadow: 0 8px 32px color-mix(in srgb, var(--accent-color) 30%, transparent);
 }
 
 .ai-floating-btn:active {
@@ -4522,12 +4544,12 @@ a.setting-link {
 }
 
 .onboarding-btn-next {
-  background: var(--accent-color, #6e56cf);
+  background: var(--accent-fill, #6e56cf);
   color: #fff;
 }
 
 .onboarding-btn-next:hover {
-  opacity: 0.9;
+  background: var(--accent-hover);
 }
 
 /* Quick-Start Prompt */
@@ -4601,7 +4623,7 @@ a.setting-link {
 }
 
 .global-chat-source-tag:hover {
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
 }
 
@@ -4799,7 +4821,7 @@ a.setting-link {
 
 :root .ai-message-content blockquote {
   background: #eaeaea;
-  border-left-color: #2383e2;
+  border-left-color: var(--accent-color);
   color: #4a4a4a;
 }
 
@@ -4943,7 +4965,7 @@ a.setting-link {
 }
 
 .note-insights-tag:hover {
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: white;
 }
 
@@ -5641,8 +5663,10 @@ kbd {
   display: none;
 }
 
+/* The fill under the white mark, and the ink at its edge, which holds 3:1 on a hovered and an
+   active row in dark, where the fill doesn't (#268) */
 .sidebar-note-checkbox.checked {
-  background: var(--accent-color);
+  background: var(--accent-fill);
   border-color: var(--accent-color);
 }
 
@@ -5926,11 +5950,11 @@ kbd {
 /* A darker fill than .primary-btn's, so the white label is at least 4.5:1 (5.1:1, and 7:1 on
    hover) in the light and dark themes. .primary-btn elsewhere stays as it is. */
 .export-notice .primary-btn.export-notice-btn {
-  background: #1a6fc4;
+  background: var(--accent-fill);
 }
 
 .export-notice .primary-btn.export-notice-btn:hover {
-  background: #155a9f;
+  background: var(--accent-hover);
 }
 
 .export-notice[aria-busy="true"] .export-notice-btn {

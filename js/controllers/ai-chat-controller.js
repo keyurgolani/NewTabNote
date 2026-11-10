@@ -1232,7 +1232,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       `<span>Response may be incomplete</span>`;
 
     const continueBtn = document.createElement('button');
-    continueBtn.className = 'continue-btn';
+    // The app's filled button, white on the accent's fill (#268); continue-btn sizes it
+    continueBtn.className = 'primary-btn continue-btn';
     continueBtn.textContent = 'Continue';
     continueBtn.setAttribute('aria-label', 'Continue generating response');
     continueBtn.addEventListener('click', async () => {
