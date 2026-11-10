@@ -25,7 +25,7 @@
       "one-sided-border": 6,
       "transition-all": 47,
       "px-font-size": 176,
-      "alias-use": 588
+      "alias-use": 591
     },
     "css/popup.css": {
       "color-literal": 54,
@@ -39,7 +39,7 @@
       "theme-branching": 1,
       "backdrop-filter": 2,
       "px-font-size": 23,
-      "alias-use": 93
+      "alias-use": 94
     },
     "css/sidepanel.css": {
       "color-literal": 21,

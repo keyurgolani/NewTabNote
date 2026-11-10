@@ -689,7 +689,9 @@
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--accent-tint);
+  /* Opaque, the tint on the page's own surface, so the user card's tint under it can't take its
+     letter under 4.5:1 (#268) */
+  background: linear-gradient(var(--accent-tint), var(--accent-tint)), var(--bg-primary);
   color: var(--accent-color);
   font-size: 14px;
   font-weight: 600;

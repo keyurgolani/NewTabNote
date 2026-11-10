@@ -381,6 +381,9 @@ const FILLS = [
   ['css/editor.css', '.export-notice .primary-btn.export-notice-btn'],
   ['css/premium-chat.css', '.scroll-fab-badge'],
 ];
+// The fills whose edge is the ink: the checked box's, where the fill's edge falls under 3:1 on a
+// hovered and an active row in dark
+const INK_EDGES = new Set(['css/editor.css .sidebar-note-checkbox.checked']);
 // The ink as a background, by its token or its channels, or today's blue
 const ON_INK = /var\(--accent-color\b|rgb\(var\(--accent-rgb\)\)|#2383e2/i;
 const isWhite = (/** @type {string | undefined} */ value) => /^(?:white|#fff|#ffffff)$/i.test(value || '');
@@ -392,6 +395,7 @@ describe('white over the accent sits on the fill', () => {
       const rule = ruleFor(file, selector);
       assert.ok(rule, `${file}: ${selector}`);
       for (const { property, value } of rule.declarations) {
+        if (property === 'border-color' && INK_EDGES.has(`${file} ${selector}`) && INK.test(value)) continue;
         if (/^(?:background(?:-color)?|border-color)$/.test(property) && !/^var\(--accent-fill\b/.test(value)) misses.push(`${file}: ${selector} ${property}: ${value}`);
       }
     }

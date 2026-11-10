@@ -3184,6 +3184,13 @@ a.setting-link {
   text-overflow: ellipsis;
 }
 
+/* On the selection's tint the secondary gray falls under 4.5:1, so the preview takes the gray
+   halfway to the text's (#268) */
+.sidebar-note-item.active .sidebar-note-preview,
+.sidebar-note-item.sidebar-drop-target .sidebar-note-preview {
+  color: color-mix(in srgb, var(--text-primary) 50%, var(--text-secondary));
+}
+
 .sidebar-note-footer {
   display: flex;
   flex-wrap: wrap;
@@ -3204,8 +3211,9 @@ a.setting-link {
   text-overflow: ellipsis;
 }
 
+/* Opaque on the sidebar, so a hovered or active row under it can't take its ink under 4.5:1 (#268) */
 .sidebar-note-progress {
-  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-secondary));
   color: var(--accent-color);
 }
 
@@ -4541,7 +4549,7 @@ a.setting-link {
 }
 
 .onboarding-btn-next:hover {
-  opacity: 0.9;
+  background: var(--accent-hover);
 }
 
 /* Quick-Start Prompt */
@@ -5655,9 +5663,11 @@ kbd {
   display: none;
 }
 
+/* The fill under the white mark, and the ink at its edge, which holds 3:1 on a hovered and an
+   active row in dark, where the fill doesn't (#268) */
 .sidebar-note-checkbox.checked {
   background: var(--accent-fill);
-  border-color: var(--accent-fill);
+  border-color: var(--accent-color);
 }
 
 .sidebar-note-checkbox.checked::after {
