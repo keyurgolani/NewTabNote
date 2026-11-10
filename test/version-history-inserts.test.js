@@ -397,8 +397,9 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
      * mutant review's copy of the tree, which holds no release files, runs these: an element for each
      * of A's blocks in the blocks container, the chat's input and its insert preview beside it, and
      * the chat. Focus moves as the browser moves it, and the blocks container's focus and blur
-     * listeners (editor.js) hear each move, so no case sets the editor's focused block itself. The
-     * load's own focus of the first block (loadNote) has run.
+     * listeners (editor.js) hear each move, and its input listener what the person types, so no
+     * case sets the editor's focused block itself. The load's own focus of the first block
+     * (loadNote) has run.
      */
     async function chatPage() {
       const env = createLegacyEnv();
@@ -408,6 +409,8 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
       const editor = makeEditor(env);
       await editor.loadNote('A');
       const doc = env.document;
+      // No text is selected, as this fake keeps no selection: the wiki-link check typing runs reads it
+      doc.defaultView.getSelection = () => ({ rangeCount: 0 });
       /** @type {Record<string, any>} */
       const text = {};
       for (const id of ['a1', 'a2', 'a3']) {
@@ -442,6 +445,11 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
         env.clock.tick(ms);
         hear(from, doc.activeElement);
       };
+      /** The person types `html` into `element`, which holds the focus, and the input listener hears it */
+      const typeInto = (/** @type {any} */ element, /** @type {string} */ html) => {
+        element.innerHTML = html;
+        return editor.onBlockInput({ type: 'input', target: element });
+      };
       // The load focuses the first block 50 ms on
       wait(100);
       /** A note's stored blocks' text, in note order, read from the database itself */
@@ -450,7 +458,7 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
           .filter((row) => row.canvasId === noteId)
           .sort((a, b) => (a.order || 0) - (b.order || 0) || (a.id < b.id ? -1 : 1))
           .map((row) => row.content);
-      return { env, editor, chat: aiChat(env, editor), text, input, modal, confirm, focus, wait, stored };
+      return { env, editor, chat: aiChat(env, editor), text, input, modal, confirm, focus, wait, typeInto, stored };
     }
 
     it('keeps the block once the caret leaves it for the chat, so the insert confirmed after the blur goes after it', async () => {
@@ -516,6 +524,18 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
       focus(confirm);
       await runUntil(env, chat.confirmAIInsertPreview());
       assert.deepEqual(await stored('A'), ['Milk', 'Eggs', 'Bread', 'From the chat']);
+    });
+
+    it('takes typing in the first block, where the load put the caret, as a caret the person placed there', async () => {
+      const { env, chat, text, input, confirm, focus, wait, typeInto, stored } = await chatPage();
+      // The person types at the end of the first block, which the load's focus holds, so no focus moves
+      await typeInto(text.a1, 'Milk and oats');
+      focus(input);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk and oats', 'From the chat', 'Eggs', 'Bread']);
     });
   });
 
