@@ -3,8 +3,10 @@
 // #268: the accent is two blues. The ink draws text, icons, rings and marks, and the fill sits
 // under white text and white marks. In the built-in light and dark themes each meets WCAG 2.2 AA
 // where it's drawn, judged unrounded: the ink at 4.5:1 on the four surfaces and on any accent tint
-// under it, the focus ring at 3:1 on the surfaces, and white at 4.5:1 on the fill and on its
-// hover. Every rule that paints white over the accent paints it on the fill.
+// under it, over each surface that tint sits on, the focus ring at 3:1 on the surfaces, and white
+// at 4.5:1 on the fill and on its hover. Every rule that paints white over the accent paints it on
+// the fill. On a sidebar row, in each state the row takes, its grey preview holds 4.5:1 and a
+// checked box's edge 3:1 (#268).
 
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
@@ -132,8 +134,10 @@ function ceiling(ink, under) {
   return lo;
 }
 
-// A tint of the accent: its token, the selection, or the ink mixed with transparent or at an alpha
-const TINT = /^(?:var\(--(?:accent-tint|selection-bg)\)|color-mix\(in srgb, var\(--accent-color\) [\d.]+%, transparent\)|rgba\(var\(--accent-rgb\), ?[\d.]+\))$/;
+// A tint of the accent: its token, the selection, or the ink mixed with transparent or at an
+// alpha, or made opaque on a surface, mixed into it or stacked over it
+const TINT =
+  /^(?:var\(--(?:accent-tint|selection-bg)\)|color-mix\(in srgb, var\(--accent-color\) [\d.]+%, (?:transparent|var\(--bg-[\w-]+\))\)|rgba\(var\(--accent-rgb\), ?[\d.]+\)|linear-gradient\(var\(--accent-tint\), var\(--accent-tint\)\), var\(--bg-[\w-]+\))$/;
 // Accent text: the ink, by its token or its channels
 const INK = /^(?:var\(--accent-color(?:, ?#[\da-f]+)?\)|rgb\(var\(--accent-rgb\)\))$/i;
 // The states the census reads: a state rule takes what it doesn't set from the rules it qualifies
@@ -151,6 +155,58 @@ function qualified(/** @type {string} */ selector) {
     out.push({ kept: keep.toString(2).split('1').length - 1, selector: text.replace(/\s+/g, ' ').trim() });
   }
   return out.filter((c) => c.selector).sort((a, b) => b.kept - a.kept);
+}
+
+/**
+ * A background as it paints: a tint stacked on a surface (`linear-gradient(T, T), S`) is T over S,
+ * and anything else its resolved color, translucent or not
+ * @param {string} background
+ * @param {'light' | 'dark'} theme
+ */
+function paintOf(background, theme) {
+  const layered = /^linear-gradient\((.*)\),\s*(.+)$/.exec(background.trim());
+  if (!layered) return colorOf(resolve(background, theme));
+  const [top] = splitTopLevel(layered[1]).map((part) => part.trim());
+  return C.compositeOver(colorOf(resolve(top, theme)), colorOf(resolve(layered[2], theme)));
+}
+
+/**
+ * A sidebar row in each state it takes, over the sidebar, as editor.css paints it
+ * @param {'light' | 'dark'} theme
+ */
+function rowStates(theme) {
+  const sidebar = token('--bg-secondary', theme);
+  const states = [{ name: 'a plain row', color: sidebar }];
+  for (const [name, selector] of [
+    ['a hovered row', '.sidebar-note-item:hover'],
+    ['the active row', '.sidebar-note-item.active'],
+    ['a drop target', '.sidebar-note-item.sidebar-drop-target'],
+  ]) {
+    const rule = ruleFor('css/editor.css', selector);
+    const background = rule && valueOf(rule, 'background');
+    assert.ok(background, `css/editor.css: ${selector}'s background`);
+    states.push({ name, selector, color: C.compositeOver(paintOf(background, theme), sidebar) });
+  }
+  return states;
+}
+
+/**
+ * What a pair sits on: the avatar on the user card's tint over the chat, a part of a sidebar row
+ * on each state of its row, and the rest on the sidebar
+ * @param {string} file
+ * @param {string} selector
+ * @param {'light' | 'dark'} theme
+ */
+function surfacesUnder(file, selector, theme) {
+  const sidebar = token('--bg-secondary', theme);
+  if (file === 'css/premium-chat.css' && /^\.user-avatar(?![\w-])/.test(selector)) {
+    const card = ruleFor('css/premium-chat.css', '.user-request-card');
+    const background = card && valueOf(card, 'background');
+    assert.ok(background, "css/premium-chat.css: .user-request-card's background");
+    return [{ name: 'the user card', color: C.compositeOver(paintOf(background, theme), sidebar) }];
+  }
+  if (/^\.sidebar-note-(?!item)/.test(selector)) return rowStates(theme);
+  return [{ name: 'the sidebar', color: sidebar }];
 }
 
 /** Every rule in the sheets that draws accent text on an accent tint, at rest or in a state */
@@ -233,20 +289,59 @@ describe('the accent on the built-in themes (css/editor.css, css/premium-chat.cs
     assert.deepEqual(misses, []);
   });
 
-  it('keeps accent text at 4.5:1 on every accent tint under it, at rest and in each state, over the sidebar', () => {
+  it('keeps accent text at 4.5:1 on every accent tint under it, at rest and in each state, on each surface it sits on', () => {
     const pairs = accentTextOnTints();
-    // Today's three, so the walker can't pass by finding none
-    for (const [file, selector] of [['css/editor.css', '.settings-nav-item.active'], ['css/editor.css', '.sidebar-drop-zone-new'], ['css/premium-chat.css', '.user-avatar']]) {
+    // Today's four, so the walker can't pass by finding none
+    for (const [file, selector] of [
+      ['css/editor.css', '.settings-nav-item.active'],
+      ['css/editor.css', '.sidebar-drop-zone-new'],
+      ['css/editor.css', '.sidebar-note-progress'],
+      ['css/premium-chat.css', '.user-avatar'],
+    ]) {
       assert.ok(pairs.some((p) => p.file === file && p.selector === selector), `${file}: ${selector} draws accent text on a tint`);
     }
     const misses = [];
     for (const theme of THEMES) {
-      const under = token('--bg-secondary', theme);
-      const most = ceiling(token('--accent-color', theme), under);
+      const ink = token('--accent-color', theme);
       for (const { file, selector, color, background } of pairs) {
-        const tint = colorOf(resolve(background, theme));
-        const value = ratio(colorOf(resolve(color, theme)), tint, under);
-        if (value < 4.5) misses.push(`${theme}: ${file} ${selector}, the ink on a ${tint.a.toFixed(3)} tint ${shown(value)}, above the ${most.toFixed(3)} the ink holds`);
+        const text = colorOf(resolve(color, theme));
+        const tint = paintOf(background, theme);
+        for (const surface of surfacesUnder(file, selector, theme)) {
+          const value = C.contrastRatio(text, C.compositeOver(tint, surface.color));
+          if (value >= 4.5) continue;
+          const how = tint.a < 1 ? `a ${tint.a.toFixed(3)} tint ${shown(value)}, above the ${ceiling(ink, surface.color).toFixed(3)} the ink holds` : `its opaque mix ${shown(value)}`;
+          misses.push(`${theme}: ${file} ${selector} on ${surface.name}, the ink on ${how}`);
+        }
+      }
+    }
+    assert.deepEqual(misses, []);
+  });
+
+  it("keeps a sidebar row's grey preview at 4.5:1 on the active row and on a drop target", () => {
+    const misses = [];
+    const rest = ruleFor('css/editor.css', '.sidebar-note-preview');
+    assert.ok(rest && valueOf(rest, 'color'), "css/editor.css: .sidebar-note-preview's color");
+    for (const theme of THEMES) {
+      for (const row of rowStates(theme).filter((state) => state.selector && !state.selector.endsWith(':hover'))) {
+        const own = ruleFor('css/editor.css', `${row.selector} .sidebar-note-preview`);
+        const color = (own && valueOf(own, 'color')) || valueOf(rest, 'color');
+        const value = C.contrastRatio(colorOf(resolve(color, theme)), row.color);
+        if (value < 4.5) misses.push(`${theme}: .sidebar-note-preview on ${row.name}, ${color} ${shown(value)}`);
+      }
+    }
+    assert.deepEqual(misses, []);
+  });
+
+  it("keeps a checked box's edge at 3:1 on each state of its row", () => {
+    const rule = ruleFor('css/editor.css', '.sidebar-note-checkbox.checked');
+    const edge = rule && valueOf(rule, 'border-color');
+    assert.ok(edge, "css/editor.css: .sidebar-note-checkbox.checked's border-color");
+    const misses = [];
+    for (const theme of THEMES) {
+      // Selection mode turns dragging off, so a checked box never sits on a drop target
+      for (const row of rowStates(theme).filter((state) => state.name !== 'a drop target')) {
+        const value = C.contrastRatio(colorOf(resolve(edge, theme)), row.color);
+        if (value < 3) misses.push(`${theme}: the checked box's edge, ${edge}, on ${row.name} ${shown(value)}`);
       }
     }
     assert.deepEqual(misses, []);
