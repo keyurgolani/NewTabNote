@@ -378,6 +378,207 @@ describe('T7: AI chat inserts move blocks, update the note, and lose no save', (
     assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'See [[Work]]', 'Call the bakery', 'Eggs']);
   });
 
+  describe("through the chat's preview, the block that held the caret picks where the insert goes, and never splits its text (#277)", () => {
+    // Three blocks in A, so the block the person picks, the first one the load focuses, and the
+    // end are each a different place, and two in B
+    const CHAT_RECORDS = {
+      canvases: [note('A', { name: 'Groceries' }), note('B', { name: 'Work' })],
+      elements: [
+        block('a1', 'A', 0, 'Milk'),
+        block('a2', 'A', 1, 'Eggs'),
+        block('a3', 'A', 2, 'Bread'),
+        block('b1', 'B', 0, 'Plan'),
+        block('b2', 'B', 1, 'Review'),
+      ],
+    };
+
+    /**
+     * A open in its editor, as page() starts it but with no frozen 1.4.1 Storage beside it, so the
+     * mutant review's copy of the tree, which holds no release files, runs these: an element for each
+     * of A's blocks in the blocks container, the chat's input and its insert preview beside it, and
+     * the chat. Focus moves as the browser moves it, and the blocks container's focus and blur
+     * listeners (editor.js) hear each move, its input listener what the person types, and its
+     * click listener each click, so no case sets the editor's focused block itself. The load's own
+     * focus of the first block (loadNote) has run.
+     */
+    async function chatPage() {
+      const env = createLegacyEnv();
+      await createDatabase(env.indexedDB, { records: CHAT_RECORDS });
+      env.load(...FILES);
+      await startEditorClient(env);
+      const editor = makeEditor(env);
+      await editor.loadNote('A');
+      const doc = env.document;
+      // No text is selected, as this fake keeps no selection: the wiki-link check typing runs reads it
+      doc.defaultView.getSelection = () => ({ rangeCount: 0 });
+      // A platform for the click listener's selection keys (Cmd on a Mac, Ctrl elsewhere)
+      env.get('navigator').platform = 'Linux x86_64';
+      /** @type {Record<string, any>} */
+      const text = {};
+      for (const id of ['a1', 'a2', 'a3']) {
+        const row = editor.container.appendChild(doc.createElement('div'));
+        row.className = 'block';
+        row.setAttribute('data-id', id);
+        text[id] = row.appendChild(doc.createElement('div'));
+        text[id].className = 'block-content';
+        text[id].setAttribute('contenteditable', 'true');
+      }
+      const input = doc.body.appendChild(doc.createElement('textarea'));
+      input.id = 'ai-chat-input';
+      const modal = doc.body.appendChild(doc.createElement('div'));
+      modal.id = 'ai-insert-preview-modal';
+      modal.className = 'hidden';
+      const confirm = modal.appendChild(doc.createElement('button'));
+      confirm.id = 'ai-insert-preview-confirm';
+      /** What the blocks container's focus and blur listeners hear as focus moves from `from` to `to` */
+      const hear = (/** @type {any} */ from, /** @type {any} */ to) => {
+        if (from && from !== to && editor.container.contains(from)) editor.onBlockBlur({ type: 'blur', target: from });
+        if (to && from !== to && editor.container.contains(to)) editor.onBlockFocus({ type: 'focus', target: to });
+      };
+      /** The person moves focus to `element` */
+      const focus = (/** @type {any} */ element) => {
+        const from = doc.activeElement;
+        element.focus();
+        hear(from, element);
+      };
+      /** `ms` pass, and the listeners hear any focus the page moved itself */
+      const wait = (/** @type {number} */ ms) => {
+        const from = doc.activeElement;
+        env.clock.tick(ms);
+        hear(from, doc.activeElement);
+      };
+      /** The person types `html` into `element`, which holds the focus, and the input listener hears it */
+      const typeInto = (/** @type {any} */ element, /** @type {string} */ html) => {
+        element.innerHTML = html;
+        return editor.onBlockInput({ type: 'input', target: element });
+      };
+      /**
+       * The person clicks `element`, in a block: focus moves to it unless it holds it already, as a
+       * browser moves it, and the click listener hears the click
+       */
+      const click = (/** @type {any} */ element) => {
+        if (doc.activeElement !== element) focus(element);
+        editor.onBlockClick({ type: 'click', target: element, shiftKey: false, ctrlKey: false, metaKey: false });
+      };
+      // The load focuses the first block 50 ms on
+      wait(100);
+      /** A note's stored blocks' text, in note order, read from the database itself */
+      const stored = async (/** @type {string} */ noteId) =>
+        Object.values(recordsOf(await dumpDatabase(env.indexedDB), 'elements'))
+          .filter((row) => row.canvasId === noteId)
+          .sort((a, b) => (a.order || 0) - (b.order || 0) || (a.id < b.id ? -1 : 1))
+          .map((row) => row.content);
+      return { env, editor, chat: aiChat(env, editor), text, input, modal, confirm, focus, wait, typeInto, click, stored };
+    }
+
+    it('keeps the block once the caret leaves it for the chat, so the insert confirmed after the blur goes after it', async () => {
+      const { env, editor, chat, text, input, confirm, focus, wait, stored } = await chatPage();
+      focus(text.a2);
+      wait(150);
+      // The person types the question in the chat, and the blur's 100 ms pass
+      focus(input);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk', 'Eggs', 'From the chat', 'Bread']);
+      assert.deepEqual(editor.blocks.map((b) => b.content), ['Milk', 'Eggs', 'From the chat', 'Bread'], 'the Eggs block keeps its text');
+    });
+
+    it('takes the block as the preview opens, so focus that leaves for the preview before the confirm changes nothing', async () => {
+      const { env, chat, text, modal, confirm, focus, wait, stored } = await chatPage();
+      focus(text.a2);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      // The person reads the preview, and the blur's 100 ms pass before the confirm
+      focus(modal);
+      wait(150);
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk', 'Eggs', 'From the chat', 'Bread']);
+    });
+
+    it("keeps the block when the caret moves to the note's title before the chat, so the insert still goes after it", async () => {
+      const { env, editor, chat, text, input, confirm, focus, wait, stored } = await chatPage();
+      focus(text.a2);
+      wait(150);
+      focus(editor.titleEl);
+      wait(150);
+      focus(input);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk', 'Eggs', 'From the chat', 'Bread']);
+    });
+
+    it('goes at the end of another note opened after the caret left the first, as no block there held it', async () => {
+      const { env, editor, chat, text, input, confirm, focus, wait, stored } = await chatPage();
+      focus(text.a2);
+      wait(150);
+      focus(input);
+      wait(150);
+      await editor.loadNote('B');
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('B'), ['Plan', 'Review', 'From the chat']);
+      assert.deepEqual(await stored('A'), ['Milk', 'Eggs', 'Bread']);
+    });
+
+    it("goes at the end when the person placed no caret in the note: the load's own focus of the first block doesn't pick it", async () => {
+      const { env, chat, input, confirm, focus, wait, stored } = await chatPage();
+      focus(input);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk', 'Eggs', 'Bread', 'From the chat']);
+    });
+
+    it('takes typing in the first block, where the load put the caret, as a caret the person placed there', async () => {
+      const { env, chat, text, input, confirm, focus, wait, typeInto, stored } = await chatPage();
+      // The person types at the end of the first block, which the load's focus holds, so no focus moves
+      await typeInto(text.a1, 'Milk and oats');
+      focus(input);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk and oats', 'From the chat', 'Eggs', 'Bread']);
+    });
+
+    it('takes a click into the first block, where the load put the caret, as a caret the person placed there, though the click moves no focus', async () => {
+      const { env, chat, text, input, confirm, focus, wait, click, stored } = await chatPage();
+      // The load's focus holds the first block, so the click sends no focus event
+      click(text.a1);
+      focus(input);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk', 'From the chat', 'Eggs', 'Bread']);
+    });
+
+    it("takes the person's focus in the first block as a caret after a second load, whose own focus of that block, focused already, sends no focus event", async () => {
+      const { env, editor, chat, text, input, confirm, focus, wait, stored } = await chatPage();
+      // The note loads again while the first load's focus holds its first block, as two loads close together do
+      await editor.loadNote('A');
+      wait(100);
+      focus(input);
+      wait(150);
+      // The person comes back to the first block with the keys, then goes to the chat
+      focus(text.a1);
+      wait(150);
+      focus(input);
+      wait(150);
+      chat.openAIInsertPreview('append', 'From the chat');
+      focus(confirm);
+      await runUntil(env, chat.confirmAIInsertPreview());
+      assert.deepEqual(await stored('A'), ['Milk', 'From the chat', 'Eggs', 'Bread']);
+    });
+  });
+
   it('with no block focused, after the last block', async () => {
     const { env, frozen } = await page({ records: RECORDS });
     const editor = makeEditor(env);
