@@ -2,22 +2,31 @@
  * #12 slice 4b2b in the built extension, with a stub provider: version history (a snapshot,
  * the list, a preview, and a revert after a pin) and AI chat's inserts (append, insert at the
  * cursor, and a new note from a response), all through the new tab's kernel. The stub replaces
- * the LLM service's provider calls, so nothing leaves the machine.
+ * the LLM service's provider calls, so nothing leaves the machine. #277's cases ask the chat and
+ * append its answer as a person does, with real clicks and keys from the question to the
+ * preview's confirm.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
 const driver = require('./characterization/driver');
 
+/** What the stub's note chat answers */
+const CHAT_ANSWER = 'From the chat';
+
 /** Answer every provider call on the new tab without a network request */
 function stubProvider(page) {
-  return page.evaluate(() => {
+  return page.evaluate(answer => {
     Object.assign(LLM, {
       isConfigured: () => true,
       generateTitle: async () => 'Bakery plan',
       extractInsights: async () => null,
       chat: async () => 'A reply',
+      // The note chat's answer, which the chat streams
+      chatStream: async function* chatStream() {
+        yield answer;
+      },
     });
-  });
+  }, CHAT_ANSWER);
 }
 
 /** The note as the new tab's kernel reads it */
@@ -41,6 +50,30 @@ async function confirmInsert(page, action, content) {
   await page.evaluate(([kind, text]) => app.aiChatController.openAIInsertPreview(kind, text), [action, content]);
   await expect(page.locator('#ai-insert-preview-modal')).not.toHaveClass(/hidden/);
   await page.locator('#ai-insert-preview-confirm').click();
+}
+
+/**
+ * Ask the open note's chat `question` as a person does, with real clicks and keys: the chat's
+ * button, its note tab, the question typed into its input, and Send. Waits for the stub's answer
+ * and its buttons.
+ */
+async function askTheChat(page, question) {
+  await page.locator('#ai-floating-btn').click();
+  await page.locator('#ai-tab-note').click();
+  await page.locator('#ai-chat-input').click();
+  await page.keyboard.type(question);
+  await page.locator('#ai-chat-send').click();
+  const answer = page.locator('#ai-chat-messages .ai-chat-message.assistant').last();
+  await expect(answer).toContainText(CHAT_ANSWER);
+  await expect(answer.getByTitle('Append to current note')).toHaveCount(1);
+}
+
+/** The answer's Append button, then the preview's Append Blocks, each clicked as a person clicks it */
+async function appendTheAnswer(page) {
+  await page.locator('#ai-chat-messages .ai-chat-message.assistant').last().getByTitle('Append to current note').click();
+  await expect(page.locator('#ai-insert-preview-modal')).not.toHaveClass(/hidden/);
+  await page.locator('#ai-insert-preview-confirm').click();
+  await expect(page.locator('#ai-insert-preview-modal')).toHaveClass(/hidden/);
 }
 
 test('version history saves, lists, previews, and reverts through the kernel, keeping a pin', async ({ extension }) => {
@@ -130,5 +163,38 @@ test('AI chat appends, inserts at the cursor, and makes a new note through the k
   // The sidebar shows the inserted text as the new note's preview, with no reload
   const listed = page.locator('#sidebar-notes-list .sidebar-note-item').filter({ has: page.getByText('Bakery plan', { exact: true }) });
   await expect(listed.locator('.sidebar-note-preview')).toHaveText('Call the bakery');
+  await expectNoUncaught(extension, page);
+});
+
+test("AI chat's Append, clicked as a person clicks it, inserts after the block that held the caret before the chat took the focus (#277)", async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Plan', blocks: [{ type: 'text', content: 'First' }, { type: 'text', content: 'Last' }] }]);
+  const page = await driver.openNewTab(extension);
+  await stubProvider(page);
+  await driver.openNote(page, 'Plan');
+  const noteId = await page.evaluate(() => app.editor.noteId);
+
+  // The person clicks into First's text, where the load's own focus already is, then asks the chat
+  await page.locator('#blocks-container .block-content').first().click();
+  await askTheChat(page, 'What comes next?');
+  await appendTheAnswer(page);
+  const inserted = ['First', CHAT_ANSWER, 'Last'];
+  await expect.poll(() => storedTexts(page, noteId)).toEqual(inserted);
+  await expect.poll(() => driver.blocks(page).then(shown => shown.map(block => block.text))).toEqual(inserted);
+  await expectNoUncaught(extension, page);
+});
+
+test("AI chat's Append goes at the end when the person placed no caret in the note, as the load's own focus of the first block doesn't pick it (#277)", async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Plan', blocks: [{ type: 'text', content: 'First' }, { type: 'text', content: 'Last' }] }]);
+  const page = await driver.openNewTab(extension);
+  await stubProvider(page);
+  await driver.openNote(page, 'Plan');
+  const noteId = await page.evaluate(() => app.editor.noteId);
+
+  await askTheChat(page, 'What comes next?');
+  await appendTheAnswer(page);
+  await expect.poll(() => storedTexts(page, noteId)).toEqual(['First', 'Last', CHAT_ANSWER]);
+  await expect.poll(() => driver.blocks(page).then(shown => shown.map(block => block.text))).toEqual(['First', 'Last', CHAT_ANSWER]);
   await expectNoUncaught(extension, page);
 });

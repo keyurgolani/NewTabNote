@@ -9,8 +9,8 @@
   "edits": [
     {
       "file": "build/budgets.json",
-      "replace": "\"js\": { \"raw\": 667874, \"gzip\": 188741 }",
-      "with": "\"js\": { \"raw\": 20480, \"gzip\": 188741 }"
+      "replace": "\"js\": { \"raw\": 668270, \"gzip\": 188843 }",
+      "with": "\"js\": { \"raw\": 20480, \"gzip\": 188843 }"
     }
   ]
 }
