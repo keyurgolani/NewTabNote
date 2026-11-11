@@ -1230,6 +1230,26 @@
       "replace": "          this._loadFocused = firstContent;\n",
       "test": "test/version-history-inserts.test.js",
       "name": "takes the person's focus in the first block as a caret after a second load, whose own focus of that block, focused already, sends no focus event"
+    },
+    {
+      "id": "chat-context-caret-from-focus",
+      "behavior": "#279 the chat's context keeps the caret's block",
+      "protects": "The chat's context for a long note centers on the block the person's caret was last in, which the editor keeps once focus leaves the blocks for the chat's input, not on the focused block, gone by then.",
+      "file": "js/controllers/ai-chat-controller.js",
+      "find": "    const caretBlock = editor ? editor.caretBlock : null;\n",
+      "replace": "    const caretBlock = editor ? editor.activeBlock : null;\n",
+      "test": "test/chat-context-caret.test.js",
+      "name": "centers on the block that held the caret once the caret has left it for the chat, so its neighbours go in place of blocks further on"
+    },
+    {
+      "id": "chat-context-caret-unranked",
+      "behavior": "#279 the chat's context keeps the caret's block",
+      "protects": "The context window ranks the blocks around the caret's block next after headings, so they go in place of blocks further on.",
+      "file": "js/controllers/ai-chat-controller.js",
+      "find": "      if (cursorIndex >= 0) {\n        const distance = Math.abs(entry.index - cursorIndex);\n",
+      "replace": "      if (false) {\n        const distance = Math.abs(entry.index - cursorIndex);\n",
+      "test": "test/chat-context-caret.test.js",
+      "name": "centers on the block that held the caret once the caret has left it for the chat, so its neighbours go in place of blocks further on"
     }
   ]
 }
