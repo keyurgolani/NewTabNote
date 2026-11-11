@@ -101,6 +101,10 @@ import { PAGE_OPERATIONS } from './page-operations.js';
  * @property {boolean} [purgeRecoveryPoints] - PURGE_RECOVERY_POINTS unless a test says otherwise
  * @property {PurgeEvents | null} [events] - the worker's failure events (#20), which a stopped
  *   purge or stopped transforms, and their ends, go to
+ * @property {() => Promise<unknown>} [whenClear]
+ *   What each attempt, and each purge a page asks for, waits for before it reads or opens
+ *   anything: no other context restoring, which #35's coordinator says (slice 7). Without it, they
+ *   start at once.
  */
 
 /**
@@ -395,8 +399,10 @@ async function record(settings, outcome, stored, now, version, costly) {
 
 /**
  * The worker's client, with the migration behind it, and the transforms, the records' catch-up
- * and the purge after it
- * @typedef {Client & {migration: WorkerMigration, transforms: WorkerTransforms, recordsCatchUp: WorkerRecordsCatchUp, purge: WorkerPurge}} WorkerClient
+ * and the purge after it. close() and reopen() are #35's coordinator's, while another context
+ * restores (slice 7): close() closes its adapter, so nothing of the worker holds the database, and
+ * reopen() starts another attempt, which opens a new one.
+ * @typedef {Client & {migration: WorkerMigration, transforms: WorkerTransforms, recordsCatchUp: WorkerRecordsCatchUp, purge: WorkerPurge, close: () => void, reopen: () => Promise<MigrationOutcome>}} WorkerClient
  */
 
 /**
@@ -512,8 +518,25 @@ export function createWorkerClient(host = workerHost()) {
   const kept = new WeakSet();
 
   /**
+   * Resolves once no other context restores, as the coordinator says (`whenClear`, #35 slice 7),
+   * and at once without it. It never rejects.
+   * @returns {Promise<unknown>}
+   */
+  const clear = () =>
+    typeof host.whenClear === 'function'
+      ? Promise.resolve()
+          .then(() => /** @type {() => Promise<unknown>} */ (host.whenClear)())
+          .catch(() => undefined)
+      : Promise.resolve();
+
+  /** Whether the coordinator closed the adapter while another context restores, until reopen() */
+  let closed = false;
+
+  /**
    * One attempt: read the record, then run unless a run that read the stores stands. It never
-   * rejects: a run that couldn't start (a lock manager that throws, say) is a failed outcome.
+   * rejects: a run that couldn't start (a lock manager that throws, say) is a failed outcome. It
+   * reads and opens nothing while another context restores (#35 slice 7), whatever starts it: a
+   * start, a page's storage.migrate, a command's retry, or the coordinator's reopen.
    * @returns {Promise<MigrationOutcome>}
    */
   const attempt = () => {
@@ -522,7 +545,7 @@ export function createWorkerClient(host = workerHost()) {
     /** Whether a blocked marker stood when this attempt started, which it clears */
     let markerStood = false;
     /** @type {Promise<MigrationOutcome>} */
-    const outcome = Promise.resolve()
+    const outcome = clear()
       .then(() => host.settings.get([UPGRADE_RECORD_KEY, UPGRADE_BLOCKED_KEY]))
       .catch(() => ({}))
       .then(async stored => {
@@ -766,7 +789,8 @@ export function createWorkerClient(host = workerHost()) {
    */
   const requestPurge = () => {
     const before = Promise.all([transformed, caughtUp]);
-    const next = Promise.all([done, before])
+    // A page's storage.purge while another context restores sweeps once it's done (#35 slice 7)
+    const next = Promise.all([done, before, clear()])
       .then(([ended]) =>
         purgeOn && (ended.status === 'migrated' || ended.status === 'current') ? sweepPoints() : null,
       )
@@ -830,6 +854,9 @@ export function createWorkerClient(host = workerHost()) {
         copiesMissingStores: !upgraded,
       });
       if (replaced) replaced.close();
+      // An attempt that began before another context's restore opens nothing once it lands, and
+      // sets off none of the work below until the coordinator's reopen (#35 slice 7)
+      if (closed) adapter.close();
       // The kernels on it, the worker's own and each page's, write their settings in turn order
       const kernels = settingsInTurns(adapter);
       const built = kernelClient({
@@ -842,7 +869,7 @@ export function createWorkerClient(host = workerHost()) {
       // At every start, and after every later attempt: the transforms a run cut off or never
       // reached, the catch-up of 1.4.x's lagging records until it's done once, then the deletes
       // the worker didn't hear of, or a sweep its stop cut off
-      if (upgraded) {
+      if (upgraded && !closed) {
         requestTransforms();
         requestCatchUp(adapter, built);
         requestPurge();
@@ -883,6 +910,26 @@ export function createWorkerClient(host = workerHost()) {
     done = attempt();
     client = build(done, keep ? before : null);
     return done;
+  };
+
+  /**
+   * The coordinator's, while another context restores (#35 slice 7): the adapter closes, so the
+   * worker holds no connection, and every call on it answers `reload-required`, whose retry starts
+   * an attempt that waits for the restore to end, so nothing opens the database meanwhile
+   */
+  const close = () => {
+    closed = true;
+    if (adapter) adapter.close();
+  };
+
+  /**
+   * Once the restore is done: another attempt, which may find a database the restore replaced,
+   * then a new adapter on what it leaves, as after any connection that went
+   * @returns {Promise<MigrationOutcome>}
+   */
+  const reopen = () => {
+    closed = false;
+    return again();
   };
 
   /** The retry that requests arriving together after a failed or space-blocked attempt share */
@@ -1020,6 +1067,8 @@ export function createWorkerClient(host = workerHost()) {
         return purged;
       },
     }),
+    close,
+    reopen,
   });
 }
 
