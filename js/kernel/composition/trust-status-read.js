@@ -21,7 +21,11 @@
 
 import { readOnlyTrustStore } from '../adapters/indexeddb/trust.js';
 import { principalOf } from '../adapters/messaging/runtime-port.js';
+import { failedFrom, ready } from '../core/contracts/outcomes.js';
+import { operationOf } from '../core/messaging/operations.js';
 import { systemClock } from '../core/ports/runtime.js';
+import { TRUST_QUERIES } from '../../trust/core/contracts.js';
+import * as trustStatus from '../../trust/core/operations/trust-status.js';
 import { rowsOn } from '../../trust/core/providers/rows.js';
 import { TRUST_STATUS_MESSAGE, narrowStatus } from '../../trust/core/status-message.js';
 import { leadingOf, summarize } from '../../trust/core/summary.js';
@@ -100,6 +104,47 @@ export function workerStatusRead({
       return UNAVAILABLE;
     }
   };
+}
+
+/** trust.status as the worker's router serves it over #13's port (#280's probe) */
+export const STATUS_OPERATIONS = Object.freeze({
+  'trust.status': operationOf(TRUST_QUERIES['trust.status'], trustStatus),
+});
+
+/**
+ * The worker's router's handler for trust.status (#280's probe): the status read above, from the
+ * same kind of store and records, answered as a query's state. The router's rows take the new tab
+ * alone (WORKER_STATUS_ROWS), so it reads no sender. A read that fails answers why, as a query does.
+ * @param {{store?: () => TrustStore, records?: (store: TrustStore) => TrustRecords, clock?: Clock}} [options]
+ * @returns {Readonly<Record<string, () => Promise<unknown>>>}
+ */
+export function workerStatusHandlers({ store: makeStore = browserStore, records: build = browserRecords, clock = systemClock } = {}) {
+  /** @type {TrustStore | null} */
+  let store = null;
+  return Object.freeze({
+    'trust.status': async () => {
+      const now = clock.now();
+      try {
+        if (!store) store = makeStore();
+        const records = build(store);
+        const receipts = await records.latestReceipts();
+        const { incidents, copyRead, recordsRead } = await records.incidentsRead();
+        /** @type {import('../../trust/core/summary.js').SummaryInput} */
+        const input = {
+          providers: STATUS_ROWS,
+          receipts,
+          incidents,
+          copyRead,
+          recordsRead,
+          recordsState: records.state() === 'fallback' ? 'fallback' : 'open',
+          now,
+        };
+        return ready(now, narrowStatus(summarize(input), leadingOf(input)));
+      } catch (error) {
+        return failedFrom(error);
+      }
+    },
+  });
 }
 
 /** @param {...unknown} _ */

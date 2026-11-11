@@ -118,11 +118,20 @@ export function plainlyClear(answer) {
  * with Settings it reads for itself; once it has loaded, each Settings opening has it read again.
  * A load that fails is tried again at the next one. `send` and `load` are a test's; the browser's
  * are made here.
- * @param {{loader?: Loader, document?: Document, runtime?: Runtime, send?: () => Promise<unknown>, load?: () => Promise<LinesChunk | null>}} [options]
+ * #280's probe: with the page's `client`, the read is trust.status over #13's port, and its answer
+ * is the ready state's data, or none for any other state, within the same wait.
+ * @param {{loader?: Loader, document?: Document, runtime?: Runtime, send?: () => Promise<unknown>, load?: () => Promise<LinesChunk | null>, client?: {query(request: {type: string}): Promise<any>}}} [options]
  * @returns {{asked: Promise<void>, settingsOpened: () => Promise<void>}} - `asked`: the first ask, and the load it set off
  */
-export function startStatusAsk({ loader, document: doc = globalThis.document, runtime, send, load } = {}) {
-  const ask = send || statusSender(runtime || /** @type {Runtime} */ (/** @type {any} */ (globalThis).chrome.runtime));
+export function startStatusAsk({ loader, document: doc = globalThis.document, runtime, send, load, client } = {}) {
+  const ask =
+    send ||
+    (client
+      ? statusSender({
+          sendMessage: () =>
+            client.query({ type: 'trust.status' }).then(state => (state && state.kind === 'ready' ? state.data : undefined)),
+        })
+      : statusSender(runtime || /** @type {Runtime} */ (/** @type {any} */ (globalThis).chrome.runtime)));
   const loadLines =
     load ||
     (async () => {

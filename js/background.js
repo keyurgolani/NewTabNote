@@ -35,7 +35,13 @@ import {
 import { DRAIN_MESSAGE, createWorkerJournal } from './kernel/composition/journal.js';
 import { randomIds } from './kernel/composition/messaging.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
-import { TRUST_STATUS_MESSAGE, workerStatusRead } from './kernel/composition/trust-status-read.js';
+import {
+  STATUS_OPERATIONS,
+  TRUST_STATUS_MESSAGE,
+  workerStatusHandlers,
+  workerStatusRead,
+} from './kernel/composition/trust-status-read.js';
+import { WORKER_STATUS_ROWS } from './trust/core/router-rows.js';
 import { createWorkerInternalClient, createWorkerInternalRouter } from './kernel/composition/worker-internal.js';
 import { installWorkerNetwork } from './kernel/composition/worker-network.js';
 
@@ -99,7 +105,14 @@ installWorkerRouter({
   status: () => coordinator.status(),
   settled: () => coordinator.start(),
   sessions: { closed: session => coordinator.closed(session) },
-  handlers: { ...coordinatorHandlers(() => coordinator), ...pageCommandHandlers(() => coordinator) },
+  handlers: {
+    ...coordinatorHandlers(() => coordinator),
+    ...pageCommandHandlers(() => coordinator),
+    // The new tab's trust.status over the port, from the worker's NewTabNoteTrust records (#280's probe)
+    ...workerStatusHandlers(),
+  },
+  operations: STATUS_OPERATIONS,
+  rows: WORKER_STATUS_ROWS,
 });
 
 /**

@@ -1125,7 +1125,11 @@ const PAGE_LOOKUP = createLookup(PAGE_OPERATIONS);
  *   settled?: () => unknown,
  *   sessions?: import('../core/messaging/router.js').SessionHooks,
  *   handlers?: Readonly<Record<string, import('../core/messaging/router.js').Handler>>,
- * }} [options] - `runtime` is chrome.runtime unless a test passes another
+ *   operations?: Readonly<Record<string, import('../core/contracts/validate.js').Operation>>,
+ *   rows?: Readonly<Record<string, import('../core/ports/policy.js').PolicyRow>>,
+ * }} [options] - `runtime` is chrome.runtime unless a test passes another. `operations` and
+ *   `rows`: what the router serves beyond the shared catalog's entries, each by its row, as
+ *   js/background.js passes the new tab's trust.status (#280's probe)
  * @returns {Router | null} the router, or null when it couldn't be installed
  */
 export function installWorkerRouter({
@@ -1136,11 +1140,13 @@ export function installWorkerRouter({
   settled,
   sessions,
   handlers,
+  operations = {},
+  rows = {},
 } = {}) {
   try {
     const worker = /** @type {WorkerRuntime} */ (runtime);
     const router = createRouter({
-      policy: createBaselinePolicy(),
+      policy: createBaselinePolicy(undefined, { rows }),
       clock: systemClock,
       timers: hostTimers,
       coordinatorId: coordinatorId ?? randomIds.next(),
@@ -1148,7 +1154,7 @@ export function installWorkerRouter({
       status,
       settled,
       sessions,
-      lookup: PAGE_LOOKUP,
+      lookup: Object.keys(operations).length > 0 ? createLookup({ ...PAGE_OPERATIONS, ...operations }) : PAGE_LOOKUP,
       handlers,
       logger: messagingLogger,
     });

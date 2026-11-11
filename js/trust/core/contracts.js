@@ -32,6 +32,9 @@ const STATUS_PAGES = Object.freeze(/** @type {Surface[]} */ (['newtab', 'popup',
 /** The pages that hold the Trust and Recovery views */
 const TRUST_PAGES = Object.freeze(/** @type {Surface[]} */ (['newtab', 'recovery']));
 
+/** The page that reads the status lines' trust.status over #13's port (#280's probe): the new tab */
+const STATUS_LINE_PAGES = Object.freeze(/** @type {Surface[]} */ (['newtab']));
+
 /** Every context that can hit a failure */
 const ANY_CONTEXT = Object.freeze(
   /** @type {Surface[]} */ (['newtab', 'popup', 'sidepanel', 'offscreen', 'worker-internal', 'recovery']),
@@ -84,6 +87,8 @@ const command = (module, surfaces, deadlineMs = COMMAND_DEADLINE_MS) =>
 
 export const TRUST_QUERIES = Object.freeze({
   'trust.summary': query('trust-summary', STATUS_PAGES),
+  // What the status lines read, trust.summary narrowed with each group's leading count (#280's probe)
+  'trust.status': query('trust-status', STATUS_LINE_PAGES),
   'trust.report': query('trust-report', TRUST_PAGES),
   'recovery.incidents': query('recovery-incidents', TRUST_PAGES),
   'recovery.copies': query('recovery-copies', TRUST_PAGES),

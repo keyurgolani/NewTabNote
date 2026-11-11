@@ -22,10 +22,13 @@
  * opens its database only when it's there or its first entry needs it.
  */
 
+import * as v from '../../lib/valibot/index.mjs';
+import { TRUST_QUERIES } from '../../trust/core/contracts.js';
+import { statusFrom } from '../../trust/core/status-message.js';
 import { inContextStores } from '../adapters/in-context.js';
 import { createRuntimePortTransport } from '../adapters/messaging/runtime-port.js';
 import { COMMANDS } from '../core/contracts/commands.js';
-import { bulkResultSchema, outcomeSchema } from '../core/contracts/outcome-schemas.js';
+import { bulkResultSchema, outcomeSchema, queryStateSchema } from '../core/contracts/outcome-schemas.js';
 import { unavailable } from '../core/contracts/outcomes.js';
 import { DRAFT_PREFIX } from '../core/domain/close-draft-keys.js';
 import { createClient } from '../core/messaging/client.js';
@@ -80,8 +83,26 @@ const SENT = Object.freeze(
   ),
 );
 
-/** The commands the new tab sends the worker, on the shared catalog's entries */
-export const NEWTAB_SENDS = createLookup(SENT);
+/**
+ * The status lines' trust.status, which the new tab asks the worker over the port (#280's probe):
+ * its entry, and its answer checked by statusFrom, as the lines check the worker message's answer,
+ * with no payload schema
+ * @type {Readonly<Record<string, Operation>>}
+ */
+const STATUS_SENT = Object.freeze({
+  'trust.status': /** @type {Operation} */ (
+    /** @type {unknown} */ (
+      Object.freeze({
+        entry: TRUST_QUERIES['trust.status'],
+        payload: undefined,
+        result: queryStateSchema(v.custom(value => statusFrom(value) !== null)),
+      })
+    )
+  ),
+});
+
+/** The commands the new tab sends the worker, on the shared catalog's entries, and trust.status */
+export const NEWTAB_SENDS = createLookup({ ...SENT, ...STATUS_SENT });
 
 /**
  * What a closing save its page's close-time draft holds is answered, unsent (newTabWrites): nothing

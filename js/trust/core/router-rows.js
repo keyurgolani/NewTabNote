@@ -44,3 +44,16 @@ export const RECOVERY_PAGE_ROWS = Object.freeze({
       /** @type {readonly unknown[]} */ (RECOVERY_PAGE_REMEDIATIONS).includes(request.remediationId),
   }),
 });
+
+/** The new tab, as #13's runtime port names it */
+const NEWTAB_PAGE = Object.freeze(/** @type {const} */ (['newtab']));
+
+/**
+ * The rows the worker's router takes trust.status by (#280's probe): the new tab's status lines,
+ * and nothing else of the trust catalog, which js/background.js passes it
+ * (composition/background.js, installWorkerRouter's `rows`)
+ * @type {Readonly<Record<string, PolicyRow>>}
+ */
+export const WORKER_STATUS_ROWS = Object.freeze({
+  'trust.status': Object.freeze({ surfaces: NEWTAB_PAGE }),
+});

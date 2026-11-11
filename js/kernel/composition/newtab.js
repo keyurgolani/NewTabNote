@@ -556,6 +556,12 @@ function heldWrites(load, options, requestIdle) {
         started => started.execute(command, journaling),
         () => unavailable('coordinator', 'reload-required', false),
       ),
+    /** @type {(request: {type: string}) => Promise<unknown>} #280's probe: a query over the writes' client */
+    query: request =>
+      start().then(
+        started => started.client.query(request),
+        () => ({ kind: 'failed', cause: 'unavailable', code: 'reload-required' }),
+      ),
     /** @param {Promise<unknown>} answer - the page's first read */
     read: answer => {
       if (idle) answer.then(idle, idle);
@@ -660,6 +666,8 @@ export function createNewTabPageClient(
   };
   /** @type {Client['query']} */
   const query = request => {
+    // #280's probe: the status lines' trust.status goes to the worker over #13's port
+    if (/** @type {string} */ (request.type) === 'trust.status') return /** @type {any} */ (writes.query(request));
     const answer = reads.query(request);
     writes.read(answer);
     return answer;

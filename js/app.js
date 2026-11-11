@@ -279,7 +279,7 @@ class App {
       this.trustStatusAsk = loader
         .loadChunk('trust-status-ask', () => import('./kernel/composition/trust-status-ask.js'))
         .then((result) => {
-          if (result.status === 'loaded') return result.module.startStatusAsk({ loader });
+          if (result.status === 'loaded') return result.module.startStatusAsk({ loader, client: this.kernel });
           this.trustStatusAsk = null;
           return null;
         })
