@@ -3049,11 +3049,6 @@ a.setting-link {
   color: var(--text-secondary);
 }
 
-.sidebar-footer-btn.active {
-  background: var(--bg-primary);
-  color: var(--accent-color);
-}
-
 .sidebar-footer-btn .sidebar-tab-badge {
   position: absolute;
   top: 2px;
