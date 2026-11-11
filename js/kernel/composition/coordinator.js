@@ -64,6 +64,18 @@
  * `coordinator.turn-stuck`, by the command's type and how long it ran.
  * system.coordinatorHealth says which command holds the queue (`running`), and how many turns it
  * cut in this worker's life (`cutTurns`).
+ *
+ * It pauses while another context restores the notes (#35 slice 7, core/messaging/
+ * restore-messages.js). It checks Web Lock `storage.restore` with `locks.query()` at its start,
+ * before each dequeue, and at once on `storage.restoring`. While another context holds it, nothing
+ * dequeues, its kernel opens nothing, its adapter closes once the command running then is in, and
+ * each welcome and system.coordinatorHealth say `restoring`, which the router answers a command
+ * still waiting at its deadline with. Queued commands need no flush to the journal: a journaled one
+ * has its page's entry, and the rest answer `restoring` there. It resumes once it can take the lock
+ * itself, so a restorer that dies mid-restore holds it no longer than its context lives (call 9),
+ * and `storage.restored` only makes it check at once. Then it reopens its adapter, drains the
+ * journal on the queue, and the commands that waited run in order, each asking its request's
+ * `begin` at its own dequeue, so one the router answered meanwhile never runs.
  */
 
 import { TURN_EXCEEDED } from '../core/application/kernel.js';
@@ -72,6 +84,7 @@ import { isRecord } from '../core/contracts/checks.js';
 import { TURN_LIMIT_MS } from '../core/contracts/limits.js';
 import { HELD_NOTES_NAMED } from '../core/contracts/operations/system-coordinator-health.js';
 import { failed, ready, unavailable } from '../core/contracts/outcomes.js';
+import { RESTORE_LOCK, RESTORING } from '../core/messaging/restore-messages.js';
 import { systemClock } from '../core/ports/runtime.js';
 import { hostTimers, randomIds } from './messaging.js';
 
@@ -118,6 +131,33 @@ import { hostTimers, randomIds } from './messaging.js';
  */
 
 /**
+ * What a worker kernel adds for the pause while another context restores (#35 slice 7,
+ * ./background.js's worker client): close() closes its adapter, and reopen() opens one again,
+ * through a new migration attempt
+ * @typedef {{close?: () => unknown, reopen?: () => Promise<unknown>}} Pausable
+ */
+
+/**
+ * Web Locks, as the coordinator watches Web Lock `storage.restore` with them (#35 slice 7):
+ * query() for what's held now, and request(), which waits until it can take the lock
+ * @typedef {{
+ *   query: () => Promise<{held?: Array<{name?: string}>}>,
+ *   request: (name: string, callback: () => unknown) => Promise<unknown>,
+ * }} RestoreLocks
+ */
+
+/** A gate: `shut` waits until `open()` lets it through */
+const gate = () => {
+  /** @type {() => void} */
+  let open = () => {};
+  /** @type {Promise<unknown>} */
+  const shut = new Promise(resolve => {
+    open = () => resolve(undefined);
+  });
+  return { shut, open };
+};
+
+/**
  * The worker's background coordinator
  * @typedef {object} Coordinator
  * @property {string} instanceId - this worker instance's, the router's coordinatorId
@@ -146,6 +186,14 @@ import { hostTimers, randomIds } from './messaging.js';
  *   What the router tells it of a connection that closed: once the page that owns the session's
  *   entries is gone, it drains, so what that page journaled and sent just before it went lands then,
  *   not at the next start (#35 slice 4b-2, rule 7). It never rejects.
+ * @property {() => Promise<CoordinatorStatus>} restoring
+ *   What js/background.js tells it of a `storage.restoring` (#35 slice 7): it checks Web Lock
+ *   `storage.restore` at once, and answers what a welcome says once it has paused, the command
+ *   running then in and its adapter closed, or at once when no other context holds the lock. It
+ *   never rejects.
+ * @property {() => Promise<CoordinatorStatus>} restored
+ *   What it tells it of a `storage.restored`: it checks the lock at once and answers what a welcome
+ *   says then. The resume never waits for it. It never rejects.
  */
 
 /** The reason a welcome gives, and the code every command answers, when the kernel can't be built */
@@ -261,17 +309,24 @@ const reportUnbuilt = error => console.error("NewTabNote: the background coordin
  * retryable, `turn-exceeded`, and `onCut` hears the turn's type and how long it ran. What the task
  * settles with after its cut changes nothing, but `onLate` hears the type and the turn's age when
  * that's a commit (#247). `running()` is the turn that holds the queue: its type, when it began,
- * and how many wait behind it, or null while the queue is idle.
+ * and how many wait behind it, or null while the queue is idle. `idle()` resolves once that turn
+ * has its outcome or its cut, and at once while the queue is idle.
+ *
+ * `before`, when it's given, runs before each dequeue, and the turn waits for it (#35 slice 7: the
+ * coordinator's check of Web Lock `storage.restore`, and its pause): `begin` is asked once it's in,
+ * so a request that ended meanwhile never runs. One that throws or rejects holds nothing up.
  * @param {{
  *   timers?: Timers,
  *   clock?: {now(): number},
  *   limitMs?: number,
  *   onCut?: (type: string, ageMs: number) => void,
  *   onLate?: (type: string, ageMs: number) => void,
+ *   before?: (() => unknown) | null,
  * }} [options]
  * @returns {{
  *   run: <T>(task: Task<T>, begin?: () => boolean, type?: string) => Promise<T | Unavailable | null>,
  *   running: () => RunningTurn | null,
+ *   idle: () => Promise<unknown>,
  * }}
  */
 export function commandQueue({
@@ -280,10 +335,11 @@ export function commandQueue({
   limitMs = TURN_LIMIT_MS,
   onCut = () => {},
   onLate = () => {},
+  before = null,
 } = {}) {
   /** @type {Promise<unknown>} */
   let tail = Promise.resolve();
-  /** @type {{type: string, since: number} | null} the turn that holds the queue */
+  /** @type {{type: string, since: number, over: Promise<unknown>} | null} the turn that holds the queue */
   let current = null;
   /** How many turns wait behind the one that holds the queue */
   let waiting = 0;
@@ -298,13 +354,15 @@ export function commandQueue({
   const turnOf = (task, type) =>
     new Promise((resolve, reject) => {
       const since = clock.now();
-      const turn = { type, since };
+      const { shut: over, open: done } = gate();
+      const turn = { type, since, over };
       current = turn;
       let cut = false;
       let settled = false;
       const end = () => {
         settled = true;
         if (current === turn) current = null;
+        done();
       };
       const bound = timers.set(() => {
         if (settled) return;
@@ -350,7 +408,15 @@ export function commandQueue({
      */
     run(task, begin = () => true, type = '') {
       waiting++;
-      const turn = tail.then(() => {
+      const due = before
+        ? tail
+            .then(() => before())
+            .then(
+              () => {},
+              () => {},
+            )
+        : tail;
+      const turn = due.then(() => {
         waiting--;
         return begin() ? turnOf(task, type) : null;
       });
@@ -362,6 +428,7 @@ export function commandQueue({
     },
     running: () =>
       current ? { type: /** @type {RunningTurn['type']} */ (current.type), since: current.since, waiting } : null,
+    idle: () => (current ? current.over : Promise.resolve()),
   });
 }
 
@@ -400,10 +467,12 @@ export function pageCommandHandlers(current) {
 export function unavailableCoordinator(instanceId) {
   const client = unavailableClient(unavailable('coordinator', UNAVAILABLE, false));
   const start = () => Promise.resolve();
+  /** @returns {CoordinatorStatus} */
+  const status = () => ({ status: 'degraded', reason: UNAVAILABLE });
   return Object.freeze({
     instanceId,
     start,
-    status: () => ({ status: /** @type {const} */ ('degraded'), reason: UNAVAILABLE }),
+    status,
     health: () => ({
       status: /** @type {const} */ ('degraded'),
       reason: UNAVAILABLE,
@@ -418,6 +487,9 @@ export function unavailableCoordinator(instanceId) {
     installed: start,
     drain: () => Promise.resolve(null),
     closed: () => Promise.resolve(null),
+    // It holds nothing open, so a restore waits on nothing of it (#35 slice 7)
+    restoring: () => Promise.resolve(status()),
+    restored: () => Promise.resolve(status()),
   });
 }
 
@@ -427,15 +499,19 @@ export function unavailableCoordinator(instanceId) {
  * awaits nothing before it. A throw from it leaves the coordinator unavailable for this
  * instance, is `coordinator.start-failed`, and goes to `report`.
  * `journal` is the worker's journal, which it drains once it's ready (#35 slice 3). `timers` time
- * each turn on its queue against TURN_LIMIT_MS (#35 slice 4b-1).
+ * each turn on its queue against TURN_LIMIT_MS (#35 slice 4b-1). With `locks`, navigator.locks in
+ * the worker, it pauses while another context holds Web Lock `storage.restore` (#35 slice 7), and
+ * hands makeKernel `whenClear`, which each of the kernel's attempts waits for before it reads or
+ * opens anything. Without them it never pauses.
  * @param {{
  *   instanceId: string,
- *   makeKernel: () => Client,
+ *   makeKernel: (gates: {whenClear: () => Promise<unknown>}) => Client,
  *   events?: Events | null,
  *   clock?: {now(): number},
  *   timers?: Timers,
  *   report?: (error: unknown) => void,
  *   journal?: CoordinatorJournal | null,
+ *   locks?: RestoreLocks | null,
  * }} options
  * @returns {Coordinator}
  */
@@ -447,6 +523,7 @@ export function createCoordinator({
   timers = hostTimers,
   report = reportUnbuilt,
   journal: entries = null,
+  locks = null,
 }) {
   /** @type {'idle' | 'starting' | 'ready' | 'degraded' | 'unavailable'} */
   let state = 'idle';
@@ -456,10 +533,27 @@ export function createCoordinator({
   let kernel = null;
   /** How many turns the queue cut in this worker's life (#35 slice 4b-1) */
   let cutTurns = 0;
+  /** Whether another context holds `storage.restore`, as last checked, so it's paused (#35 slice 7) */
+  let paused = false;
+  /** Whether the kernel's storage may be open: its start's check found no restore, or it resumed */
+  let opened = false;
+  /** Whether this pause closed the kernel's adapter, so the resume reopens it */
+  let closed = false;
+  /** @type {Promise<void>} the start's check of the lock, which the kernel and the queue wait for */
+  let startChecked = Promise.resolve();
+  /** @type {Promise<unknown>} resolves once the pause holds nothing open */
+  let quiet = Promise.resolve();
+  /** @type {Promise<void> | null} the coordinator's own wait to take the lock */
+  let lockWait = null;
+  /** @type {ReturnType<typeof gate> | null} what the kernel's attempts wait on, from a pause until the lock frees */
+  let storageGate = null;
+  /** @type {ReturnType<typeof gate> | null} what each dequeue waits on, from a pause until its reopen is in */
+  let queueGate = null;
   /**
    * The one queue the kernel's commands wait their turn on (#35 slice 4a). A turn it cuts is
    * journaled by the command's type and how long it ran, and nothing more: no incident, since a
-   * journaled command replays at the next drain, and the health shows the cut (the lead's ruling)
+   * journaled command replays at the next drain, and the health shows the cut (the lead's ruling).
+   * With `locks`, each dequeue first checks for a restore, and waits out a pause (#35 slice 7).
    */
   const queue = commandQueue({
     timers,
@@ -471,7 +565,129 @@ export function createCoordinator({
     // A cut command that landed anyway, journaled as each cut is, with no incident and no count
     // (#247, the lead's ruling)
     onLate: (type, ageMs) => journal(events, 'coordinator.turn-landed-late', { commandType: type, ageMs }),
+    before: locks
+      ? async () => {
+          await startChecked;
+          if (!paused && (await heldElsewhere())) pause();
+          while (queueGate) await queueGate.shut;
+        }
+      : null,
   });
+
+  /**
+   * Whether another context holds Web Lock `storage.restore` now. A lock manager that can't say
+   * holds nothing up. It never rejects.
+   * @returns {Promise<boolean>}
+   */
+  const heldElsewhere = async () => {
+    if (!locks) return false;
+    try {
+      const snapshot = await locks.query();
+      const held = snapshot && Array.isArray(snapshot.held) ? snapshot.held : [];
+      return held.some(lock => Boolean(lock) && lock.name === RESTORE_LOCK);
+    } catch {
+      return false;
+    }
+  };
+
+  /** What each of the kernel's attempts waits for before it reads or opens anything */
+  const whenClear = () => startChecked.then(() => (storageGate ? storageGate.shut : undefined));
+
+  /** Closes the kernel's adapter for the pause, where its kernel can (Pausable) */
+  const closeKernel = () => {
+    try {
+      const { close } = /** @type {Pausable} */ (/** @type {unknown} */ (kernel ?? {}));
+      if (typeof close === 'function') close();
+    } catch {
+      // A close that throws leaves nothing more to do
+    }
+  };
+
+  /**
+   * Pauses while another context restores: nothing dequeues, the kernel opens nothing, its adapter
+   * closes once the command running now is in, and it waits to take the lock itself
+   */
+  const pause = () => {
+    if (paused) return;
+    paused = true;
+    if (!storageGate) storageGate = gate();
+    if (!queueGate) queueGate = gate();
+    quiet = opened
+      ? queue.idle().then(() => {
+          if (paused && !closed) {
+            closed = true;
+            closeKernel();
+          }
+        })
+      : Promise.resolve();
+    waitForRestore();
+  };
+
+  /**
+   * Waits until it can take the lock, which frees whether the restorer let it go or its context
+   * died (call 9), lets it go at once, and resumes. It never rejects.
+   */
+  const waitForRestore = () => {
+    if (lockWait || !locks) return;
+    const held = locks;
+    lockWait = Promise.resolve()
+      .then(() => held.request(RESTORE_LOCK, () => undefined))
+      .catch(() => undefined)
+      .then(() => {
+        lockWait = null;
+        return resume();
+      })
+      .catch(() => undefined);
+  };
+
+  /** Lets the commands that waited go on, in order, unless another pause has begun */
+  const release = () => {
+    if (paused || !queueGate) return;
+    const waited = queueGate;
+    queueGate = null;
+    waited.open();
+  };
+
+  /**
+   * Resumes once no other context holds the lock: the kernel may open again, its adapter reopens
+   * if this pause closed it, and once its open has answered, it drains the journal on the queue
+   * and lets the commands that waited go on
+   */
+  const resume = async () => {
+    // Another restore may have taken the lock as this one let it go
+    if (await heldElsewhere()) {
+      waitForRestore();
+      return;
+    }
+    paused = false;
+    const reopening = closed;
+    closed = false;
+    opened = true;
+    const storage = storageGate;
+    storageGate = null;
+    if (storage) storage.open();
+    try {
+      const { reopen } = /** @type {Pausable} */ (/** @type {unknown} */ (kernel ?? {}));
+      if (reopening && typeof reopen === 'function') await reopen();
+    } catch {
+      // Its open answers why it couldn't, below
+    }
+    try {
+      if (kernel && state !== 'unavailable') await settle(kernel, clock.now());
+    } finally {
+      release();
+    }
+  };
+
+  /**
+   * Checks the lock now, and pauses while another context holds it. It never rejects.
+   * @returns {Promise<void>}
+   */
+  const checkNow = async () => {
+    if (!locks) return;
+    await startChecked;
+    if (await heldElsewhere()) pause();
+  };
   /** @type {Client | null} the kernel with each command on the queue: what client() hands out and the drain runs on */
   let queued = null;
   /** What the worker's handlers run on until the kernel is built, and for good if it can't be */
@@ -583,6 +799,8 @@ export function createCoordinator({
     } catch (error) {
       failure = error;
     }
+    // Another context began a restore meanwhile, so the resume asks again (#35 slice 7)
+    if (paused) return;
     if (!failure) {
       state = 'ready';
       reason = '';
@@ -591,6 +809,8 @@ export function createCoordinator({
       // What a context journaled and didn't live to see answered, after the start, which
       // nothing that waits on the start waits for (#35 slice 3), each replay on the queue
       drainOn(queued || onQueue(built));
+      // After a pause, the commands that waited go on now, ahead of the drain's replays
+      release();
       if (checkWhenReady) {
         checkWhenReady = false;
         await check(built);
@@ -623,8 +843,19 @@ export function createCoordinator({
     state = 'starting';
     const began = clock.now();
     startedAt = began;
+    // The start's check of `storage.restore` (#35 slice 7), begun before the kernel is built and
+    // never awaited before it: the kernel's first attempt waits for it, so it opens nothing while
+    // another context restores
+    if (locks) {
+      startChecked = heldElsewhere().then(held => {
+        if (held) pause();
+        else opened = true;
+      });
+    } else {
+      opened = true;
+    }
     try {
-      kernel = counted(makeKernel());
+      kernel = counted(makeKernel({ whenClear }));
       queued = onQueue(kernel);
     } catch (error) {
       state = 'unavailable';
@@ -636,6 +867,12 @@ export function createCoordinator({
         // Nothing a report throws changes what the worker answers
       }
       return;
+    }
+    if (locks) {
+      await startChecked;
+      // Another context restores: the start resolves now, so a hello is welcomed `restoring` at
+      // once, and the resume opens the kernel once that context lets the lock go
+      if (paused) return;
     }
     await settle(kernel, began);
   };
@@ -656,6 +893,8 @@ export function createCoordinator({
    */
   const migrationNow = () => {
     const migration = kernel ? /** @type {WithMigration} */ (/** @type {unknown} */ (kernel)).migration : undefined;
+    // It says `restoring` then, not `migrating` (#35 slice 7)
+    if (paused) return null;
     if (state === 'degraded' && reason === MIGRATING) {
       return migration && typeof migration.blocked === 'function' && !migration.blocked() ? 'running' : 'blocked';
     }
@@ -724,15 +963,21 @@ export function createCoordinator({
 
   /** @returns {CoordinatorStatus} */
   const status = () => {
+    // Another context restores, and nothing dequeues until it lets the lock go (#35 slice 7)
+    if (paused) return { status: 'degraded', reason: RESTORING };
     if (state === 'ready') return { status: 'ready' };
     if (migrationNow() !== null) return { status: 'degraded', reason: MIGRATING };
     return { status: 'degraded', reason: state === 'idle' || state === 'starting' ? 'starting' : reason };
   };
 
-  /** @returns {Promise<unknown>} what a drain once it's ready did, and null while it isn't ready */
+  /**
+   * What a drain once it's ready did, and null while it isn't ready, or while another context
+   * restores, since the resume drains (#35 slice 7)
+   * @returns {Promise<unknown>}
+   */
   const drain = async () => {
     await start();
-    if (state !== 'ready' || !queued) return null;
+    if (state !== 'ready' || !queued || paused) return null;
     return drainOn(queued);
   };
 
@@ -764,12 +1009,13 @@ export function createCoordinator({
     async installed(installReason) {
       await start();
       if (!kernel || !CHECKED_ON.includes(/** @type {string} */ (installReason))) return;
-      if (state === 'ready') {
+      if (state === 'ready' && !paused) {
         await check(kernel);
         return;
       }
-      // While the upgrade is blocked, the check runs once the run's end lets the kernel open
-      if (state === 'degraded' && reason === MIGRATING) checkWhenReady = true;
+      // While the upgrade is blocked, or another context restores (#35 slice 7), the check runs
+      // once the kernel opens, and never reopens it meanwhile
+      if (paused || (state === 'degraded' && reason === MIGRATING)) checkWhenReady = true;
     },
     drain,
     closed(session) {
@@ -778,6 +1024,15 @@ export function createCoordinator({
       return Promise.resolve()
         .then(() => owner(session.sessionId))
         .then(drain, () => null);
+    },
+    async restoring() {
+      await checkNow();
+      await quiet;
+      return status();
+    },
+    async restored() {
+      await checkNow();
+      return status();
     },
   });
 }
