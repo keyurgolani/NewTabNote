@@ -14,7 +14,8 @@
  * vm.SourceTextModule, so node runs with --experimental-vm-modules (npm test passes it).
  * This file adds fakes for what the tests look at: the context menus created, the active
  * tab, and chrome.scripting.executeScript returning a selection from that tab, as #5's
- * extractSelection reads it (1.4.0 never calls it).
+ * extractSelection reads it (1.4.0 never calls it). The worker's global holds every
+ * build/define-allowlist.json row at its release value, as a release build inlines it (#300).
  */
 
 const { webcrypto } = require('node:crypto');
@@ -23,13 +24,13 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { pathToFileURL, fileURLToPath } = require('node:url');
 const { createLegacyEnv, dumpDatabase, recordsOf, plain } = require('./legacy-env');
+const { readAllowlist, defineName } = require('../../scripts/build/define-allowlist.js');
+const { format } = require('../../scripts/build/diagnostics.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const WORKER_SCRIPT = 'js/background.js';
 // What importScripts() throws in a module service worker
 const MODULE_IMPORT_SCRIPTS = "Failed to execute 'importScripts' on 'WorkerGlobalScope': Module scripts don't support importScripts().";
-// #27 adds it; then every row has to take its release-build value here
-const DEFINE_ALLOWLIST = path.join(ROOT, 'build', 'define-allowlist.json');
 // Rounds of queued work a capture may take before the worker counts as stuck
 const DRAIN_LIMIT = 10_000;
 
@@ -97,6 +98,11 @@ async function startWorker(env, { rewrite = {} } = {}) {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
   env.chrome.api.runtime.getManifest = () => structuredClone(manifest);
   env.global.crypto = webcrypto;
+  // The sources read each build/define-allowlist.json row as the global __NTN_<name>__, which no
+  // build wrote, so the worker gets each at its release value (#300)
+  const defines = readAllowlist(ROOT);
+  if (defines.problems.length > 0) throw new Error(defines.problems.map(format).join('\n'));
+  for (const [name, row] of Object.entries(defines.rows)) env.global[defineName(name)] = row.release;
 
   const modules = new Map();
   const rewritten = new Set();
@@ -150,10 +156,6 @@ async function startWorker(env, { rewrite = {} } = {}) {
  * }>}
  */
 async function loadBackground({ mutate, setup, opens = true, start = true, rewrite } = {}) {
-  if (fs.existsSync(DEFINE_ALLOWLIST)) {
-    throw new Error(`${path.relative(ROOT, DEFINE_ALLOWLIST)} exists: set each of its rows to its release-build value in test/helpers/load-background.js before loading the worker`);
-  }
-
   const env = createLegacyEnv({ context: 'worker' });
   const menus = [];
   env.chrome.api.contextMenus.create = (properties, callback) => {

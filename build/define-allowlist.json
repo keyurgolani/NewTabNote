@@ -1,0 +1,19 @@
+{
+  "about": "Each value the build inlines beyond three named keys (#300, from #27's Security). First-party code reads a row as __NTN_<name>__, and npm run build writes the row's release value in its place, npm run build:dev its dev value. build:test, which writes the test values, comes with #301. Each row names the issue that owns it and why it's here. moment and workspace stay false in release until their milestone's release PR turns them on (#34's release rule), and workspace gates #3's new Workspace, not today's workspace chunk. The three named keys aren't rows, and scripts/build/vite-config.js's define sets them: process.env.NODE_ENV, the mode, which js/core/logger.js reads; __NTN_BUILD_ID__, the build's ID, which the loader's update check compares with build-info.json's (js/runtime/lazy.js); and module, as undefined, so a legacy file takes its browser branch and not its CommonJS one. The define holds those three and the rows, and nothing else (test/build-define.test.js). A read of any other __NTN_ name fails the build as define/unknown, and a row with no owner, a value it can't inline or no reason fails it as define/file. test/helpers/load-background.js starts the worker with every row at its release value.",
+  "rows": {
+    "moment": {
+      "owner": 2,
+      "release": false,
+      "dev": false,
+      "test": false,
+      "reason": "#2's Moment shell. With it on, the new tab's boot root loads the moment chunk through loadChunk in place of workspace (#27's Entries). Nothing reads it yet: #2 does, and #2's release PR turns it on."
+    },
+    "workspace": {
+      "owner": 3,
+      "release": false,
+      "dev": false,
+      "test": false,
+      "reason": "#3's new Workspace, rebuilt around rail, collection, canvas and inspector regions. It gates that Workspace, not today's workspace chunk (js/main.js's graph), which nothing gates. Nothing reads it yet: #3 does, and #3's release PR turns it on."
+    }
+  }
+}

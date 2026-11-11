@@ -24,12 +24,14 @@
  * lightningcss. Development leaves JavaScript as the bundler writes it and still minifies CSS,
  * so a stylesheet lightningcss refuses fails both. Neither writes a source map, reads a .env
  * file, or inlines any environment variable but NODE_ENV, which is the mode. Each inlines the
- * build's ID, which the loader compares with build-info.json's (#27 slice 3).
+ * build's ID, which the loader compares with build-info.json's (#27 slice 3), and each
+ * build/define-allowlist.json row at the mode's value (#300), and nothing else.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { pageChunkGroups } = require('./page-chunks.js');
+const { defineValues } = require('./define-allowlist.js');
 
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).InlineConfig} InlineConfig */
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).Plugin} Plugin */
@@ -278,6 +280,8 @@ function workerTerserPlugin() {
  * @property {string} outDir - the staging directory every pass writes into
  * @property {Mode} mode
  * @property {string} buildId - the build's, which the loader carries (build-info.js's buildId)
+ * @property {Record<string, import('./define-allowlist.js').DefineRow>} defineRows - build/define-allowlist.json's
+ *   rows, read and checked (scripts/build/define-allowlist.js), which every pass inlines at the mode's value
  * @property {BundleReport} report - what the passes wrote, filled in as they run
  * @property {Logger} logger - Vite's own warnings and errors go here
  * @property {(level: LogLevel, log: RolldownLog, handler: LogHandler) => void} onLog - and the bundler's
@@ -290,7 +294,7 @@ function workerTerserPlugin() {
  * @param {PassOptions} options
  * @returns {InlineConfig}
  */
-function common({ root, mode, buildId, logger }) {
+function common({ root, mode, buildId, logger, defineRows }) {
   return {
     configFile: false,
     root,
@@ -302,6 +306,9 @@ function common({ root, mode, buildId, logger }) {
     customLogger: logger,
     clearScreen: false,
     define: {
+      // build/define-allowlist.json's rows, each __NTN_<name>__ at the mode's value. No row's name
+      // is one of the three keys below, and they come after the rows all the same.
+      ...defineValues(mode, defineRows),
       // The one environment value the build inlines, and never the environment's own NODE_ENV
       'process.env.NODE_ENV': JSON.stringify(mode),
       // The build's ID, from its inputs alone: the loader tells an update under the page by a
