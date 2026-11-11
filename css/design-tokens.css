@@ -178,6 +178,12 @@
   initial-value: #cbd5d1;
 }
 
+@property --seam-tint {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #cbd5d1;
+}
+
 @property --seam-strong {
   syntax: "<color>";
   inherits: true;
@@ -281,6 +287,7 @@
   --tint-urgent: #f6eee9;
   --tint-pending: #f7f4e8;
   --seam: #cbd5d1;
+  --seam-tint: #cbd5d1;
   --seam-strong: #aab9b4;
   --control-boundary: #778179;
   --focus-ring: #315f8a;
@@ -350,7 +357,7 @@
   --surface-paper: #191919;
   --surface-collection: #252525;
   --surface-intelligence: #252525;
-  --surface-muted: #2f2f2f;
+  --surface-muted: #2a2a2a;
   --surface-code: #2a2a2a;
   --text-primary: #e0e0e0;
   --text-secondary: #9b9b9b;
@@ -358,15 +365,16 @@
   --text-link: #e0e0e0;
   --action-destructive: #e03e3e;
   --state-danger: #e03e3e;
-  --ink-local: #e0e0e0;
+  --ink-local: #7a9d95;
   --ink-info: #e0e0e0;
-  --ink-urgent: #e0e0e0;
+  --ink-urgent: #af916c;
   --ink-pending: #e0e0e0;
   --tint-local: #2f2f2f;
   --tint-info: #2f2f2f;
   --tint-urgent: #2f2f2f;
   --tint-pending: #2f2f2f;
   --seam: #333333;
+  --seam-tint: #414141;
   --seam-strong: #3a3a3a;
   --control-boundary: #9b9b9b;
   --focus-ring-inner: #e0e0e0;
@@ -385,6 +393,7 @@
 :root[data-contrast="more"] {
   --text-secondary: #253443;
   --seam: #778179;
+  --seam-tint: #778179;
   --focus-width: 3px;
 }
 
@@ -392,6 +401,7 @@
 :root[data-scheme="dark"][data-contrast="more"] {
   --text-secondary: #e0e0e0;
   --seam: #9b9b9b;
+  --seam-tint: #9b9b9b;
   --focus-width: 3px;
 }
 
@@ -403,7 +413,7 @@
     --surface-paper: #191919;
     --surface-collection: #252525;
     --surface-intelligence: #252525;
-    --surface-muted: #2f2f2f;
+    --surface-muted: #2a2a2a;
     --surface-code: #2a2a2a;
     --text-primary: #e0e0e0;
     --text-secondary: #9b9b9b;
@@ -411,15 +421,16 @@
     --text-link: #e0e0e0;
     --action-destructive: #e03e3e;
     --state-danger: #e03e3e;
-    --ink-local: #e0e0e0;
+    --ink-local: #7a9d95;
     --ink-info: #e0e0e0;
-    --ink-urgent: #e0e0e0;
+    --ink-urgent: #af916c;
     --ink-pending: #e0e0e0;
     --tint-local: #2f2f2f;
     --tint-info: #2f2f2f;
     --tint-urgent: #2f2f2f;
     --tint-pending: #2f2f2f;
     --seam: #333333;
+    --seam-tint: #414141;
     --seam-strong: #3a3a3a;
     --control-boundary: #9b9b9b;
     --focus-ring-inner: #e0e0e0;
@@ -437,6 +448,7 @@
   :root[data-scheme="system"][data-contrast="more"] {
     --text-secondary: #e0e0e0;
     --seam: #9b9b9b;
+    --seam-tint: #9b9b9b;
     --focus-width: 3px;
   }
 }
@@ -446,12 +458,14 @@
   :root {
     --text-secondary: #253443;
     --seam: #778179;
+    --seam-tint: #778179;
     --focus-width: 3px;
   }
 
   :root[data-scheme="dark"] {
     --text-secondary: #e0e0e0;
     --seam: #9b9b9b;
+    --seam-tint: #9b9b9b;
     --focus-width: 3px;
   }
 }
@@ -460,6 +474,7 @@
   :root[data-scheme="system"] {
     --text-secondary: #e0e0e0;
     --seam: #9b9b9b;
+    --seam-tint: #9b9b9b;
     --focus-width: 3px;
   }
 }
@@ -496,6 +511,7 @@
     --tint-urgent: Canvas !important;
     --tint-pending: Canvas !important;
     --seam: CanvasText !important;
+    --seam-tint: CanvasText !important;
     --seam-strong: CanvasText !important;
     --control-boundary: CanvasText !important;
     --focus-ring: Highlight !important;

@@ -6,7 +6,10 @@
 // under it, over each surface that tint sits on, the focus ring at 3:1 on the surfaces, and white
 // at 4.5:1 on the fill and on its hover. Every rule that paints white over the accent paints it on
 // the fill. On a sidebar row, in each state the row takes, its grey preview holds 4.5:1 and a
-// checked box's edge 3:1 (#268).
+// checked box's edge 3:1 (#268). The active row, the active card, Settings' active page item and a
+// drop target each draw a bar in the ink on their inline-start edge, 3:1 against the list and a
+// hovered row, the cue that isn't their pale tint, and the system's Highlight under forced colors
+// (#267).
 
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
@@ -32,19 +35,19 @@ const WHITE = { r: 255, g: 255, b: 255, a: 1 };
 const SHEETS = ['css/editor.css', 'css/premium-chat.css'];
 
 /**
- * A sheet's style rules, each with its selectors, and whether an at-rule holds it
+ * A sheet's style rules, each with its selectors, whether an at-rule holds it, and the nearest one's prelude
  * @param {string} text
  */
 function rulesOf(text) {
-  /** @type {{selectors: string[], declarations: {property: string, value: string}[], nested: boolean}[]} */
+  /** @type {{selectors: string[], declarations: {property: string, value: string}[], nested: boolean, at: string | null}[]} */
   const out = [];
-  const visit = (/** @type {any[]} */ nodes, /** @type {boolean} */ nested) => {
+  const visit = (/** @type {any[]} */ nodes, /** @type {boolean} */ nested, /** @type {string | null} */ at) => {
     for (const node of nodes) {
-      if (node.type === 'rule') out.push({ selectors: splitTopLevel(node.prelude).map((s) => s.trim()), declarations: node.declarations, nested });
-      visit(node.children || [], true);
+      if (node.type === 'rule') out.push({ selectors: splitTopLevel(node.prelude).map((s) => s.trim()), declarations: node.declarations, nested, at });
+      visit(node.children || [], true, node.type === 'at-rule' ? `@${node.name} ${node.prelude}`.trim() : at);
     }
   };
-  visit(parse(text), false);
+  visit(parse(text), false, null);
   return out;
 }
 
@@ -519,6 +522,61 @@ describe("the theme engine's switch (js/theme-engine.js)", () => {
       if (inline.get('--accent-fill') !== want) misses.push(`${theme.name}: --accent-fill is ${inline.get('--accent-fill')} inline, not ${want}`);
       if (!sameColor(drawn, colorOf(want))) misses.push(`${theme.name}: .primary-btn draws rgb(${drawn.r}, ${drawn.g}, ${drawn.b}), not ${want}`);
       if (JSON.stringify(theme) !== saved) misses.push(`${theme.name}: the saved theme changed`);
+    }
+    assert.deepEqual(misses, []);
+  });
+});
+
+describe("the active rows' bar, the cue that isn't their tint (#267)", () => {
+  // --row-active-bg is pale enough to hold secondary text at 4.5:1 on it, so it can't tell an active
+  // part from the list or from a hovered row by itself: the bar does
+  const PARTS = [
+    ['the active row', '.sidebar-note-item.active'],
+    ['the active card', '.sidebar-notes-list.cards-view .sidebar-note-item.active'],
+    ["Settings' active page item", '.page-item.active'],
+    ['a drop target', '.sidebar-note-item.sidebar-drop-target'],
+  ];
+
+  it("draws a 3px bar in the ink on each active part's inline-start edge, at 3:1 against the list and against a hovered row, in light and dark", () => {
+    const misses = [];
+    for (const theme of THEMES) {
+      const list = token('--bg-secondary', theme);
+      const hovered = C.compositeOver(token('--bg-hover', theme), list);
+      for (const [name, selector] of PARTS) {
+        const part = ruleFor('css/editor.css', selector);
+        const tint = part && valueOf(part, 'background');
+        assert.ok(tint, `css/editor.css: ${selector}'s background`);
+        const painted = C.compositeOver(paintOf(tint, theme), list);
+        // Active against the list and against a hovered row, by the tint alone
+        const apart = `its tint ${shown(C.contrastRatio(painted, list))} against the list and ${shown(C.contrastRatio(painted, hovered))} against a hovered row`;
+        const rule = ruleFor('css/editor.css', `${selector}::before`);
+        const bar = rule && valueOf(rule, 'background');
+        if (!bar) {
+          misses.push(`${theme}: ${name} draws no bar, ${apart}`);
+          continue;
+        }
+        const shape = ['content', 'position', 'inset-inline-start', 'width'].map((property) => `${property}: ${valueOf(rule, property)}`).join('; ');
+        if (shape !== "content: ''; position: absolute; inset-inline-start: 0; width: 3px") misses.push(`${theme}: ${name}'s bar is ${shape}`);
+        const color = paintOf(bar, theme);
+        for (const [surface, under] of [['the list', list], ['a hovered row', hovered]]) {
+          const value = C.contrastRatio(C.compositeOver(color, under), under);
+          if (value < 3) misses.push(`${theme}: ${name}'s bar, ${bar}, on ${surface} ${shown(value)}`);
+        }
+      }
+    }
+    assert.deepEqual(misses, []);
+  });
+
+  it('draws the bar in Highlight under forced colors, which would draw it in Canvas', () => {
+    const forced = RULES['css/editor.css'].filter((rule) => rule.at === '@media (forced-colors: active)');
+    const misses = [];
+    for (const [name, selector] of PARTS) {
+      const rule = forced.find((r) => r.selectors.includes(`${selector}::before`));
+      const background = rule && valueOf(rule, 'background');
+      const adjust = rule && valueOf(rule, 'forced-color-adjust');
+      if (!background || background.toLowerCase() !== 'highlight' || adjust !== 'none') {
+        misses.push(`${name}'s bar under forced colors: ${rule ? `background ${background}, forced-color-adjust ${adjust}` : 'no rule'}`);
+      }
     }
     assert.deepEqual(misses, []);
   });

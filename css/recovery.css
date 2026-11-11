@@ -577,11 +577,12 @@ html {
 }
 
 /* Under a problem that leads a row's evidence, the row's checks that passed sit apart, after a
-   seam, under "Also checked" (#20 slice 4c) */
+   seam, under "Also checked" (#20 slice 4c). The row is tinted when it needs attention, so the
+   seam is the one for a tinted row (#267) */
 .trust-also {
   margin: var(--space-control) 0 0;
   padding-top: var(--space-control);
-  border-top: 1px solid var(--seam);
+  border-top: 1px solid var(--seam-tint);
   color: var(--text-secondary);
 }
 

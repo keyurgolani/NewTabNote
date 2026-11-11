@@ -90,7 +90,7 @@ describe('test/build-fixtures/', () => {
       }
     }
     // The real tree's rows stay as they are
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'budgets.json'), 'utf8')).entries.newtab.start.js, { raw: 668520, gzip: 188943 });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'budgets.json'), 'utf8')).entries.newtab.start.js, { raw: 668515, gzip: 188944 });
   });
 
   it("a fixture that sets securityEntry is one for another rule, and its entry records the edited tree", () => {
