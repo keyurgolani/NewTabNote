@@ -19,6 +19,9 @@
  * command is sent and waits there. In the last four, the hold lasts until the case ends it, once
  * the command's page has closed or its worker has stopped, and the case checks that it still held
  * then, so what lands after is what the case claims, never the live turn landing first (#241).
+ * The last case holds Web Lock `storage.restore` instead, as a restore in another context does: a
+ * Popup quick note sent meanwhile waits in the worker uncommitted, its entry journaled, and commits
+ * once that page lets the lock go (#35 slice 7).
  * The tests also fail on an uncaught exception that test/known-defects.json doesn't list.
  */
 
@@ -28,6 +31,8 @@ const driver = require('./characterization/driver');
 
 /** How long the first test's holding page keeps the stores, which is longer than it needs to set up */
 const HOLD_MS = 4000;
+/** How long the restore case watches its quick note not commit: far past a commit, far short of its deadline */
+const RESTORE_WATCH_MS = 2000;
 
 /** In `page`: a readwrite transaction over CanvasTabDB's `stores`, kept busy for `ms` */
 function holdStores(page, stores, ms) {
@@ -477,4 +482,34 @@ test('a capture the worker was stopped in the middle of lands at its next start,
   ]);
   await expect.poll(() => journalEntries(next), { message: 'its entry is gone' }).toEqual([]);
   await expectNoUncaught(extension, next);
+});
+
+test('a quick note sent while another page holds storage.restore waits uncommitted, and commits once that page lets the lock go (#35 slice 7)', async ({ extension }) => {
+  await extension.seedOnboarded();
+  await driver.seedNotes(extension, [{ name: 'Already here', blocks: [{ type: 'text', content: 'An older note' }] }]);
+  const popup = await extension.openSurface('popup');
+  await expect.poll(() => journalIn(popup), { message: "Popup's journal is in" }).toBe(true);
+  // The lock a restore holds, as recovery.html's fallback and #304's command take it
+  const holder = await extension.openSurface('sidepanel');
+  await holder.evaluate(() => new Promise(held => {
+    navigator.locks.request('storage.restore', () => new Promise(release => {
+      window.__ntnRestore = release;
+      held();
+    }));
+  }));
+  const names = async () => (await profileStore(holder).getAllNotes(true)).map(note => note.name).sort();
+
+  // Sent: the worker checks the lock before its dequeue, so it waits there, and its entry stays
+  const input = popup.locator('#quick-note-input');
+  await input.fill('Call the plumber');
+  await input.press('Enter');
+  await holder.waitForTimeout(RESTORE_WATCH_MS);
+  expect(await names(), 'nothing commits while the lock is held').toEqual(['Already here']);
+  expect(await journalEntries(holder), 'the quick note, journaled while it waits').toEqual(['createNote']);
+
+  // The restore ends: the worker takes the lock itself, reopens, and runs it, with no message
+  await holder.evaluate(() => window.__ntnRestore());
+  await expect.poll(names, { message: 'the quick note, made once', timeout: 10_000 }).toEqual(['Already here', 'Call the plumber']);
+  await expect.poll(() => journalEntries(holder), { message: 'its entry is gone' }).toEqual([]);
+  await expectNoUncaught(extension, popup);
 });
