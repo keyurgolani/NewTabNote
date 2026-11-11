@@ -583,10 +583,10 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     // 668,515 / 188,933, and its gzip row 188,944: the build id spreads this row over 11 bytes (lazy.js
     // 1,504 to 1,515 gzip, measured over 500 build ids), since js/runtime/lazy.js:385 holds the id, which
     // scripts/build/build-info.js:116 makes the SHA-256 of the commit's tree, package-lock.json, the
-    // toolchain's versions and the mode (2026-11-10). Its start CSS: its start with #281 and #292 in as
-    // build job 130421806258 of PR checks run 42990463386 read it, 109,431 / 17,948, with no headroom
+    // toolchain's versions and the mode (2026-11-10). Its start CSS: its start with #281, #292 and #296 in
+    // as build job 130742183157 of PR checks run 43083605333 read it, 109,349 / 17,940, with no headroom
     // (2026-11-10)
-    assert.deepEqual(entries.newtab.start, { js: { raw: 668515, gzip: 188944 }, css: { raw: 109431, gzip: 17948 }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
+    assert.deepEqual(entries.newtab.start, { js: { raw: 668515, gzip: 188944 }, css: { raw: 109349, gzip: 17940 }, html: { raw: 72 * KIB, gzip: 12 * KIB }, fonts: null });
     // The workspace loads at boot, so it's start; nothing the root loads is named lazy
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
