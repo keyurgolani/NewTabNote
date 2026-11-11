@@ -1,0 +1,26 @@
+{
+  "about": "#24's matrix (interaction-contract.md, Responsive): each surface's default point, the widths it's also checked at, and the points that change one axis from the default on every surface. Widths are CSS px, zoom is a percentage, and fontSize is the profile's default font size in px. Zoom Z at width W is a W/Z CSS px viewport at deviceScaleFactor Z, and Popup at zoom Z is min(maxWidth, width x Z)/Z CSS px wide. Dark is gated against its ownerGate entries.",
+  "defaults": {
+    "wide": { "width": 1280, "zoom": 100, "fontSize": 16, "spacing": "default", "pointer": "fine", "scheme": "light", "contrast": "no-preference", "forcedColors": "none", "motion": "no-preference" },
+    "narrow": { "width": 360, "zoom": 100, "fontSize": 16, "spacing": "default", "pointer": "fine", "scheme": "light", "contrast": "no-preference", "forcedColors": "none", "motion": "no-preference" }
+  },
+  "surfaces": {
+    "moment": { "default": "wide", "widths": [320, 390, 720, 1100] },
+    "workspace": { "default": "wide", "widths": [320, 390, 720, 1100] },
+    "popup": { "default": "narrow", "widths": [320], "maxWidth": 800 },
+    "sidepanel": { "default": "narrow", "widths": [320] }
+  },
+  "everySurface": [
+    { "zoom": 200 },
+    { "zoom": 400 },
+    { "fontSize": 20 },
+    { "fontSize": 24 },
+    { "spacing": "override" },
+    { "pointer": "coarse" },
+    { "scheme": "dark" },
+    { "contrast": "more" },
+    { "forcedColors": "active" },
+    { "motion": "reduce" }
+  ],
+  "gated": { "scheme": { "dark": "#16-dark" } }
+}
