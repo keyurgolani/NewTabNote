@@ -1170,6 +1170,66 @@
       "replace": "    if (true) return false;\n",
       "test": "test/kernel/newtab-port.test.mjs",
       "name": "keeps a closing save its close-time draft holds in the page, so the next start makes one recovered note of the edit where another tab saved the block since, keeps that tab's text, and tells it"
+    },
+    {
+      "id": "chat-caret-block-blur-forgets",
+      "behavior": "#277 the chat keeps the caret's block",
+      "protects": "The block that held the person's caret stays once focus leaves the blocks for the chat, so the chat's insert goes after it.",
+      "file": "js/editor.js",
+      "find": "      if (!this.container.contains(this.doc.activeElement)) {\n        this.activeBlock = null;\n      }\n",
+      "replace": "      if (!this.container.contains(this.doc.activeElement)) {\n        this.activeBlock = null;\n        this.caretBlock = null;\n      }\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "keeps the block once the caret leaves it for the chat, so the insert confirmed after the blur goes after it"
+    },
+    {
+      "id": "chat-preview-caret-block-untaken",
+      "behavior": "#277 the chat keeps the caret's block",
+      "protects": "The chat's preview takes the block that held the person's caret as it opens, so its confirm inserts after that block though focus has left the blocks.",
+      "file": "js/controllers/ai-chat-controller.js",
+      "find": "      caretBlock: action === 'append' ? editor.caretBlock || null : null,\n",
+      "replace": "      caretBlock: undefined,\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "takes the block as the preview opens, so focus that leaves for the preview before the confirm changes nothing"
+    },
+    {
+      "id": "chat-caret-block-from-load-focus",
+      "behavior": "#277 the chat keeps the caret's block",
+      "protects": "The load's own focus of a note's first block isn't a caret the person placed, so a person who placed none still gets the chat's insert at the end.",
+      "file": "js/editor.js",
+      "find": "      if (e.target === this._loadFocused) this._loadFocused = null;\n      else this.caretBlock = blockEl.dataset.id;\n",
+      "replace": "      this.caretBlock = blockEl.dataset.id;\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "goes at the end when the person placed no caret in the note: the load's own focus of the first block doesn't pick it"
+    },
+    {
+      "id": "chat-caret-block-typing-untaken",
+      "behavior": "#277 the chat keeps the caret's block",
+      "protects": "Typing in a block places the person's caret there, in the first block too once the load focused it, so the chat's insert goes after it.",
+      "file": "js/editor.js",
+      "find": "    this.caretBlock = block.id;\n",
+      "replace": "",
+      "test": "test/version-history-inserts.test.js",
+      "name": "takes typing in the first block, where the load put the caret, as a caret the person placed there"
+    },
+    {
+      "id": "chat-caret-block-click-untaken",
+      "behavior": "#277 the chat keeps the caret's block",
+      "protects": "A click in the block that holds the focus places the person's caret there though it sends no focus event, so the chat's insert goes after it.",
+      "file": "js/editor.js",
+      "find": "    if (clicked && clicked.contains(this.doc.activeElement)) this.caretBlock = clicked.dataset.id;\n",
+      "replace": "",
+      "test": "test/version-history-inserts.test.js",
+      "name": "takes a click into the first block, where the load put the caret, as a caret the person placed there, though the click moves no focus"
+    },
+    {
+      "id": "chat-caret-block-load-focus-remarked",
+      "behavior": "#277 the chat keeps the caret's block",
+      "protects": "A load's focus of a block that holds the focus already sends no focus event, so it marks none, and the person's next focus of that block is a caret the person placed.",
+      "file": "js/editor.js",
+      "find": "          if (this.doc.activeElement !== firstContent) this._loadFocused = firstContent;\n",
+      "replace": "          this._loadFocused = firstContent;\n",
+      "test": "test/version-history-inserts.test.js",
+      "name": "takes the person's focus in the first block as a caret after a second load, whose own focus of that block, focused already, sends no focus event"
     }
   ]
 }

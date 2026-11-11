@@ -282,6 +282,15 @@ class BlockEditor {
     this.slashMenu = this.root.querySelector('.slash-menu') || this.doc.getElementById('slash-menu');
     this.slashMenuItems = this.slashMenu ? this.slashMenu.querySelector('.slash-menu-items') : null;
     this.activeBlock = null;
+    /**
+     * The block the person's caret was last in, kept once focus leaves the blocks, where
+     * activeBlock clears, so the AI chat's insert goes after it (#277). A focus in a block sets it,
+     * and typing or a click in one, but not the load's own focus of the first block. A load forgets it.
+     * @type {string | null}
+     */
+    this.caretBlock = null;
+    /** The element the load's own focus went to, until the focus listener hears it (#277) */
+    this._loadFocused = null;
     this.slashMenuVisible = false;
     this.slashMenuIndex = 0;
     this.slashFilter = '';
@@ -548,6 +557,8 @@ class BlockEditor {
     this.blocks = blocksData
       .sort((a, b) => (a.order || 0) - (b.order || 0))
       .map((data) => Block.deserialize(data));
+    // Only a caret placed in the note shown now picks where the chat's insert goes (#277)
+    this.caretBlock = null;
 
     // Clear undo/redo stacks for new note
     this.undoStack.length = 0;
@@ -606,6 +617,10 @@ class BlockEditor {
       try {
         const firstContent = this.container.querySelector('.block-content');
         if (firstContent && !this._focusInOverlay()) {
+          // The load's own focus, which places no caret of the person's (#277). One that holds the
+          // focus already gets no focus event, as when two loads close together focus it twice, so
+          // it isn't marked
+          if (this.doc.activeElement !== firstContent) this._loadFocused = firstContent;
           firstContent.focus();
           this.placeCaretAtEnd(firstContent);
         }
@@ -1939,6 +1954,8 @@ class BlockEditor {
 
     const block = this.getBlockById(blockEl.dataset.id);
     if (!block) return;
+    // Typing places the person's caret in this block, the first one too once the load focused it (#277)
+    this.caretBlock = block.id;
 
     // Capture before-snapshot for undo if not already pending
     if (!this._contentUndoPending[block.id]) {
@@ -2799,17 +2816,20 @@ class BlockEditor {
   }
 
   /**
-   * Handle block focus
+   * Handle block focus: the block holds the person's caret now, but for the load's own focus of
+   * the first block, which a person who never placed a caret in the note didn't place (#277)
    */
   onBlockFocus(e) {
     const blockEl = e.target.closest('.block');
     if (blockEl) {
       this.activeBlock = blockEl.dataset.id;
+      if (e.target === this._loadFocused) this._loadFocused = null;
+      else this.caretBlock = blockEl.dataset.id;
     }
   }
 
   /**
-   * Handle block blur
+   * Handle block blur. The block that held the caret stays caretBlock, for the chat's insert (#277)
    */
   onBlockBlur(e) {
     // Delay to allow click events to fire
@@ -2824,6 +2844,11 @@ class BlockEditor {
    * Handle block click
    */
   onBlockClick(e) {
+    // A click in the block that holds the focus places the person's caret there and sends no focus
+    // event, as in the first block once the load focused it (#277)
+    const clicked = e.target.closest('.block');
+    if (clicked && clicked.contains(this.doc.activeElement)) this.caretBlock = clicked.dataset.id;
+
     // A press on a divider or an image leaves no focus on its stop, which only the keys give it
     // (#202's review): a stop a click focused would take a typed letter, and Backspace would
     // delete its block. Its mousedown isn't prevented, which would keep the block from a drag.

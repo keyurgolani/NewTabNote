@@ -2096,6 +2096,9 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       blocks,
       content,
       preview,
+      // The block the person's caret was last in, taken now: focus left the blocks for the chat
+      // before this, and leaves for the preview's confirm after (#277). None puts the insert at the end
+      caretBlock: action === 'append' ? editor.caretBlock || null : null,
     };
 
     this.renderAIInsertPreview();
@@ -2161,11 +2164,11 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
   async confirmAIInsertPreview() {
     if (!this.aiInsertPreviewState) return;
 
-    const { action, blocks, content } = this.aiInsertPreviewState;
+    const { action, blocks, content, caretBlock } = this.aiInsertPreviewState;
     this.closeAIInsertPreview();
 
     if (action === 'append') {
-      await this.appendAIResponseToNote(blocks);
+      await this.appendAIResponseToNote(blocks, caretBlock);
       return;
     }
 
@@ -2214,7 +2217,14 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     if (this.indexing) this.indexing.noteChanged(noteId);
   }
 
-  async appendAIResponseToNote(blocksOrContent) {
+  /**
+   * Add the AI's blocks to the open note, after a block of it or at its end (Req 19.3)
+   * @param {Array<Object>|string} blocksOrContent
+   * @param {string|null} [afterBlockId] - the block they go after, as the preview took it (#277):
+   *   null for none, which puts them at the end. Left out, the block focused now
+   * @returns {Promise<void>}
+   */
+  async appendAIResponseToNote(blocksOrContent, afterBlockId) {
     const editor = this.getEditor ? this.getEditor() : null;
     if (!editor || !editor.noteId) {
       Utils.showToast('No note is currently open', 'error');
@@ -2222,9 +2232,10 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
     }
     // The note is taken before anything is awaited, and the blocks go to it
     const noteId = editor.noteId;
-    // So is the focused block: the confirm click's blur clears the editor's focus 100 ms on
-    // (editor.js's onBlockBlur), which can land while the save below is pending (#276)
-    const focusedBlockId = editor.activeBlock;
+    // So is the block they go after, the focused one when none is given: the confirm click's blur
+    // clears the editor's focus 100 ms on (editor.js's onBlockBlur), which can land while the save
+    // below is pending (#276)
+    const focusedBlockId = afterBlockId === undefined ? editor.activeBlock : afterBlockId;
 
     try {
       const parsedBlocks = Array.isArray(blocksOrContent)
@@ -2236,8 +2247,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
       // below is the stored one
       await editor.save();
 
-      // Insert after the block focused as the insert began, otherwise append at end (Req 19.3),
-      // at its index once the save is in
+      // Insert after that block, at its index once the save is in, otherwise append at end (Req
+      // 19.3): none, or one this note no longer holds
       let atOrder;
       if (editor.noteId === noteId && focusedBlockId) {
         const activeIdx = editor.blocks.findIndex(b => b.id === focusedBlockId);
