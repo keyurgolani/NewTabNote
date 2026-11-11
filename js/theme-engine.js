@@ -16,11 +16,11 @@ class ThemeEngine {
             '--text-muted': '#9b9b9b',
             '--text-placeholder': '#c4c4c4',
             '--border-color': '#e5e5e5',
-            '--accent-color': '#2383e2',
-            '--accent-hover': '#1a6fc4',
+            '--accent-color': '#1869ba',
+            '--accent-hover': '#155a9f',
             '--danger-color': '#e03e3e',
             '--code-bg': '#f4f4f4',
-            '--selection-bg': 'rgba(35, 131, 226, 0.15)',
+            '--selection-bg': 'rgba(24, 105, 186, 0.15)',
         };
 
         this.darkProperties = {
@@ -34,8 +34,11 @@ class ThemeEngine {
             '--text-placeholder': '#4a4a4a',
             '--border-color': '#333',
             '--code-bg': '#2a2a2a',
-            '--selection-bg': 'rgba(35, 131, 226, 0.25)',
+            '--selection-bg': 'rgba(100, 168, 235, 0.25)',
         };
+
+        /** @type {string[]} The properties injectProperties set on the root for the theme applied */
+        this.injected = [];
     }
 
     /**
@@ -81,7 +84,11 @@ class ThemeEngine {
             const customThemes = await this.settings.themes();
             const theme = customThemes.find(t => t.id === themeId);
             if (theme && theme.properties) {
-                properties = theme.properties;
+                // A theme saved before the accent split into ink and fill (#268) has no fill, so
+                // its fills take its own accent. The saved theme stays as it is
+                properties = !('--accent-fill' in theme.properties) && theme.properties['--accent-color']
+                    ? { ...theme.properties, '--accent-fill': theme.properties['--accent-color'] }
+                    : theme.properties;
                 // Determine if it's a dark or light custom theme for iconography/base styles
                 const isDark = this.isThemeDark(properties['--bg-primary']);
                 document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
@@ -97,15 +104,21 @@ class ThemeEngine {
     }
 
     /**
-     * Inject CSS custom properties into :root.
+     * Inject CSS custom properties into :root. The ones it set for the theme before that these
+     * lack come off, so the stylesheet's values for the new theme show, as on a page opened on
+     * it (#268). Inline styles other code set stay.
      * @param {Object<string, string>} properties - CSS variable key-value pairs
      * @returns {void}
      */
     injectProperties(properties) {
         const root = document.documentElement;
+        for (const key of this.injected) {
+            if (!(key in properties)) root.style.removeProperty(key);
+        }
         for (const [key, value] of Object.entries(properties)) {
             root.style.setProperty(key, value);
         }
+        this.injected = Object.keys(properties);
     }
 
     /**
