@@ -92,8 +92,10 @@ export const ERROR_CODES = Object.freeze([
   'version-too-new',
   'write-in-readonly-transaction',
   'write-outside-scope',
-  // #35's coordinator: its run upgrading the database, which the `coordinator` provider reads
+  // #35's coordinator: its run upgrading the database, and its pause while another context
+  // restores (slice 7), which the `coordinator` provider reads
   'migration-running',
+  'restoring',
   // #35 slice 3's journal drain: why an entry can't replay as written (journal-drain.js), a
   // newer build's, one naming an operation this build doesn't journal, one it can't read, one
   // the kernel refused, or one whose note isn't there or was deleted for a reason it keeps for;

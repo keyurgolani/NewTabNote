@@ -373,7 +373,13 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
       messaging: { query: async () => ready(1, { status: 'degraded', reason: 'restoring', ...health }) },
     });
     assert.deepEqual(
-      [restoring.receipt.status, restoring.receipt.evidence, restoring.receipt.consequenceKey, restoring.faults, restoring.looked],
+      [
+        restoring.receipt.status,
+        restoring.receipt.evidence,
+        restoring.receipt.consequenceKey,
+        restoring.faults,
+        restoring.looked,
+      ],
       ['unverified', { errorCode: 'restoring' }, null, [], []],
     );
   });

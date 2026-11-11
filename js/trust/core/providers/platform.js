@@ -134,6 +134,9 @@ export const coordinator = Object.freeze({
       const errorCode = health.migration === 'running' ? 'migration-running' : 'blocked-upgrade';
       return { status: 'unverified', evidence: { errorCode } };
     }
+    // Restoring: another context holds Web Lock storage.restore, and the coordinator waits for it
+    // to let go (#35 slice 7). Nothing failed
+    if (health.reason === 'restoring') return { status: 'unverified', evidence: { errorCode: 'restoring' } };
     return { status: 'unverified' };
   },
 });
