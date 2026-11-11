@@ -6,7 +6,8 @@
  *
  * Every message starts with the ledger rule it counts under, in brackets. no-undef's can't
  * carry one, and check:boundaries counts it as registry-global in js/kernel/registry/, as
- * trust-global in js/trust/core/, and as core-global everywhere else.
+ * trust-global in js/trust/core/, as states-global in js/states/core/, and as core-global
+ * everywhere else.
  */
 
 import fs from 'node:fs';
@@ -582,6 +583,25 @@ export default [
         rule: 'trust-import',
         message: 'js/trust/core/ imports only from itself, js/kernel/core/, js/kernel/registry/, and js/lib/valibot/.',
         allow: ['js/trust/core/', 'js/kernel/core/', 'js/kernel/registry/', 'js/lib/valibot/'],
+      }],
+    },
+  },
+  // #26's states core is host-neutral under the same rules, with the same imports as the trust
+  // core, and none from it: the trust core's views move onto the states presenter (#26 slice 4).
+  {
+    files: ['js/states/core/**/*.js', 'js/states/core/**/*.mjs'],
+    plugins: { kernel },
+    languageOptions: { globals: { window: 'off', self: 'off' } },
+    rules: {
+      'no-undef': ['error', { typeof: true }],
+      'no-restricted-globals': ['error', {
+        name: 'globalThis',
+        message: '[states-global] js/states/core/ is host-neutral: no browser API or legacy global, globalThis included.',
+      }],
+      'kernel/imports': ['error', {
+        rule: 'states-import',
+        message: 'js/states/core/ imports only from itself, js/kernel/core/, js/kernel/registry/, and js/lib/valibot/.',
+        allow: ['js/states/core/', 'js/kernel/core/', 'js/kernel/registry/', 'js/lib/valibot/'],
       }],
     },
   },

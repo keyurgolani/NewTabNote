@@ -74,6 +74,9 @@ const RULES = {
   // #20's trust core, host-neutral like core (#20 slice 1)
   'trust-global': 'a browser API or legacy global in js/trust/core/',
   'trust-import': 'an import into js/trust/core/ from outside it, kernel core, the registry kit, and js/lib/valibot/',
+  // #26's states core, host-neutral like core (#26 slice 1)
+  'states-global': 'a browser API or legacy global in js/states/core/',
+  'states-import': 'an import into js/states/core/ from outside it, kernel core, the registry kit, and js/lib/valibot/',
   'app-callback': "an assignment to a controller's on* or get* property in js/app.js",
   'legacy-store': "a handle on js/storage.js the new-tab root gives App, or the whole of it as legacyStorage, outside js/kernel/",
   'scheduler-timer': 'a setInterval assigned to autoTitleIntervalId or insightsIntervalId',
@@ -174,18 +177,20 @@ function byRowKey(a, b) {
   return byFileThenRule(a, b) || byName(a, b) || (a.verify < b.verify ? -1 : a.verify > b.verify ? 1 : 0);
 }
 
-/** Where no-undef counts under registry-global or trust-global rather than core-global */
+/** Where no-undef counts under registry-global, trust-global or states-global rather than core-global */
 const REGISTRY_DIR = 'js/kernel/registry/';
 const TRUST_DIR = 'js/trust/core/';
+const STATES_DIR = 'js/states/core/';
 
 /**
  * The ledger rule an ESLint message in `file` counts under, or null when it isn't a boundary
- * message. no-undef runs only in kernel core, the registry kit, and the trust core, so its
- * rule is the one for the directory it's in.
+ * message. no-undef runs only in kernel core, the registry kit, the trust core, and the states
+ * core, so its rule is the one for the directory it's in.
  */
 function ruleOf(message, file = '') {
   if (message.ruleId === 'no-undef') {
     if (file.startsWith(REGISTRY_DIR)) return 'registry-global';
+    if (file.startsWith(STATES_DIR)) return 'states-global';
     return file.startsWith(TRUST_DIR) ? 'trust-global' : 'core-global';
   }
   const tag = /\[([^\]\s]+)\]/.exec(message.message || '');
