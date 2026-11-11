@@ -510,9 +510,11 @@ class AIChatController {
     // The note the answer is about, which a title it generates goes to
     const noteId = editor ? editor.noteId : null;
     const blocks = (editor && editor.blocks) ? editor.blocks : [];
-    const cursorIndex = (editor && editor.activeBlock)
-      ? blocks.findIndex(b => b.id === editor.activeBlock)
-      : -1;
+    // The context centers on the block the person's caret was last in, the one the editor keeps
+    // once focus leaves the blocks for the chat's input (#277) and the one the chat's insert goes
+    // after, so the two agree on where the person was. None ranks as before (#279)
+    const caretBlock = editor ? editor.caretBlock : null;
+    const cursorIndex = caretBlock ? blocks.findIndex(b => b.id === caretBlock) : -1;
 
     let noteContent;
     let contextResult;
@@ -3357,7 +3359,8 @@ Be concise but helpful. If the user asks to generate a title, respond with ONLY 
    *   4. Remaining blocks in order
    *
    * @param {Array<Object>} blocks - Array of block data objects from the editor
-   * @param {number} cursorIndex - Index of the currently focused block (-1 if none)
+   * @param {number} cursorIndex - Index of the block the person's caret was last in, the editor's
+   *   caretBlock (-1 if none)
    * @param {Object} [options]
    * @param {number} [options.tokenLimit=6000] - Max estimated tokens (chars / 4)
    * @returns {{ content: string, percentage: number, isWindowed: boolean }}
