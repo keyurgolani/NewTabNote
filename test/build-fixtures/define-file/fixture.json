@@ -1,0 +1,13 @@
+{
+  "rule": "a build/define-allowlist.json row's owner isn't the number of the issue that owns it",
+  "expect": [
+    "define/file"
+  ],
+  "edits": [
+    {
+      "file": "build/define-allowlist.json",
+      "replace": "\"owner\": 2,",
+      "with": "\"owner\": \"#2\","
+    }
+  ]
+}

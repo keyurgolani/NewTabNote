@@ -1,0 +1,13 @@
+{
+  "rule": "first-party code reads import.meta.env",
+  "expect": [
+    "env/reference"
+  ],
+  "securityEntry": true,
+  "edits": [
+    {
+      "file": "js/offscreen.js",
+      "append": "\nconst ntnFixtureMeta = import.meta.env.NTN_FIXTURE_KEY;\n"
+    }
+  ]
+}

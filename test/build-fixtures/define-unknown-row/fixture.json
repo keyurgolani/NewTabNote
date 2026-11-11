@@ -1,0 +1,13 @@
+{
+  "rule": "first-party code reads an __NTN_ name build/define-allowlist.json has no row for, so the build writes no value in its place",
+  "expect": [
+    "define/unknown"
+  ],
+  "securityEntry": true,
+  "edits": [
+    {
+      "file": "js/offscreen.js",
+      "append": "\nglobalThis.ntnFixtureRow = __NTN_nope__;\n"
+    }
+  ]
+}

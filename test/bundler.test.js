@@ -30,9 +30,12 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 const MANIFEST = JSON.parse(read('manifest.json'));
 const PAGES = Object.values(config.PAGES);
 
-/** What a pass's configuration takes, reporting into an empty report */
+/**
+ * What a pass's configuration takes, reporting into an empty report, with no define allowlist
+ * rows: what each pass inlines is test/build-define.test.js's
+ */
 function passOptions(mode = 'production') {
-  return { root: '/repo', outDir: '/repo/.dist-staging-x', mode, buildId: 'build-x', report: { chunks: [], assets: [] }, logger: /** @type {any} */ ({}), onLog: () => {} };
+  return { root: '/repo', outDir: '/repo/.dist-staging-x', mode, buildId: 'build-x', defineRows: {}, report: { chunks: [], assets: [] }, logger: /** @type {any} */ ({}), onLog: () => {} };
 }
 
 /** A chunk as the report plugin records one */
@@ -216,7 +219,9 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     }
   });
 
-  it("minifies JavaScript with terser in production only and CSS with lightningcss in both, writes no source map, reads no config or .env file, and inlines NODE_ENV and the build's ID alone, with no CommonJS module", () => {
+  it('minifies JavaScript with terser in production only and CSS with lightningcss in both, writes no source map, and reads no config or .env file', () => {
+    // What each pass inlines, NODE_ENV, the build's ID, the module shim and the define allowlist's
+    // rows and nothing else, is test/build-define.test.js's
     for (const mode of ['production', 'development']) {
       for (const pass of [config.pagesConfig(passOptions(mode)), config.backgroundConfig(passOptions(mode))]) {
         assert.equal(pass.build.minify, mode === 'production' ? 'terser' : false, mode);
@@ -226,7 +231,6 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
         assert.equal(pass.build.assetsInlineLimit, 0);
         assert.deepEqual([pass.configFile, pass.envDir, pass.publicDir, pass.build.copyPublicDir], [false, false, false, false]);
         assert.equal(pass.mode, mode);
-        assert.deepEqual(pass.define, { 'process.env.NODE_ENV': JSON.stringify(mode), __NTN_BUILD_ID__: JSON.stringify('build-x'), module: 'undefined' });
       }
     }
   });
