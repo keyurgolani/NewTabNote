@@ -3,8 +3,9 @@
 /**
  * What the output checks read from a shipped script, from one parse with the TypeScript
  * compiler API: the paths it names (closure), the URL-like literals and where they sit
- * (remote code), its environment reads (environment), and the syntax only a module parses
- * (load mode). Each file is parsed once per content however many checks ask.
+ * (remote code), its environment reads and the __NTN_ names it reads (environment), and the
+ * syntax only a module parses (load mode). Each file is parsed once per content however many
+ * checks ask.
  */
 
 const crypto = require('node:crypto');
@@ -43,6 +44,9 @@ const { isDeclaredInScope } = require('./js-scope.js');
  *   import.meta.env reads: the variable's name for a read of one, such as NODE_ENV, or null for
  *   any other use, which could read them all, process read on its own included. `process.env &&
  *   ...` reads nothing.
+ * @property {Array<{name: string, at: string}>} defines - reads of a free name that starts
+ *   __NTN_, one the build writes a value in place of (scripts/build/define-allowlist.js): not a
+ *   property's name, not typeof's operand, and not where a binding of the file's own is in scope
  * @property {string[]} functionConstructors - where the Function constructor is called or
  *   constructed some way ESLint's no-new-func doesn't see (isFunctionConstructor)
  * @property {string[]} moduleSyntax - where it has syntax only a module parses: an import or
@@ -232,7 +236,7 @@ function scanScript(file, text) {
     return `${line + 1}:${character + 1}`;
   };
   /** @type {ScriptScan} */
-  const scan = { references: [], urls: [], environment: [], functionConstructors: [], moduleSyntax: [] };
+  const scan = { references: [], urls: [], environment: [], defines: [], functionConstructors: [], moduleSyntax: [] };
   const reference = (/** @type {ReferenceKind} */ kind, /** @type {ts.Node | undefined} */ node, /** @type {ts.Node} */ where) => {
     scan.references.push({ kind, value: literal(node), at: at(node || where) });
   };
@@ -283,6 +287,10 @@ function scanScript(file, text) {
     if (isProcessEnv(node)) {
       scan.environment.push({ what: 'process.env', name: null, at: at(node) });
       return;
+    }
+    // A name the build writes a value in place of, the build's ID or a define allowlist row (#300)
+    if (ts.isIdentifier(node) && node.text.startsWith('__NTN_') && isVariableRead(node) && !isDeclaredInScope(node, node.text)) {
+      scan.defines.push({ name: node.text, at: at(node) });
     }
     // process itself, handed on or aliased (`const p = process; p.env.X`), could read it all.
     // Where a binding of the file's own is in scope (a function, a local, a parameter, an

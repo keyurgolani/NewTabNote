@@ -44,6 +44,7 @@ const { bundle } = require('./bundle.js');
 const { listedInputs } = require('./inputs.js');
 const { CLASSIC_SCRIPTS, STATIC_FILES, MINIMUM_CHROME_VERSION, terserOptions } = require('./vite-config.js');
 const { analyze, checkBudgets, readBudgets, startChunksOf } = require('./budgets.js');
+const { readAllowlist } = require('./define-allowlist.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./bundle.js').Bundled} Bundled */
@@ -324,8 +325,9 @@ async function build(argv = process.argv.slice(2)) {
   }
   const buildId = computeBuildId(ROOT_DIR, source.info, mode);
 
-  // 2. The inputs
-  const missing = inputProblems(ROOT_DIR);
+  // 2. The inputs, and the define allowlist the bundle inlines (#300)
+  const defines = readAllowlist(ROOT_DIR);
+  const missing = [...inputProblems(ROOT_DIR), ...defines.problems];
   if (missing.length > 0) {
     missing.forEach(report);
     fail(missing);
@@ -336,7 +338,7 @@ async function build(argv = process.argv.slice(2)) {
   try {
     // 3. The bundle, then what no page or script imports
     console.log('📦 Bundling the pages, their workers, and the service worker...');
-    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId });
+    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId, defineRows: defines.rows });
     const copied = bundled.problems.length > 0 ? [] : await copyUnbundled(ROOT_DIR, staging, mode);
     const built = [...bundled.problems, ...copied];
     if (built.length > 0) {

@@ -237,11 +237,12 @@ function moduleMap(report, root) {
 }
 
 /**
- * Bundle the pages and the background into `outDir`, with the build's ID inlined
- * @param {{root: string, outDir: string, mode: Mode, buildId: string}} options
+ * Bundle the pages and the background into `outDir`, with the build's ID and the define
+ * allowlist's rows inlined
+ * @param {{root: string, outDir: string, mode: Mode, buildId: string, defineRows: import('./vite-config.js').PassOptions['defineRows']}} options
  * @returns {Promise<Bundled>}
  */
-async function bundle({ root, outDir, mode, buildId }) {
+async function bundle({ root, outDir, mode, buildId, defineRows }) {
   const vite = await import('vite');
   /** @type {string[]} */
   const warnings = [];
@@ -257,7 +258,7 @@ async function bundle({ root, outDir, mode, buildId }) {
     if (level === 'info' || level === 'debug') return;
     handler(level, log);
   };
-  const options = { root, outDir, mode, buildId, report, logger, onLog };
+  const options = { root, outDir, mode, buildId, defineRows, report, logger, onLog };
 
   /** @type {Problem[]} */
   const problems = [];

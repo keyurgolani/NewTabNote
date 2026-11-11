@@ -49,6 +49,8 @@ const CODES = Object.freeze({
   'source-map/file': 'the package holds a source map',
   'source-map/comment': 'a shipped file has a sourceMappingURL comment',
   'env/reference': 'first-party code reads process.env, process itself, or import.meta.env',
+  'define/unknown': 'first-party code the bundle holds reads an __NTN_ name build/define-allowlist.json has no row for, or shipped first-party code reads one the build wrote no value in place of',
+  'define/file': 'build/define-allowlist.json is missing, doesn\'t parse, or doesn\'t read as a define allowlist: a row with no owner, a value the build can\'t inline, or no reason',
   'background/not-self-contained': 'the service worker, or a first-party module of its graph, imports, calls import(), or calls importScripts()',
   'background/top-level-await': 'the service worker, or a first-party module of its graph, awaits at its top level',
   'background/dom': 'a first-party module of the service worker\'s graph reads document or window outside a typeof check',
