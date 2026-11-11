@@ -441,6 +441,35 @@ describe('the worker\'s router (#13, "Topology")', () => {
     assert.deepEqual(after && [after.frame, after.code], ['error', 'deadline-exceeded'], JSON.stringify(after));
   });
 
+  it('answers a command still waiting at its deadline while another context restores as unavailable, coordinator, restoring, retryable (#35 slice 7)', async () => {
+    /** @type {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} */
+    const status = { status: 'degraded', reason: 'restoring' };
+    // A queue the pause holds, so the command's turn never comes
+    const coordinator = { enqueue: () => new Promise(() => {}) };
+    const handlers = /** @type {any} */ (coordination).pageCommandHandlers?.(() => coordinator) ?? {};
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, status: () => status, handlers });
+    });
+    const port = fake.page('popup').chrome.runtime.connect({ name: PORT_NAME });
+    /** @type {Array<Record<string, any>>} */
+    const frames = [];
+    port.onMessage.addListener((/** @type {string} */ text) => {
+      frames.push(/** @type {Record<string, any>} */ (decode(text)));
+    });
+    const quick = { type: 'createNote', commandId: 'c-n1', noteId: 'n1', name: 'Quick', blocks: [] };
+    port.postMessage(encode(hello('popup', 's1')));
+    port.postMessage(encode(request('r1', quick, { deadline: Date.now() + 40 })));
+    await new Promise(resolve => setTimeout(resolve, 120));
+    await settle();
+    const late = frames.find(frame => frame.requestId === 'r1');
+    assert.deepEqual(
+      late && [late.frame, late.result?.kind, late.result?.cause, late.result?.code, late.result?.retryable],
+      ['response', 'unavailable', 'coordinator', 'restoring', true],
+      JSON.stringify(late),
+    );
+  });
+
   it("serves no page what only the worker runs, even with a handler for each (the catalog split's sixth rule)", async () => {
     const workerOnly = [...Object.keys(WORKER_ONLY_COMMANDS), ...Object.keys(WORKER_ONLY_QUERIES)];
     /** @type {string[]} */

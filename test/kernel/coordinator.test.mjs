@@ -7,11 +7,14 @@
 // and its commands by outcome. Nothing it journals or reports changes what it answers. Once it's
 // ready it drains #35's journal (slice 3), never inside its start, so a hello held while it
 // starts never waits for a drain. Its one queue runs a command at a time (slice 4a), and cuts a
-// turn that runs TURN_LIMIT_MS from its start (slice 4b-1). test/background-coordinator.test.js
-// runs it in js/background.js.
+// turn that runs TURN_LIMIT_MS from its start (slice 4b-1). While another context holds Web Lock
+// `storage.restore` it opens nothing, closes its adapter once a running command is in, dequeues
+// nothing and says `restoring`, and once it can take that lock itself it reopens, drains and runs
+// what waited (slice 7). test/background-coordinator.test.js runs it in js/background.js.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 
 import {
   coordinatorHandlers,
@@ -19,6 +22,11 @@ import {
   createCoordinator,
   unavailableCoordinator,
 } from '../../js/kernel/composition/coordinator.js';
+
+/** Web Locks as a profile's contexts share them, with query() (test/helpers/legacy-env.js) */
+const { createLockManager } = /** @type {{createLockManager: () => any}} */ (
+  createRequire(import.meta.url)('../helpers/legacy-env.js')
+);
 
 /** When a journal entry was written, for the health's oldest orphaned entry */
 const NOW_AT = Date.UTC(2026, 9, 20, 12, 0, 0);
@@ -1295,5 +1303,170 @@ describe("a closed port's session (#35 slice 4b-2, rule 7)", () => {
     // On the queue, as every drain is, so its replays wait their turn
     assert.equal(held.drains[1].client, coordinator.client());
     held.drains[1].release();
+  });
+});
+
+/**
+ * heldKernel()'s, with what the worker's kernel adds for the pause while another context restores
+ * (#35 slice 7): close() closes its adapter and reopen() opens one again, each kept in its log, and
+ * `opens` counts each time it's asked whether it opened
+ */
+function pausableKernel() {
+  const kernel = heldKernel();
+  const opens = { count: 0 };
+  Object.assign(kernel.client, {
+    whenReady: async () => {
+      opens.count++;
+      return null;
+    },
+    close: () => void kernel.log.push('close'),
+    reopen: async () => void kernel.log.push('reopen'),
+  });
+  return { ...kernel, opens };
+}
+
+/**
+ * Another context's restore (#35 slice 7): it takes Web Lock `storage.restore` on `locks`, as
+ * recovery.html's fallback and #304's command do, and holds it until the case ends it. release()
+ * is a restore that ends. kill() is its context dying mid-restore: Chrome frees what a dead context
+ * held, which to the lock manager is a release, and no `storage.restored` comes after it.
+ * @param {any} locks - createLockManager()'s, which the coordinator shares
+ */
+async function restorer(locks) {
+  /** @type {() => void} */
+  let end = () => {};
+  await new Promise(held => {
+    locks.request('storage.restore', () => {
+      held(undefined);
+      return new Promise(ended => {
+        end = () => ended(undefined);
+      });
+    });
+  });
+  return { release: () => end(), kill: () => end() };
+}
+
+describe("the coordinator's pause while another context restores (#35 slice 7)", () => {
+  /** Timers that never fire, so a turn a case leaves held sets no real one to wait on */
+  const still = { set: () => 0, clear: () => {} };
+
+  it('opens nothing while another context holds storage.restore at its start, says restoring in its welcomes and its health, and opens once the lock is free', async () => {
+    const locks = createLockManager();
+    const restore = await restorer(locks);
+    const kernel = pausableKernel();
+    const { coordinator } = coordinatorOn(kernel, { locks, timers: still });
+    coordinator.start();
+    coordinator.enqueue(captureOf('c-1'), { begin: () => true });
+    await turns();
+    assert.deepEqual([kernel.opens.count, kernel.log], [0, []], 'its kernel is asked nothing: nothing opens or runs');
+    assert.deepEqual(coordinator.status(), { status: 'degraded', reason: 'restoring' });
+    assert.deepEqual([coordinator.health().status, coordinator.health().reason], ['degraded', 'restoring']);
+    restore.release();
+    await turns(10);
+    assert.deepEqual(
+      [kernel.opens.count, kernel.log, coordinator.status()],
+      [1, ['start c-1'], { status: 'ready' }],
+      'it opens, and the command that waited runs',
+    );
+  });
+
+  it('on storage.restoring, lets the running command finish, then closes its adapter and dequeues nothing more', async () => {
+    const locks = createLockManager();
+    const kernel = pausableKernel();
+    const { coordinator } = coordinatorOn(kernel, { locks, timers: still });
+    await coordinator.start();
+    const first = coordinator.client().execute(captureOf('c-1'));
+    await turns();
+    await restorer(locks);
+    const hooked = /** @type {any} */ (coordinator);
+    assert.equal(typeof hooked.restoring, 'function', 'the coordinator hears storage.restoring');
+    hooked.restoring();
+    await turns();
+    // It says so at once, while the running command still holds the queue and the adapter
+    assert.deepEqual([coordinator.status(), kernel.log], [{ status: 'degraded', reason: 'restoring' }, ['start c-1']]);
+    kernel.release('c-1');
+    assert.equal((await first).kind, 'committed', 'the running command finishes');
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1', 'end c-1', 'close'], 'its adapter closes once that command is in');
+    coordinator.client().execute(captureOf('c-2'));
+    await turns();
+    assert.deepEqual(kernel.log, ['start c-1', 'end c-1', 'close'], 'nothing dequeues');
+    assert.deepEqual([coordinator.health().status, coordinator.health().reason], ['degraded', 'restoring']);
+  });
+
+  /** @type {Array<[string, (restore: {release(): void, kill(): void}, coordinator: any) => void]>} */
+  const endings = [
+    [
+      'once the restore ends and storage.restored comes',
+      (restore, coordinator) => {
+        restore.release();
+        assert.equal(typeof coordinator.restored, 'function', 'the coordinator hears storage.restored');
+        coordinator.restored();
+      },
+    ],
+    ['the same way when the restorer dies mid-restore, with no storage.restored (call 9)', restore => restore.kill()],
+  ];
+  for (const [ending, end] of endings) {
+    it(`resumes ${ending}: it reopens its adapter, drains, and runs the commands that waited, in order`, async () => {
+      const locks = createLockManager();
+      const kernel = pausableKernel();
+      const held = heldJournal();
+      const { coordinator } = coordinatorOn(kernel, { locks, timers: still, journal: held.journal });
+      await coordinator.start();
+      await turns();
+      held.drains[0].release();
+      const restore = await restorer(locks);
+      // Each is checked before its dequeue, and another context holds the lock
+      const first = coordinator.client().execute(captureOf('c-1'));
+      const second = coordinator.enqueue(captureOf('c-2'), { begin: () => true });
+      await turns();
+      assert.deepEqual(kernel.log, ['close'], 'nothing dequeues, and its adapter is closed');
+      end(restore, coordinator);
+      await turns(10);
+      assert.deepEqual([kernel.log, coordinator.status()], [['close', 'reopen', 'start c-1'], { status: 'ready' }]);
+      assert.deepEqual(
+        [held.drains.length, held.drains[1]?.client === coordinator.client()],
+        [2, true],
+        'it drains on its queue once it has reopened',
+      );
+      kernel.release('c-1');
+      await turns();
+      kernel.release('c-2');
+      assert.deepEqual([(await first).kind, (await second)?.kind], ['committed', 'committed']);
+      assert.deepEqual(kernel.log, ['close', 'reopen', 'start c-1', 'end c-1', 'start c-2', 'end c-2']);
+    });
+  }
+
+  it('replays a journaled command the pause held exactly once: when its deadline passed and its page went meanwhile, the drain after the pause replays it and the queue skips its request (AC3)', async () => {
+    const locks = createLockManager();
+    const kernel = pausableKernel();
+    const entry = noteOf('c-journaled');
+    // Its page's entry, which the journal's drain replays once that page is gone, and then holds no more
+    const page = { gone: false, kept: true };
+    const journal = {
+      /** @param {any} client */
+      drain: async client => {
+        if (!page.gone || !page.kept) return null;
+        page.kept = false;
+        return client.execute(entry);
+      },
+      oldestOrphanedEntryAt: () => null,
+    };
+    const { coordinator } = coordinatorOn(kernel, { locks, timers: still, journal });
+    await coordinator.start();
+    await turns();
+    const restore = await restorer(locks);
+    let waited = true;
+    const sent = coordinator.enqueue(entry, { begin: () => waited });
+    await turns();
+    const runs = () => kernel.log.filter(line => line === 'start c-journaled').length;
+    assert.equal(runs(), 0, 'the pause holds it');
+    // Its deadline comes while it waits, so the router answers it restoring, and its page closes
+    waited = false;
+    page.gone = true;
+    restore.release();
+    await turns(10);
+    assert.equal(await sent, null, "the queue doesn't run the request the router answered");
+    assert.equal(runs(), 1, "the drain's replay runs it once");
   });
 });
