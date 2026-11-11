@@ -12,7 +12,7 @@
  * the page code #27 slice 3 adds, js/entries/ and js/runtime/, under tsconfig.strict.json's,
  * and each must report none. jsconfig.json still reaches them, through its js/ include and the
  * imports from js/background.js, until #27 lists the legacy files instead
- * (docs/adr/0001-kernel-stack.md, decision 1).
+ * (docs/adr/0001-kernel-stack.md, decision 1). #26's js/states/ is strict under tsconfig.kernel.json too.
  *
  *   npm run typecheck:ratchet               fail on a new key, a higher count, or a lower
  *                                           count the baseline hasn't recorded yet
@@ -41,7 +41,7 @@ const DIAGNOSTIC_EXIT_CODES = [1, 2];
 // Node's own warnings, the only stderr a trusted run may have
 const NODE_WARNING = /^\(node:\d+\) |^\(Use `node --trace-[a-z-]+ \.\.\.` to show where the warning was created\)$/;
 // Checked by typecheck:kernel and typecheck:strict instead (see the top of this file)
-const STRICT_DIRS = ['js/kernel/', 'js/entries/', 'js/runtime/'];
+const STRICT_DIRS = ['js/kernel/', 'js/states/', 'js/entries/', 'js/runtime/'];
 
 /**
  * Run tsc from the repository root and return its exit status and output

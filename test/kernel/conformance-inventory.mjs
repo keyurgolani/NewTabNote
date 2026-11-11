@@ -74,6 +74,8 @@ export const PORTS = Object.freeze({
       { module: 'js/trust/core/families.js', run: 'test/kernel/trust-families.test.mjs' },
       // #14's block family, defined where roots assemble it (kernel core can't import the kit)
       { module: 'js/kernel/composition/blocks.js', run: 'test/kernel/blocks-registry.test.mjs' },
+      // #26's cause family, the states contract's first registry
+      { module: 'js/states/core/families.js', run: 'test/kernel/states-families.test.mjs' },
     ],
   },
   // The stub every legacy test runs on, held to Chromium (#28 slice 2)
