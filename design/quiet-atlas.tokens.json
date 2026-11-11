@@ -93,7 +93,7 @@
     },
     "forcedColors": {
       "focus": { "token": "--focus-ring", "value": "Highlight", "surfaces": ["Canvas"] },
-      "boundaries": ["--seam", "--seam-strong", "--control-boundary"],
+      "boundaries": ["--seam", "--seam-tint", "--seam-strong", "--control-boundary"],
       "border": "1px solid transparent",
       "pairs": {
         "Canvas": ["CanvasText", "LinkText", "VisitedText", "ActiveText", "GrayText", "ButtonBorder"],
@@ -141,7 +141,7 @@
     "--surface-muted": {
       "type": "color", "axis": "color", "status": "approved", "overridable": true,
       "role": "Quiet fills, such as a quiet button's hover",
-      "values": { "light": "#E8ECEA", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+      "values": { "light": "#E8ECEA", "dark": { "value": "#2A2A2A", "legacy": "--bg-hover" }, "forced": "Canvas" }
     },
     "--surface-code": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": true,
@@ -222,7 +222,7 @@
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
       "role": "Local ink: text and sole-cue markers in the local tone",
       "alternatives": ["#315B52"],
-      "values": { "light": "#526F69", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+      "values": { "light": "#526F69", "dark": { "value": "#7A9D95", "note": "#16's provisional dark value (#267): the darkest of the light ink's hue and saturation at 4.5:1 on the dark tints" }, "forced": "CanvasText" }
     },
     "--ink-info": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
@@ -232,7 +232,7 @@
     "--ink-urgent": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
       "role": "Urgent ink: text and sole-cue markers in the urgent tone",
-      "values": { "light": "#604C34", "dark": { "value": "#E0E0E0", "legacy": "--text-primary" }, "forced": "CanvasText" }
+      "values": { "light": "#604C34", "dark": { "value": "#AF916C", "note": "#16's provisional dark value (#267): the darkest of the light ink's hue and saturation at 4.5:1 on the dark tints" }, "forced": "CanvasText" }
     },
     "--ink-pending": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
@@ -242,22 +242,22 @@
     "--tint-local": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
       "role": "Local tint, the board's --surface-proposed",
-      "values": { "light": "#EDF2EF", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+      "values": { "light": "#EDF2EF", "dark": { "value": "#2F2F2F", "note": "#16's provisional dark value (#267): its own, not the hover's, so a tinted row never reads as a hovered one" }, "forced": "Canvas" }
     },
     "--tint-info": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
       "role": "Info tint",
-      "values": { "light": "#F2F4F8", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+      "values": { "light": "#F2F4F8", "dark": { "value": "#2F2F2F", "note": "#16's provisional dark value (#267): its own, not the hover's, so a tinted row never reads as a hovered one" }, "forced": "Canvas" }
     },
     "--tint-urgent": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
       "role": "Urgent tint",
-      "values": { "light": "#F6EEE9", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+      "values": { "light": "#F6EEE9", "dark": { "value": "#2F2F2F", "note": "#16's provisional dark value (#267): its own, not the hover's, so a tinted row never reads as a hovered one" }, "forced": "Canvas" }
     },
     "--tint-pending": {
       "type": "color", "axis": "color", "status": "candidate", "overridable": false,
       "role": "Pending tint",
-      "values": { "light": "#F7F4E8", "dark": { "value": "#2F2F2F", "legacy": "--bg-hover" }, "forced": "Canvas" }
+      "values": { "light": "#F7F4E8", "dark": { "value": "#2F2F2F", "note": "#16's provisional dark value (#267): its own, not the hover's, so a tinted row never reads as a hovered one" }, "forced": "Canvas" }
     },
     "--seam": {
       "type": "color", "axis": "color", "status": "approved", "overridable": true,
@@ -265,6 +265,16 @@
       "values": {
         "light": "#CBD5D1",
         "dark": { "value": "#333333", "legacy": "--border-color" },
+        "more": { "ref": "--control-boundary", "note": "Contrast-more swaps the seam for the control boundary." },
+        "forced": "CanvasText"
+      }
+    },
+    "--seam-tint": {
+      "type": "color", "axis": "color", "status": "candidate", "overridable": false,
+      "role": "Quiet Seam on a tinted row, such as the divider above Also checked on a row that needs attention",
+      "values": {
+        "light": "#CBD5D1",
+        "dark": { "value": "#414141", "note": "#16's provisional dark value (#267): light's 1.31:1 step from the dark tints" },
         "more": { "ref": "--control-boundary", "note": "Contrast-more swaps the seam for the control boundary." },
         "forced": "CanvasText"
       }
