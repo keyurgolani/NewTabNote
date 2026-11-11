@@ -313,12 +313,10 @@ describe("the new tab's trust-status chunk (#20 slice 4c)", () => {
 
   it("tones the shapes on two tokens in the tab's own theme blocks, and gives a wrapped line and its focus ring room (the design review's S1, N1 and live check 1)", () => {
     // Sage where saving is checked and clay where something needs the user, as recovery.html has
-    // them light, and the text's color dark, in the blocks the tab already has
+    // them, in light and in dark, where they're #16's provisional values (#267), in the blocks the
+    // tab already has
     assert.match(ruleOf(':root'), /\n {2}--trust-ok: #526f69;\n {2}--trust-action: #604c34;$/);
-    assert.match(
-      ruleOf('[data-theme="dark"]'),
-      /\n {2}--trust-ok: var\(--text-primary\);\n {2}--trust-action: var\(--text-primary\);$/,
-    );
+    assert.match(ruleOf('[data-theme="dark"]'), /\n {2}--trust-ok: #7a9d95;\n {2}--trust-action: #af916c;$/);
     assert.match(
       ruleOf('.trust-glyph.trust-tone-ok'),
       /^\n\.trust-glyph\.trust-tone-ok \{\n {2}color: var\(--trust-ok\);$/,
