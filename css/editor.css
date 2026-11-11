@@ -2062,6 +2062,7 @@ a.setting-link {
   border-radius: 6px;
   margin-bottom: 4px;
   cursor: pointer;
+  position: relative;
 }
 
 .page-item:hover {
@@ -3168,6 +3169,34 @@ a.setting-link {
 
 .sidebar-note-item.active {
   background: var(--row-active-bg);
+}
+
+/* The active rows' cue that isn't their tint (#292): --row-active-bg is pale to keep its text at
+   4.5:1, so a bar in the ink on the inline-start edge tells the active row, the active card, the
+   active page item and a drop target apart: 5.20 against the sidebar in light and 6.08 in dark,
+   and 4.88 and 5.70 against a hovered row */
+.sidebar-note-item.active::before,
+.sidebar-notes-list.cards-view .sidebar-note-item.active::before,
+.sidebar-note-item.sidebar-drop-target::before,
+.page-item.active::before {
+  content: '';
+  position: absolute;
+  inset-block: 6px;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent-color);
+}
+
+@media (forced-colors: active) {
+  /* Forced colors would draw the bar in Canvas: it keeps the system's highlight */
+  .sidebar-note-item.active::before,
+  .sidebar-notes-list.cards-view .sidebar-note-item.active::before,
+  .sidebar-note-item.sidebar-drop-target::before,
+  .page-item.active::before {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
 }
 
 .sidebar-note-item.archived {
