@@ -435,8 +435,12 @@ function format(ratio) {
  * @param {{fg: Rgba, bg: Rgba, over: Rgba | null, inner: Rgba | null}} colors
  * @param {number} opacity
  * @returns {{ratio: number, outer: number, innerOnOuter: number | null, innerOnSurface: number | null}}
+ * @throws {TypeError} when a translucent bg or a faded pair has no opaque backdrop to composite onto
  */
 export function measure(colors, opacity) {
+  if ((colors.bg.a < 1 || opacity < 1) && !(colors.over && colors.over.a === 1)) {
+    throw new TypeError('measure() needs an opaque backdrop (over) under a translucent background or a faded pair');
+  }
   let bg = colors.bg.a < 1 ? compositeOver(colors.bg, colors.over) : colors.bg;
   let fg = compositeOver(colors.fg, bg);
   let inner = colors.inner ? compositeOver(colors.inner, bg) : null;

@@ -3,7 +3,10 @@
  * (design/quiet-atlas.tokens.json). A translucent ring composites onto its plane, and a translucent
  * plane onto what's under it, before anything is measured. A two-tone ring is measured as #16
  * measures its pairs, through js/design/contrast.js's measure(): the outer ring's contrast, or the
- * inner ring's against both the outer and the plane, whichever is better.
+ * inner ring's against both the outer and the plane, whichever is better. #16's inner ring fills the
+ * offset between the control and the outline, so it's painted on the plane beside the outer ring,
+ * never over it, and a translucent inner ring composites onto the plane. A plane on a translucent
+ * backdrop can't be measured, so it's a TypeError that names the plane.
  */
 
 import { measure, parseColor } from '../../../js/design/contrast.js';
@@ -40,6 +43,9 @@ export function ringShortfalls(ring, planes, min = RING_MIN) {
         over: color(plane.over ?? WHITE),
         inner: ring.inner === undefined ? null : color(ring.inner),
       };
+      if (colors.bg.a < 1 && colors.over.a < 1) {
+        throw new TypeError(`plane ${plane.id}: what's under it, ${JSON.stringify(plane.over)}, isn't opaque`);
+      }
       return { plane: plane.id, ratio: measure(colors, 1).ratio };
     })
     .filter(({ ratio }) => ratio < min);

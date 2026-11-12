@@ -12,8 +12,12 @@ export const TARGET_MIN = 44;
 /** The contract's exemptions */
 export const EXEMPTIONS = Object.freeze(['editing-area', 'browser-ui', 'inline-link']);
 
-/** What a box may fall short by and still count as 44, for subpixel layout */
-const SUBPIXEL = 0.01;
+/**
+ * What a box may fall short by and still count as 44: floating-point error and nothing more. Layout
+ * sizes boxes in 1/64 px steps and the matrix zooms by whole multiples, so a 44px box measures 44, give
+ * or take float error, and the nearest box under it measures 43.984375, which fails.
+ */
+const FLOAT_ERROR = 1e-6;
 
 /**
  * The targets that fall short: smaller than `min` either way, unless they carry one of the contract's
@@ -25,6 +29,6 @@ const SUBPIXEL = 0.01;
 export function smallTargets(boxes, min = TARGET_MIN) {
   return boxes
     .filter(box => !(box.exempt !== undefined && EXEMPTIONS.includes(box.exempt)))
-    .filter(box => box.width < min - SUBPIXEL || box.height < min - SUBPIXEL)
+    .filter(box => box.width < min - FLOAT_ERROR || box.height < min - FLOAT_ERROR)
     .map(({ id, width, height }) => ({ id, width, height }));
 }
