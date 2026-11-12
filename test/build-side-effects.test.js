@@ -74,11 +74,22 @@ describe('build/side-effects.json (#300)', () => {
       { file: 'js/main.js', text: "import './a.js';\nimport './b.js';\nimport { c } from './c.js';\nexport * from './d.js';" },
       { file: 'js/x/e.js', text: "import '../a.js';" },
     ];
-    const found = sideEffectProblems(sources, new Set(['js/a.js', 'js/c.js']));
+    // Each of these modules is there
+    const there = () => true;
+    const found = sideEffectProblems(sources, new Set(['js/a.js', 'js/c.js']), there);
     assert.deepEqual(found.map(({ code, subject }) => `${code} ${subject}`), ['side-effects/unlisted js/main.js:2:8', 'side-effects/stale build/side-effects.json']);
     assert.match(found[0].message, /js\/b\.js/);
     assert.match(found[1].message, /js\/c\.js/);
-    assert.deepEqual(sideEffectProblems(sources, new Set(['js/a.js', 'js/b.js'])), []);
+    assert.deepEqual(sideEffectProblems(sources, new Set(['js/a.js', 'js/b.js']), there), []);
+  });
+
+  it("leaves an import for side effects only of a file that isn't there to the bundler, which fails it as build/bundle, as the bundle-unresolved fixture's does", () => {
+    const { sideEffectProblems } = sideEffects();
+    const sources = [{ file: 'js/popup.js', text: "import './ntn-fixture-missing.js';\nimport './here.js';" }];
+    const found = sideEffectProblems(sources, new Set(), (file) => file === 'js/here.js');
+    assert.deepEqual(found.map(({ code, subject }) => `${code} ${subject}`), ['side-effects/unlisted js/popup.js:2:8']);
+    // By default it looks under the repository's root, where the fixture's file isn't
+    assert.deepEqual(sideEffectProblems([{ file: 'js/popup.js', text: "import './ntn-fixture-missing.js';" }], new Set()), []);
   });
 
   it("fails a list that is missing, doesn't parse, or has a group with no owner, no reason or no modules, a module twice, or a field it doesn't take, each as side-effects/file", () => {
