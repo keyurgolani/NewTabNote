@@ -84,6 +84,9 @@ describe("the accessibility checks' pure parts (#24 slice 2)", () => {
     // Chrome computes a color-mix() in sRGB as color(srgb …), with its alpha after a slash
     const mixed = [{ id: 'active-row', color: 'color(srgb 0.897255 0.885961 0.942902)' }, { id: 'tint', color: 'color(srgb 0.431373 0.337255 0.811765 / 0.1)' }];
     assert.deepEqual(short({ outer: '#000000' }, mixed), []);
+    // A white ring on the tint falls short only with its alpha applied: 1.145:1, where an opaque tint gives 5.391:1
+    const onTint = ring.ringShortfalls({ outer: '#ffffff' }, [mixed[1]]);
+    assert.deepEqual(onTint.map((/** @type {any} */ s) => [s.plane, s.ratio.toFixed(3)]), [['tint', '1.145']]);
     assert.deepEqual(short({ outer: 'color(srgb 0.4 0.4 1)' }, paper), []);
     assert.deepEqual(short({ outer: 'color(srgb 0.6 0.6 0.6)' }, paper), ['paper']);
     // A color in another space is a TypeError that names the space
