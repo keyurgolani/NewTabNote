@@ -16,6 +16,7 @@
     "typecheck:kernel": "tsc -p tsconfig.kernel.json",
     "typecheck:strict": "tsc -p tsconfig.strict.json",
     "check:boundaries": "node scripts/check-boundaries.js",
+    "check:states": "node scripts/check-states.js",
     "check:dist": "node scripts/check-dist.js",
     "perf:probe": "node scripts/perf-probe.js",
     "perf:reference": "node scripts/perf/reference.js",
