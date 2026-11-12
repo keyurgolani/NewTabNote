@@ -3,7 +3,9 @@
 // #26 slice 1: js/states/core/ is host-neutral under #12's module rules, as #20's trust core is.
 // check:boundaries runs eslint.config.mjs's states-global and states-import rules over a copy of
 // js/ with forbidden code added to the states core, and the repository's states core has no hit
-// and no row. It imports nothing of the trust core, whose views move onto its presenter.
+// and no row. It imports nothing of the trust core, whose views move onto its presenter. A second
+// copy adds only what the rules allow and has no hit, so the first copy's totals can't hide an
+// allowed import or global counted in place of a forbidden one the rules let through.
 
 const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,6 +18,20 @@ const boundaries = require('../scripts/check-boundaries.js');
 
 const temps = [];
 after(() => temps.forEach(dir => fs.rmSync(dir, { recursive: true, force: true })));
+
+// check:boundaries over a copy of js/ with the probe's lines added as js/states/core/probe.js.
+async function boundariesWith(probe) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-states-boundaries-'));
+  temps.push(root);
+  fs.cpSync(path.join(ROOT, 'js'), path.join(root, 'js'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'eslint.config.mjs'), path.join(root, 'eslint.config.mjs'));
+  fs.cpSync(path.join(ROOT, 'docs', 'architecture'), path.join(root, 'docs', 'architecture'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'js', 'states', 'core'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'js', 'states', 'core', 'probe.js'), probe.join('\n'));
+  const lines = [];
+  const code = await boundaries.main([], { root, log: line => lines.push(line), error: line => lines.push(line) });
+  return { code, output: lines.join('\n') };
+}
 
 describe('check:boundaries on js/states/core/ (#26 slice 1)', () => {
   it('counts no-undef there as states-global', () => {
@@ -30,13 +46,7 @@ describe('check:boundaries on js/states/core/ (#26 slice 1)', () => {
   });
 
   it('keeps the states core host-neutral in a copy of js/: no browser API, legacy global, or outside import', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-states-boundaries-'));
-    temps.push(root);
-    fs.cpSync(path.join(ROOT, 'js'), path.join(root, 'js'), { recursive: true });
-    fs.cpSync(path.join(ROOT, 'eslint.config.mjs'), path.join(root, 'eslint.config.mjs'));
-    fs.cpSync(path.join(ROOT, 'docs', 'architecture'), path.join(root, 'docs', 'architecture'), { recursive: true });
-    fs.mkdirSync(path.join(root, 'js', 'states', 'core'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'js', 'states', 'core', 'probe.js'), [
+    const { code, output } = await boundariesWith([
       "import '../../storage.js';",
       "import '../../trust/core/vocabulary.js';",
       "import '../../ui/part-state.js';",
@@ -55,11 +65,7 @@ describe('check:boundaries on js/states/core/ (#26 slice 1)', () => {
       'export const wait = () => setTimeout(() => {}, 1);',
       // ECMAScript's own globals are fine
       'export const ok = [STATES, unknown, defineFamily, v, new Map(), JSON.stringify({}), Date.now()];',
-    ].join('\n'));
-
-    const lines = [];
-    const code = await boundaries.main([], { root, log: line => lines.push(line), error: line => lines.push(line) });
-    const output = lines.join('\n');
+    ]);
     assert.equal(code, 1, output);
     for (const expected of [
       'js/states/core/probe.js: 4 states-import hits no ledger row covers',
@@ -69,5 +75,26 @@ describe('check:boundaries on js/states/core/ (#26 slice 1)', () => {
     }
     assert.doesNotMatch(output, /core-global|core-import|registry-|trust-/);
     assert.equal(output.split('\n').filter(line => line.startsWith('  - ')).length, 2, output);
+  });
+
+  it('counts no hit for an import from the states core, kernel core, the registry kit or Valibot, or for ECMAScript globals', async () => {
+    const { code, output } = await boundariesWith([
+      // Each import form the rule reads, from each place the states core may import from
+      "import { STATES } from './vocabulary.js';",
+      "export { cause } from './families.js';",
+      "export const later = () => import('./families.js');",
+      "import { unknown } from '../../kernel/core/contracts/outcomes.js';",
+      "import { defineFamily } from '../../kernel/registry/family.js';",
+      "export * from '../../kernel/registry/vocabulary.js';",
+      "import * as v from '../../lib/valibot/index.mjs';",
+      // ECMAScript's own globals, none of them the host's
+      'export const ok = [STATES, unknown, defineFamily, v, Object.keys({}), Array.isArray([]), new Map(), new Set(),',
+      "  new WeakMap(), JSON.stringify({}), Math.max(1, 2), Number.isInteger(1), String(1), Boolean(0), Symbol('probe'),",
+      "  Promise.resolve(), new Error('probe'), new TypeError('probe'), new RegExp('x'), Reflect.ownKeys({}), BigInt(1),",
+      "  parseInt('1', 10), isNaN(1), Infinity, NaN, undefined, encodeURIComponent('x'), typeof Symbol, Date.now()];",
+    ]);
+    assert.equal(code, 0, output);
+    assert.doesNotMatch(output, /states-/);
+    assert.match(output, /^check:boundaries: OK, /m);
   });
 });
