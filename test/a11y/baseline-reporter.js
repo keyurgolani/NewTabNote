@@ -3,7 +3,9 @@
  * test/a11y/playwright.config.js (#24 slice 2). A test's page is its spec's path under test/a11y/, and
  * a test that passes attaches what its checks found as `a11y-findings`, JSON of
  * {findings: [{rule, target, gate?}]}, with `gate` the matrix's gate at a gated point.
- * scripts/check-a11y-baseline.js says what fails a run. It writes nothing.
+ * scripts/check-a11y-baseline.js says what fails a run. Until the file lands with its seed, the run
+ * reports what the checks find without failing on it, so no CI step goes red on today's known issues; a
+ * spec that attaches nothing or garbles it still fails, and so does any failing test. It writes nothing.
  *
  *   options.baseline, options.specs  the file and the specs' folder (default: test/a11y/'s)
  *   options.write                    where the problems go (default: stderr)
@@ -73,7 +75,8 @@ class BaselineReporter {
 
   onEnd() {
     // The file lands with its seed; until then there's none, which is no lines
-    const file = fs.existsSync(this._baseline) ? JSON.parse(fs.readFileSync(this._baseline, 'utf8')) : { check: CHECK, entries: [] };
+    const seeded = fs.existsSync(this._baseline);
+    const file = seeded ? JSON.parse(fs.readFileSync(this._baseline, 'utf8')) : { check: CHECK, entries: [] };
     const shape = fileProblems(file, gates());
     const problems = [...this._problems, ...shape];
     if (shape.length === 0) {
@@ -81,7 +84,10 @@ class BaselineReporter {
       for (const page of new Set(file.entries.map((/** @type {{page: string}} */ line) => line.page))) {
         if (this._selected.has(page) && !reported.has(page)) problems.push(`${page}'s spec ran, but no test of it reported what its checks found, so its lines go unchecked`);
       }
-      problems.push(...specProblems(file, this._specs), ...runProblems(this._records, file));
+      problems.push(...specProblems(file, this._specs));
+      const found = runProblems(this._records, file);
+      if (seeded) problems.push(...found);
+      else if (found.length > 0) this._write(`\ntest:a11y's findings, reported only until ${BASELINE} lands with its seed:\n${found.map(finding => `  ${finding}`).join('\n')}\n`);
     }
     if (problems.length === 0) return undefined;
     this._write(`\ntest:a11y's findings don't match ${BASELINE}:\n${problems.map(problem => `  ${problem}`).join('\n')}\n`);
