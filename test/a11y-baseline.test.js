@@ -12,7 +12,10 @@
 // - npm run check:a11y-baseline checks the file's shape and each line's spec, and with --base fails a
 //   line or target the base's file lacks, reading the base's own file, passing where the base has
 //   none yet, and failing a head that drops a file the base has. The file lands with its seed, and
-//   until then there's none, which is no lines. Neither one writes the file.
+//   until then there's none, which is no lines. Neither one writes the file;
+// - until the seed lands, the reporter reports what the checks find without failing on it, so no CI
+//   step goes red on today's known issues. A spec that attaches nothing or garbles it still fails,
+//   and so does any failing test.
 
 const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -35,14 +38,15 @@ const scratch = () => {
 
 /**
  * The reporter over a run of `tests`, each a title, what it attached (null for nothing), its page and
- * its status, against a baseline of `entries`, or `file` as it's written, with specs for `specs`
+ * its status, against a baseline of `entries`, or `file` as it's written (null for no file), with specs
+ * for `specs`
  * @param {object[]} entries
  * @param {[string, object | null, string?, string?][]} tests
  */
 function report(entries, tests, { file = { check: 'a11y-rules', entries }, specs = ['legacy-newtab', 'popup'] } = {}) {
   const dir = scratch();
   const baseline = path.join(dir, 'baseline.json');
-  fs.writeFileSync(baseline, JSON.stringify(file));
+  if (file !== null) fs.writeFileSync(baseline, JSON.stringify(file));
   for (const page of specs) fs.writeFileSync(path.join(dir, `${page}.spec.js`), '');
   let said = '';
   const reporter = new Reporter({ baseline, specs: dir, write: (/** @type {string} */ text) => (said += text) });
@@ -151,6 +155,17 @@ describe("test:a11y's baseline (#24 slice 2)", () => {
     const shape = report([], [], { file: { check: 'a11y-rules', entries: [{ page: 'popup', targets: ['main'] }] } });
     assert.ok(shape.failed);
     assert.match(shape.said, /entries\[0\] needs a page and a rule/);
+  });
+
+  it("reports what the checks find without failing on it until the baseline's seed lands, and still fails a spec that attaches nothing or garbles it", () => {
+    const early = report([], tab([{ rule: 'button-name', target: '#menu' }]), { file: null });
+    assert.equal(early.failed, false);
+    assert.match(early.said, /test:a11y's findings, reported only until test\/a11y\/baseline\.json lands with its seed:\n {2}legacy-newtab's button-name fails "#menu"/);
+    assert.ok(report([], [['Workspace at 1280', null]], { file: null }).failed);
+    assert.ok(report([], [['Workspace at 1280', { findings: [{ rule: 'region' }] }]], { file: null }).failed);
+    assert.equal(report([], tab([]), { file: null }).said, '');
+    // Once the file lands, the same finding fails the run
+    assert.ok(report([], tab([{ rule: 'button-name', target: '#menu' }])).failed);
   });
 
   it("fails a line whose page has no spec, and with --base a line or target the base's file lacks, or a file the base has and the head drops", () => {
