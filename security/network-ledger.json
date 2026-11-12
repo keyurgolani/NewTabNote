@@ -19,16 +19,6 @@
       "note": "Both proxies send through this one call, with the request the policy checked"
     },
     {
-      "file": "js/kernel/composition/api-request.js",
-      "function": "workerScriptUrl",
-      "count": 1,
-      "credential": "none",
-      "destinations": [],
-      "owner": 21,
-      "removeWhen": "Stays: it reads this extension's own manifest.json, which no destination row needs",
-      "note": "The offscreen document finds the worker's script URL, since its runtime has no getManifest"
-    },
-    {
       "file": "js/llm.js",
       "function": "fetchViaBackground",
       "count": 1,

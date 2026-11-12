@@ -5,7 +5,8 @@
  * manifest.json, it follows every path the package names: manifest keys, each page's src,
  * href, poster, data, and srcset, stylesheet url() and CSS imports, static and literal dynamic
  * imports, new Worker, importScripts, chrome.runtime.getURL, chrome.offscreen.createDocument's
- * url, chrome.tabs.create's url, and iconUrl, a shorthand `{ url }` or `{ iconUrl }` included. It
+ * url, chrome.tabs.create's url, and iconUrl, a shorthand `{ url }` or `{ iconUrl }` included.
+ * getURL and createDocument count on any receiver, so an alias terser writes is followed too (#300). It
  * fails on a named path the package lacks; on an import of a bare specifier, which nothing
  * resolves without a bundler or an import map; on a file nothing names that
  * build/static-assets.json doesn't list; and on a path of any of those kinds built at run time
@@ -233,6 +234,9 @@ function checkClosure(files, { staticAssets: assets = staticAssets(), vendored =
       return;
     }
     if (!files.has(target)) {
+      // build-info.json is the build's own, written once its checks pass, and npm run package
+      // requires it (package/no-build), so the loader's update check may name it before it's there
+      if (target === 'build-info.json') return;
       problems.push(problem('closure/missing', target, `${what} in ${from}, but ${files.label} doesn't have it`));
       return;
     }

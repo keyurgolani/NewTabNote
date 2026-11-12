@@ -10,7 +10,7 @@
 
 import { checkRequest, isWorkerSender, loopbackOrigin, send, workerScriptUrl } from './kernel/composition/api-request.js';
 
-// The worker's script URL, read once: this document's chrome.runtime has no getManifest
+// The worker's script URL, the one sender this document takes requests from
 const workerUrl = workerScriptUrl();
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
