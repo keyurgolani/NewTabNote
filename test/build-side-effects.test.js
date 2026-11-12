@@ -50,10 +50,10 @@ describe('build/side-effects.json (#300)', () => {
     ]);
   });
 
-  it("keeps a first-party module's side effects only for a root or a listed module, and every other id's, Vite's own and the dependencies', as they come", () => {
+  it("keeps a first-party module's side effects only for a root or a listed module, a vendored one under js/lib/ too, and every other id's, Vite's own and node_modules', as they come", () => {
     const { sideEffectsFor } = require('../scripts/build/bundle.js');
     const keep = sideEffectsFor('/repo', new Set(['js/a.js', 'js/entry.js']));
-    assert.deepEqual(['/repo/js/a.js', '/repo/js/entry.js', '/repo/js/b.js', '/repo/js/kernel/c.mjs'].map(keep), [true, true, false, false]);
+    assert.deepEqual(['/repo/js/a.js', '/repo/js/entry.js', '/repo/js/b.js', '/repo/js/kernel/c.mjs', '/repo/js/lib/valibot/index.mjs'].map(keep), [true, true, false, false, false]);
     for (const id of ['/repo/newtab.html', '\0vite/preload-helper.js', '/repo/js/b.js?worker_file&type=module', '/repo/node_modules/valibot/dist/index.js', '/repo/css/a.css']) {
       assert.equal(keep(id), true, id);
     }

@@ -87,8 +87,10 @@ function sourcePath(id, root) {
 /**
  * The bundler's moduleSideEffects (#300): a first-party module keeps its side effects only when
  * it's in `keep`, the entry roots and build/side-effects.json's modules
- * (scripts/build/side-effects.js), so any other one nothing takes anything from drops whole. Vite's
- * own modules, the pages and stylesheets, and the dependencies keep theirs as they come.
+ * (scripts/build/side-effects.js), so any other one nothing takes anything from drops whole. A
+ * vendored module under js/lib/ is first-party here: valibot, the one the bundle holds, has nothing
+ * at its top level but declarations. Vite's own modules, the pages and stylesheets, and anything
+ * from node_modules keep theirs as they come.
  * @param {string} root
  * @param {Set<string>} keep - source paths
  * @returns {(id: string) => boolean}
