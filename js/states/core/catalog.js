@@ -120,7 +120,7 @@ export function format(text, declared, values, host) {
  * sentence, takes back
  * @param {string} text
  */
-const claimsSuccess = text =>
+export const claimsSuccess = text =>
   [...text.matchAll(SUCCESS)].some(match => !NOT_A_CLAIM.test(text.slice(0, match.index ?? 0)));
 
 /** @typedef {Readonly<Record<string, Readonly<Record<string, string>>>>} Parameters */

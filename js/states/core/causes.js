@@ -105,14 +105,16 @@ export const CODE_CAUSES = new Set([...TRANSPORT, ...NAMED].map(([id]) => id));
 /**
  * The id of the cause an outcome or a failed query presents through: an unknown command's is
  * `unknown`, since its key is checked first whatever its code; any other's is its code's own cause,
- * or else its branch's. A committed command and a bulk have none.
+ * or else its branch's. A committed command and a bulk have none. `codes` are the codes with a cause
+ * of their own, #12's and #13's unless an owner's are registered too.
  * @param {{kind: string, code: string, reason?: string, cause?: string}} result
+ * @param {ReadonlySet<string>} [codes]
  * @returns {string | null}
  */
-export function causeIdFor({ kind, code, reason, cause }) {
+export function causeIdFor({ kind, code, reason, cause }, codes = CODE_CAUSES) {
   if (kind === 'unknown') return 'unknown';
   if (kind === 'committed' || kind === 'bulk') return null;
-  if (CODE_CAUSES.has(code)) return code;
+  if (codes.has(code)) return code;
   if (kind === 'conflict') return 'conflict';
   return `${kind}-${kind === 'rejected' ? reason : cause}`;
 }
