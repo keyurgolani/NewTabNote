@@ -11,7 +11,9 @@
 // the run's upgrade it's migrating, not failed, until that page goes. Since #35 slice 3 a
 // capture writes its journal entry before the coordinator starts, so one its notes can't take
 // is kept and says so, and the coordinator's drain adds it, in the day it was made, once it's
-// ready, which no welcome waits for.
+// ready, which no welcome waits for. Since #35 slice 7, while another context holds Web Lock
+// storage.restore, it opens nothing and welcomes a page restoring, and it takes storage.restoring
+// and storage.restored from this extension only.
 
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
@@ -1737,5 +1739,50 @@ describe("the new tab's commands over the port, in the worker (#35 slice 4d)", (
     await pastTheHold(worker);
     assert.equal(await holdsNote(worker, 'n-held'), false);
     assert.deepEqual(page.received.filter((frame) => frame.requestId === 'held'), [], 'no answer to the page that went');
+  });
+});
+
+describe("another context's restore, in the worker (#35 slice 7)", () => {
+  it('opens no notes database for a hello while another context holds storage.restore, welcomes it restoring, and opens once the lock is free', async () => {
+    const opens = [];
+    let release = () => {};
+    const worker = await loadBackground({
+      start: false,
+      setup: (env) => {
+        countOpens(env, opens);
+        // The lock recovery.html's fallback and #304's command take, held from another page
+        return new Promise((held) => {
+          env.global.navigator.locks.request('storage.restore', () => new Promise((ended) => {
+            release = ended;
+            held();
+          }));
+        });
+      },
+    });
+    const page = pagePort();
+    await worker.dispatch('runtime.onConnect', page.port);
+    page.hello('session-1');
+    await worker.drain();
+    // By the welcome's cap at the latest, whether or not the start answers while the lock is held
+    worker.env.clock.tick(limits.WELCOME_WAIT_MS);
+    await worker.drain();
+    const welcome = page.received.find((frame) => frame.frame === 'welcome');
+    assert.deepEqual(welcome && [welcome.status, welcome.reason], ['degraded', 'restoring'], JSON.stringify(page.received));
+    assert.deepEqual(opens, [], 'nothing opens while the lock is held');
+    release();
+    await worker.drain();
+    assert.deepEqual(await welcomeOf(worker, 'session-2'), { status: 'ready', reason: undefined });
+    assert.ok(opens.length > 0, 'it opened once the lock was free');
+  });
+
+  it('answers storage.restoring and storage.restored from another extension request-refused, and starts nothing for them', async () => {
+    const opens = [];
+    const worker = await loadBackground({ start: false, setup: (env) => { withUrl(env); countOpens(env, opens); } });
+    const another = { id: 'another', url: 'chrome-extension://another/recovery.html', origin: 'chrome-extension://another' };
+    for (const type of ['storage.restoring', 'storage.restored']) {
+      assert.deepEqual(await ask(worker, { type }, another, { withinMs: 1000 }), { error: 'request-refused' }, type);
+    }
+    await worker.drain();
+    assert.deepEqual(opens, [], 'no coordinator start');
   });
 });

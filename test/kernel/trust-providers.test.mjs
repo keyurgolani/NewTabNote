@@ -367,6 +367,23 @@ describe('index lag, messaging, contributions, and block types (#20 slice 2)', (
     assert.equal(odd.receipt.status, 'unverified');
   });
 
+  it('coordinator: unverified, restoring, while another context restores, never a failure (#35 slice 7)', async () => {
+    const health = { coordinatorId: 'c1', startedAt: 1, commands: [], oldestOrphanedEntryAt: null, migration: null };
+    const restoring = await checkOf('coordinator', {
+      messaging: { query: async () => ready(1, { status: 'degraded', reason: 'restoring', ...health }) },
+    });
+    assert.deepEqual(
+      [
+        restoring.receipt.status,
+        restoring.receipt.evidence,
+        restoring.receipt.consequenceKey,
+        restoring.faults,
+        restoring.looked,
+      ],
+      ['unverified', { errorCode: 'restoring' }, null, [], []],
+    );
+  });
+
   it("contributions: degraded while one is unresolved or temporarily unavailable, and block types waits for #14; neither counts the other's", async () => {
     const thing = defineFamily({ id: BLOCK_FAMILY, apiVersion: 1, groups: ['text'], hosts: ['workspace'] });
     const tool = defineFamily({ id: 'tool', apiVersion: 1, groups: ['text'], hosts: ['workspace'] });

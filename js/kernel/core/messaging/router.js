@@ -25,7 +25,9 @@
  * The router enforces each request's deadline, and its entry's when the request sets a later
  * one. A query stops there or when it's cancelled, as does a command that hasn't opened its
  * transaction. A command that has runs to its outcome: a cancel gets `too-late` with that
- * outcome, then the response. A connection that closes stops what it asked for the same way.
+ * outcome, then the response. A connection that closes stops what it asked for the same way. A
+ * command still waiting at its deadline while the coordinator says `migrating`, or `restoring`
+ * while another context restores (#35 slice 7), answers that, unavailable and retryable.
  *
  * A hello in this major while #35's coordinator says it's `starting` waits for that start
  * (`settled`), for WELCOME_WAIT_MS at most, so its welcome says what the start came to, or at
@@ -51,6 +53,7 @@ import { check, checkRequest, checkResult, readFrame } from '../contracts/valida
 import { silentLogger } from '../ports/runtime.js';
 import { denialOf } from './denials.js';
 import { createLookup } from './operations.js';
+import { RESTORING } from './restore-messages.js';
 import { SYSTEM_OPERATIONS } from './system-operations.js';
 import { createScopeCheck } from './scope.js';
 
@@ -430,10 +433,14 @@ export function createRouter({
     return { status: 'degraded', reason: 'status-unknown' };
   };
 
-  /** Whether the coordinator says it's migrating now, as a welcome would say it */
-  const migrating = () => {
+  /**
+   * What the coordinator says it waits on now, as a welcome would say it: `migrating`, or
+   * `restoring` while another context restores (#35 slice 7), and null for anything else
+   * @returns {string | null}
+   */
+  const waitingOn = () => {
     const now = statusNow();
-    return now.status === 'degraded' && now.reason === MIGRATING;
+    return now.status === 'degraded' && (now.reason === MIGRATING || now.reason === RESTORING) ? now.reason : null;
   };
 
   /**
@@ -578,11 +585,12 @@ export function createRouter({
     running.timer = timers.set(() => {
       if (running.ended || (running.isCommand && running.begun)) return;
       end(peer, requestId, running, true);
-      if (running.isCommand && migrating()) {
-        // Still waiting while the coordinator migrates: migrating, retryable, as an answer every
-        // page reads (outcome-schemas.js), so its page can tell a slow upgrade from a lost command
-        // (#35 slice 4d, rule 18)
-        const result = unavailable('coordinator', MIGRATING, true);
+      const waited = running.isCommand ? waitingOn() : null;
+      if (waited) {
+        // Still waiting while the coordinator migrates (#35 slice 4d, rule 18), or while another
+        // context restores (#35 slice 7): that, retryable, as an answer every page reads
+        // (outcome-schemas.js), so its page can tell a slow upgrade or a restore from a lost command
+        const result = unavailable('coordinator', waited, true);
         countAnswer(result, arrived);
         send(peer, { frame: 'response', requestId, result });
         return;

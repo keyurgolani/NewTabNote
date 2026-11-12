@@ -34,6 +34,7 @@ import {
 } from './kernel/composition/coordinator.js';
 import { DRAIN_MESSAGE, createWorkerJournal } from './kernel/composition/journal.js';
 import { randomIds } from './kernel/composition/messaging.js';
+import { RESTORED_MESSAGE, RESTORING_MESSAGE } from './kernel/core/messaging/restore-messages.js';
 import { createFailureEvents } from './kernel/composition/trust.js';
 import { TRUST_STATUS_MESSAGE, workerStatusRead } from './kernel/composition/trust-status-read.js';
 import { createWorkerInternalClient, createWorkerInternalRouter } from './kernel/composition/worker-internal.js';
@@ -595,6 +596,25 @@ function drainStatus() {
   );
 }
 
+/**
+ * What a context that restores the notes hears when it tells the worker it holds Web Lock
+ * storage.restore, with storage.restoring, and when it has let it go, with storage.restored (#35
+ * slice 7): the coordinator checks the lock at once, and answers what its welcomes say then, which
+ * is `degraded` `restoring` once it has paused, its running command in and its adapter closed.
+ * Only that status goes back. js/kernel/composition/worker-network.js runs both for this
+ * extension's own senders only, as it runs migrationStatus, and answers any other sender
+ * `{error: 'request-refused'}`. Neither starts the coordinator, which checks the lock as it starts.
+ * @returns {Promise<{status: string, reason?: string}>}
+ */
+function restoringStatus() {
+  return coordinator.restoring();
+}
+
+/** @returns {Promise<{status: string, reason?: string}>} */
+function restoredStatus() {
+  return coordinator.restored();
+}
+
 // ============ The coordinator ============
 
 // Built last, after every listener above (#35): a throw here leaves them all in place
@@ -622,10 +642,11 @@ const statusRead = workerStatusRead();
 // guard's wiring, which journals what the guard refused into the events above. It never throws.
 // It hands a page's wait on the migration (#17) to migrationStatus, a page's storage.purge
 // after a delete for good (#17 PR 2b) to purgeStatus, a page's journal.drain (#35 slice 3)
-// to drainStatus, and a status page's trust.status (#20 slice 4c) to statusRead, from this
-// extension's own senders only. Every event comes after this file has run, the coordinator's
-// build included.
-installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus, [PURGE_MESSAGE]: purgeStatus, [DRAIN_MESSAGE]: drainStatus, [TRUST_STATUS_MESSAGE]: statusRead } });
+// to drainStatus, a status page's trust.status (#20 slice 4c) to statusRead, and a restorer's
+// storage.restoring and storage.restored (#35 slice 7) to restoringStatus and restoredStatus,
+// from this extension's own senders only. Every event comes after this file has run, the
+// coordinator's build included.
+installWorkerNetwork({ guard: contextGuard, events: failureEvents, ownHandlers: { [MIGRATE_MESSAGE]: migrationStatus, [PURGE_MESSAGE]: purgeStatus, [DRAIN_MESSAGE]: drainStatus, [TRUST_STATUS_MESSAGE]: statusRead, [RESTORING_MESSAGE]: restoringStatus, [RESTORED_MESSAGE]: restoredStatus } });
 try {
   // Building it opens nothing: the first capture opens NewTabNoteJournal, and the first drain
   // reads it only when it's there
@@ -645,9 +666,12 @@ try {
 try {
   coordinator = createCoordinator({
     instanceId,
-    makeKernel: () => createWorkerClient({ ...workerHost(), report: migrationEvents(failureEvents.event), events: failureEvents }),
+    // Each of its attempts waits while another context restores, as the coordinator says (#35 slice 7)
+    makeKernel: ({ whenClear }) => createWorkerClient({ ...workerHost(), whenClear, report: migrationEvents(failureEvents.event), events: failureEvents }),
     events: failureEvents,
     journal: captureJournal,
+    // Web Lock storage.restore, which a context that restores the notes holds (#35 slice 7)
+    locks: (self.navigator && self.navigator.locks) || null,
   });
 } catch (error) {
   // The stand-in stays, every capture is kept for a later start's drain and says so, and #20
