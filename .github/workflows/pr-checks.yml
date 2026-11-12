@@ -133,6 +133,12 @@ jobs:
         env:
           BASE: ${{ steps.ledger-base.outputs.base }}
         run: npm run check:states -- ${BASE:+--base "$BASE"} 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      # #24 slice 2: each test/a11y/baseline.json line's page has its spec, and the baseline only
+      # shrinks: a line or target the same base doesn't have fails
+      - name: npm run check:a11y-baseline
+        env:
+          BASE: ${{ steps.ledger-base.outputs.base }}
+        run: npm run check:a11y-baseline -- ${BASE:+--base "$BASE"} 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
         id: excerpt
         if: failure() || cancelled()
@@ -232,6 +238,10 @@ jobs:
         run: node_modules/.bin/playwright install --with-deps --no-shell chromium 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm run test:extension
         run: npm run test:extension 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+      # #24 slice 2: the accessibility check library's own spec, and each page's spec as it lands, held
+      # to test/a11y/baseline.json by its reporter. A step here until #29's aggregate gate takes it over
+      - name: npm run test:a11y
+        run: npm run test:a11y 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: Record the failure for pr-gate
         id: excerpt
         if: failure() || cancelled()
@@ -267,7 +277,7 @@ jobs:
             "typecheck": "npm run typecheck:ratchet",
             "kernel": ${{ toJSON(format('npm run test:kernel && npm run typecheck:kernel && {0}', needs.kernel.outputs.command || 'npm run check:boundaries')) }},
             "build": "npm run build -- --strict && npm run check:dist && npm run verify:fixtures && npm run verify:reproducible && npm run package && npm run check:notices",
-            "extension": "npm run build -- --strict && npm run test:extension"}
+            "extension": "npm run build -- --strict && npm run test:extension && npm run test:a11y"}
         run: |
           set -euo pipefail
           jq -nr '

@@ -25,8 +25,9 @@ const MARKERS = {
   kernel: /^✖ failing tests:|error TS\d+:|^check:boundaries failed/,
   build: /^✗ Build failed|^check:dist failed|^verify:fixtures failed|^verify:reproducible failed|^Packaging failed|^Error|^check:notices failed/,
   // Playwright's list reporter numbers each failed test; a spec or config that fails to
-  // load, or a failed browser install, prints a bare Error line instead
-  extension: /^ {2}1\) |^Error: /,
+  // load, or a failed browser install, prints a bare Error line instead, and test:a11y's
+  // reporter its baseline report (test/a11y/baseline-reporter.js)
+  extension: /^ {2}1\) |^Error: |^test:a11y's findings don't match/,
 };
 
 function excerpt(text, marker) {
