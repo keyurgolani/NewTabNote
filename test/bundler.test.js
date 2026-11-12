@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const config = require('../scripts/build/vite-config.js');
-const { bundlerProblem, warningProblem, measuredChunks, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
+const { bundlerProblem, warningProblem, measuredChunks, passTies, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
 const { checkCommonJs } = require('../scripts/build/commonjs.js');
 const { BUILD_INPUTS, SOURCE_DIRS, listedInputs, buildEntries } = require('../scripts/build/inputs.js');
 const { checkBackgroundSources, pageGlobalReads, loadingProblems } = require('../scripts/build/background.js');
@@ -484,6 +484,35 @@ describe('what the build reads from the bundler (scripts/build/bundle.js)', () =
     const { checkWarnings } = require('../scripts/build/warning-allowlist.js');
     const warned = checkWarnings(['\n(!) Some chunks are larger than 500 kB after minification. Consider:'], { chunks: {}, warnings: [] }, { mode: 'production', complete: true, chunks: measured.chunks, passes: ['pages'] });
     assert.deepEqual(warned.problems.map(({ code, subject }) => `${code} ${subject}`), ['build/bundler-warning workspace']);
+  });
+
+  it("ties each chunk and each warning to the pass that made it, so recovery.html's pass answers for its own chunks over the limit (#326's review)", () => {
+    const { checkWarnings } = require('../scripts/build/warning-allowlist.js');
+    const SIZE = '\n(!) Some chunks are larger than 500 kB after minification. Consider:';
+    const rows = { chunks: { workspace: { owner: 3, reason: 'why it stays' } }, warnings: [] };
+    // Each pass in turn, as bundle() runs them: the report labels recovery.html's chunks as the pages pass's
+    const build = (/** @type {Array<[string, Array<[string, number]>, number]>} */ passes) => {
+      const report = { chunks: [], assets: [] };
+      /** @type {string[]} */
+      const warnings = [];
+      const ties = passTies(report, warnings);
+      for (const [pass, chunks, warned] of passes) {
+        ties.begin(pass);
+        for (const [name, bytes] of chunks) report.chunks.push({ ...chunk('pages', name, `assets/${name}-A1.js`), bytes });
+        for (let i = 0; i < warned; i++) warnings.push(SIZE);
+      }
+      const { measured, passes: printed } = ties.read(true);
+      const found = checkWarnings(warnings, rows, { mode: 'production', complete: true, chunks: measured.chunks, passes: printed });
+      return { printed, chunks: measured.chunks.map(({ pass, name }) => `${pass} ${name}`), problems: found.problems.map(({ code, subject }) => `${code} ${subject}`), ties };
+    };
+    // Both passes warn, and recovery.html's has a chunk over the limit with no row
+    const both = build([['pages', [['workspace', 591069]], 1], ['recovery', [['big', 600000]], 1]]);
+    assert.deepEqual([both.printed, both.chunks, both.problems], [['pages', 'recovery'], ['pages workspace', 'recovery big'], ['build/bundler-warning big']]);
+    // Only recovery.html's pass warns, with nothing of its own over the limit: the pages pass's rowed chunk can't answer for it
+    const one = build([['pages', [['workspace', 591069]], 0], ['recovery', [['recovery', 284351]], 1]]);
+    assert.deepEqual([one.printed, one.problems], [['recovery'], ['build/bundler-warning the bundle', 'build/warning-stale build/warning-allowlist.json']]);
+    // Until every pass ran, no chunk is read
+    assert.deepEqual(one.ties.read(false).measured, { chunks: [], problems: [] });
   });
 
   it('reads a module id as a source path, through the root\'s real path too, and nothing else as one', () => {
