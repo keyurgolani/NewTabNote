@@ -1,6 +1,7 @@
 /**
  * The kernel's state strings (#26 slice 1): a message for each of #12's and #13's causes, a
- * headline for each of the 11 states, and a label for each action, Inspect, and Open's
+ * headline for each of the 11 states, the presenter's labels for a pending save, an unverified
+ * provider and a partial result's two lists, and a label for each action, Inspect, and Open's
  * destinations. "Nothing changed" shows only where #12 or #13 says so. Provisional until slice 2's
  * Design gate, in #20's house style.
  */
@@ -48,10 +49,14 @@ export default Object.freeze({
   'state.empty.headline': 'Nothing here',
   'state.stale.headline': 'This may be out of date',
   'state.offline.headline': "Can't reach {host}",
-  'state.blocked.headline': 'Waiting on {subsystem}',
+  'state.blocked.headline': "Can't continue yet",
   'state.partial.headline': "{committed} of {total} finished, the rest didn't",
   'state.failed.headline': "Couldn't finish this",
   'state.recovering.headline': 'Recovering',
+  'state.pending.headline': 'Saving',
+  'state.unverified.headline': 'Not verified yet',
+  'state.partial.committed': 'Saved',
+  'state.partial.failed': 'Not saved',
 
   'action.retry': 'Retry',
   'action.reconnect': 'Reconnect',

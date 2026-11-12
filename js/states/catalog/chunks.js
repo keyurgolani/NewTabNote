@@ -21,7 +21,6 @@ export const CHUNKS = Object.freeze([
     holds: ['cause', 'state', 'action'],
     parameters: {
       'state.offline.headline': { host: 'host' },
-      'state.blocked.headline': { subsystem: 'subsystem' },
       'state.partial.headline': { committed: 'count', total: 'count' },
     },
     load: () => import('./kernel.js'),
