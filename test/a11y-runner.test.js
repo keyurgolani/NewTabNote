@@ -7,7 +7,9 @@
 // - test:a11y runs Playwright on test/a11y/playwright.config.js and nothing else, so none of the
 //   flags that let a run with no test pass (--pass-with-no-tests, --shard, --only-changed,
 //   --test-list) is set, and the config runs the *.spec.js under test/a11y/ one at a time, with no
-//   retry, so a finding comes from one attempt.
+//   retry, so a finding comes from one attempt;
+// - the reporter the config builds reads test/a11y/baseline.json at the path check:a11y-baseline
+//   reads, since a wrong one reads as no file, which after the seed is report-only.
 // test/toolchain.test.js holds every devDependency to the version the lockfile installs.
 
 const { describe, it } = require('node:test');
@@ -16,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
+const check = require('../scripts/check-a11y-baseline.js');
 const read = (/** @type {string} */ file) => JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf8'));
 
 describe('test:a11y and its pinned axe (#24 slice 2)', () => {
@@ -48,5 +51,16 @@ describe('test:a11y and its pinned axe (#24 slice 2)', () => {
     // The baseline reporter is what fails a run on a finding, and a shard lets a run with no test pass
     assert.ok(config.reporter.some((/** @type {unknown[]} */ entry) => entry[0] === './baseline-reporter.js'), 'the baseline reporter');
     assert.equal(config.shard, undefined);
+  });
+
+  it('holds a real run to the file check:a11y-baseline reads, with the reporter as the config builds it', () => {
+    const config = require('./a11y/playwright.config.js');
+    const [name, options] = config.reporter.find((/** @type {unknown[]} */ entry) => entry[0] === './baseline-reporter.js');
+    // Playwright resolves a reporter's path against its config's folder, and hands it the entry's options
+    const Reporter = require(path.resolve(ROOT, 'test', 'a11y', name));
+    // A wrong path in the reporter's default or the config's options reads as no file, which after the
+    // seed is report-only, and --base, which reads the file itself, wouldn't notice
+    assert.equal(check.baselineIn(), path.join(ROOT, 'test', 'a11y', 'baseline.json'));
+    assert.equal(new Reporter(options)._baseline, check.baselineIn());
   });
 });
