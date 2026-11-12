@@ -1,5 +1,5 @@
 {
-  "rule": "a page loads a classic script without vite-ignore, which Vite warns it can't bundle: no bundler warning is reviewed as allowed",
+  "rule": "a page loads a classic script without vite-ignore, which Vite warns it can't bundle, and build/warning-allowlist.json has no row for that warning",
   "expect": [
     "build/bundler-warning"
   ],

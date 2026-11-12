@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const config = require('../scripts/build/vite-config.js');
-const { bundlerProblem, warningProblem, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
+const { bundlerProblem, warningProblem, writtenChunks, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
 const { checkCommonJs } = require('../scripts/build/commonjs.js');
 const { BUILD_INPUTS, SOURCE_DIRS, listedInputs, buildEntries } = require('../scripts/build/inputs.js');
 const { checkBackgroundSources, pageGlobalReads, loadingProblems } = require('../scripts/build/background.js');
@@ -235,12 +235,17 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     }
   });
 
-  it("turns off only the bundler's timing check, whose warning says how busy the machine is, in every pass and the workers' build", () => {
-    // Any warning fails the build, and under load this one failed five fixtures' builds
+  it("turns off only the bundler's timing check, whose warning says how busy the machine is, in every pass and the workers' build, and leaves its chunk-size warning on at its own limit (#300)", () => {
+    // A warning no row allows fails the build, and under load this one failed five fixtures' builds
     const pages = config.pagesConfig(passOptions());
     const background = config.backgroundConfig(passOptions());
     for (const options of [pages.build.rolldownOptions, pages.worker.rolldownOptions, background.build.rolldownOptions]) {
       assert.deepEqual(options.checks, { bundlerTimings: false });
+    }
+    // No pass sets the limit, so the bundler warns at its own 500 kB, and
+    // build/warning-allowlist.json has a row for each chunk the warning covers
+    for (const pass of [pages, config.recoveryConfig(passOptions()), background, config.guardConfig({ ...passOptions(), guardRows: [] })]) {
+      assert.equal(pass.build.chunkSizeWarningLimit, undefined);
     }
   });
 
@@ -445,14 +450,33 @@ describe('what the build reads from the bundler (scripts/build/bundle.js)', () =
     assert.equal(bundlerProblem({ message: 'x', id: '/elsewhere/b.js' }, '/repo').subject, '/elsewhere/b.js');
   });
 
-  it("fails the build on every warning, a stylesheet's as build/css and any other as build/bundler-warning, with its detail", () => {
+  it("fails the build on each warning no build/warning-allowlist.json row allows, a stylesheet's as build/css and any other as build/bundler-warning, with its detail (#300)", () => {
     const css = warningProblem('[vite:css][lightningcss] Unknown pseudo-class: ntn-unknown\n  css/premium-chat.css:900:13');
     assert.deepEqual([css.code, css.subject, css.details], ['build/css', 'the stylesheets', ['  css/premium-chat.css:900:13']]);
     assert.match(css.message, /A CSS warning fails the build as an error does\.$/);
     const other = warningProblem('<script src="js/x.js"> in "/popup.html" can\'t be bundled without type="module" attribute');
     assert.deepEqual([other.code, other.subject, other.details], ['build/bundler-warning', 'the bundle', undefined]);
-    assert.match(other.message, /No bundler warning is reviewed as allowed\.$/);
+    assert.match(other.message, /build\/warning-allowlist\.json has no row for it\.$/);
     assert.equal(warningProblem(Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n')).details.length, 12);
+  });
+
+  it("reads each chunk's bytes as its pass wrote the file, which the bundler's chunk-size warning measured, and skips a chunk with no file (#300)", () => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ntn-written-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'assets'));
+      fs.mkdirSync(path.join(dir, 'js'));
+      fs.writeFileSync(path.join(dir, 'assets', 'workspace-A1.js'), 'x'.repeat(1200));
+      fs.writeFileSync(path.join(dir, 'js', 'background.js'), 'é');
+      const report = { assets: [], chunks: [
+        chunk('pages', 'workspace', 'assets/workspace-A1.js'),
+        chunk('background', 'background', 'js/background.js'),
+        chunk('pages', 'gone', 'assets/gone-B2.js'),
+      ] };
+      // Bytes, not characters: é is two in UTF-8
+      assert.deepEqual(writtenChunks(report, dir), [{ name: 'workspace', bytes: 1200 }, { name: 'background', bytes: 2 }]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('reads a module id as a source path, through the root\'s real path too, and nothing else as one', () => {

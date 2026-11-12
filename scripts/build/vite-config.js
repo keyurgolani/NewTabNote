@@ -348,16 +348,13 @@ function buildOptions({ outDir, mode }) {
     manifest: false,
     copyPublicDir: false,
     reportCompressedSize: false,
-    // #27 slice 4's budgets gate sizes. Until then the bundler's own 500 kB warning would fail
-    // every build on the new tab's chunk, so it's set past any chunk's size.
-    chunkSizeWarningLimit: 1024 * 1024,
   };
 }
 
 /**
  * The bundler's checks. Its timing check warns when plugin callbacks take most of a build's
  * time, which says how busy the machine is, not what's wrong with the code, and any warning
- * fails the build, so that one is off: under load it failed five fixtures' builds.
+ * no row allows fails the build, so that one is off: under load it failed five fixtures' builds.
  */
 const CHECKS = Object.freeze({ bundlerTimings: false });
 

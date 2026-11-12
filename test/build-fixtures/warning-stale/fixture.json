@@ -1,0 +1,16 @@
+{
+  "rule": "a build/warning-allowlist.json row names the host chunk, which is under the bundler's 500 kB chunk-size limit, so the row has no warning to allow: the list only shrinks (#300)",
+  "expect": [
+    "build/warning-stale"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/warning-allowlist.json",
+      "replace": "\"chunks\": {",
+      "with": "\"chunks\": {\n    \"host\": { \"owner\": 3, \"reason\": \"a row for a chunk the bundler's limit doesn't reach\" },"
+    }
+  ]
+}

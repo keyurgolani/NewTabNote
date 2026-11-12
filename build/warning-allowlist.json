@@ -1,0 +1,10 @@
+{
+  "about": "The warnings a build may print, each reviewed to stay (#27 AC1, #300). Any other warning Vite or the bundler prints fails the build as build/bundler-warning, and a CSS warning fails it as build/css, which no row allows. chunks holds a row for each chunk the bundler's chunk-size warning covers, by the chunk's name: the warning names no chunk, so the build names each one a pass wrote whose file is over the limit the warning states, the bundler's own 500 kB. The bundler measures only a minified pass, so these rows hold for npm run build, and build:dev checks none. warnings holds a row for any other warning, with its first line exactly as the build prints it. Each row names the issue that owns it and why it's here. The list only shrinks: a row whose warning doesn't come fails the build as build/warning-stale, and test/build-warnings.test.js pins the rows it may hold. A list that doesn't read fails as build/warning-file. The bundler's timing check (checks.bundlerTimings) is off in scripts/build/vite-config.js and isn't a row: its warning says how busy the machine is, which varies from run to run with the load, not what's wrong with the code.",
+  "chunks": {
+    "workspace": {
+      "owner": 3,
+      "reason": "The new tab's workspace chunk is still the whole tab, about 591 KB, over the bundler's 500 kB, until #2's Moment shell takes the tab's start and #3's route split (#27 AC2) splits what's left. The row goes once the chunk is under the limit, which build/warning-stale holds it to."
+    }
+  },
+  "warnings": []
+}

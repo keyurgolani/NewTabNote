@@ -4,8 +4,9 @@
  * Runs the bundler's four passes (scripts/build/vite-config.js) and turns what goes wrong into
  * problems (#27 "Failure rules"). An error from the bundler is `build/bundle` (an import it
  * can't resolve, a file it can't parse), `build/css` from the stylesheet pipeline, or
- * `build/terser` from the minifier. Any warning Vite or the bundler prints is
- * `build/bundler-warning`: no warning is reviewed as allowed, so each one fails the build. A
+ * `build/terser` from the minifier. A warning Vite or the bundler prints is
+ * `build/bundler-warning` unless build/warning-allowlist.json has a row for it
+ * (scripts/build/warning-allowlist.js), and a stylesheet's is `build/css`, which no row allows. A
  * module the bundler wrapped as CommonJS is `build/commonjs` (scripts/build/commonjs.js), and a
  * loader that isn't alone in its chunk at its own path, or lacks the build's ID, `build/loader`.
  *
@@ -19,6 +20,7 @@ const path = require('node:path');
 const { problem } = require('./diagnostics.js');
 const { pagesConfig, recoveryConfig, backgroundConfig, guardConfig, BACKGROUND_ENTRY, LOADER } = require('./vite-config.js');
 const { guardOrderProblems, guardRegistry } = require('./guard.js');
+const { checkWarnings, CSS_WARNING, ALLOWLIST_FILE } = require('./warning-allowlist.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./vite-config.js').BundleReport} BundleReport */
@@ -34,6 +36,7 @@ const { guardOrderProblems, guardRegistry } = require('./guard.js');
  * @property {{background: string[], pages: string[]}} graphs - the source paths each pass bundled,
  *   workers counted with the pages
  * @property {ChunkReport[]} report - every chunk each pass wrote, for the budgets' analyzer
+ * @property {string[]} allowed - each warning build/warning-allowlist.json allowed, for the log
  */
 
 /** ANSI color codes, which Vite's messages carry */
@@ -102,18 +105,32 @@ function bundlerProblem(error, root) {
 }
 
 /**
- * The problem for a warning Vite or the bundler logged. A stylesheet's is the stylesheet's, as a
- * CleanCSS warning was (#89's review), and any other the bundle's.
+ * The problem for a warning Vite or the bundler logged that no build/warning-allowlist.json row
+ * allows. A stylesheet's is the stylesheet's, as a CleanCSS warning was (#89's review), and any
+ * other the bundle's.
  * @param {string} warning
  * @returns {Problem}
  */
 function warningProblem(warning) {
   const [first, ...rest] = warning.split('\n');
-  const found = /lightningcss|\[vite:css/i.test(first)
+  const found = CSS_WARNING.test(first)
     ? problem('build/css', 'the stylesheets', `${first}. A CSS warning fails the build as an error does.`)
-    : problem('build/bundler-warning', 'the bundle', `${first}. No bundler warning is reviewed as allowed.`);
+    : problem('build/bundler-warning', 'the bundle', `${first}. ${ALLOWLIST_FILE} has no row for it.`);
   if (rest.length > 0) found.details = rest.slice(0, 12);
   return found;
+}
+
+/**
+ * Each chunk the passes wrote, with its file's bytes: what the bundler's chunk-size warning
+ * measures, and names no chunk of (scripts/build/warning-allowlist.js)
+ * @param {BundleReport} report
+ * @param {string} outDir
+ * @returns {Array<{name: string, bytes: number}>}
+ */
+function writtenChunks(report, outDir) {
+  return report.chunks
+    .filter((chunk) => fs.existsSync(path.join(outDir, chunk.fileName)))
+    .map((chunk) => ({ name: chunk.name, bytes: fs.statSync(path.join(outDir, chunk.fileName)).size }));
 }
 
 /**
@@ -238,11 +255,11 @@ function moduleMap(report, root) {
 
 /**
  * Bundle the pages and the background into `outDir`, with the build's ID and the define
- * allowlist's rows inlined
- * @param {{root: string, outDir: string, mode: Mode, buildId: string, defineRows: import('./vite-config.js').PassOptions['defineRows']}} options
+ * allowlist's rows inlined, and each warning the passes print checked against the warning allowlist
+ * @param {{root: string, outDir: string, mode: Mode, buildId: string, defineRows: import('./vite-config.js').PassOptions['defineRows'], allowlist: import('./warning-allowlist.js').WarningAllowlist}} options
  * @returns {Promise<Bundled>}
  */
-async function bundle({ root, outDir, mode, buildId, defineRows }) {
+async function bundle({ root, outDir, mode, buildId, defineRows, allowlist }) {
   const vite = await import('vite');
   /** @type {string[]} */
   const warnings = [];
@@ -262,6 +279,8 @@ async function bundle({ root, outDir, mode, buildId, defineRows }) {
 
   /** @type {Problem[]} */
   const problems = [];
+  // Whether every pass ran: until then, a row's warning may be one a pass that didn't run prints
+  let complete = false;
   try {
     await vite.build(pagesConfig(options));
     // recovery.html in a pass of its own, so it splits no chunk the other pages share
@@ -270,12 +289,16 @@ async function bundle({ root, outDir, mode, buildId, defineRows }) {
     // The page guard inlines the registry's rows cut, once they're validated
     const registry = await guardRegistry(root);
     if ('problem' in registry) problems.push(registry.problem);
-    else await vite.build(guardConfig({ ...options, guardRows: registry.rows }));
+    else {
+      await vite.build(guardConfig({ ...options, guardRows: registry.rows }));
+      complete = true;
+    }
   } catch (error) {
     problems.push(bundlerProblem(error, root));
   }
-  problems.push(...warnings.map(warningProblem));
-  if (problems.length > 0) return { problems, chunks: {}, modules: {}, graphs: { background: [], pages: [] }, report: [] };
+  const checked = checkWarnings(warnings, allowlist, { mode, complete, chunks: complete ? writtenChunks(report, outDir) : [] });
+  problems.push(...checked.unlisted.map(warningProblem), ...checked.problems);
+  if (problems.length > 0) return { problems, chunks: {}, modules: {}, graphs: { background: [], pages: [] }, report: [], allowed: [] };
 
   const named = chunkNames(report);
   const { modules, graphs } = moduleMap(report, root);
@@ -288,7 +311,8 @@ async function bundle({ root, outDir, mode, buildId, defineRows }) {
     modules,
     graphs,
     report: report.chunks,
+    allowed: checked.allowed,
   };
 }
 
-module.exports = { bundle, bundlerProblem, warningProblem, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };
+module.exports = { bundle, bundlerProblem, warningProblem, writtenChunks, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };

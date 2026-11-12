@@ -45,6 +45,7 @@ const { listedInputs } = require('./inputs.js');
 const { CLASSIC_SCRIPTS, STATIC_FILES, terserOptions } = require('./vite-config.js');
 const { analyze, checkBudgets, readBudgets, startChunksOf } = require('./budgets.js');
 const { readAllowlist } = require('./define-allowlist.js');
+const { readAllowlist: readWarningList } = require('./warning-allowlist.js');
 const { readTable, chromeProblems } = require('./chrome-features.js');
 const { dependencyReport } = require('./dependencies.js');
 
@@ -331,11 +332,12 @@ async function build(argv = process.argv.slice(2)) {
   }
   const buildId = computeBuildId(ROOT_DIR, source.info, mode);
 
-  // 2. The inputs, the define allowlist the bundle inlines, and the Chrome features table with its
-  // scan of the sources (#300)
+  // 2. The inputs, the define allowlist the bundle inlines, the warning allowlist its warnings
+  // answer to, and the Chrome features table with its scan of the sources (#300)
   const defines = readAllowlist(ROOT_DIR);
+  const warningList = readWarningList(ROOT_DIR);
   const features = readTable(ROOT_DIR);
-  const missing = [...inputProblems(ROOT_DIR), ...defines.problems, ...features.problems];
+  const missing = [...inputProblems(ROOT_DIR), ...defines.problems, ...warningList.problems, ...features.problems];
   if (features.problems.length === 0) missing.push(...chromeProblems(ROOT_DIR, features.rows));
   if (missing.length > 0) {
     missing.forEach(report);
@@ -347,7 +349,7 @@ async function build(argv = process.argv.slice(2)) {
   try {
     // 3. The bundle, then what no page or script imports
     console.log('📦 Bundling the pages, their workers, and the service worker...');
-    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId, defineRows: defines.rows });
+    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId, defineRows: defines.rows, allowlist: warningList.allowlist });
     const copied = bundled.problems.length > 0 ? [] : await copyUnbundled(ROOT_DIR, staging, mode);
     const built = [...bundled.problems, ...copied];
     if (built.length > 0) {
@@ -357,6 +359,7 @@ async function build(argv = process.argv.slice(2)) {
       return;
     }
     for (const [name, file] of Object.entries(bundled.chunks)) console.log(`  ✓ ${name}: ${file}`);
+    for (const line of bundled.allowed) console.log(`  ✓ build/warning-allowlist.json allows ${line}`);
     console.log(`  ✓ ${plural(Object.keys(CLASSIC_SCRIPTS).length, 'classic script')} and ${plural(STATIC_FILES.length, 'static file')} copied`);
 
     // 4. What the build wrote
