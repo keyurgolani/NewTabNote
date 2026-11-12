@@ -275,6 +275,43 @@ describe('how the closure check follows paths', () => {
     assert.deepEqual(checkClosure(named, { staticAssets: NO_ASSETS, vendored: new Set() }).problems, []);
   });
 
+  it('follows getURL and createDocument on any receiver, an alias terser writes included, and fails a path built at run time outside the loader (#300, AC5)', () => {
+    // The offscreen document's runtime.getURL(script) read its path from the manifest, and only the
+    // literal chrome.runtime.getURL was read as a reference, so nothing checked it
+    const cases = [
+      ['const runtime = chrome.runtime; runtime.getURL(script);', 'script);'],
+      ['function f(e = globalThis.chrome?.runtime) { return e.getURL(t); }', 't); }'],
+      ['const { getURL } = chrome.runtime; getURL(page);', 'page);'],
+      ["const o = chrome.offscreen; o.createDocument({ url: page, reasons: ['DOM_PARSER'] });", 'page, reasons'],
+    ];
+    const pkg = packageOf({
+      'manifest.json': MANIFEST,
+      'newtab.html': '<script src="js/a.js"></script>',
+      'js/a.js': cases.map(([line]) => line).join('\n'),
+    });
+    const expected = cases.map(([line, at], i) => `closure/non-literal js/a.js:${i + 1}:${line.indexOf(at) + 1}`);
+    assert.deepEqual(found(checkClosure(pkg, { staticAssets: NO_ASSETS, vendored: new Set() }).problems), [...expected].sort());
+
+    // A literal path through an alias is followed like any other, and its getURL is a tab's url
+    const literal = packageOf({
+      'manifest.json': MANIFEST,
+      'newtab.html': '<script src="js/a.js"></script>',
+      'js/a.js': "const r = chrome.runtime; r.getURL('page.html'); r.getURL('gone.html'); const o = chrome.offscreen; o.createDocument({ url: 'off.html' }); chrome.tabs.create({ url: r.getURL('page.html') });",
+      'page.html': '',
+      'off.html': '',
+    });
+    assert.deepEqual(found(checkClosure(literal, { staticAssets: NO_ASSETS, vendored: new Set() }).problems), ['closure/missing gone.html']);
+
+    // build-info.json is the build's own, which it writes once its checks pass, and the loader's
+    // update check names it, through an alias as well
+    const info = packageOf({
+      'manifest.json': MANIFEST,
+      'newtab.html': '<script src="js/a.js"></script>',
+      'js/a.js': "const host = { getURL: (file) => file }; fetch(host.getURL('build-info.json')); fetch(chrome.runtime.getURL('build-info.json'));",
+    });
+    assert.deepEqual(found(checkClosure(info, { staticAssets: NO_ASSETS, vendored: new Set() }).problems), []);
+  });
+
   it('resolves a worker from the page that runs the script, and importScripts from the worker', () => {
     // From js/a.js on a root page, 'w.js' is the root's w.js, not js/w.js
     const pkg = packageOf({

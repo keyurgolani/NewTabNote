@@ -1,0 +1,12 @@
+{
+  "rule": "shipped code names a remote URL with a .js path segment that isn't its last, which #27 counts as executable (#300, AC6)",
+  "expect": [
+    "remote-code/url"
+  ],
+  "edits": [
+    {
+      "file": "js/popup.js",
+      "append": "\nwindow.ntnFixtureGuide = 'https://cdn.example.test/tool.js/guide';\n"
+    }
+  ]
+}

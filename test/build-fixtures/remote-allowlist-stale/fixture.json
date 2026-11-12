@@ -6,8 +6,8 @@
   "edits": [
     {
       "file": "build/remote-allowlist.json",
-      "replace": "\"count\": 1,",
-      "with": "\"count\": 2,"
+      "replace": "\"context\": \"wasmPaths\",\n      \"count\": 1,",
+      "with": "\"context\": \"wasmPaths\",\n      \"count\": 2,"
     }
   ]
 }
