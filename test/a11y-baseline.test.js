@@ -10,9 +10,9 @@
 //   but a page whose spec the run left out keeps its lines. A line is one page's, and a finding at a
 //   gated point counts only against a line with that ownerGate, #16-dark;
 // - npm run check:a11y-baseline checks the file's shape and each line's spec, and with --base fails a
-//   line or target the base's file lacks, reading the base's own file, passing where the base has
-//   none yet, and failing a head that drops a file the base has. The file lands with its seed, and
-//   until then there's none, which is no lines. Neither one writes the file;
+//   line or target the base's file lacks, reading the base's own file at its own path, passing where
+//   the base has none yet, and failing a head that drops a file the base has. The file lands with its
+//   seed, and until then there's none, which is no lines. Neither one writes the file;
 // - until the seed lands, the reporter reports what the checks find without failing on it, so no CI
 //   step goes red on today's known issues. A spec that attaches nothing or garbles it still fails,
 //   and so does any failing test.
@@ -179,7 +179,9 @@ describe("test:a11y's baseline (#24 slice 2)", () => {
     /**
      * A git that answers by ref: `refs` gives each ref's baseline lines, or null where it has no file,
      * and any other ref is one git can't read. HEAD holds the file under check, so a --base that read
-     * HEAD's file instead of the base's would pass what the base's fails.
+     * HEAD's file instead of the base's would pass what the base's fails. It answers `ls-tree` and
+     * `show` only about the baseline's own path, since real git lists nothing at another path and a
+     * base that has the file would then read as having none yet.
      */
     const at = (/** @type {Record<string, object[] | null>} */ refs) => ({
       root,
@@ -187,7 +189,10 @@ describe("test:a11y's baseline (#24 slice 2)", () => {
         const ref = args[0] === 'rev-parse' ? args[3].replace(/\^\{commit\}$/, '') : args[0] === 'ls-tree' ? args[2] : args[1].split(':')[0];
         if (!(ref in refs)) throw new Error(`fatal: Needed a single revision: ${ref}`);
         if (args[0] === 'rev-parse') return `${'a'.repeat(40)}\n`;
-        if (args[0] === 'ls-tree') return refs[ref] === null ? '' : `${check.BASELINE}\n`;
+        if (args[0] === 'ls-tree') {
+          assert.deepEqual(args.slice(3), ['--', check.BASELINE]);
+          return refs[ref] === null ? '' : `${check.BASELINE}\n`;
+        }
         assert.equal(args[1], `${ref}:${check.BASELINE}`);
         return JSON.stringify({ check: 'a11y-rules', entries: refs[ref] });
       },
