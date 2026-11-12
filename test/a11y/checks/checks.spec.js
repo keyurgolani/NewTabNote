@@ -1,0 +1,77 @@
+// #24 slice 2: the check library's browser halves, on pages set in plain Chromium. Each check has to
+// find a planted fault and pass its clean twin:
+// - axe, with #29's tags, finds a button with no name and passes one with a name;
+// - the hit boxes find a 43 by 43 button, and pass a 44 by 44 one, a link in running text, and a
+//   checkbox whose label is its hit area;
+// - the focus ring finds a ring under 3:1 against the page and a control with no ring, and passes a
+//   strong ring and two two-tone rings on a dark plane whose inner ring carries the contrast: one
+//   outlined, its inner ring beside the outline, and one of box-shadows, its inner ring stacked on
+//   the outer one;
+// - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
+//   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix.
+// These tests are the library's own, so they attach no findings, and no baseline line holds them.
+
+const { test, expect } = require('@playwright/test');
+
+/** @type {any} */ let axe;
+/** @type {any} */ let targets;
+/** @type {any} */ let ring;
+test.beforeAll(async () => {
+  axe = await import('./axe.mjs');
+  targets = await import('./targets.mjs');
+  ring = await import('./ring.mjs');
+});
+
+/** A page with `body` in its main landmark, and nothing else axe's tags would flag */
+const html = (/** @type {string} */ body) =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>A check's page</title></head><body><main>${body}</main></body></html>`;
+
+test('axe finds a button with no name, and passes one with a name', async ({ page }) => {
+  await page.setContent(html('<button id="nameless"></button>'));
+  expect(await axe.axeOn(page)).toEqual([{ rule: 'button-name', target: '#nameless' }]);
+  await page.setContent(html('<button id="named">Save</button>'));
+  expect(await axe.axeOn(page)).toEqual([]);
+});
+
+test('the hit boxes find a 43 by 43 button, and pass a 44 by 44 one, a link in running text, and a checkbox its label carries', async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { width: 44px; height: 44px; padding: 0; } #small { width: 43px; height: 43px; }
+      label { display: inline-block; min-width: 44px; min-height: 44px; }</style>
+      <button id="fits">A</button><button id="small">B</button>
+      <p>Read <a href="#guide" id="inline">the guide</a> first.</p>
+      <label><input type="checkbox" id="done"> Done</label>`),
+  );
+  expect(await targets.targetFindings(page)).toEqual([{ rule: 'ntn-target-size', target: '#small' }]);
+});
+
+test('the focus ring finds a faint ring and a missing one, and passes a strong ring and two-tone rings, outlined or stacked, on a dark plane', async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { outline: none; }
+      #faint:focus-visible { outline: 2px solid #cccccc; outline-offset: 2px; }
+      #strong:focus-visible { outline: 2px solid #000000; outline-offset: 2px; }
+      .slate { background: #333333; padding: 8px; }
+      #two-tone:focus-visible { outline: 2px solid #555555; outline-offset: 2px; box-shadow: 0 0 0 2px #ffffff; }
+      #stacked:focus-visible { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5), 0 0 0 4px #555555; }</style>
+      <button id="faint">A</button><button id="strong">B</button>
+      <div class="slate"><button id="two-tone">C</button><button id="stacked">E</button></div><button id="none">D</button>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([
+    { rule: 'ntn-focus-ring', target: '#faint' },
+    { rule: 'ntn-focus-ring', target: '#none' },
+  ]);
+});
+
+test("the focus ring reads planes and rings Chrome computes as color(srgb …), a translucent mix's alpha included", async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { outline: none; }
+      .tinted { background: color-mix(in srgb, #6c5ce7 10%, white); padding: 8px; }
+      #on-mix:focus-visible { outline: 2px solid #000000; outline-offset: 2px; }
+      .slate { background: #333333; padding: 8px; }
+      .haze { background: color-mix(in srgb, white 10%, transparent); padding: 8px; }
+      #through-haze:focus-visible { outline: 2px solid #555555; outline-offset: 2px; }
+      #mixed-stack:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, white 50%, transparent), 0 0 0 4px #555555; }</style>
+      <div class="tinted"><button id="on-mix">A</button></div>
+      <div class="slate"><div class="haze"><button id="through-haze">B</button></div><button id="mixed-stack">C</button></div>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-ring', target: '#through-haze' }]);
+});

@@ -7,8 +7,9 @@
 //   doesn't list, on a listed target that a page that ran no longer fails, and on a test that passed
 //   without attaching what its checks found. A page is its spec's path under test/a11y/: a line whose
 //   page has no spec fails, and so does a spec that ran without reporting while its page has lines,
-//   but a page whose spec the run left out keeps its lines. A line is one page's, and a finding at a
-//   gated point counts only against a line with that ownerGate, #16-dark;
+//   but a page whose spec the run left out keeps its lines. A line is one page's, and the library's
+//   own spec, under test/a11y/checks/, is no page. A finding at a gated point counts only against a
+//   line with that ownerGate, #16-dark;
 // - npm run check:a11y-baseline checks the file's shape and each line's spec, and with --base fails a
 //   line or target the base's file lacks, reading the base's own file at its own path, passing where
 //   the base has none yet, and failing a head that drops a file the base has. The file lands with its
@@ -166,6 +167,14 @@ describe("test:a11y's baseline (#24 slice 2)", () => {
     assert.equal(report([], tab([]), { file: null }).said, '');
     // Once the file lands, the same finding fails the run
     assert.ok(report([], tab([{ rule: 'button-name', target: '#menu' }])).failed);
+  });
+
+  it("treats test/a11y/checks/ as the library's own spec, not a page: its tests attach nothing, and no line may hold it", () => {
+    assert.equal(report([], [['axe finds a button with no name', null, 'checks/checks']]).failed, false);
+    const line = { page: 'checks/checks', rule: 'button-name', targets: ['#nameless'] };
+    assert.deepEqual(check.fileProblems({ check: 'a11y-rules', entries: [line] }, check.gates()), [
+      "entries[0]'s page is the check library's own spec, which no line holds",
+    ]);
   });
 
   it("fails a line whose page has no spec, and with --base a line or target the base's file lacks, or a file the base has and the head drops", () => {
