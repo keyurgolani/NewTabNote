@@ -2,12 +2,13 @@
 // state, a blocked state's reason, how it retries and its one action from the vocabulary's closed
 // lists. The kit leaves a cause with a bad field unresolved, and causeProblems holds the rules that
 // join two fields. The state matrix holds one descriptor per contribution, with a row for each
-// state it can be in or the reason a state can't arise.
+// state it can be in or the reason a state can't arise, and a catalog chunk is one descriptor.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { HOSTS } from '../../js/kernel/registry/vocabulary.js';
+import { catalog } from '../../js/states/core/catalog.js';
 import { cause, causeProblems, matrix } from '../../js/states/core/families.js';
 import * as words from '../../js/states/core/vocabulary.js';
 import { describeRegistryConformance, resolveOne } from './registry-conformance.mjs';
@@ -66,6 +67,24 @@ const matrixSample = (id, rank) => ({
 });
 
 describeRegistryConformance('states matrix', { family: matrix, builtIns: [], sample: matrixSample });
+
+/**
+ * A valid catalog chunk to vary: a feature's strings, one with a count, loaded eagerly
+ * @param {string} id
+ * @param {number} rank
+ * @returns {Descriptor}
+ */
+const chunkSample = (id, rank) => ({
+  ...SHARED,
+  group: 'feature',
+  id,
+  rank,
+  holds: ['feature'],
+  parameters: { 'feature.left': { left: 'count' } },
+  implementation: Object.freeze({ 'feature.left': '{left} left' }),
+});
+
+describeRegistryConformance('states catalog', { family: catalog, builtIns: [], sample: chunkSample });
 
 describe("the states contract's words (#26 slice 1)", () => {
   it('names the 11 view states, the 10 reasons a state is blocked, and 22 actions, with Inspect apart', () => {
