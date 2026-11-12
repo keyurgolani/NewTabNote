@@ -36,7 +36,7 @@
  * Nothing shipped registers these: no root has a `recovery.run` handler until slice 4.
  */
 
-import { REBUILD_BATCH, indexed, searchEntryOf } from '../../../kernel/core/application/search-rebuild.js';
+import { REBUILD_BATCH, indexed, rebuildCommands, searchEntryOf } from '../../../kernel/core/application/search-rebuild.js';
 import { UnavailableError, committed, rejected } from '../../../kernel/core/contracts/outcomes.js';
 import { newNoteRecord, newSearchEntry } from '../../../kernel/core/domain/note.js';
 import * as v from '../../../lib/valibot/index.mjs';
@@ -118,7 +118,14 @@ function port(context, name) {
  * @param {Work} work
  */
 async function commitOrThrow(adapter, work) {
-  const { outcome } = await adapter.commit(work);
+  return committedOrThrow((await adapter.commit(work)).outcome);
+}
+
+/**
+ * `outcome` when it committed, or throws its code
+ * @param {import('../../../kernel/core/contracts/outcomes.js').Outcome | import('../../../kernel/core/contracts/outcomes.js').BulkOutcome} outcome
+ */
+function committedOrThrow(outcome) {
   if (outcome.kind === 'committed') return outcome;
   if (outcome.kind === 'unavailable') throw new UnavailableError(outcome.cause, outcome.code, outcome.retryable);
   if (outcome.kind === 'rejected' && outcome.code === 'preview-changed') {
@@ -243,35 +250,18 @@ const rebuildIndex = {
     };
   },
   async apply(context, plan) {
-    const adapter = port(context, 'adapter');
     const noteIds = /** @type {string[]} */ (plan);
+    // Each batch where its root sends it, the worker's queue on recovery.html (#35 slice 8), or
+    // committed on the run's adapter, as the worker's queue commits one
+    const rebuild =
+      context.ports.rebuild ||
+      (async (/** @type {import('./ports.js').RebuildBatch} */ command) => {
+        const work = rebuildCommands.rebuildSearchIndex(command);
+        return 'kind' in work ? work : (await port(context, 'adapter').commit(work)).outcome;
+      });
     for (let start = 0; start < noteIds.length; start += REBUILD_BATCH) {
       const batch = noteIds.slice(start, start + REBUILD_BATCH);
-      const commandId = context.ids.next();
-      await commitOrThrow(adapter, {
-        commandId,
-        command: /** @type {any} */ ({ type: 'rebuildSearchIndex', commandId }),
-        // Content scope with no `revised`: it writes only search entries, so no note's revision moves
-        effect: {
-          kind: 'units',
-          units: [
-            {
-              stores: ['notes', 'blocks', 'searchIndex'],
-              async run(tx) {
-                for (const noteId of batch) {
-                  const note = await tx.get('notes', noteId);
-                  // A note deleted, trashed, archived, or made a template since the preview
-                  // gets nothing written, and its old entry stays
-                  if (!note || !indexed(note)) continue;
-                  const blocks = await tx.getAllByIndex('blocks', 'canvasId', noteId);
-                  tx.put('searchIndex', searchEntryOf(note, blocks));
-                }
-              },
-            },
-          ],
-        },
-        done: () => committed('search-index-rebuilt', batch),
-      });
+      committedOrThrow(await rebuild({ type: 'rebuildSearchIndex', commandId: context.ids.next(), noteIds: batch }));
     }
     return noteIds;
   },

@@ -463,9 +463,12 @@ const BATCH = Object.freeze({ type: 'rebuildSearchIndex', commandId: ID, noteIds
 /** recovery.html's fallback (#35 slice 8), by a name the typecheck doesn't resolve */
 const FALLBACK = '../../js/kernel/composition/recovery-fallback.js';
 
-/** The fallback's module, once there is one */
+/** The fallback's module, once there is one: any load error but its absence fails with its own */
 async function fallbackModule() {
-  const loaded = await import(FALLBACK).catch(() => ({}));
+  const loaded = await import(FALLBACK).catch((/** @type {any} */ error) => {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND' && error.url === new URL(FALLBACK, import.meta.url).href) return {};
+    throw error;
+  });
   assert.equal(typeof loaded.createRecoveryFallback, 'function', 'the fallback, js/kernel/composition/recovery-fallback.js');
   return loaded;
 }

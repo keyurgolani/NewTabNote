@@ -99,8 +99,8 @@
     },
     "recovery": {
       "page": "recovery.html",
-      "lazyChunks": ["index-lag", "legacy", "permissions", "platform", "probe", "recovery-readiness"],
-      "reason": "The Trust Center and the Recovery Center (#20 slice 4b). Its rows are today's size plus about 5%, the rule the owner set for these rows, decided for the owner on 2026-11-01 (docs/performance/budgets.md). Its start CSS gzip row is 4.75 KiB, about 5% over the 4,639 bytes that build job 130333246078 of PR checks run 42962855381 measured with #292 in, by that rule (2026-11-10; it was 4.5 KiB). Its raw row stays 22.5 KiB, which that start isn't over. The trust code is its own, so its start holds it; the providers' checks load after it opens. Its forbidden list is every other category and its dependencies are what its graph holds, both as the build reported them on 2026-10-31, so anything added later is deliberate.",
+      "lazyChunks": ["index-lag", "legacy", "permissions", "platform", "probe", "recovery-fallback", "recovery-readiness"],
+      "reason": "The Trust Center and the Recovery Center (#20 slice 4b). Its rows are today's size plus about 5%, the rule the owner set for these rows, decided for the owner on 2026-11-01 (docs/performance/budgets.md). Its start CSS gzip row is 4.75 KiB, about 5% over the 4,639 bytes that build job 130333246078 of PR checks run 42962855381 measured with #292 in, by that rule (2026-11-10; it was 4.5 KiB). Its raw row stays 22.5 KiB, which that start isn't over. The trust code is its own, so its start holds it; the providers' checks load after it opens, and the fallback a repair commits on while the coordinator can't run it loads at its first use (#35 slice 8). Its forbidden list is every other category and its dependencies are what its graph holds, both as the build reported them on 2026-10-31, so anything added later is deliberate.",
       "start": {
         "js": { "raw": 404480, "gzip": 125952 },
         "css": { "raw": 23040, "gzip": 4864 },

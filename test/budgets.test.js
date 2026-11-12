@@ -648,9 +648,10 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
       'workspace',
     ]);
     assert.deepEqual(recovery.dependencies, ['valibot']);
-    // The providers' checks load after the page opens, from the catalog's import()s
+    // The providers' checks load after the page opens, from the catalog's import()s, and the fallback a
+    // repair commits on while the coordinator can't run it, from its root's (#35 slice 8)
     assert.equal(recovery.startChunks, undefined);
-    assert.deepEqual(recovery.lazyChunks, ['index-lag', 'legacy', 'permissions', 'platform', 'probe', 'recovery-readiness']);
+    assert.deepEqual(recovery.lazyChunks, ['index-lag', 'legacy', 'permissions', 'platform', 'probe', 'recovery-fallback', 'recovery-readiness']);
   });
 });
 

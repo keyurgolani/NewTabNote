@@ -66,6 +66,18 @@
  */
 
 /**
+ * One batch of rebuild-index's notes, whose search entries are written again from their blocks
+ * @typedef {{type: 'rebuildSearchIndex', commandId: string, noteIds: string[]}} RebuildBatch
+ */
+
+/**
+ * Where rebuild-index's batches commit when it isn't the run's adapter: on recovery.html, the
+ * worker's queue over #13's port, or the page's fallback while the coordinator can't run them
+ * (js/kernel/composition/recovery.js, #35 slice 8)
+ * @typedef {(batch: RebuildBatch) => Promise<import('../../../kernel/core/contracts/outcomes.js').Outcome>} RebuildPort
+ */
+
+/**
  * @typedef {object} RemediationPorts
  * @property {KernelAdapter} [adapter] - #17's IndexedDB adapter over CanvasTabDB, or the memory one
  * @property {FilePort} [files]
@@ -75,6 +87,7 @@
  * @property {ProviderChecks} [checks]
  * @property {SecretPort} [secrets]
  * @property {DiagnosticsPort} [diagnostics]
+ * @property {RebuildPort} [rebuild]
  */
 
 export {};

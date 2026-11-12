@@ -34,6 +34,15 @@ const { IDBFactory, IDBKeyRange } = /** @type {any} */ (createRequire(import.met
 /** recovery.html's fallback (#35 slice 8), by a name the typecheck doesn't resolve */
 const FALLBACK = '../../js/kernel/composition/recovery-fallback.js';
 
+/**
+ * Nothing, when the fallback's module isn't there; any other load error fails with its own
+ * @param {any} error
+ */
+const missing = error => {
+  if (error?.code === 'ERR_MODULE_NOT_FOUND' && error.url === new URL(FALLBACK, import.meta.url).href) return {};
+  throw error;
+};
+
 /** When a journal entry was written, for the health's oldest orphaned entry */
 const NOW_AT = Date.UTC(2026, 9, 20, 12, 0, 0);
 
@@ -1477,7 +1486,7 @@ describe("the coordinator's pause while another context restores (#35 slice 7)",
   });
 
   it("pauses a coordinator that comes up while recovery.html's fallback holds storage.restore, and opens once the fallback lets it go (#35 slice 8)", async () => {
-    const loaded = await import(FALLBACK).catch(() => ({}));
+    const loaded = await import(FALLBACK).catch(missing);
     assert.equal(typeof loaded.createRecoveryFallback, 'function', 'the fallback, js/kernel/composition/recovery-fallback.js');
     const locks = createLockManager();
     const settings = { get: async () => ({}), set: async () => {} };
