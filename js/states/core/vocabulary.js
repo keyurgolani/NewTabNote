@@ -1,9 +1,8 @@
 /**
- * The fixed words of #26's states contract ("View states", "Registries") that a cause draws on:
- * the 11 states a view can be in, what a blocked one waits on, how a cause retries, who brings
- * causes, and the closed list of primary actions. Nothing adds to them at run time, and an action
- * joins the list with its catalog entry, in the same PR. A state row's own tokens come with its
- * family.
+ * The fixed words of #26's states contract ("View states", "Registries") that a cause and a state
+ * row draw on: the 11 states a view can be in, what a blocked one waits on, how a cause retries,
+ * who brings causes, the closed list of primary actions, and a row's tokens. Nothing adds to them
+ * at run time, and an action joins the list with its catalog entry, in the same PR.
  *
  * js/states/core/ is host-neutral under #12's module rules: no browser API, no legacy global, and
  * imports only from itself, #12's kernel core, #15's registry kit and the vendored Valibot, never
@@ -66,6 +65,33 @@ export const INSPECT = 'inspect';
 export const CAUSE_GROUPS = Object.freeze(
   /** @type {const} */ (['kernel', 'transport', 'storage', 'coordinator', 'security', 'providers', 'blocks']),
 );
+
+/**
+ * The kinds of contribution a state matrix covers (AC1). The kit's hosts are its surfaces, and
+ * routes and background jobs join when #15's navigation family and #35's job host register them.
+ */
+export const SUBJECTS = Object.freeze(/** @type {const} */ (['command', 'query', 'route', 'job', 'surface']));
+
+/** What a state changed: nothing, the units it committed, or nobody knows yet */
+export const DATA_CHANGED = Object.freeze(/** @type {const} */ (['none', 'committed', 'unknown']));
+
+/** How a live region announces a state: not at all, when the person pauses, or at once */
+export const POLITENESS = Object.freeze(/** @type {const} */ (['off', 'polite', 'assertive']));
+
+/**
+ * Where a state shows: inline where the task happens, at region level for a collection or a
+ * stream, in Recovery Center for an incident, or in an OS notification, for background capture only
+ */
+export const PLACEMENTS = Object.freeze(/** @type {const} */ (['inline', 'region', 'recovery-center', 'notification']));
+
+/** Whether an operation commits whole, so its failure is a verified rollback, or by units (rule 7) */
+export const ATOMICITY = Object.freeze(/** @type {const} */ (['atomic', 'batch']));
+
+/**
+ * How a row's data goes stale (rule 2): by revision for a local projection, by `verifiedAt` for a
+ * remote source, or not at all for a row with no data of its own, such as a command's
+ */
+export const STALENESS = Object.freeze(/** @type {const} */ (['revision', 'verified-at', 'none']));
 
 /** A message key: two or more dotted segments in lowercase kebab case, as #12's `rejected.<code>` */
 const MESSAGE_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$/;
