@@ -79,7 +79,7 @@
  */
 
 import { TURN_EXCEEDED } from '../core/application/kernel.js';
-import { WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
+import { WORKER_PAGE_HANDLERS, WORKER_RECOVERY_HANDLERS } from '../core/application/handlers-worker.js';
 import { isRecord } from '../core/contracts/checks.js';
 import { TURN_LIMIT_MS } from '../core/contracts/limits.js';
 import { HELD_NOTES_NAMED } from '../core/contracts/operations/system-coordinator-health.js';
@@ -447,7 +447,8 @@ export function coordinatorHandlers(current, clock = systemClock) {
  * The router's handlers for the commands a page sends over the port (#35 slice 4b-2, rule 5): each
  * waits its turn on the queue of whichever coordinator `current` gives, with its request's `begin`,
  * so it runs only if it's still waited on then, and on the worker's kernel of the surface the router
- * verified, which checks that surface again
+ * verified, which checks that surface again. recovery.html's rebuild batches are among them (#35
+ * slice 8), so js/background.js serves them with no handler of its own.
  * @param {() => Coordinator} current
  * @returns {Readonly<Record<string, Handler>>}
  */
@@ -455,7 +456,8 @@ export function pageCommandHandlers(current) {
   /** @type {Handler} */
   const onQueue = (payload, { caller, begin }) =>
     current().enqueue(/** @type {Command} */ (payload), { begin, surface: caller.surface });
-  return Object.freeze(Object.fromEntries(Object.keys(WORKER_PAGE_HANDLERS.commands).map(type => [type, onQueue])));
+  const types = [...Object.keys(WORKER_PAGE_HANDLERS.commands), ...Object.keys(WORKER_RECOVERY_HANDLERS.commands)];
+  return Object.freeze(Object.fromEntries(types.map(type => [type, onQueue])));
 }
 
 /**

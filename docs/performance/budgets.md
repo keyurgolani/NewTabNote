@@ -36,7 +36,7 @@
 
 - **New tab**: the four libraries and the trust code. That's `chart-library` (Chart.js), `search-library` (Fuse.js), `zip-library` (JSZip), `model-runtime` (transformers.js), and `trust` (`js/trust/**`). Slice 3 made all five lazy, so this is what today's new tab can be held to.
 - **Popup and Side Panel**: the full list. Both pass it today.
-- **`recovery.html`**: every category but `trust`, which is the page's own code. That's what its start held when its row was added, so anything that joins it later is a reviewed change. Its providers' checks load after it opens, so its row names their six chunks in `lazyChunks`.
+- **`recovery.html`**: every category but `trust`, which is the page's own code. That's what its start held when its row was added, so anything that joins it later is a reviewed change. Its providers' checks load after it opens, and the fallback a repair commits on while the coordinator can't run it at its first use (#35 slice 8), so its row names those seven chunks in `lazyChunks`.
 - **Moment** (`planned`): the full list. It switches on the day #2 builds a `moment` chunk: a built planned row fails until its numbers are set and `planned` is false, and from then on the full list holds on its start (`test/budgets.test.js`).
 
 Today's new tab still imports these modules of the full list at its start, through the workspace chunk:

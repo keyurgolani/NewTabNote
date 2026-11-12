@@ -3,17 +3,24 @@
 // surface, and only what its Trust Center and Recovery Center call. The kernel lets it read
 // its theme and nothing else, #15's `recovery` host resolves the trust families there, and its
 // root (js/kernel/composition/recovery.js) serves the rows in the page through #13's router,
-// over the in-process transport, so the worker serves none of them.
+// over the in-process transport, so the worker serves none of them. Since #35 slice 8 its root
+// reads through #17's reader and writes nothing itself while the coordinator answers: its rebuild
+// goes to the worker over the port, which the worker's router takes from recovery.html alone, and
+// only a coordinator that can't run it sends it to the fallback, under Web Lock storage.restore.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 
-import { principalOf } from '../../js/kernel/adapters/messaging/runtime-port.js';
+import { PORT_NAME, principalOf } from '../../js/kernel/adapters/messaging/runtime-port.js';
+import { installWorkerRouter } from '../../js/kernel/composition/background.js';
+import { pageCommandHandlers, unavailableCoordinator } from '../../js/kernel/composition/coordinator.js';
 import { browserRecoveryHost, createRecoveryRoot } from '../../js/kernel/composition/recovery.js';
 import { RECOVERY_HANDLERS } from '../../js/kernel/core/application/handlers-recovery.js';
+import { decode, encode } from '../../js/kernel/core/contracts/codec.js';
 import { COMMAND_TYPES } from '../../js/kernel/core/contracts/commands.js';
-import { rejected } from '../../js/kernel/core/contracts/outcomes.js';
+import { committed, rejected } from '../../js/kernel/core/contracts/outcomes.js';
+import { newNoteRecord } from '../../js/kernel/core/domain/note.js';
 import { QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
 import { createClient } from '../../js/kernel/core/messaging/client.js';
 import { createInProcessTransport } from '../../js/kernel/core/messaging/in-process.js';
@@ -32,8 +39,10 @@ import { TRUST_OPERATIONS } from '../../js/trust/core/trust-operations.js';
 import { TRIGGERS } from '../../js/trust/core/vocabulary.js';
 import { INCIDENT as TITLES, PAGE, PROVIDER, RESOLVED } from '../../js/trust/ui/copy.js';
 import { PLATFORM } from '../../js/trust/ui/model.js';
-import { EXTENSION_ID } from './chrome-fake.mjs';
+import { EXTENSION_ID, PAGE_FILES, createChromeFake } from './chrome-fake.mjs';
+import { hello, request, settle } from './messaging-support.mjs';
 import { KeyRange, profileWith, synthesized } from './migration-support.mjs';
+import { recoveryWorker } from './recovery-worker.mjs';
 import { adapterOn } from './storage-fixture.mjs';
 import { CALLERS } from './support.mjs';
 import { MANIFEST, freshProfile, grantedAsDeclared, settingsOf } from './trust-provider-support.mjs';
@@ -277,17 +286,21 @@ describe("#15's recovery host (#20 slice 4b)", () => {
 });
 
 /**
- * recovery.html's root on a fresh profile, with #17's adapter for its notes database
+ * recovery.html's root on a fresh profile, with #17's adapter for its notes database, and `extra`
+ * in place of what its host has. Unless `extra` names a runtime, the root reaches the worker's
+ * stand-in on the same profile (recovery-worker.mjs), which closes with the root.
  * @param {ReturnType<typeof freshProfile>} [of]
+ * @param {Partial<import('../../js/kernel/composition/recovery.js').RecoveryHost>} [extra]
  */
-async function rootOn(of = freshProfile()) {
+async function rootOn(of = freshProfile(), extra = {}) {
   const local = of.chrome.api.storage.local;
   // The worker's open makes the database at this build's version, as its run does on a new
   // profile; the root opens it as it is, on #17's adapter of its own
-  const worker = adapterOn(of);
-  await worker.open();
-  worker.close();
-  const root = createRecoveryRoot({
+  const opening = adapterOn(of);
+  await opening.open();
+  opening.close();
+  const worker = 'runtime' in extra ? null : recoveryWorker({ indexedDB: of.real, settings: local });
+  const made = createRecoveryRoot({
     host: {
       indexedDB: of.faults.factory,
       keyRange: /** @type {any} */ (KeyRange),
@@ -298,9 +311,18 @@ async function rootOn(of = freshProfile()) {
       permissions: grantedAsDeclared(),
       manifest: MANIFEST,
       timers: realTimers,
+      ...(worker ? { runtime: worker.runtime } : {}),
+      ...extra,
     },
   });
-  return { of, root };
+  const root = Object.freeze({
+    ...made,
+    close() {
+      made.close();
+      if (worker) worker.close();
+    },
+  });
+  return { of, root, worker };
 }
 
 let commands = 0;
@@ -335,6 +357,8 @@ describe("recovery.html's root", () => {
     // 1.4.x's database, which the worker's run hasn't upgraded yet
     const of = /** @type {any} */ (await profileWith(/** @type {any} */ (synthesized().get('v8.basic'))));
     const local = of.chrome.api.storage.local;
+    // The worker's stand-in on the same profile, where the checks' probes commit
+    const worker = recoveryWorker({ indexedDB: of.real, settings: local });
     const root = createRecoveryRoot({
       host: {
         indexedDB: of.faults.factory,
@@ -346,6 +370,7 @@ describe("recovery.html's root", () => {
         permissions: grantedAsDeclared(),
         manifest: MANIFEST,
         timers: realTimers,
+        runtime: worker.runtime,
       },
     });
     try {
@@ -369,6 +394,7 @@ describe("recovery.html's root", () => {
       assert.deepEqual(listed.filter((/** @type {any} */ db) => db.name === 'CanvasTabDB').map((/** @type {any} */ db) => db.version), [8]);
     } finally {
       root.close();
+      worker.close();
     }
   });
 
@@ -443,5 +469,291 @@ describe("recovery.html's browser host (#20 slice 4b)", () => {
       assert.equal(await countLegacyCopies(host.settings), null);
     });
     assert.deepEqual([...modern.reads, ...old.reads], []);
+  });
+});
+
+/** A note's id on the seeded profiles, and the rebuild's batch as recovery.html sends it (#35 slice 8) */
+const NOTE = '00000000-0000-4000-8000-0000000000c';
+const BATCH = Object.freeze({ type: 'rebuildSearchIndex', commandId: ID, noteIds: [`${NOTE}1`] });
+
+/** recovery.html's fallback (#35 slice 8), by a name the typecheck doesn't resolve */
+const FALLBACK = '../../js/kernel/composition/recovery-fallback.js';
+
+/** The fallback's module, once there is one: any load error but its absence fails with its own */
+async function fallbackModule() {
+  const loaded = await import(FALLBACK).catch((/** @type {any} */ error) => {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND' && error.url === new URL(FALLBACK, import.meta.url).href) return {};
+    throw error;
+  });
+  assert.equal(typeof loaded.createRecoveryFallback, 'function', 'the fallback, js/kernel/composition/recovery-fallback.js');
+  return loaded;
+}
+
+/**
+ * A worker whose router says `status` in each welcome and serves nothing, and recovery.html's
+ * chrome.runtime to it
+ * @param {import('../../js/kernel/core/messaging/router.js').CoordinatorStatus} status
+ */
+function workerSaying(status) {
+  const fake = createChromeFake();
+  fake.worker.install(chrome => {
+    installWorkerRouter({ runtime: chrome.runtime, status: () => status });
+  });
+  return { runtime: fake.page('recovery').chrome.runtime, stop: () => fake.worker.stop() };
+}
+
+/**
+ * webLocks(), and `factory`, each keeping what the page did with it: each lock it asked for, what
+ * it holds now, and for each open of CanvasTabDB whether it held storage.restore then
+ * @param {IDBFactory} factory
+ */
+function watched(factory) {
+  const locks = webLocks();
+  /** @type {string[]} */
+  const asked = [];
+  /** @type {Set<string>} */
+  const holding = new Set();
+  /** @type {boolean[]} */
+  const opens = [];
+  /** @param {string} name @param {number} [version] */
+  const open = (name, version) => {
+    if (name === 'CanvasTabDB') opens.push(holding.has('storage.restore'));
+    return version === undefined ? factory.open(name) : factory.open(name, version);
+  };
+  const indexedDB = new Proxy(factory, {
+    get(target, property) {
+      if (property === 'open') return open;
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  /** @param {string} name @param {...any} rest */
+  const request = (name, ...rest) => {
+    asked.push(name);
+    const callback = rest.pop();
+    return locks.request(name, ...rest, async (/** @type {unknown} */ lock) => {
+      if (lock) holding.add(name);
+      try {
+        return await callback(lock);
+      } finally {
+        if (lock) holding.delete(name);
+      }
+    });
+  };
+  return { asked, holding, opens, indexedDB, locks: { request } };
+}
+
+/**
+ * A fresh profile whose notes database holds `count` notes, and no search entry for any
+ * @param {number} count
+ */
+async function profileWithNotes(count) {
+  const of = freshProfile();
+  const adapter = adapterOn(of);
+  await adapter.open();
+  /** @param {any} tx */
+  const run = async tx => {
+    for (let n = 1; n <= count; n++) tx.put('notes', newNoteRecord({ id: `${NOTE}${n}`, name: `Note ${n}`, now: Date.now() }));
+  };
+  const { outcome } = await adapter.commit({
+    commandId: 'seed-notes',
+    command: /** @type {any} */ ({ type: 'seedNotes', commandId: 'seed-notes' }),
+    effect: { kind: 'units', units: [{ stores: ['notes'], run }] },
+    done: () => committed('notes-seeded', []),
+  });
+  assert.equal(outcome.kind, 'committed', JSON.stringify(outcome));
+  adapter.close();
+  return of;
+}
+
+/** How many search entries `of`'s notes database holds */
+const entriesOf = async (/** @type {ReturnType<typeof freshProfile>} */ of) => {
+  const adapter = adapterOn(of);
+  try {
+    await adapter.open();
+    return (await adapter.read(['searchIndex'], tx => tx.getAll('searchIndex'))).length;
+  } finally {
+    adapter.close();
+  }
+};
+
+/**
+ * Capture's and Storage's statuses, as the Trust Center's report reads them
+ * @param {any} report
+ */
+const statusesOf = report => {
+  assert.equal(report.kind, 'ready', JSON.stringify(report));
+  const of = (/** @type {string} */ id) => report.data.providers.find((/** @type {any} */ provider) => provider.providerId === id).status;
+  return { capture: of('capture'), storage: of('storage') };
+};
+
+/**
+ * rebuild-index on `root`, confirmed as its preview asks: the confirmed run's answer
+ * @param {import('../../js/kernel/composition/recovery.js').RecoveryRoot} root
+ */
+async function rebuild(root) {
+  const run = { type: 'recovery.run', remediationId: 'rebuild-index', userInitiated: true };
+  const asked = /** @type {any} */ (await root.trust.execute({ ...run, commandId: commandId() }));
+  assert.equal(asked.state, 'awaiting-confirmation', JSON.stringify(asked));
+  const confirm = { runId: asked.runId, decision: 'confirm', previewDigest: asked.previewDigest };
+  return /** @type {any} */ (await root.trust.execute({ ...run, ...confirm, commandId: commandId() }));
+}
+
+describe("recovery.html's remediations on the port (#35 slice 8)", () => {
+  it("reads through #17's reader and writes nothing itself while the coordinator answers: its checks open no readwrite transaction on CanvasTabDB, and it takes no storage.restore", async () => {
+    const worker = workerSaying({ status: 'ready' });
+    const of = freshProfile();
+    const spy = watched(of.faults.factory);
+    const { root } = await rootOn(of, { indexedDB: spy.indexedDB, locks: spy.locks, runtime: worker.runtime });
+    // What the profile's setup made before the page's root
+    const before = of.faults.transactions.length;
+    try {
+      const verify = { type: 'trust.verify', commandId: commandId(), trigger: 'open', providerIds: ['capture', 'storage'] };
+      const verified = /** @type {any} */ (await root.trust.execute(verify));
+      assert.equal(verified.kind, 'committed', JSON.stringify(verified));
+      assert.equal(await root.theme(), 'system');
+      const ran = of.faults.transactions.slice(before);
+      const writes = ran.filter(tx => tx.mode === 'readwrite' && tx.tx.db.name === 'CanvasTabDB');
+      assert.deepEqual(writes.map(tx => tx.names), [], 'the page wrote to CanvasTabDB');
+      assert.deepEqual(spy.asked.filter(name => name === 'storage.restore'), []);
+    } finally {
+      root.close();
+      worker.stop();
+    }
+  });
+
+  for (const status of /** @type {const} */ ([
+    { status: 'degraded', reason: 'coordinator-unavailable' },
+    { status: 'degraded', reason: 'storage-unavailable' },
+  ])) {
+    it(`rebuilds on its fallback when the coordinator says ${status.reason}: it takes storage.restore before it opens the write adapter, and lets it go after`, async () => {
+      const of = await profileWithNotes(2);
+      const worker = workerSaying(status);
+      const spy = watched(of.faults.factory);
+      const { root } = await rootOn(of, { indexedDB: spy.indexedDB, locks: spy.locks, runtime: worker.runtime });
+      try {
+        const run = await rebuild(root);
+        assert.equal(run.state, 'succeeded', JSON.stringify(run));
+        assert.ok(spy.asked.includes('storage.restore'), `the fallback took storage.restore: ${spy.asked.join(', ')}`);
+        assert.ok(spy.opens.includes(true), 'the write adapter opened while the fallback held storage.restore');
+        assert.equal(spy.holding.has('storage.restore'), false, 'and let it go after');
+        assert.equal(await entriesOf(of), 2);
+      } finally {
+        root.close();
+        worker.stop();
+      }
+    });
+  }
+
+  it("rebuilds on its fallback when the worker can't be reached, once its client stops trying to wake it, as for the reasons the coordinator names", { timeout: 10_000 }, async () => {
+    const of = await profileWithNotes(2);
+    // No worker runs: each port recovery.html opens ends at once, as Chrome ends one whose worker won't start
+    const fake = createChromeFake();
+    const spy = watched(of.faults.factory);
+    const { root } = await rootOn(of, { indexedDB: spy.indexedDB, locks: spy.locks, runtime: fake.page('recovery').chrome.runtime });
+    try {
+      const run = await rebuild(root);
+      assert.equal(run.state, 'succeeded', JSON.stringify(run));
+      assert.ok(spy.asked.includes('storage.restore'), `the fallback took storage.restore: ${spy.asked.join(', ')}`);
+      assert.ok(spy.opens.includes(true), 'the write adapter opened while the fallback held storage.restore');
+      assert.equal(spy.holding.has('storage.restore'), false, 'and let it go after');
+      assert.equal(await entriesOf(of), 2);
+    } finally {
+      root.close();
+    }
+  });
+
+  it('runs nothing on its fallback without Web Locks: no write adapter opens, and it answers why', async () => {
+    const { createRecoveryFallback } = await fallbackModule();
+    const of = await profileWithNotes(1);
+    const spy = watched(of.faults.factory);
+    const fallback = createRecoveryFallback({ indexedDB: spy.indexedDB, keyRange: KeyRange, settings: settingsOf(of), locks: null });
+    const outcome = await fallback.execute(BATCH);
+    assert.deepEqual([outcome.kind, outcome.code], ['unavailable', 'locks-unavailable'], JSON.stringify(outcome));
+    assert.deepEqual(spy.opens, [], 'no open of CanvasTabDB');
+    assert.equal(await entriesOf(of), 0);
+  });
+
+  it("probes on the worker's queue, where captures commit: capture and storage verify on its commit, each probe sent from recovery.html (call 10)", async () => {
+    const { root, worker } = await rootOn();
+    try {
+      const verify = { type: 'trust.verify', commandId: commandId(), trigger: 'open', providerIds: ['capture', 'storage'] };
+      const verified = /** @type {any} */ (await root.trust.execute(verify));
+      assert.equal(verified.kind, 'committed', JSON.stringify(verified));
+      assert.deepEqual(statusesOf(await root.trust.query({ type: 'trust.report' })), { capture: 'verified', storage: 'verified' });
+      const probes = /** @type {NonNullable<typeof worker>} */ (worker).handed.filter(([type]) => type === 'probeCommit');
+      assert.deepEqual(probes, [['probeCommit', 'recovery'], ['probeCommit', 'recovery']]);
+    } finally {
+      root.close();
+    }
+  });
+
+  it("passes capture and storage only on the worker's commit: a worker that runs no probe leaves both unverified, though the page's own database would take the write", async () => {
+    const worker = workerSaying({ status: 'ready' });
+    const { root } = await rootOn(freshProfile(), { runtime: worker.runtime });
+    try {
+      const verify = { type: 'trust.verify', commandId: commandId(), trigger: 'open', providerIds: ['capture', 'storage'] };
+      assert.equal(/** @type {any} */ (await root.trust.execute(verify)).kind, 'committed');
+      assert.deepEqual(statusesOf(await root.trust.query({ type: 'trust.report' })), { capture: 'unverified', storage: 'unverified' });
+    } finally {
+      root.close();
+      worker.stop();
+    }
+  });
+
+  it("reads capture and storage as unverified, never failed, when the coordinator answers that it can't run their probes, which never reached the database", async () => {
+    // The worker's router with what js/background.js gives it, on the coordinator it keeps when building the real one threw
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({
+        runtime: chrome.runtime,
+        status: () => ({ status: 'degraded', reason: 'coordinator-unavailable' }),
+        handlers: pageCommandHandlers(() => unavailableCoordinator('coordinator-down')),
+      });
+    });
+    const { root } = await rootOn(freshProfile(), { runtime: fake.page('recovery').chrome.runtime });
+    try {
+      const verify = { type: 'trust.verify', commandId: commandId(), trigger: 'open', providerIds: ['capture', 'storage'] };
+      assert.equal(/** @type {any} */ (await root.trust.execute(verify)).kind, 'committed');
+      assert.deepEqual(statusesOf(await root.trust.query({ type: 'trust.report' })), { capture: 'unverified', storage: 'unverified' });
+    } finally {
+      root.close();
+      fake.worker.stop();
+    }
+  });
+
+  it("takes the rebuild's batch on the worker's router from recovery.html alone, by its policy row, and refuses it from every other page before any handler runs", async () => {
+    /** @type {string[]} */
+    const reached = [];
+    /** @type {(payload: any, context: any) => unknown} */
+    const rebuildSearchIndex = (payload, context) => {
+      reached.push(context.caller.surface);
+      return committed('search-index-rebuilt', payload.noteIds);
+    };
+    const fake = createChromeFake();
+    fake.worker.install(chrome => {
+      installWorkerRouter({ runtime: chrome.runtime, handlers: { rebuildSearchIndex } });
+    });
+    try {
+      for (const surface of /** @type {Array<keyof typeof PAGE_FILES>} */ (Object.keys(PAGE_FILES))) {
+        const port = fake.page(surface).chrome.runtime.connect({ name: PORT_NAME });
+        /** @type {Array<Record<string, any>>} */
+        const frames = [];
+        port.onMessage.addListener((/** @type {string} */ text) => {
+          frames.push(/** @type {Record<string, any>} */ (decode(text)));
+        });
+        port.postMessage(encode(hello(surface, `${surface}-rebuild`)));
+        port.postMessage(encode(request('r1', BATCH, { deadline: Date.now() + 10_000 })));
+        await settle();
+        await settle();
+        const answer = frames.find(frame => frame.requestId === 'r1');
+        const got = answer && [answer.frame, answer.frame === 'response' ? answer.result.kind : answer.code];
+        const expected = surface === 'recovery' ? ['response', 'committed'] : ['error', 'forbidden-for-surface'];
+        assert.deepEqual(got, expected, `${surface}: ${JSON.stringify(answer)}`);
+      }
+      assert.deepEqual(reached, ['recovery']);
+    } finally {
+      fake.worker.stop();
+    }
   });
 });

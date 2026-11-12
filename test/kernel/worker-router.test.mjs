@@ -508,7 +508,7 @@ describe('the worker\'s router (#13, "Topology")', () => {
     assert.deepEqual(ran, []);
   });
 
-  it("builds its router's policy on the shared catalog alone, which a page's grants come from once slice 4 serves commands over the port (the catalog split's sixth rule)", () => {
+  it("builds its router's policy on the shared catalog alone, which a page's grants come from once slice 4 serves commands over the port, with recovery.html's rows for its rebuild batches, which no catalog lists (the catalog split's sixth rule, #35 slice 8)", () => {
     const file = path.join(import.meta.dirname, '..', '..', 'js', 'kernel', 'composition', 'background.js');
     const source = ts.createSourceFile(
       file,
@@ -538,8 +538,9 @@ describe('the worker\'s router (#13, "Topology")', () => {
       ts.forEachChild(node, walk);
     };
     walk(source);
-    // The baseline policy with no catalog given is the shared catalog's (ports/policy.js)
-    assert.deepEqual(policies, ['createBaselinePolicy()']);
+    // The baseline policy with no catalog given is the shared catalog's (ports/policy.js), and a row
+    // never widens a catalog entry
+    assert.deepEqual(policies, ['createBaselinePolicy(undefined, { rows: RECOVERY_PORT_ROWS })']);
   });
 
   it("never throws, where the runtime can't take its listener, and reports why", () => {

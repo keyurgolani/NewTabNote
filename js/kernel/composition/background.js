@@ -33,9 +33,10 @@ import { LATEST_STRUCTURAL, pendingStructural } from '../adapters/indexeddb/regi
 import { runTransforms } from '../adapters/indexeddb/transforms.js';
 import { WORKER_TASKS } from '../adapters/indexeddb/worker-tasks.js';
 import { installRuntimePort } from '../adapters/messaging/runtime-port.js';
-import { WORKER_HANDLERS, WORKER_PAGE_HANDLERS } from '../core/application/handlers-worker.js';
+import { WORKER_HANDLERS, WORKER_PAGE_HANDLERS, WORKER_RECOVERY_HANDLERS } from '../core/application/handlers-worker.js';
 import { CATCH_UP_NOTES } from '../core/application/record-catch-up.js';
 import { TURN_EXCEEDED, UnavailableError, unavailable } from '../core/contracts/outcomes.js';
+import { RECOVERY_PORT_OPERATIONS, RECOVERY_PORT_ROWS } from '../core/contracts/recovery-port.js';
 import { WORKER_COMMANDS } from '../core/contracts/worker-catalog.js';
 import { createLookup } from '../core/messaging/operations.js';
 import { createRouter } from '../core/messaging/router.js';
@@ -884,7 +885,8 @@ export function createWorkerClient(host = workerHost()) {
           page = kernelClient({
             adapter: opened,
             surface,
-            handlers: WORKER_PAGE_HANDLERS,
+            // recovery.html's on its own table, which no other page's holds (#35 slice 8)
+            handlers: surface === 'recovery' ? WORKER_RECOVERY_HANDLERS : WORKER_PAGE_HANDLERS,
             // Not before the worker's own kernel is ready, its startup maintenance in, and failing as it fails
             ready: built.whenReady().then(failure => {
               if (failure) throw new UnavailableError(failure.cause, failure.code, false);
@@ -1147,17 +1149,19 @@ const warnOf = error => messagingLogger.warn('worker-router-failed', { error });
  * The commands a page sends the worker over the port, as its router finds them (#35 slice 4b-2,
  * rule 5): page-operations.js's, every one the new tab sends but its session's write and startup
  * maintenance (#35 slice 4d), Popup's two and Side Panel's one among them, on the shared catalog's
- * entries, with the schemas their modules export, which only the worker loads. The router knows
- * the coordinator's own queries besides, and no other operation.
+ * entries, with the schemas their modules export, which only the worker loads, and recovery.html's
+ * rebuild batches, which no catalog lists (#35 slice 8). The router knows the coordinator's own
+ * queries besides, and no other operation.
  */
-const PAGE_LOOKUP = createLookup(PAGE_OPERATIONS);
+const PAGE_LOOKUP = createLookup({ ...PAGE_OPERATIONS, ...RECOVERY_PORT_OPERATIONS });
 
 /**
  * #13's router, on `runtime`'s port listener, so each port one of this extension's pages
  * opens by PORT_NAME reaches it (adapters/messaging/runtime-port.js). It serves the handshake,
  * system.messagingHealth and system.coordinatorHealth, and the commands a page sends over the port,
  * on the coordinator's queue (./coordinator.js, pageCommandHandlers), Popup's first (#35 slice
- * 4b-2) and the new tab's since slice 4d. js/background.js calls this at its top level,
+ * 4b-2), the new tab's since slice 4d, and recovery.html's rebuild batches since slice 8.
+ * js/background.js calls this at its top level,
  * synchronously, so the listener is there before Chrome hands over the port that woke the worker.
  * It never throws, since a throw there would stop every listener the worker registers: `report`
  * hears why a router couldn't be installed, and what a port's listener threw.
@@ -1189,7 +1193,9 @@ export function installWorkerRouter({
   try {
     const worker = /** @type {WorkerRuntime} */ (runtime);
     const router = createRouter({
-      policy: createBaselinePolicy(),
+      // The shared catalog's grants, and for recovery.html's rebuild batches their rows, which
+      // take them from recovery.html alone (#35 slice 8)
+      policy: createBaselinePolicy(undefined, { rows: RECOVERY_PORT_ROWS }),
       clock: systemClock,
       timers: hostTimers,
       coordinatorId: coordinatorId ?? randomIds.next(),

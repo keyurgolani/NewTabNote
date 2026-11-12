@@ -307,10 +307,14 @@ describe('where trust code loads (#20 slice 1b, R1)', () => {
       assert.ok(recovery.includes(file), file);
     }
     assert.ok(recovery.includes('js/kernel/composition/recovery.js'));
-    // Its only import()s are the provider catalog's, each check loading as it first runs (#15)
+    // Its only import()s are the provider catalog's, each check loading as it first runs (#15), and
+    // its root's one, of the fallback a repair commits on while the coordinator can't run it (#35 slice 8)
     const dynamic = dynamicImportsIn(recovery.map(file => path.join(ROOT, file)));
     assert.ok(dynamic.length > 0);
-    for (const at of dynamic) assert.ok(at.startsWith(path.join(ROOT, 'js', 'trust', 'core', 'providers', 'catalog.js:')), at);
+    const catalog = path.join(ROOT, 'js', 'trust', 'core', 'providers', 'catalog.js:');
+    const root = path.join(ROOT, 'js', 'kernel', 'composition', 'recovery.js:');
+    for (const at of dynamic) assert.ok(at.startsWith(catalog) || at.startsWith(root), at);
+    assert.equal(dynamic.filter(at => at.startsWith(root)).length, 1, "the root's import() of its fallback");
     // And no classic script of any page is trust code
     assert.deepEqual([...graph.classic].filter(isTrust), []);
   });

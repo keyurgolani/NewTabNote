@@ -36,6 +36,7 @@
  * Nothing shipped registers these: no root has a `recovery.run` handler until slice 4.
  */
 
+import { REBUILD_BATCH, indexed, rebuildCommands, searchEntryOf } from '../../../kernel/core/application/search-rebuild.js';
 import { UnavailableError, committed, rejected } from '../../../kernel/core/contracts/outcomes.js';
 import { newNoteRecord, newSearchEntry } from '../../../kernel/core/domain/note.js';
 import * as v from '../../../lib/valibot/index.mjs';
@@ -50,8 +51,6 @@ import { readBack, readBackText, writeFile, writeText } from './saved-file.js';
 /** @typedef {import('../records.js').Incident} Incident */
 /** @typedef {import('../../../kernel/core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../../../kernel/core/ports/repository.js').Work} Work */
-/** @typedef {import('../../../kernel/core/domain/note.js').NoteRecord} NoteRecord */
-/** @typedef {import('../../../kernel/core/domain/note.js').BlockRecord} BlockRecord */
 
 /**
  * What every step gets: the ports, the time and new ids, the run, the incident it answers,
@@ -100,9 +99,6 @@ import { readBack, readBackText, writeFile, writeText } from './saved-file.js';
 /** What an apply answers when the user closed the picker: not a failure, and nothing changed */
 export const CANCELLED_BY_USER = Object.freeze({ cancelledByUser: true });
 
-/** How many notes one rebuild transaction writes the entries of */
-export const REBUILD_BATCH = 100;
-
 /**
  * A port the run needs, or `not-applicable` when its root didn't pass it
  * @template {keyof RemediationPorts} K
@@ -122,7 +118,14 @@ function port(context, name) {
  * @param {Work} work
  */
 async function commitOrThrow(adapter, work) {
-  const { outcome } = await adapter.commit(work);
+  return committedOrThrow((await adapter.commit(work)).outcome);
+}
+
+/**
+ * `outcome` when it committed, or throws its code
+ * @param {import('../../../kernel/core/contracts/outcomes.js').Outcome | import('../../../kernel/core/contracts/outcomes.js').BulkOutcome} outcome
+ */
+function committedOrThrow(outcome) {
   if (outcome.kind === 'committed') return outcome;
   if (outcome.kind === 'unavailable') throw new UnavailableError(outcome.cause, outcome.code, outcome.retryable);
   if (outcome.kind === 'rejected' && outcome.code === 'preview-changed') {
@@ -207,28 +210,8 @@ const retryOpen = {
 
 // ============ rebuild-index ============
 
-/**
- * A note's search entry, as js/workers/indexer.js's buildNoteEntry makes it from the note and
- * its blocks in the order the `canvasId` index gives them
- * @param {NoteRecord} note
- * @param {readonly BlockRecord[]} blocks
- */
-export function searchEntryOf(note, blocks) {
-  const content = blocks
-    .map(block => block.content || '')
-    .join(' ')
-    .replace(/<[^>]*>?/gm, '');
-  const text = `${content} ${note.name || ''}`;
-  const tags = new Set();
-  for (const match of text.matchAll(/#([\w-]+)/g)) tags.add(match[1].toLowerCase());
-  return {
-    noteId: note.id,
-    name: note.name || 'Untitled',
-    content,
-    tags: Array.from(tags),
-    updatedAt: note.updatedAt,
-  };
-}
+// The entry it writes, as js/workers/indexer.js makes one (core/application/search-rebuild.js)
+export { searchEntryOf };
 
 /**
  * Whether a stored entry is the one `expected` would write
@@ -236,14 +219,6 @@ export function searchEntryOf(note, blocks) {
  * @param {ReturnType<typeof searchEntryOf>} expected
  */
 const sameEntry = (stored, expected) => JSON.stringify(stored) === JSON.stringify(expected);
-
-/**
- * Whether the app's indexer indexes `note`: the notes its list holds, outside trash and the
- * archive and not templates, so a rebuild and the indexer's own setSearchIndex never undo
- * each other
- * @param {NoteRecord} note
- */
-const indexed = note => !note.trashed && !note.archived && !note.isTemplate;
 
 /**
  * The entry of each note the indexer indexes, or of each of `only`, as stored and as it
@@ -275,35 +250,18 @@ const rebuildIndex = {
     };
   },
   async apply(context, plan) {
-    const adapter = port(context, 'adapter');
     const noteIds = /** @type {string[]} */ (plan);
+    // Each batch where its root sends it, the worker's queue on recovery.html (#35 slice 8), or
+    // committed on the run's adapter, as the worker's queue commits one
+    const rebuild =
+      context.ports.rebuild ||
+      (async (/** @type {import('./ports.js').RebuildBatch} */ command) => {
+        const work = rebuildCommands.rebuildSearchIndex(command);
+        return 'kind' in work ? work : (await port(context, 'adapter').commit(work)).outcome;
+      });
     for (let start = 0; start < noteIds.length; start += REBUILD_BATCH) {
       const batch = noteIds.slice(start, start + REBUILD_BATCH);
-      const commandId = context.ids.next();
-      await commitOrThrow(adapter, {
-        commandId,
-        command: /** @type {any} */ ({ type: 'rebuildSearchIndex', commandId }),
-        // Content scope with no `revised`: it writes only search entries, so no note's revision moves
-        effect: {
-          kind: 'units',
-          units: [
-            {
-              stores: ['notes', 'blocks', 'searchIndex'],
-              async run(tx) {
-                for (const noteId of batch) {
-                  const note = await tx.get('notes', noteId);
-                  // A note deleted, trashed, archived, or made a template since the preview
-                  // gets nothing written, and its old entry stays
-                  if (!note || !indexed(note)) continue;
-                  const blocks = await tx.getAllByIndex('blocks', 'canvasId', noteId);
-                  tx.put('searchIndex', searchEntryOf(note, blocks));
-                }
-              },
-            },
-          ],
-        },
-        done: () => committed('search-index-rebuilt', batch),
-      });
+      committedOrThrow(await rebuild({ type: 'rebuildSearchIndex', commandId: context.ids.next(), noteIds: batch }));
     }
     return noteIds;
   },
