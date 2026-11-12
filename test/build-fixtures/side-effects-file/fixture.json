@@ -1,0 +1,13 @@
+{
+  "rule": "a build/side-effects.json group's owner isn't the number of the issue that owns it (#300)",
+  "expect": [
+    "side-effects/file"
+  ],
+  "edits": [
+    {
+      "file": "build/side-effects.json",
+      "replace": "\"owner\": 21,",
+      "with": "\"owner\": \"#21\","
+    }
+  ]
+}

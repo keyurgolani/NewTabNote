@@ -1,0 +1,16 @@
+{
+  "rule": "a first-party module imports another for its side effects only, which build/side-effects.json doesn't list, so the bundler would drop it unseen (#300)",
+  "expect": [
+    "side-effects/unlisted"
+  ],
+  "edits": [
+    {
+      "file": "js/ntn-fixture-side-effect.js",
+      "write": "window.ntnFixtureSideEffect = true;\n"
+    },
+    {
+      "file": "js/popup.js",
+      "append": "\nimport './ntn-fixture-side-effect.js';\n"
+    }
+  ]
+}
