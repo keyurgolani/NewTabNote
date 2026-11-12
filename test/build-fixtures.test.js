@@ -11,7 +11,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { CODES } = require('../scripts/build/diagnostics.js');
 const os = require('node:os');
-const { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, liftByteRows, CANARY_NAMES } = require('../scripts/build/verify-fixtures.js');
+const { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, liftByteRows, outputProblems, CANARY_NAMES, KINDS } = require('../scripts/build/verify-fixtures.js');
+const { packageOf } = require('./helpers/source-package.js');
 const { checkSecurityBaseline, firstPartyScripts, SOURCES, CHANGES_FILE } = require('../scripts/build/security-baseline.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -41,10 +42,12 @@ describe('test/build-fixtures/', () => {
   it('gives each fixture a rule, known codes, and a kind and modes the runner knows', () => {
     for (const fixture of fixtures) {
       assert.ok(typeof fixture.rule === 'string' && fixture.rule.length > 10, fixture.name);
-      assert.ok([undefined, 'build', 'package', 'canary'].includes(fixture.kind), fixture.name);
+      assert.ok(fixture.kind === undefined || KINDS.includes(fixture.kind), fixture.name);
       for (const code of fixture.expect || []) assert.ok(Object.hasOwn(CODES, code), `${fixture.name}: ${code}`);
       for (const mode of fixture.modes || []) assert.ok(['production', 'development'].includes(mode), `${fixture.name}: ${mode}`);
-      if (fixture.kind !== 'canary') assert.ok((fixture.expect || []).length > 0, `${fixture.name} expects no code`);
+      // An output fixture's build passes, and what it proves is a marker it keeps out of dist/ (#300)
+      if (fixture.kind === 'output') assert.ok((fixture.absent || []).length > 0 && !fixture.expect, `${fixture.name} keeps nothing out`);
+      else if (fixture.kind !== 'canary') assert.ok((fixture.expect || []).length > 0, `${fixture.name} expects no code`);
     }
   });
 
@@ -122,6 +125,16 @@ describe('test/build-fixtures/', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("reads an output fixture's dist/: each marker it keeps has to be in a script, page or stylesheet there, and each it keeps out in none (#300)", () => {
+    assert.deepEqual(KINDS, ['build', 'package', 'canary', 'output']);
+    const files = packageOf({ 'a.js': 'ntn-used', 'b.html': '<p>ntn-page</p>', 'c.css': '.ntn-dropped {}', 'd.png': 'ntn-unused' });
+    assert.deepEqual(outputProblems(files, { name: 'x', rule: 'x', present: ['ntn-used', 'ntn-page'], absent: ['ntn-unused'] }), []);
+    assert.deepEqual(outputProblems(files, { name: 'x', rule: 'x', present: ['ntn-missing'], absent: ['ntn-dropped'] }), [
+      'ntn-missing is in no script, page or stylesheet',
+      'ntn-dropped is in c.css',
+    ]);
   });
 
   it('reads the codes a build or package run reported from its problem lines', () => {
