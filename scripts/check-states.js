@@ -7,21 +7,23 @@
  * missing. The baseline only shrinks: a missing row it doesn't list fails, a written row it still
  * lists fails, and an entry for a contribution or a state that doesn't exist fails. Matrix
  * descriptors and causes have to resolve on their families and keep the causes' joined rules, and
- * every message key a row or a cause names needs a catalog string. It writes nothing, and no flag
- * makes it.
+ * every message key a row or a cause names needs a catalog string. With --base <ref>, an entry the
+ * base's baseline doesn't have fails, so the baseline only shrinks from its first day; a base with
+ * no baseline yet passes and says so. It writes nothing, and no flag makes it.
  *
  * The contributions are today's: #13's, #20's and recovery.html's port operations (#35 slice 8), as
  * commands and queries by their names in kebab case, and the kit's hosts as surfaces. Routes and background jobs join when #15's
  * navigation family and #35's job host register them. Owners register rows in js/states/rows.js.
  */
 
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const ROOT = path.join(__dirname, '..');
 const BASELINE = 'ci/baselines/states.json';
-const USAGE = 'usage: node scripts/check-states.js';
+const USAGE = 'usage: node scripts/check-states.js [--base <git ref>]';
 
 /** @param {string} name - `createNote` */
 const kebab = name => name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
@@ -72,14 +74,21 @@ async function registered(root) {
 
 /**
  * @param {string[]} [argv]
- * @param {{root?: string, log?: (line: string) => void, error?: (line: string) => void}} [options]
+ * @param {{root?: string, log?: (line: string) => void, error?: (line: string) => void,
+ *   git?: (args: string[]) => string}} [options] - `git` runs git in `root`, unless a test hands in another
  * @returns {Promise<number>}
  */
 async function main(argv = process.argv.slice(2), options = {}) {
   const { root = ROOT, log = console.log, error = console.error } = options;
-  if (argv.length > 0) {
-    error(USAGE);
-    return 2;
+  const git = options.git ?? (args => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+  /** @type {string | null} */
+  let base = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] !== '--base' || i + 1 >= argv.length || argv[i + 1].startsWith('--')) {
+      error(USAGE);
+      return 2;
+    }
+    base = argv[(i += 1)];
   }
   const { contributions, strings, states, validate, families, causes, rows } = await registered(root);
   /** @type {string[]} */
@@ -117,6 +126,28 @@ async function main(argv = process.argv.slice(2), options = {}) {
     }
     if (new Set(list).size !== list.length) problems.push(`${BASELINE}: ${subject} lists a state twice`);
   }
+  let note = '';
+  if (base !== null) {
+    try {
+      git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`]);
+    } catch {
+      error(`check:states failed: git can't read ${base}, so there's no baseline to hold this one to`);
+      return 1;
+    }
+    if (git(['ls-tree', '--name-only', base, '--', BASELINE]).trim() === '') note = `; ${base} has no baseline yet`;
+    else {
+      /** @type {Record<string, string[]>} */
+      const before = JSON.parse(git(['show', `${base}:${BASELINE}`])).missing;
+      for (const [subject, list] of Object.entries(listed)) {
+        for (const state of list) {
+          if (!(before[subject] ?? []).includes(state)) {
+            problems.push(`${subject} lists ${state}, which ${base}'s baseline doesn't: the baseline only shrinks`);
+          }
+        }
+      }
+      note = `, none of them new since ${base}`;
+    }
+  }
   let missing = 0;
   for (const subject of [...contributions].sort()) {
     const has = covered.get(subject) ?? new Set();
@@ -133,7 +164,7 @@ async function main(argv = process.argv.slice(2), options = {}) {
     for (const problem of problems) error(`  - ${problem}`);
     return 1;
   }
-  log(`check:states: OK, ${contributions.size} contributions, ${rows.length} with rows, ${missing} missing rows that ${BASELINE} lists`);
+  log(`check:states: OK, ${contributions.size} contributions, ${rows.length} with rows, ${missing} missing rows that ${BASELINE} lists${note}`);
   return 0;
 }
 
