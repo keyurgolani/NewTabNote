@@ -287,6 +287,8 @@ function workerTerserPlugin() {
  * @property {BundleReport} report - what the passes wrote, filled in as they run
  * @property {Logger} logger - Vite's own warnings and errors go here
  * @property {(level: LogLevel, log: RolldownLog, handler: LogHandler) => void} onLog - and the bundler's
+ * @property {(id: string) => boolean} [sideEffects] - the bundler's moduleSideEffects: whether a module
+ *   keeps its side effects when nothing takes anything from it (scripts/build/bundle.js's sideEffectsFor, #300)
  * @property {unknown} [guardRows] - for the guard pass: the registry's rows, validated
  *   and cut to what the guard reads (scripts/build/guard.js's guardRegistry)
  */
@@ -357,6 +359,17 @@ function buildOptions({ outDir, mode }) {
  * no row allows fails the build, so that one is off: under load it failed five fixtures' builds.
  */
 const CHECKS = Object.freeze({ bundlerTimings: false });
+
+/**
+ * Each pass's tree shaking: the bundler's own, with moduleSideEffects from the build when it gives
+ * one, so a module nothing takes anything from keeps its side effects only as the build says (#27's
+ * Architecture, #300)
+ * @param {PassOptions} options
+ * @returns {{treeshake?: {moduleSideEffects: (id: string) => boolean}}}
+ */
+function treeshakeOf({ sideEffects }) {
+  return sideEffects ? { treeshake: { moduleSideEffects: sideEffects } } : {};
+}
 
 /**
  * The ids the bundler may give the loader's module: its path under the sources, and under their
@@ -483,6 +496,7 @@ function recoveryConfig(options) {
  */
 function pagePassConfig(options, pages, { blockChunk = false, pageChunks = false } = {}) {
   const { root, mode, report, onLog } = options;
+  const treeshake = treeshakeOf(options);
   const names = {
     entryFileNames: `${ASSETS_DIR}/[name]-[hash].js`,
     chunkFileNames: `${ASSETS_DIR}/[name]-[hash].js`,
@@ -515,6 +529,7 @@ function pagePassConfig(options, pages, { blockChunk = false, pageChunks = false
         },
         checks: { ...CHECKS },
         onLog,
+        ...treeshake,
       },
     },
     worker: {
@@ -522,7 +537,7 @@ function pagePassConfig(options, pages, { blockChunk = false, pageChunks = false
       plugins: () => [reportPlugin(report, 'worker'), ...(mode === 'production' ? [workerTerserPlugin()] : [])],
       // terser minifies a worker's chunk in production (workerTerserPlugin), so the bundler
       // writes it as given: Vite leaves a worker's minify unset, and the bundler would reprint it
-      rolldownOptions: { output: { ...names, minify: false }, checks: { ...CHECKS }, onLog },
+      rolldownOptions: { output: { ...names, minify: false }, checks: { ...CHECKS }, onLog, ...treeshake },
     },
     plugins: [reportPlugin(report, 'pages')],
   };
@@ -551,6 +566,7 @@ function backgroundConfig(options) {
         },
         checks: { ...CHECKS },
         onLog,
+        ...treeshakeOf(options),
       },
     },
     plugins: [reportPlugin(report, 'background')],
@@ -603,6 +619,7 @@ function guardConfig(options) {
         },
         checks: { ...CHECKS },
         onLog,
+        ...treeshakeOf(options),
       },
     },
     plugins: [guardRowsPlugin(root, guardRows), reportPlugin(report, 'guard')],

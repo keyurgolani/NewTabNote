@@ -85,6 +85,22 @@ function sourcePath(id, root) {
 }
 
 /**
+ * The bundler's moduleSideEffects (#300): a first-party module keeps its side effects only when
+ * it's in `keep`, the entry roots and build/side-effects.json's modules
+ * (scripts/build/side-effects.js), so any other one nothing takes anything from drops whole. Vite's
+ * own modules, the pages and stylesheets, and the dependencies keep theirs as they come.
+ * @param {string} root
+ * @param {Set<string>} keep - source paths
+ * @returns {(id: string) => boolean}
+ */
+function sideEffectsFor(root, keep) {
+  return (id) => {
+    const file = sourcePath(id, root);
+    return file === null || !/\.m?js$/.test(file) || keep.has(file);
+  };
+}
+
+/**
  * The problem for an error a pass threw. The bundler names the plugin that threw on the error
  * or, for one it wraps, at the start of the message: `[plugin vite:css] <file>`.
  * @param {any} error
@@ -256,10 +272,10 @@ function moduleMap(report, root) {
 /**
  * Bundle the pages and the background into `outDir`, with the build's ID and the define
  * allowlist's rows inlined, and each warning the passes print checked against the warning allowlist
- * @param {{root: string, outDir: string, mode: Mode, buildId: string, defineRows: import('./vite-config.js').PassOptions['defineRows'], allowlist: import('./warning-allowlist.js').WarningAllowlist}} options
+ * @param {{root: string, outDir: string, mode: Mode, buildId: string, defineRows: import('./vite-config.js').PassOptions['defineRows'], allowlist: import('./warning-allowlist.js').WarningAllowlist, keep: Set<string>}} options
  * @returns {Promise<Bundled>}
  */
-async function bundle({ root, outDir, mode, buildId, defineRows, allowlist }) {
+async function bundle({ root, outDir, mode, buildId, defineRows, allowlist, keep }) {
   const vite = await import('vite');
   /** @type {string[]} */
   const warnings = [];
@@ -275,7 +291,7 @@ async function bundle({ root, outDir, mode, buildId, defineRows, allowlist }) {
     if (level === 'info' || level === 'debug') return;
     handler(level, log);
   };
-  const options = { root, outDir, mode, buildId, defineRows, report, logger, onLog };
+  const options = { root, outDir, mode, buildId, defineRows, report, logger, onLog, sideEffects: sideEffectsFor(root, keep) };
 
   /** @type {Problem[]} */
   const problems = [];
@@ -315,4 +331,4 @@ async function bundle({ root, outDir, mode, buildId, defineRows, allowlist }) {
   };
 }
 
-module.exports = { bundle, bundlerProblem, warningProblem, writtenChunks, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };
+module.exports = { bundle, bundlerProblem, warningProblem, writtenChunks, sideEffectsFor, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };

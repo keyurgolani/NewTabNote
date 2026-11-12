@@ -46,7 +46,7 @@ const { CLASSIC_SCRIPTS, STATIC_FILES, terserOptions } = require('./vite-config.
 const { analyze, checkBudgets, readBudgets, startChunksOf } = require('./budgets.js');
 const { readAllowlist } = require('./define-allowlist.js');
 const { readAllowlist: readWarningList } = require('./warning-allowlist.js');
-const { readSideEffects, firstPartySources, sideEffectProblems } = require('./side-effects.js');
+const { readSideEffects, firstPartySources, entryRoots, sideEffectProblems } = require('./side-effects.js');
 const { readTable, chromeProblems } = require('./chrome-features.js');
 const { dependencyReport } = require('./dependencies.js');
 
@@ -354,7 +354,8 @@ async function build(argv = process.argv.slice(2)) {
   try {
     // 3. The bundle, then what no page or script imports
     console.log('📦 Bundling the pages, their workers, and the service worker...');
-    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId, defineRows: defines.rows, allowlist: warningList.allowlist });
+    const keep = new Set([...entryRoots(ROOT_DIR, sources), ...sideEffects.modules]);
+    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId, defineRows: defines.rows, allowlist: warningList.allowlist, keep });
     const copied = bundled.problems.length > 0 ? [] : await copyUnbundled(ROOT_DIR, staging, mode);
     const built = [...bundled.problems, ...copied];
     if (built.length > 0) {
