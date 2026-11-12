@@ -28,6 +28,12 @@ const { createLockManager } = /** @type {{createLockManager: () => any}} */ (
   createRequire(import.meta.url)('../helpers/legacy-env.js')
 );
 
+/** IndexedDB with no notes database on it, for recovery.html's fallback (#35 slice 8) */
+const { IDBFactory, IDBKeyRange } = /** @type {any} */ (createRequire(import.meta.url)('fake-indexeddb'));
+
+/** recovery.html's fallback (#35 slice 8), by a name the typecheck doesn't resolve */
+const FALLBACK = '../../js/kernel/composition/recovery-fallback.js';
+
 /** When a journal entry was written, for the health's oldest orphaned entry */
 const NOW_AT = Date.UTC(2026, 9, 20, 12, 0, 0);
 
@@ -1468,5 +1474,26 @@ describe("the coordinator's pause while another context restores (#35 slice 7)",
     await turns(10);
     assert.equal(await sent, null, "the queue doesn't run the request the router answered");
     assert.equal(runs(), 1, "the drain's replay runs it once");
+  });
+
+  it("pauses a coordinator that comes up while recovery.html's fallback holds storage.restore, and opens once the fallback lets it go (#35 slice 8)", async () => {
+    const loaded = await import(FALLBACK).catch(() => ({}));
+    assert.equal(typeof loaded.createRecoveryFallback, 'function', 'the fallback, js/kernel/composition/recovery-fallback.js');
+    const locks = createLockManager();
+    const settings = { get: async () => ({}), set: async () => {} };
+    const fallback = loaded.createRecoveryFallback({ indexedDB: new IDBFactory(), keyRange: IDBKeyRange, settings, locks });
+    // On a profile with no notes database, its command holds the lock for as long as its open takes
+    const ran = fallback.execute({ type: 'rebuildSearchIndex', commandId: 'c-fallback', noteIds: ['00000000-0000-4000-8000-0000000000c1'] });
+    const held = async () => (await locks.query()).held.some((/** @type {{name: string}} */ lock) => lock.name === 'storage.restore');
+    for (let round = 0; round < 50 && !(await held()); round++) await Promise.resolve();
+    assert.equal(await held(), true, 'the fallback holds storage.restore');
+    const kernel = pausableKernel();
+    const { coordinator } = coordinatorOn(kernel, { locks, timers: still });
+    coordinator.start();
+    for (let round = 0; round < 10; round++) await Promise.resolve();
+    assert.deepEqual([kernel.opens.count, coordinator.status()], [0, { status: 'degraded', reason: 'restoring' }]);
+    await ran;
+    await turns(10);
+    assert.deepEqual([kernel.opens.count, coordinator.status()], [1, { status: 'ready' }]);
   });
 });
