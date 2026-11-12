@@ -12,9 +12,9 @@
  *   define/unknown   first-party code reads an __NTN_ name with no row (scripts/build/environment.js)
  */
 
-const fs = require('node:fs');
 const path = require('node:path');
 const { problem } = require('./diagnostics.js');
+const { isObject, readList } = require('./json-file.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {'production' | 'development'} Mode */
@@ -48,14 +48,6 @@ const ROW_NAME = /^[a-z][A-Za-z0-9]*$/;
  */
 function defineName(name) {
   return `__NTN_${name}__`;
-}
-
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-function isObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
@@ -104,18 +96,8 @@ function fileProblems(allowlist) {
  * @returns {{rows: Record<string, DefineRow>, problems: Problem[]}}
  */
 function readAllowlist(root = ROOT) {
-  const file = path.join(root, ALLOWLIST_FILE);
-  if (!fs.existsSync(file)) return { rows: {}, problems: [problem('define/file', ALLOWLIST_FILE, 'is missing')] };
-  /** @type {unknown} */
-  let allowlist;
-  try {
-    allowlist = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (error) {
-    return { rows: {}, problems: [problem('define/file', ALLOWLIST_FILE, `doesn't parse: ${error instanceof Error ? error.message : error}`)] };
-  }
-  const problems = fileProblems(allowlist);
-  if (problems.length > 0) return { rows: {}, problems };
-  return { rows: /** @type {Record<string, DefineRow>} */ (/** @type {{rows: unknown}} */ (allowlist).rows), problems };
+  const { value, problems } = readList(root, ALLOWLIST_FILE, 'define/file', fileProblems);
+  return { rows: value === undefined ? {} : /** @type {{rows: Record<string, DefineRow>}} */ (value).rows, problems };
 }
 
 /**

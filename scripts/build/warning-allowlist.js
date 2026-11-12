@@ -15,9 +15,9 @@
  *   build/warning-stale   a row whose warning didn't come
  */
 
-const fs = require('node:fs');
 const path = require('node:path');
 const { problem } = require('./diagnostics.js');
+const { isObject, readList } = require('./json-file.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {'production' | 'development'} Mode */
@@ -34,14 +34,6 @@ const CSS_WARNING = /lightningcss|\[vite:css/i;
 const CHUNK_SIZE = /^\(!\) Some chunks are larger than (\d+) kB after minification/;
 /** A plugin's tag, which can come ahead of the warning it printed */
 const PLUGIN_TAG = /^\s*\[plugin [^\]]+\]/;
-
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-function isObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 /**
  * What's wrong with a row: a field it doesn't take, no owner, or no reason
@@ -95,19 +87,9 @@ function fileProblems(allowlist) {
  * @returns {{allowlist: WarningAllowlist, problems: Problem[]}}
  */
 function readAllowlist(root = ROOT) {
-  const none = () => ({ chunks: {}, warnings: [] });
-  const file = path.join(root, ALLOWLIST_FILE);
-  if (!fs.existsSync(file)) return { allowlist: none(), problems: [problem('build/warning-file', ALLOWLIST_FILE, 'is missing')] };
-  /** @type {unknown} */
-  let allowlist;
-  try {
-    allowlist = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (error) {
-    return { allowlist: none(), problems: [problem('build/warning-file', ALLOWLIST_FILE, `doesn't parse: ${error instanceof Error ? error.message : error}`)] };
-  }
-  const problems = fileProblems(allowlist);
-  if (problems.length > 0) return { allowlist: none(), problems };
-  const { chunks, warnings } = /** @type {WarningAllowlist} */ (allowlist);
+  const { value, problems } = readList(root, ALLOWLIST_FILE, 'build/warning-file', fileProblems);
+  if (value === undefined) return { allowlist: { chunks: {}, warnings: [] }, problems };
+  const { chunks, warnings } = /** @type {WarningAllowlist} */ (value);
   return { allowlist: { chunks, warnings }, problems };
 }
 

@@ -15,6 +15,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { problem } = require('./diagnostics.js');
+const { isObject, readList } = require('./json-file.js');
 const { scanScript } = require('./js-scan.js');
 const { htmlTags } = require('./markup.js');
 const { PAGES, BACKGROUND_ENTRY, GUARD_SCRIPT } = require('./vite-config.js');
@@ -27,14 +28,6 @@ const LIST_FILE = 'build/side-effects.json';
 const FIELDS = Object.freeze({ list: ['about', 'groups'], group: ['owner', 'reason', 'modules'] });
 /** A module's path under the sources: js/, then folders, then a script */
 const MODULE_PATH = /^js\/(?:[\w.-]+\/)*[\w.-]+\.m?js$/;
-
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-function isObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 /**
  * The problems with the list's shape, before it's used
@@ -80,18 +73,9 @@ function fileProblems(list) {
  * @returns {{modules: Set<string>, problems: Problem[]}}
  */
 function readSideEffects(root = ROOT) {
-  const file = path.join(root, LIST_FILE);
-  if (!fs.existsSync(file)) return { modules: new Set(), problems: [problem('side-effects/file', LIST_FILE, 'is missing')] };
-  /** @type {unknown} */
-  let list;
-  try {
-    list = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (error) {
-    return { modules: new Set(), problems: [problem('side-effects/file', LIST_FILE, `doesn't parse: ${error instanceof Error ? error.message : error}`)] };
-  }
-  const problems = fileProblems(list);
-  if (problems.length > 0) return { modules: new Set(), problems };
-  const { groups } = /** @type {{groups: Array<{modules: string[]}>}} */ (list);
+  const { value, problems } = readList(root, LIST_FILE, 'side-effects/file', fileProblems);
+  if (value === undefined) return { modules: new Set(), problems };
+  const { groups } = /** @type {{groups: Array<{modules: string[]}>}} */ (value);
   return { modules: new Set(groups.flatMap((group) => group.modules)), problems };
 }
 
