@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const config = require('../scripts/build/vite-config.js');
 
 const ROOT = path.join(__dirname, '..');
 const FILE = path.join(ROOT, 'build', 'side-effects.json');
@@ -22,6 +23,12 @@ const sideEffects = () => require('../scripts/build/side-effects.js');
 
 const GROUP = Object.freeze({ owner: 3, reason: 'why these run for their side effects', modules: ['js/a.js'] });
 const list = (/** @type {object[]} */ groups) => ({ about: 'what the groups are', groups });
+
+/** Each pass's configuration, with `sideEffects` as the bundler's moduleSideEffects */
+function passes(sideEffectsOf) {
+  const options = { root: '/repo', outDir: '/repo/.dist-staging-x', mode: 'production', buildId: 'build-x', defineRows: {}, report: { chunks: [], assets: [] }, logger: /** @type {any} */ ({}), onLog: () => {}, sideEffects: sideEffectsOf };
+  return [config.pagesConfig(options), config.recoveryConfig(options), config.backgroundConfig(options), config.guardConfig({ ...options, guardRows: [] })];
+}
 
 describe('build/side-effects.json (#300)', () => {
   it("holds js/main.js's imports for side effects, #3's, and the guard's installer, #21's, and nothing else, so the list only shrinks", () => {
@@ -41,6 +48,23 @@ describe('build/side-effects.json (#300)', () => {
     assert.deepEqual([...sideEffects().entryRoots()].sort(), [
       'js/background.js', 'js/entries/newtab.js', 'js/network-guard.js', 'js/offscreen.js', 'js/popup.js', 'js/recovery.js', 'js/sidepanel.js', 'js/workers/indexer.js',
     ]);
+  });
+
+  it("keeps a first-party module's side effects only for a root or a listed module, and every other id's, Vite's own and the dependencies', as they come", () => {
+    const { sideEffectsFor } = require('../scripts/build/bundle.js');
+    const keep = sideEffectsFor('/repo', new Set(['js/a.js', 'js/entry.js']));
+    assert.deepEqual(['/repo/js/a.js', '/repo/js/entry.js', '/repo/js/b.js', '/repo/js/kernel/c.mjs'].map(keep), [true, true, false, false]);
+    for (const id of ['/repo/newtab.html', '\0vite/preload-helper.js', '/repo/js/b.js?worker_file&type=module', '/repo/node_modules/valibot/dist/index.js', '/repo/css/a.css']) {
+      assert.equal(keep(id), true, id);
+    }
+  });
+
+  it("sets the bundler's moduleSideEffects in every pass and the workers' build", () => {
+    const keep = () => true;
+    const [pages, recovery, background, guard] = passes(keep);
+    for (const options of [pages.build.rolldownOptions, pages.worker.rolldownOptions, recovery.build.rolldownOptions, background.build.rolldownOptions, guard.build.rolldownOptions]) {
+      assert.equal(options.treeshake.moduleSideEffects, keep);
+    }
   });
 
   it('fails an import for side effects only of a module the list lacks as side-effects/unlisted, and a listed module no such import names as side-effects/stale', () => {

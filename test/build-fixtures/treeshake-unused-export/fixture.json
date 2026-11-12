@@ -1,0 +1,25 @@
+{
+  "rule": "the build drops a fixture module's unused export, and the whole of a module whose one import goes unused, since only the entry roots and build/side-effects.json's modules keep their side effects (#27 AC8, #300)",
+  "kind": "output",
+  "present": [
+    "ntn-fixture-used-export"
+  ],
+  "absent": [
+    "ntn-fixture-unused-export",
+    "ntn-fixture-dropped-module"
+  ],
+  "edits": [
+    {
+      "file": "js/ntn-fixture-treeshake.js",
+      "write": "export function ntnFixtureUsed() {\n  return 'ntn-fixture-used-export';\n}\n\nexport function ntnFixtureUnused() {\n  return 'ntn-fixture-unused-export';\n}\n"
+    },
+    {
+      "file": "js/ntn-fixture-dropped.js",
+      "write": "document.documentElement.dataset.ntnFixtureDropped = 'ntn-fixture-dropped-module';\n\nexport const ntnFixtureNever = 1;\n"
+    },
+    {
+      "file": "js/popup.js",
+      "append": "\nimport { ntnFixtureUsed } from './ntn-fixture-treeshake.js';\nimport { ntnFixtureNever } from './ntn-fixture-dropped.js';\ndocument.documentElement.dataset.ntnFixtureUsed = ntnFixtureUsed();\n"
+    }
+  ]
+}
