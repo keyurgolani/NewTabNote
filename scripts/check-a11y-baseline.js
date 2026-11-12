@@ -26,6 +26,12 @@ const ROOT = path.join(__dirname, '..');
 const BASELINE = 'test/a11y/baseline.json';
 const SPECS = 'test/a11y';
 const CHECK = 'a11y-rules';
+/**
+ * Where `root`'s tree keeps the baseline: the one path both of the file's readers use, main() here
+ * and test:a11y's reporter, so a run can't be held to a file this check doesn't read
+ * @param {string} [root]
+ */
+const baselineIn = (root = ROOT) => path.join(root, BASELINE);
 const USAGE = 'usage: node scripts/check-a11y-baseline.js [--base <git ref>]';
 
 /** @typedef {{page: string, rule: string, targets: string[], ownerGate?: string}} Line */
@@ -155,8 +161,9 @@ function main(argv = process.argv.slice(2), options = {}) {
     }
     base = argv[(i += 1)];
   }
-  const seeded = fs.existsSync(path.join(root, BASELINE));
-  const file = seeded ? JSON.parse(fs.readFileSync(path.join(root, BASELINE), 'utf8')) : { check: CHECK, entries: [] };
+  const at = baselineIn(root);
+  const seeded = fs.existsSync(at);
+  const file = seeded ? JSON.parse(fs.readFileSync(at, 'utf8')) : { check: CHECK, entries: [] };
   const problems = seeded ? fileProblems(file, gates(root)) : [];
   if (problems.length === 0) problems.push(...specProblems(file, path.join(root, SPECS)));
   let note = '';
@@ -188,4 +195,4 @@ function main(argv = process.argv.slice(2), options = {}) {
 
 if (require.main === module) process.exitCode = main();
 
-module.exports = { main, BASELINE, SPECS, CHECK, ROOT, gates, fileProblems, specProblems, runProblems, historyProblems };
+module.exports = { main, BASELINE, SPECS, CHECK, ROOT, baselineIn, gates, fileProblems, specProblems, runProblems, historyProblems };

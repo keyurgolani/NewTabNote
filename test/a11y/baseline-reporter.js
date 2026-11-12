@@ -7,13 +7,14 @@
  * reports what the checks find without failing on it, so no CI step goes red on today's known issues; a
  * spec that attaches nothing or garbles it still fails, and so does any failing test. It writes nothing.
  *
- *   options.baseline, options.specs  the file and the specs' folder (default: test/a11y/'s)
+ *   options.baseline, options.specs  the file and the specs' folder (default: test/a11y/'s, the file
+ *                                    at the path check:a11y-baseline reads)
  *   options.write                    where the problems go (default: stderr)
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { BASELINE, CHECK, ROOT, SPECS, fileProblems, gates, runProblems, specProblems } = require('../../scripts/check-a11y-baseline.js');
+const { BASELINE, CHECK, ROOT, SPECS, baselineIn, fileProblems, gates, runProblems, specProblems } = require('../../scripts/check-a11y-baseline.js');
 
 const NAME = 'a11y-findings';
 
@@ -24,7 +25,7 @@ const isRecord = (/** @type {any} */ record) =>
 
 class BaselineReporter {
   /** @param {{baseline?: string, specs?: string, write?: (text: string) => void}} [options] */
-  constructor({ baseline = path.join(ROOT, BASELINE), specs = path.join(ROOT, SPECS), write = text => process.stderr.write(text) } = {}) {
+  constructor({ baseline = baselineIn(), specs = path.join(ROOT, SPECS), write = text => process.stderr.write(text) } = {}) {
     this._baseline = baseline;
     this._specs = specs;
     this._write = write;
