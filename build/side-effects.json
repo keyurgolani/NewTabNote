@@ -1,0 +1,63 @@
+{
+  "about": "The first-party modules the bundler keeps for their side effects alone (#27's Architecture, #300): treeshake.moduleSideEffects is true only for each pass's entry roots and these, so any other module nothing takes anything from drops whole (scripts/build/bundle.js's sideEffectsFor). A first-party import made for side effects only, import './x.js', has to name a module here, or the build fails as side-effects/unlisted, since the bundler would drop it unseen. Each group names the issue that owns its modules and why they run for their side effects. The list only shrinks: a module no such import names fails as side-effects/stale, and test/build-side-effects.test.js pins what it may hold. A list that doesn't read fails as side-effects/file (scripts/build/side-effects.js).",
+  "groups": [
+    {
+      "owner": 3,
+      "reason": "The new tab's legacy graph, which js/main.js imports for side effects alone, in the order it runs: each legacy file sets up its global (window.Utils, window.Storage and the rest) when it runs, and the others read those globals. Its two composition modules, block-projections.js and rendering.js, are #14's ports the legacy scripts read blocks and render rich text through, so they leave with the legacy graph. #3's rebuilt Workspace retires the graph.",
+      "modules": [
+        "js/kernel/composition/block-projections.js",
+        "js/kernel/composition/rendering.js",
+        "js/utils.js",
+        "js/core/storage-error.js",
+        "js/core/dom-refs.js",
+        "js/core/logger.js",
+        "js/utils/sanitize.js",
+        "js/ui/confirm-dialog.js",
+        "js/ui/formatting-toolbar.js",
+        "js/ui/graph-view.js",
+        "js/ui/export-notice.js",
+        "js/ui/part-state.js",
+        "js/ui/pre-update-copy.js",
+        "js/storage.js",
+        "js/theme-engine.js",
+        "js/virtual-scroller.js",
+        "js/block-placeholders.js",
+        "js/resizable-panel.js",
+        "js/sidebar-utils.js",
+        "js/shortcut-utils.js",
+        "js/command-palette-utils.js",
+        "js/ai-prompt-templates.js",
+        "js/ai-response-utils.js",
+        "js/search.js",
+        "js/image-compression.js",
+        "js/blocks.js",
+        "js/editor.js",
+        "js/llm.js",
+        "js/analytics.js",
+        "js/embeddings.js",
+        "js/onboarding.js",
+        "js/services/sync-service.js",
+        "js/stream-renderer.js",
+        "js/scroll-state-machine.js",
+        "js/chat-ui-components.js",
+        "js/controllers/sidebar-controller.js",
+        "js/controllers/tab-controller.js",
+        "js/controllers/ai-chat-controller.js",
+        "js/controllers/settings-controller.js",
+        "js/controllers/theme-builder-controller.js",
+        "js/controllers/analytics-controller.js",
+        "js/controllers/notes-manager.js",
+        "js/controllers/shortcuts-manager.js",
+        "js/controllers/export-import-service.js",
+        "js/app.js"
+      ]
+    },
+    {
+      "owner": 21,
+      "reason": "The network guard's installer, which js/network-guard.js and the indexer's module worker import for side effects alone. It wraps every network API the guard covers when it runs, so it has to run before any other import.",
+      "modules": [
+        "js/kernel/composition/network-guard-first.js"
+      ]
+    }
+  ]
+}
