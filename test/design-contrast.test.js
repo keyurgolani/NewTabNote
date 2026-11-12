@@ -82,6 +82,16 @@ describe('colors', () => {
     assert.throws(() => ratio('#000000', '#FFFFFF80'), /opaque background/);
   });
 
+  it('measure() refuses a translucent background or a faded pair with no opaque backdrop, and says what it needs (#24 slice 2)', () => {
+    const color = (/** @type {string} */ text) => /** @type {any} */ (C.parseColor(text));
+    const pair = { fg: color('#000000'), inner: null };
+    const needs = { name: 'TypeError', message: /measure\(\) needs an opaque backdrop \(over\)/ };
+    assert.throws(() => C.measure({ ...pair, bg: color('#ffffff'), over: null }, 0.5), needs);
+    assert.throws(() => C.measure({ ...pair, bg: color('#ffffff80'), over: null }, 1), needs);
+    assert.throws(() => C.measure({ ...pair, bg: color('#ffffff'), over: color('#00000080') }, 0.5), needs);
+    assert.ok(C.measure({ ...pair, bg: color('#ffffff'), over: color('#ffffff') }, 0.5).ratio > 1);
+  });
+
   it('knows the CSS system colors', () => {
     assert.ok(C.isSystemColor('Highlight'));
     assert.ok(C.isSystemColor('canvastext'));

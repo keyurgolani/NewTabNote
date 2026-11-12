@@ -36,13 +36,17 @@ describe("the accessibility checks' pure parts (#24 slice 2)", () => {
       box('fits', 44, 44),
       box('narrow', 43, 44),
       box('short', 44, 43.5),
+      // Only floating-point error is spared: layout's nearest box under 44 is 43.984375
       box('subpixel', 43.995, 44),
+      box('layout-step', 44 - 1 / 64, 44),
+      box('just-under', 43.98, 44),
+      box('float-error', 44 - 1e-9, 44),
       box('todo-checkbox', 20, 20),
       box('inline-link', 30, 18, 'inline-link'),
       box('editor', 600, 20, 'editing-area'),
       box('decorated', 20, 20, 'decorative'),
     ]);
-    assert.deepEqual(short.map((/** @type {any} */ t) => t.id), ['narrow', 'short', 'todo-checkbox', 'decorated']);
+    assert.deepEqual(short.map((/** @type {any} */ t) => t.id), ['narrow', 'short', 'subpixel', 'layout-step', 'just-under', 'todo-checkbox', 'decorated']);
     assert.deepEqual(targets.EXEMPTIONS, ['editing-area', 'browser-ui', 'inline-link']);
     assert.equal(targets.TARGET_MIN, 44);
   });
@@ -63,6 +67,12 @@ describe("the accessibility checks' pure parts (#24 slice 2)", () => {
     const dark = [{ id: 'slate', color: '#444444' }, { id: 'ink', color: '#333333' }];
     assert.deepEqual(short({ outer: '#555555' }, dark), ['slate', 'ink']);
     assert.deepEqual(short({ outer: '#555555', inner: '#ffffff' }, dark), []);
+    // #16's inner ring fills the offset, so it's painted on the plane beside the outer ring: half
+    // white on slate is #999, under 3:1 against the outer ring, where over the outer ring it'd pass
+    assert.deepEqual(short({ outer: '#555555', inner: 'rgba(255, 255, 255, 0.5)' }, [{ id: 'slate', color: '#333333' }]), ['slate']);
+    // A translucent plane on a translucent backdrop can't be measured, and the check names the plane
+    const veil = [{ id: 'veil', color: 'rgba(255, 255, 255, 0.5)', over: 'rgba(0, 0, 0, 0.5)' }];
+    assert.throws(() => short({ outer: '#000000' }, veil), { name: 'TypeError', message: /plane veil: what's under it, "rgba\(0, 0, 0, 0\.5\)", isn't opaque/ });
     assert.equal(typeof contrast.measure, 'function');
   });
 
@@ -86,7 +96,16 @@ describe("the accessibility checks' pure parts (#24 slice 2)", () => {
     assert.deepEqual(moves({ transitionProperty: 'opacity, transform', transitionDuration: '0.3s' }), ['transform-transition']);
     assert.deepEqual(moves({ scrollBehavior: 'smooth' }), ['smooth-scroll']);
     assert.deepEqual(moves({ chartAnimation: true }), ['chart-animation']);
+    // translate, rotate and scale move an element just as transform does
+    for (const property of ['translate', 'rotate', 'scale']) {
+      assert.deepEqual(moves({ transitionProperty: property, transitionDuration: '0.2s' }), ['transform-transition'], property);
+    }
+    assert.deepEqual(moves({ transitionProperty: 'opacity, scale', transitionDuration: '0s, 0.2s' }), ['transform-transition']);
+    // Keyframed movement too, as #16's motion rule drops translation and scaling
+    assert.deepEqual(moves({ animations: [{ properties: ['opacity', 'translate'], duration: 300 }] }), ['transform-animation']);
+    assert.deepEqual(moves({ animations: [{ properties: ['transform'], duration: 300 }] }), ['transform-animation']);
+    assert.deepEqual(moves({ animations: [{ properties: ['opacity'], duration: 300 }, { properties: ['scale'], duration: 0 }] }), []);
     assert.deepEqual(moves({ scrollBehavior: 'auto', chartAnimation: false }), []);
-    assert.deepEqual(motion.REDUCED_MOTION_RULES, ['transform-transition', 'smooth-scroll', 'chart-animation']);
+    assert.deepEqual(motion.REDUCED_MOTION_RULES, ['transform-transition', 'transform-animation', 'smooth-scroll', 'chart-animation']);
   });
 });
