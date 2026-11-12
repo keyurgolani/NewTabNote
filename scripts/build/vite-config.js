@@ -206,6 +206,8 @@ function assetFileName(asset) {
  * @property {string[]} dynamicImports - the chunks its import() calls load
  * @property {string[]} importedCss - the stylesheets Vite loads with it
  * @property {string[]} commonJs - the modules the bundler wrapped as CommonJS, by id
+ * @property {number} [bytes] - its code in UTF-8 bytes as its pass wrote it: the bundler's own
+ *   chunk-size measure (scripts/build/warning-allowlist.js)
  */
 
 /**
@@ -254,6 +256,14 @@ function reportPlugin(report, pass) {
         } else {
           report.assets.push({ pass, fileName: output.fileName });
         }
+      }
+    },
+    // What the bundler's chunk-size warning measures, read where it reads it: each JS chunk's code
+    // in UTF-8 bytes as the pass writes its output (#321's review)
+    writeBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        const recorded = output.type === 'chunk' ? report.chunks.find((chunk) => chunk.pass === pass && chunk.fileName === output.fileName && chunk.bytes === undefined) : undefined;
+        if (recorded && output.type === 'chunk') recorded.bytes = Buffer.byteLength(output.code);
       }
     },
   };

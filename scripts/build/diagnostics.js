@@ -20,7 +20,7 @@ const CODES = Object.freeze({
   'toolchain/node-version': 'Node isn\'t the exact version .nvmrc pins',
   'toolchain/missing-tool': 'a build tool isn\'t installed in node_modules',
   'build/missing-input': 'a listed input file or directory is missing',
-  'build/bundle': 'the bundler refused the sources: an import it can\'t resolve, a file it can\'t parse, or two chunks with one name',
+  'build/bundle': 'the bundler refused the sources: an import it can\'t resolve, a file it can\'t parse, or two chunks with one name; or a pass made a chunk it never wrote',
   'build/bundler-warning': 'Vite or the bundler printed a warning build/warning-allowlist.json has no row for, or its chunk-size warning covers a chunk with no row',
   'build/warning-stale': 'a build/warning-allowlist.json row whose warning didn\'t come: a chunk the bundler\'s chunk-size warning doesn\'t cover, or a warning no pass printed',
   'build/warning-file': 'build/warning-allowlist.json is missing, doesn\'t parse, or doesn\'t read as the list: a row with no owner or no reason, a warning row with no single first line, or a field a row doesn\'t take',

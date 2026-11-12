@@ -137,16 +137,26 @@ function warningProblem(warning) {
 }
 
 /**
- * Each chunk the passes wrote, with its file's bytes: what the bundler's chunk-size warning
- * measures, and names no chunk of (scripts/build/warning-allowlist.js)
+ * Each JS chunk a pass wrote, with the pass and the bytes its report recorded as the pass wrote it:
+ * the bundler's own chunk-size measure, the chunk's code in UTF-8 (scripts/build/vite-config.js's
+ * reportPlugin). The warning names no chunk (scripts/build/warning-allowlist.js). A module worker's
+ * chunk is an asset to its page's bundle, which the bundler doesn't measure, so it isn't here. A
+ * chunk a pass made and never wrote has no measure, so it's a problem, never a silent skip.
  * @param {BundleReport} report
- * @param {string} outDir
- * @returns {Array<{name: string, bytes: number}>}
+ * @param {(index: number) => string} passAt - the pass that wrote report.chunks[index]
+ * @returns {{chunks: Array<{pass: string, name: string, bytes: number}>, problems: Problem[]}}
  */
-function writtenChunks(report, outDir) {
-  return report.chunks
-    .filter((chunk) => fs.existsSync(path.join(outDir, chunk.fileName)))
-    .map((chunk) => ({ name: chunk.name, bytes: fs.statSync(path.join(outDir, chunk.fileName)).size }));
+function measuredChunks(report, passAt) {
+  /** @type {Array<{pass: string, name: string, bytes: number}>} */
+  const chunks = [];
+  /** @type {Problem[]} */
+  const problems = [];
+  for (const [i, chunk] of report.chunks.entries()) {
+    if (chunk.pass === 'worker') continue;
+    if (chunk.bytes === undefined) problems.push(problem('build/bundle', chunk.fileName, `the ${passAt(i)} pass made this chunk and never wrote it, so the bundler's chunk-size measure has nothing to read`));
+    else chunks.push({ pass: passAt(i), name: chunk.name, bytes: chunk.bytes });
+  }
+  return { chunks, problems };
 }
 
 /**
@@ -297,23 +307,32 @@ async function bundle({ root, outDir, mode, buildId, defineRows, allowlist, keep
   const problems = [];
   // Whether every pass ran: until then, a row's warning may be one a pass that didn't run prints
   let complete = false;
+  // Where each pass's chunks and warnings start, so each warning is its own pass's (#321's review)
+  /** @type {Array<{pass: string, chunks: number, warnings: number}>} */
+  const starts = [];
+  const run = async (/** @type {string} */ pass, /** @type {import('./vite-config.js').InlineConfig} */ config) => {
+    starts.push({ pass, chunks: report.chunks.length, warnings: warnings.length });
+    await vite.build(config);
+  };
+  const passAt = (/** @type {'chunks' | 'warnings'} */ key, /** @type {number} */ index) => starts.filter((start) => start[key] <= index).at(-1)?.pass ?? 'pages';
   try {
-    await vite.build(pagesConfig(options));
+    await run('pages', pagesConfig(options));
     // recovery.html in a pass of its own, so it splits no chunk the other pages share
-    await vite.build(recoveryConfig(options));
-    await vite.build(backgroundConfig(options));
+    await run('recovery', recoveryConfig(options));
+    await run('background', backgroundConfig(options));
     // The page guard inlines the registry's rows cut, once they're validated
     const registry = await guardRegistry(root);
     if ('problem' in registry) problems.push(registry.problem);
     else {
-      await vite.build(guardConfig({ ...options, guardRows: registry.rows }));
+      await run('guard', guardConfig({ ...options, guardRows: registry.rows }));
       complete = true;
     }
   } catch (error) {
     problems.push(bundlerProblem(error, root));
   }
-  const checked = checkWarnings(warnings, allowlist, { mode, complete, chunks: complete ? writtenChunks(report, outDir) : [] });
-  problems.push(...checked.unlisted.map(warningProblem), ...checked.problems);
+  const measured = complete ? measuredChunks(report, (i) => passAt('chunks', i)) : { chunks: [], problems: [] };
+  const checked = checkWarnings(warnings, allowlist, { mode, complete, chunks: measured.chunks, passes: warnings.map((_, i) => passAt('warnings', i)) });
+  problems.push(...measured.problems, ...checked.unlisted.map(warningProblem), ...checked.problems);
   if (problems.length > 0) return { problems, chunks: {}, modules: {}, graphs: { background: [], pages: [] }, report: [], allowed: [] };
 
   const named = chunkNames(report);
@@ -331,4 +350,4 @@ async function bundle({ root, outDir, mode, buildId, defineRows, allowlist, keep
   };
 }
 
-module.exports = { bundle, bundlerProblem, warningProblem, writtenChunks, sideEffectsFor, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };
+module.exports = { bundle, bundlerProblem, warningProblem, measuredChunks, sideEffectsFor, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };
