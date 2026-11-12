@@ -5,7 +5,8 @@
  * holds, so the scan fails on a remote executable URL:
  *   - any http:, https:, or protocol-relative URL given to import() or a static import,
  *     importScripts(), or new Worker(), or held by a wasmPaths setting;
- *   - any such URL whose path ends in .js, .mjs, or .wasm, anywhere in a script or a page;
+ *   - any such URL with a path segment ending in .js, .mjs, or .wasm, last or not, anywhere in a
+ *     script or a page (#300: #27 says any segment);
  *   - a page's <script src> or <link rel="modulepreload"> on another host.
  * build/remote-allowlist.json lists the occurrences reviewed to stay, each with its reason and
  * the issue that removes it. The list only shrinks: a row with more occurrences than the
@@ -41,13 +42,14 @@ function remoteUrls(text) {
 }
 
 /**
- * Whether a URL's path ends in an executable file: .js, .mjs, or .wasm
+ * Whether a URL's path has a segment that ends in an executable file's extension, .js, .mjs, or
+ * .wasm, whether or not it's the last
  * @param {string} url
  * @returns {boolean}
  */
 function isExecutable(url) {
   const pathname = url.replace(/^(?:https?:)?\/\/[^/?#]*/i, '').replace(/[?#].*$/, '');
-  return EXECUTABLE.test(pathname);
+  return pathname.split('/').some((segment) => EXECUTABLE.test(segment));
 }
 
 /**

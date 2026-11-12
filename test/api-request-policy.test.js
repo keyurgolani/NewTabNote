@@ -211,16 +211,16 @@ describe('the packaged destinations (js/kernel/composition/api-request.js)', () 
     assert.equal(policy.isWorkerSender({ id: 'test-extension', url: workerUrl }, { id: 'test-extension', workerUrl: null }), false);
   });
 
-  it("finds the worker's script URL in the manifest, read from the package where the runtime has no getManifest", async () => {
+  it("gives the worker's script URL from its literal path, the manifest's service worker, and reads no manifest for it (#300)", async () => {
+    // A literal the closure check follows (AC5): the build writes the worker at BACKGROUND_ENTRY,
+    // which manifest.json's background.service_worker names (test/bundler.test.js)
+    const { BACKGROUND_ENTRY } = require('../scripts/build/vite-config.js');
+    assert.equal(BACKGROUND_ENTRY, 'js/background.js');
     const getURL = (file) => `${OWN}/${file}`;
-    const manifest = { background: { service_worker: 'js/background.js' } };
-    assert.equal(await policy.workerScriptUrl({ getURL, getManifest: () => manifest }), `${OWN}/js/background.js`);
-    const read = [];
-    const offscreenRuntime = { getURL };
-    assert.equal(await policy.workerScriptUrl(offscreenRuntime, async (url) => (read.push(url), manifest)), `${OWN}/js/background.js`);
-    assert.deepEqual(read, [`${OWN}/manifest.json`]);
-    assert.equal(await policy.workerScriptUrl(offscreenRuntime, async () => { throw new Error('unreadable'); }), null);
-    assert.equal(await policy.workerScriptUrl({ getURL, getManifest: () => ({}) }), null);
+    const getManifest = () => assert.fail('the worker URL reads no manifest');
+    assert.equal(await policy.workerScriptUrl({ getURL, getManifest }), `${OWN}/${BACKGROUND_ENTRY}`);
+    assert.equal(await policy.workerScriptUrl({ getManifest }), null);
+    assert.equal(await policy.workerScriptUrl(null), null);
   });
 
   it('every file that asks the proxy for a request names only origins the registry lists', () => {
@@ -437,7 +437,6 @@ describe('OFFSCREEN_API_REQUEST in the offscreen document (js/offscreen.js)', ()
   async function offscreenPage() {
     const env = createLegacyEnv();
     env.global.URL = URL;
-    env.chrome.api.runtime.getManifest = () => ({ background: { service_worker: 'js/background.js' } });
     const fetches = [];
     env.global.fetch = async (url, init) => {
       fetches.push({ url: String(url), init: JSON.parse(JSON.stringify(init || {})) });

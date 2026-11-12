@@ -77,24 +77,15 @@ export function isOwnSender(sender, extensionId = globalThis.chrome?.runtime?.id
 }
 
 /**
- * The service worker's script URL, from the manifest's background.service_worker: through
- * getManifest where the runtime has it, and read from the package's manifest.json where it
- * hasn't, as in the offscreen document. Null when neither tells.
- * @param {{getURL?: (path: string) => string, getManifest?: () => unknown}} [runtime] - chrome.runtime
- *   unless a test passes another
- * @param {(url: string) => Promise<unknown>} [read] - reads a JSON file in the package
+ * The service worker's script URL: js/background.js, the manifest's background.service_worker,
+ * where the build writes the worker (scripts/build/vite-config.js's BACKGROUND_ENTRY). A literal,
+ * so the closure check follows it (#27 AC5, #300), and nothing reads the manifest for it. Null
+ * without a runtime that has getURL.
+ * @param {{getURL?: (path: string) => string}} [runtime] - chrome.runtime unless a test passes another
  * @returns {Promise<string | null>}
  */
-export async function workerScriptUrl(runtime = globalThis.chrome?.runtime, read = url => fetch(url).then(response => response.json())) {
-  try {
-    if (!runtime || typeof runtime.getURL !== 'function') return null;
-    const manifest = /** @type {{background?: {service_worker?: unknown}} | undefined} */ (
-      typeof runtime.getManifest === 'function' ? runtime.getManifest() : await read(runtime.getURL('manifest.json')));
-    const script = manifest?.background?.service_worker;
-    return typeof script === 'string' && script !== '' ? runtime.getURL(script) : null;
-  } catch {
-    return null;
-  }
+export async function workerScriptUrl(runtime = globalThis.chrome?.runtime) {
+  return runtime && typeof runtime.getURL === 'function' ? runtime.getURL('js/background.js') : null;
 }
 
 /**

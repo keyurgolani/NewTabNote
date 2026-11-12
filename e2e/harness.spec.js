@@ -159,6 +159,11 @@ test('hooks a module worker the same way', async ({ playwright, headless }) => {
   });
 });
 
+test("runs the worker at the path the build's manifest names, production's URL, which the offscreen document's sender check reads", async ({ extension }) => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(extension.dist, 'manifest.json'), 'utf8'));
+  expect(extension.worker.url()).toBe(`chrome-extension://${extension.extensionId}/${manifest.background.service_worker}`);
+});
+
 test('still sees what the worker throws after it restarts, and fails while it is stopped', async ({ extension }) => {
   const page = await extension.openSurface('popup');
   // Popup's start wakes the worker on purpose while the database is below this build's version,

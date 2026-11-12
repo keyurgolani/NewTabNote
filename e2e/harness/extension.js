@@ -3,12 +3,12 @@
  * fresh profile, takes the extension ID from its service worker, and opens its pages.
  * It holds no product logic: specs make the assertions.
  *
- * It loads a temporary copy of the build whose manifest starts the service worker through
- * a bootstrap that installs worker-hooks.js before the extension's own worker script, so
- * the worker's uncaught exceptions are seen from its first line, after every restart, and
- * inside chrome.* listeners and callbacks. The extension ID follows the copy's path, so it
- * changes from one launch to the next, and stays the same across update(), which loads a new
- * version in place, as a store update does.
+ * It loads a temporary copy of the build whose service worker starts through a bootstrap at
+ * the worker's own path, which installs worker-hooks.js before the extension's own worker
+ * script, so the worker keeps production's URL and its uncaught exceptions are seen from its
+ * first line, after every restart, and inside chrome.* listeners and callbacks. The extension
+ * ID follows the copy's path, so it changes from one launch to the next, and stays the same
+ * across update(), which loads a new version in place, as a store update does.
  *
  * A session aborts every request outside chrome-extension:// and records, in order, the
  * console output and uncaught exceptions of every page and the service worker, plus the
@@ -40,9 +40,10 @@ const LOCALE = 'en-US';
 const TIME_ZONE = process.env.NTN_E2E_TIME_ZONE || 'UTC';
 // worker-hooks.js logs each report as a console error that starts with this
 const WORKER_UNCAUGHT_TAG = '[ntn-harness:uncaught]';
-// Written next to the worker script, so its relative imports resolve as before. Chrome
-// refuses extension files whose names start with "_".
-const BOOTSTRAP_FILE = 'ntn-harness-worker.js';
+// The build's worker script, moved aside in its own folder so the bootstrap can take its path,
+// and the hooks the bootstrap loads first. In that folder, the worker's relative imports resolve
+// as before. Chrome refuses extension files whose names start with "_".
+const WORKER_FILE = 'ntn-harness-worker.js';
 const HOOKS_FILE = 'ntn-harness-hooks.js';
 // A page's chrome.* listener or callback that throws doesn't reach pageerror: Chrome catches
 // it and logs a console error with one of these prefixes
@@ -59,33 +60,37 @@ function resolveDist() {
 }
 
 /**
- * Copy the build to `dir` and start its service worker through the harness bootstrap, which
- * loads the hooks and then the worker script the manifest names, the way the manifest would:
- * importScripts for a classic worker, import for "type": "module". `version`, when given,
- * replaces the manifest's.
+ * Copy the build to `dir` and start its service worker through the harness bootstrap, written
+ * at the path the manifest names, so the worker runs at production's URL: the one the offscreen
+ * document's sender check reads (js/kernel/composition/api-request.js's workerScriptUrl). The
+ * bootstrap loads the hooks and then the build's worker script, moved beside it, the way the
+ * manifest would: importScripts for a classic worker, import for "type": "module". The manifest
+ * stays as the build has it, unless `version` replaces its version.
  */
 function prepareExtension(dist, dir, { version } = {}) {
   fs.cpSync(dist, dir, { recursive: true });
   const manifestPath = path.join(dir, 'manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  if (version !== undefined) manifest.version = version;
   const script = manifest.background && manifest.background.service_worker;
   if (typeof script !== 'string') {
     throw new Error(`${path.join(dist, 'manifest.json')} names no background.service_worker for the harness to hook`);
   }
+  if (!fs.existsSync(path.join(dir, script))) throw new Error(`${script}, the manifest's background.service_worker, isn't in the build at ${dist}`);
   const folder = path.posix.dirname(script);
-  for (const file of [BOOTSTRAP_FILE, HOOKS_FILE]) {
+  for (const file of [WORKER_FILE, HOOKS_FILE]) {
     if (fs.existsSync(path.join(dir, folder, file))) {
       throw new Error(`${path.posix.join(folder, file)} already exists in ${dist}; the harness writes a file by that name`);
     }
   }
-  const entry = `./${path.posix.basename(script)}`;
+  fs.renameSync(path.join(dir, script), path.join(dir, folder, WORKER_FILE));
   fs.writeFileSync(path.join(dir, folder, HOOKS_FILE), `(${installWorkerHooks})(${JSON.stringify(WORKER_UNCAUGHT_TAG)});\n`);
-  fs.writeFileSync(path.join(dir, folder, BOOTSTRAP_FILE), manifest.background.type === 'module'
-    ? `import './${HOOKS_FILE}';\nimport ${JSON.stringify(entry)};\n`
-    : `importScripts('${HOOKS_FILE}', ${JSON.stringify(entry)});\n`);
-  manifest.background.service_worker = path.posix.join(folder, BOOTSTRAP_FILE);
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(path.join(dir, script), manifest.background.type === 'module'
+    ? `import './${HOOKS_FILE}';\nimport './${WORKER_FILE}';\n`
+    : `importScripts('${HOOKS_FILE}', '${WORKER_FILE}');\n`);
+  if (version !== undefined) {
+    manifest.version = version;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
 }
 
 function isExtensionWorker(worker) {
@@ -602,4 +607,4 @@ function harnessFor(worker) {
   return null;
 }
 
-module.exports = { launchExtension, resolveDist, harnessFor, SURFACES, VIEWPORT, TIME_ZONE };
+module.exports = { launchExtension, resolveDist, harnessFor, prepareExtension, SURFACES, VIEWPORT, TIME_ZONE };

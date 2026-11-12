@@ -1,5 +1,5 @@
 {
-  "about": "Remote executable URLs reviewed to stay in shipped code (#27 AC6), each with the reason and the issue that removes it. scripts/build/remote-code.js fails on any other one, and on a row the package no longer has. The list only shrinks: test/build-security.test.js pins the rows it may hold. A template literal's expressions read as ${...}.",
+  "about": "Remote executable URLs reviewed to stay in shipped code (#27 AC6), each with the reason and the issue that removes it. scripts/build/remote-code.js fails on any other one, and on a row the package no longer has. A URL counts as executable when any segment of its path ends in .js, .mjs, or .wasm, so a documentation URL under transformers.js/ does too. A row's count is how many times its URL occurs in its file: #27 lists one row per occurrence, and a count says the same, since the scan tells occurrences of one URL apart by count only. The list only shrinks: test/build-security.test.js pins the rows it may hold. A template literal's expressions read as ${...}.",
   "rows": [
     {
       "file": "js/lib/transformers.js",
@@ -7,6 +7,22 @@
       "context": "wasmPaths",
       "count": 1,
       "reason": "transformers.js's default for where ONNX Runtime loads its WASM files when the page doesn't set one. js/embeddings.js doesn't, so the first semantic search model load fetches them from jsDelivr. #9 hosts the runtime in the package and removes this row.",
+      "issue": 9
+    },
+    {
+      "file": "js/lib/transformers.js",
+      "url": "https://github.com/xenova/transformers.js/issues/new/choose.",
+      "context": "url",
+      "count": 5,
+      "reason": "Text in five of transformers.js's warnings and errors, which ask the reader to report an unknown model type, language, task or token at the library's issue tracker. Its transformers.js path segment makes it count as executable, and nothing loads it. #9 replaces the library and removes this row.",
+      "issue": 9
+    },
+    {
+      "file": "js/lib/transformers.js",
+      "url": "https://huggingface.co/docs/transformers.js/guides/node-audio-processing.",
+      "context": "url",
+      "count": 1,
+      "reason": "Text in transformers.js's error for audio it can't read in this environment, pointing at its guide. Its transformers.js path segment makes it count as executable, and nothing loads it. #9 replaces the library and removes this row.",
       "issue": 9
     }
   ]

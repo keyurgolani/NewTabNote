@@ -223,14 +223,27 @@ function moduleUrl(node) {
 }
 
 /**
- * Whether `node` is a chrome.runtime.getURL call, which names its path itself
+ * Whether `callee` is a member named `name` on any receiver, or a bare function of that name.
+ * chrome.runtime.getURL and chrome.offscreen.createDocument count through an alias too, as terser
+ * writes one for a parameter that defaults to chrome.runtime (#300, AC5).
+ * @param {ts.Expression} callee
+ * @param {string} name
+ * @returns {boolean}
+ */
+function callsMember(callee, name) {
+  if (ts.isParenthesizedExpression(callee)) return callsMember(callee.expression, name);
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text === name;
+  if (ts.isElementAccessExpression(callee)) return literal(callee.argumentExpression) === name;
+  return ts.isIdentifier(callee) && callee.text === name;
+}
+
+/**
+ * Whether `node` is a getURL call, on any receiver, which names its path itself
  * @param {ts.Expression} node
  * @returns {boolean}
  */
 function isGetUrlCall(node) {
-  if (!ts.isCallExpression(node)) return false;
-  const names = memberPath(node.expression);
-  return names !== null && names.join('.') === 'chrome.runtime.getURL';
+  return ts.isCallExpression(node) && callsMember(node.expression, 'getURL');
 }
 
 /**
@@ -377,9 +390,9 @@ function scanScript(file, text) {
       } else if (name === 'importScripts') {
         node.arguments.forEach((argument) => reference('import-scripts', argument, argument));
         argumentContext = 'importScripts';
-      } else if (name === 'chrome.runtime.getURL') {
+      } else if (callsMember(callee, 'getURL')) {
         reference('get-url', node.arguments[0], node);
-      } else if (name === 'chrome.offscreen.createDocument') {
+      } else if (callsMember(callee, 'createDocument')) {
         reference('offscreen-document', propertyValue(node.arguments[0], 'url'), node);
       } else if (name === 'chrome.tabs.create') {
         const options = node.arguments[0];

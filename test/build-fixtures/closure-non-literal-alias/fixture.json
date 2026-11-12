@@ -1,0 +1,12 @@
+{
+  "rule": "first-party code calls getURL on an alias of chrome.runtime, as terser writes one, with a path built at run time (#300, AC5)",
+  "expect": [
+    "closure/non-literal"
+  ],
+  "edits": [
+    {
+      "file": "js/popup.js",
+      "append": "\nconst ntnFixtureOpen = (runtime = globalThis.chrome?.runtime) => runtime.getURL(location.hash.slice(1) || 'newtab.html');\nwindow.ntnFixturePages = [ntnFixtureOpen(), ntnFixtureOpen(chrome.runtime)];\n"
+    }
+  ]
+}

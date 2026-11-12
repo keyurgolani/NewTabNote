@@ -22,19 +22,27 @@ function found(problems) {
 }
 
 describe('the remote-code scan (AC6)', () => {
-  it('passes the package the build lists describe, with its one allowlisted occurrence', () => {
+  // transformers.js's WASM default, and its two documentation URLs, each with a .js path segment
+  // (#300): issues/new/choose five times and the audio guide once
+  const TRANSFORMERS = Object.freeze([
+    ['js/lib/transformers.js', 'https://cdn.jsdelivr.net/npm/@xenova/transformers@${...}/dist/', 'wasmPaths', 1],
+    ['js/lib/transformers.js', 'https://github.com/xenova/transformers.js/issues/new/choose.', 'url', 5],
+    ['js/lib/transformers.js', 'https://huggingface.co/docs/transformers.js/guides/node-audio-processing.', 'url', 1],
+  ]);
+
+  it("passes the package the build lists describe, with transformers.js's allowlisted occurrences", () => {
     assert.deepEqual(checkRemoteCode(sourcePackage()), []);
-    assert.deepEqual(remoteOccurrences(sourcePackage()).map(({ file, url, context }) => [file, url, context]), [
-      ['js/lib/transformers.js', 'https://cdn.jsdelivr.net/npm/@xenova/transformers@${...}/dist/', 'wasmPaths'],
-    ]);
+    /** @type {Record<string, number>} */
+    const counts = {};
+    for (const { file, url, context } of remoteOccurrences(sourcePackage())) counts[[file, url, context].join(' ')] = (counts[[file, url, context].join(' ')] || 0) + 1;
+    assert.deepEqual(counts, Object.fromEntries(TRANSFORMERS.map(([file, url, context, count]) => [[file, url, context].join(' '), count])));
   });
 
-  it('only shrinks: build/remote-allowlist.json holds no row but the WASM default #9 removes', () => {
-    const pinned = [['js/lib/transformers.js', 'https://cdn.jsdelivr.net/npm/@xenova/transformers@${...}/dist/', 'wasmPaths', 9]];
+  it("only shrinks: build/remote-allowlist.json holds no row but transformers.js's three, which #9 removes, each with its count", () => {
     for (const row of readRemoteAllowlist()) {
-      assert.ok(pinned.some(([file, url, context, issue]) => row.file === file && row.url === url && row.context === context && row.issue === issue),
-        `build/remote-allowlist.json has a new row (${row.file} ${row.url}); the list only shrinks`);
-      assert.ok(row.count === 1 && row.reason.length > 20, `${row.url} keeps its count of 1 and a reason`);
+      const pinned = TRANSFORMERS.find(([file, url, context]) => row.file === file && row.url === url && row.context === context);
+      assert.ok(pinned && row.issue === 9, `build/remote-allowlist.json has a new row (${row.file} ${row.url}); the list only shrinks`);
+      assert.ok(row.count === pinned[3] && row.reason.length > 20, `${row.url} keeps its count of ${pinned[3]} and a reason`);
     }
   });
 
@@ -60,19 +68,24 @@ describe('the remote-code scan (AC6)', () => {
     assert.ok(checkRemoteCode(pkg, { allowlist: [] }).every(({ code }) => code === 'remote-code/url'));
   });
 
-  it('leaves links, comments, and documentation URLs alone', () => {
+  it('leaves links and comments alone, and counts a URL with any path segment ending in .js, .mjs, or .wasm, as #27 says (#300)', () => {
     const pkg = packageOf({
       'a.js': [
         '// https://cdn.example.test/in-a-comment.js',
-        "const docs = 'https://github.com/xenova/transformers.js/issues/new/choose';",
         "const page = 'https://example.test/page';",
         "const regex = '// not a url.js';",
+        "const query = 'https://example.test/search?q=a.js';",
       ].join('\n'),
       'page.html': '<a href="https://example.test/guide">guide</a><script src="js/local.js"></script>',
     });
     assert.deepEqual(remoteOccurrences(pkg), []);
+    const docs = packageOf({ 'a.js': "const docs = 'https://github.com/xenova/transformers.js/issues/new/choose';", 'page.html': '<a href="https://example.test/tool.mjs/guide">guide</a>' });
+    assert.deepEqual(remoteOccurrences(docs).map(({ file, context }) => `${file} ${context}`), ['a.js url', 'page.html url']);
     assert.equal(isExecutable('https://x.test/a.js#y'), true);
-    assert.equal(isExecutable('https://x.test/transformers.js/issues'), false);
+    assert.equal(isExecutable('https://x.test/transformers.js/issues'), true);
+    assert.equal(isExecutable('https://x.test/ort.wasm/v1/'), true);
+    assert.equal(isExecutable('https://x.test/js/a'), false);
+    assert.equal(isExecutable('https://x.test/a.json'), false);
   });
 
   it('a row covers its count, and a row with more than the package holds fails as stale', () => {
