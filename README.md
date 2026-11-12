@@ -90,7 +90,7 @@ npm ci --ignore-scripts
 
 # Build for production. Vite bundles the five pages, their module workers, and the service
 # worker (scripts/build/vite-config.js); terser minifies the JavaScript and lightningcss the
-# CSS. Any problem (a bundler error or warning, a type, CSS, terser, or manifest error, a
+# CSS. Any problem (a bundler error or unlisted warning, a type, CSS, terser, or manifest error, a
 # missing input, a file the package names but lacks, remote or inline code) fails it with a
 # [code] per problem, and it leaves no dist/. dist-report/modules.json, which never ships,
 # maps each source module to the files that hold it.
