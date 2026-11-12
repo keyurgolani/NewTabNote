@@ -244,9 +244,11 @@ describe("the bundler's configuration (scripts/build/vite-config.js)", () => {
     }
   });
 
-  it('targets the Chrome version the manifest asks for, in JavaScript and in CSS', () => {
-    assert.equal(MANIFEST.minimum_chrome_version, String(config.MINIMUM_CHROME_VERSION));
-    assert.equal(config.TARGET, `chrome${config.MINIMUM_CHROME_VERSION}`);
+  it("targets build/chrome-features.json's highest row, the Chrome version the manifest asks for, in JavaScript and in CSS (#300)", () => {
+    const highest = Math.max(...Object.values(JSON.parse(read('build/chrome-features.json')).rows).map((row) => row.version));
+    assert.equal(config.MINIMUM_CHROME_VERSION, highest);
+    assert.equal(MANIFEST.minimum_chrome_version, String(highest));
+    assert.equal(config.TARGET, `chrome${highest}`);
     for (const pass of [config.pagesConfig(passOptions()), config.backgroundConfig(passOptions())]) {
       assert.deepEqual([pass.build.target, pass.build.cssTarget], [config.TARGET, config.TARGET]);
     }

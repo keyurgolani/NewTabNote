@@ -1,0 +1,13 @@
+{
+  "rule": "a build/chrome-features.json row's version isn't a whole number, so the build can't tell the minimum Chrome from it",
+  "expect": [
+    "chrome/file"
+  ],
+  "edits": [
+    {
+      "file": "build/chrome-features.json",
+      "replace": "\"chrome.runtime.getContexts\": { \"version\": 116,",
+      "with": "\"chrome.runtime.getContexts\": { \"version\": \"116\","
+    }
+  ]
+}

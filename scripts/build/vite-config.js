@@ -32,6 +32,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pageChunkGroups } = require('./page-chunks.js');
 const { defineValues } = require('./define-allowlist.js');
+const { highestVersion, readTable } = require('./chrome-features.js');
 
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).InlineConfig} InlineConfig */
 /** @typedef {import('vite', { with: { 'resolution-mode': 'import' } }).Plugin} Plugin */
@@ -44,11 +45,12 @@ const { defineValues } = require('./define-allowlist.js');
 /** @typedef {'production' | 'development'} Mode */
 
 /**
- * The Chrome version every API the extension uses needs: chrome.sidePanel.open,
- * chrome.runtime.getContexts, Document Picture-in-Picture, and a module service worker. The
- * manifest's minimum_chrome_version and the bundler's target both come from it.
+ * The Chrome version every feature the extension uses needs: build/chrome-features.json's highest
+ * row (#300). The bundler's target comes from it, and the manifest's minimum_chrome_version has to
+ * be at least it (scripts/build/chrome-features.js). A table that doesn't read gives 0, and the
+ * build stops at chrome/file before it bundles.
  */
-const MINIMUM_CHROME_VERSION = 116;
+const MINIMUM_CHROME_VERSION = highestVersion(readTable().rows);
 const TARGET = `chrome${MINIMUM_CHROME_VERSION}`;
 
 /** The pages, by entry name: each one HTML entry */

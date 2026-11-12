@@ -3,9 +3,9 @@
 /**
  * What the output checks read from a shipped script, from one parse with the TypeScript
  * compiler API: the paths it names (closure), the URL-like literals and where they sit
- * (remote code), its environment reads and the __NTN_ names it reads (environment), and the
- * syntax only a module parses (load mode). Each file is parsed once per content however many
- * checks ask.
+ * (remote code), its environment reads and the __NTN_ names it reads (environment), the Chrome
+ * features it reads (scripts/build/chrome-features.js), and the syntax only a module parses (load
+ * mode). Each file is parsed once per content however many checks ask.
  */
 
 const crypto = require('node:crypto');
@@ -47,6 +47,8 @@ const { isDeclaredInScope } = require('./js-scope.js');
  * @property {Array<{name: string, at: string}>} defines - reads of a free name that starts
  *   __NTN_, one the build writes a value in place of (scripts/build/define-allowlist.js): not a
  *   property's name, not typeof's operand, and not where a binding of the file's own is in scope
+ * @property {Array<{name: string, at: string}>} features - the Chrome features it reads, in the
+ *   same reads (featureOf)
  * @property {string[]} functionConstructors - where the Function constructor is called or
  *   constructed some way ESLint's no-new-func doesn't see (isFunctionConstructor)
  * @property {string[]} moduleSyntax - where it has syntax only a module parses: an import or
@@ -58,6 +60,55 @@ const cache = new Map();
 
 /** Prefixes that name the global object, so self.importScripts is importScripts */
 const GLOBAL_OBJECTS = new Set(['window', 'self', 'globalThis']);
+
+/**
+ * The web globals the Chrome features scan reads (#300): ones Chrome added late enough that a use
+ * could raise the version the extension needs, and #27's navigator.locks, each a free name or a
+ * path of members read from one
+ */
+const WEB_GLOBALS = Object.freeze([
+  'documentPictureInPicture', 'navigator.locks', 'structuredClone', 'crypto.randomUUID', 'Intl.Segmenter', 'Object.hasOwn',
+  'showOpenFilePicker', 'showSaveFilePicker', 'showDirectoryPicker', 'document.startViewTransition', 'Object.groupBy',
+  'Map.groupBy', 'Promise.withResolvers', 'Array.fromAsync', 'URL.canParse', 'AbortSignal.any', 'AbortSignal.timeout',
+]);
+/** The names a read of a Chrome feature starts at */
+const FEATURE_ROOTS = new Set(['chrome', ...GLOBAL_OBJECTS, ...WEB_GLOBALS.map((global) => global.split('.')[0])]);
+
+/**
+ * The Chrome feature a read of the free name `node` reaches (#300), without a leading window.,
+ * self. or globalThis.: for chrome, chrome, its namespace and the member read in it, so
+ * chrome.storage.local.get reads as chrome.storage.local and an event's addListener as the event,
+ * or chrome alone where it's read whole, which hides the members it reaches, but not as an
+ * operand of an && chain other than its last, which only checks that chrome is there; else the
+ * web global of WEB_GLOBALS it reads, or null. A cast's parentheses are the same read.
+ * @param {ts.Identifier} node
+ * @returns {string | null}
+ */
+function featureOf(node) {
+  const names = [node.text];
+  /** @type {ts.Node} */
+  let at = node;
+  for (let parent = at.parent; parent; at = parent, parent = at.parent) {
+    if (ts.isPropertyAccessExpression(parent) && parent.expression === at) names.push(parent.name.text);
+    else if (ts.isElementAccessExpression(parent) && parent.expression === at && ts.isStringLiteralLike(parent.argumentExpression)) names.push(parent.argumentExpression.text);
+    else if (!ts.isParenthesizedExpression(parent)) break;
+  }
+  while (names.length > 1 && GLOBAL_OBJECTS.has(names[0])) names.shift();
+  if (names[0] === 'chrome') return names.length > 1 || !isPresenceCheck(at) ? names.slice(0, 3).join('.') : null;
+  return WEB_GLOBALS.find((global) => global.split('.').every((name, i) => names[i] === name)) ?? null;
+}
+
+/**
+ * Whether `node` is an operand of an && chain other than its last, which only checks that it's there
+ * @param {ts.Node} node
+ * @returns {boolean}
+ */
+function isPresenceCheck(node) {
+  for (let at = node; at.parent && ts.isBinaryExpression(at.parent) && at.parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken; at = at.parent) {
+    if (at.parent.left === at) return true;
+  }
+  return false;
+}
 
 /**
  * The dotted names of a member expression, like ['chrome', 'runtime', 'getURL'], without a
@@ -236,7 +287,7 @@ function scanScript(file, text) {
     return `${line + 1}:${character + 1}`;
   };
   /** @type {ScriptScan} */
-  const scan = { references: [], urls: [], environment: [], defines: [], functionConstructors: [], moduleSyntax: [] };
+  const scan = { references: [], urls: [], environment: [], defines: [], features: [], functionConstructors: [], moduleSyntax: [] };
   const reference = (/** @type {ReferenceKind} */ kind, /** @type {ts.Node | undefined} */ node, /** @type {ts.Node} */ where) => {
     scan.references.push({ kind, value: literal(node), at: at(node || where) });
   };
@@ -291,6 +342,11 @@ function scanScript(file, text) {
     // A name the build writes a value in place of, the build's ID or a define allowlist row (#300)
     if (ts.isIdentifier(node) && node.text.startsWith('__NTN_') && isVariableRead(node) && !isDeclaredInScope(node, node.text)) {
       scan.defines.push({ name: node.text, at: at(node) });
+    }
+    // A Chrome feature, read through a free chrome or listed web global (#300)
+    if (ts.isIdentifier(node) && FEATURE_ROOTS.has(node.text) && isVariableRead(node)) {
+      const feature = featureOf(node);
+      if (feature !== null && !isDeclaredInScope(node, node.text)) scan.features.push({ name: feature, at: at(node) });
     }
     // process itself, handed on or aliased (`const p = process; p.env.X`), could read it all.
     // Where a binding of the file's own is in scope (a function, a local, a parameter, an
@@ -389,4 +445,4 @@ function scanScript(file, text) {
   return scan;
 }
 
-module.exports = { scanScript, memberPath };
+module.exports = { scanScript, memberPath, WEB_GLOBALS };
