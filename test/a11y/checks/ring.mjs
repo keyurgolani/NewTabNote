@@ -6,7 +6,9 @@
  * inner ring's against both the outer and the plane, whichever is better. #16's inner ring fills the
  * offset between the control and the outline, so it's painted on the plane beside the outer ring,
  * never over it, and a translucent inner ring composites onto the plane. A plane on a translucent
- * backdrop can't be measured, so it's a TypeError that names the plane.
+ * backdrop can't be measured, so it's a TypeError that names the plane. A color is #16's theme
+ * grammar, or color(srgb …), the form Chrome computes a color-mix() in sRGB to; a color in another
+ * space is a TypeError that names the space.
  */
 
 import { measure, parseColor } from '../../../js/design/contrast.js';
@@ -17,11 +19,26 @@ export const RING_MIN = 3;
 /** What a plane is drawn over when nothing else is said: the page's white */
 const WHITE = '#ffffff';
 
+/** color(srgb r g b), with `/ a` when it isn't opaque, each a number or a percentage */
+const SRGB = /^color\(\s*srgb\s+([^\s/]+)\s+([^\s/]+)\s+([^\s/)]+)\s*(?:\/\s*([^\s/)]+)\s*)?\)$/i;
+
+/** A color in a space other than sRGB, which the check doesn't measure */
+const OTHER_SPACE = /^(?:color\(\s*([\w-]+)|(lab|lch|oklab|oklch)\()/i;
+
 /**
  * @param {string} text
  * @returns {{r: number, g: number, b: number, a: number}}
  */
 function color(text) {
+  const srgb = SRGB.exec(text.trim());
+  if (srgb) {
+    const [r, g, b, a] = srgb
+      .slice(1)
+      .map((part, i) => (part === undefined ? 1 : part.endsWith('%') ? Number(part.slice(0, -1)) / 100 : Number(part)) * (i < 3 ? 255 : 1));
+    if ([r, g, b, a].every(Number.isFinite)) return { r, g, b, a };
+  }
+  const space = srgb ? null : OTHER_SPACE.exec(text.trim());
+  if (space) throw new TypeError(`${JSON.stringify(text)} is in ${space[1] ?? space[2]}, not sRGB, which the check measures`);
   const parsed = parseColor(text);
   if (!parsed) throw new TypeError(`not a color: ${JSON.stringify(text)}`);
   return parsed;
