@@ -1669,6 +1669,8 @@ describe("storage's update states, in the design director's words (change 9, #20
     // 1.4.x's database, which the worker's run hasn't upgraded yet
     const of = /** @type {any} */ (await profileWith(/** @type {any} */ (synthesized().get('v8.basic'))));
     const local = of.chrome.api.storage.local;
+    // The worker's stand-in on the same profile, where the checks' probes commit
+    const worker = recoveryWorker({ indexedDB: of.real, settings: local });
     const root = createRecoveryRoot({
       host: {
         indexedDB: of.real,
@@ -1680,6 +1682,7 @@ describe("storage's update states, in the design director's words (change 9, #20
         permissions: grantedAsDeclared(),
         manifest: MANIFEST,
         timers: realTimers,
+        runtime: worker.runtime,
       },
     });
     const page = openPage(root, { hash: '#recovery' });
@@ -1709,6 +1712,7 @@ describe("storage's update states, in the design director's words (change 9, #20
       assert.match(text(head.querySelector('.trust-proof')), /^Checked at \d{1,2}:\d{2} [AP]M by saving a test entry and reading it back\.$/);
     } finally {
       root.close();
+      worker.close();
     }
   });
 });
