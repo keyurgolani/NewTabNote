@@ -4,7 +4,8 @@
 /**
  * npm run verify:reproducible (#27 AC4): two clean builds of the commit, in different
  * directories at different times, have to package the same zip byte for byte, with the same
- * buildId and outputDigest. Each build runs in a clone of HEAD that shares this repository's
+ * buildId and outputDigest, and write the same dist-report/dependencies.json (#300), which
+ * doesn't ship. Each build runs in a clone of HEAD that shares this repository's
  * objects (git clone --shared), with node_modules linked, so both use the toolchain installed
  * here and neither is dirty. The second one runs after the first, with every file's
  * modification time a day later, another umask, and another time zone, none of which may
@@ -68,6 +69,7 @@ function sourceFiles(dir) {
  * @property {string} dir
  * @property {Buffer} zip
  * @property {{buildId: string, outputDigest: string}} info
+ * @property {Buffer} dependencies - its dist-report/dependencies.json
  */
 
 /**
@@ -115,7 +117,30 @@ async function cleanBuild(commit, name, { later = false } = {}) {
   const zipName = fs.readdirSync(path.join(dir, 'releases')).find((file) => file.endsWith('.zip'));
   if (!zipName) throw new Error(`the ${name} build in ${dir} wrote no zip`);
   const info = JSON.parse(fs.readFileSync(path.join(dir, 'dist', 'build-info.json'), 'utf8'));
-  return { dir, zip: fs.readFileSync(path.join(dir, 'releases', zipName)), info };
+  const report = path.join(dir, 'dist-report', 'dependencies.json');
+  if (!fs.existsSync(report)) throw new Error(`the ${name} build in ${dir} wrote no dist-report/dependencies.json`);
+  return { dir, zip: fs.readFileSync(path.join(dir, 'releases', zipName)), info, dependencies: fs.readFileSync(report) };
+}
+
+/**
+ * What differs between two builds of one commit, a line each, and none when they match
+ * @param {Build} first
+ * @param {Build} second
+ * @returns {string[]}
+ */
+function buildDifferences(first, second) {
+  /** @type {string[]} */
+  const problems = [];
+  if (first.info.buildId.endsWith('-dirty')) problems.push(`buildId ${first.info.buildId} is dirty, though the clone was clean`);
+  if (first.info.buildId !== second.info.buildId) problems.push(`buildId differs: ${first.info.buildId} and ${second.info.buildId}`);
+  if (first.info.outputDigest !== second.info.outputDigest) problems.push(`outputDigest differs: ${first.info.outputDigest} and ${second.info.outputDigest}`);
+  if (!first.zip.equals(second.zip)) {
+    problems.push(`the zips differ: ${sha256(first.zip)} and ${sha256(second.zip)}`, ...zipDifferences(first.zip, second.zip).map((line) => `  ${line}`));
+  }
+  if (!first.dependencies.equals(second.dependencies)) {
+    problems.push(`dist-report/dependencies.json differs: ${sha256(first.dependencies)} and ${sha256(second.dependencies)}`);
+  }
+  return problems;
 }
 
 /**
@@ -158,14 +183,7 @@ async function main() {
     builds.push(await cleanBuild(commit, 'first'));
     builds.push(await cleanBuild(commit, 'second', { later: true }));
     const [first, second] = builds;
-    /** @type {string[]} */
-    const problems = [];
-    if (first.info.buildId.endsWith('-dirty')) problems.push(`buildId ${first.info.buildId} is dirty, though the clone was clean`);
-    if (first.info.buildId !== second.info.buildId) problems.push(`buildId differs: ${first.info.buildId} and ${second.info.buildId}`);
-    if (first.info.outputDigest !== second.info.outputDigest) problems.push(`outputDigest differs: ${first.info.outputDigest} and ${second.info.outputDigest}`);
-    if (!first.zip.equals(second.zip)) {
-      problems.push(`the zips differ: ${sha256(first.zip)} and ${sha256(second.zip)}`, ...zipDifferences(first.zip, second.zip).map((line) => `  ${line}`));
-    }
+    const problems = buildDifferences(first, second);
     if (problems.length > 0) {
       console.error(`verify:reproducible failed: ${plural(problems.filter((line) => !line.startsWith('  ')).length, 'difference')} between two builds of ${commit}`);
       problems.forEach((line) => console.error(`  ${line}`));
@@ -174,6 +192,7 @@ async function main() {
     console.log(`verify:reproducible: OK, both builds of ${commit} packaged the same ${first.zip.length}-byte zip, SHA-256 ${sha256(first.zip)}`);
     console.log(`  buildId ${first.info.buildId}`);
     console.log(`  outputDigest ${first.info.outputDigest}`);
+    console.log(`  dist-report/dependencies.json SHA-256 ${sha256(first.dependencies)}`);
     return 0;
   } catch (error) {
     console.error(`verify:reproducible failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -187,4 +206,4 @@ if (require.main === module) {
   main().then((code) => { process.exitCode = code; });
 }
 
-module.exports = { zipDifferences };
+module.exports = { zipDifferences, buildDifferences };
