@@ -200,7 +200,7 @@
       "rationale": [
         {
           "change": "workerScriptUrl gives chrome.runtime.getURL('js/background.js'), the manifest's service worker, in place of reading background.service_worker from manifest.json, which the offscreen document fetched from the package since its chrome.runtime has no getManifest",
-          "why": "The closure check follows a getURL path only as a literal (#27 AC5, #300), and this one came from the manifest. The document takes the same sender as before: the worker at js/background.js, where the build writes it and which the manifest names. The fetch of manifest.json goes with the read."
+          "why": "The closure check follows a getURL path only as a literal (#27 AC5, #300), and this one came from the manifest. Production's sender is unchanged: the worker at js/background.js, where the build writes it and which the manifest names. The e2e harness now serves its bootstrap at production's worker URL instead of under its own file name, which only the old manifest read accepted. The fetch of manifest.json goes with the read."
         },
         {
           "change": "js/offscreen.js's comment on the worker URL",
