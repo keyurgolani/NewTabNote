@@ -82,6 +82,21 @@ test('starts an extension excerpt at an Error a failed load prints', () => {
   assert.equal(excerpt(log, MARKERS.extension).split('\n')[0], 'Error: test/known-defects.json breaks the ledger format:');
 });
 
+test("starts an extension excerpt at test:a11y's baseline report, which a run with no failed test prints (#24 slice 2)", () => {
+  const log = [
+    '> new-tab-note@1.7.0 test:a11y',
+    '> playwright test -c test/a11y/playwright.config.js',
+    '',
+    'Running 3 tests using 1 worker',
+    '  ✓  1 test/a11y/checks/checks.spec.js:25:1 › axe finds a button with no name, and passes one with a name (1.2s)',
+    '',
+    "test:a11y's findings don't match test/a11y/baseline.json:",
+    '  legacy-newtab\'s button-name fails "#menu", which test/a11y/baseline.json doesn\'t list',
+    ...numbered(30, '  detail'),
+  ].join('\n');
+  assert.equal(excerpt(log, MARKERS.extension).split('\n')[0], "test:a11y's findings don't match test/a11y/baseline.json:");
+});
+
 test('starts a kernel excerpt at whichever of its three checks failed', () => {
   const npm = (script) => ['', `> new-tab-note@1.4.1 ${script}`, ''];
   const passedTests = [...npm('test:kernel'), ...numbered(30, '✔ kernel test'), 'ℹ pass 30', 'ℹ fail 0'];

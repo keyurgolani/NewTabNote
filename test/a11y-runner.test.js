@@ -9,7 +9,9 @@
 //   --test-list) is set, and the config runs the *.spec.js under test/a11y/ one at a time, with no
 //   retry, so a finding comes from one attempt;
 // - the reporter the config builds reads test/a11y/baseline.json at the path check:a11y-baseline
-//   reads, since a wrong one reads as no file, which after the seed is report-only.
+//   reads, since a wrong one reads as no file, which after the seed is report-only;
+// - CI's extension job runs it after test:extension, on the full Chromium build the job installs,
+//   and pr-gate's local command for the job runs it too.
 // test/toolchain.test.js holds every devDependency to the version the lockfile installs.
 
 const { describe, it } = require('node:test');
@@ -62,5 +64,16 @@ describe('test:a11y and its pinned axe (#24 slice 2)', () => {
     // seed is report-only, and --base, which reads the file itself, wouldn't notice
     assert.equal(check.baselineIn(), path.join(ROOT, 'test', 'a11y', 'baseline.json'));
     assert.equal(new Reporter(options)._baseline, check.baselineIn());
+  });
+
+  it("runs in CI's extension job after test:extension, on the Chromium the job installs, and pr-gate's local command for the job runs it", () => {
+    const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pr-checks.yml'), 'utf8');
+    const job = workflow.slice(workflow.indexOf('\n  extension:\n'), workflow.indexOf('\n  pr-gate:\n'));
+    const order = ['run: npm run test:extension 2>&1', 'run: npm run test:a11y 2>&1 | tee -a "$RUNNER_TEMP/job.log"', 'job.log" extension'];
+    const at = order.map(step => job.indexOf(step));
+    assert.ok(at.every(index => index > 0) && at[0] < at[1] && at[1] < at[2], `the steps are at ${at.join(', ')}`);
+    assert.match(workflow, /"extension": "npm run build -- --strict && npm run test:extension && npm run test:a11y"/);
+    // The job installs Chromium with --no-shell, the full build the harness runs extensions on
+    assert.equal(require('./a11y/playwright.config.js').use.channel, 'chromium');
   });
 });
