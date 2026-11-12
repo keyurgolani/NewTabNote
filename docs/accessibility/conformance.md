@@ -17,7 +17,7 @@ The surfaces are the registry kit's hosts but `background`, whose notifications 
 | Projects (`workspace/projects`) | #3 | | | | | | | | | |
 | Templates (`workspace/templates`) | #3 | | | | | | | | | |
 | Search (`workspace/search`) | #3, #22 | | | | | | | | | |
-| Insights (`workspace/insights`) | #3, #7 | | | | | | | | | |
+| Insights (`workspace/insights`) | #3, #8 | | | | | | | | | |
 | Trust (`workspace/trust`) | #20 | | | | | | | | | |
 | Settings (`workspace/settings`) | #25 | | | | | | | | | |
 | Graph (`workspace/graph`) | #3, #22 | | | | | | | | | |
