@@ -7,11 +7,12 @@
 //   doesn't list, on a listed target that a page that ran no longer fails, and on a test that passed
 //   without attaching what its checks found. A page is its spec's path under test/a11y/: a line whose
 //   page has no spec fails, and so does a spec that ran without reporting while its page has lines,
-//   but a page whose spec the run left out keeps its lines. A finding at a gated point counts only
-//   against a line with that ownerGate, #16-dark;
+//   but a page whose spec the run left out keeps its lines. A line is one page's, and a finding at a
+//   gated point counts only against a line with that ownerGate, #16-dark;
 // - npm run check:a11y-baseline checks the file's shape and each line's spec, and with --base fails a
-//   line or target the base's baseline lacks, passing where the base has none yet. Neither one
-//   writes the file.
+//   line or target the base's file lacks, reading the base's own file, passing where the base has
+//   none yet, and failing a head that drops a file the base has. The file lands with its seed, and
+//   until then there's none, which is no lines. Neither one writes the file.
 
 const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -70,16 +71,14 @@ function run(argv, given = {}) {
 }
 
 describe("test:a11y's baseline (#24 slice 2)", () => {
-  it('starts empty under a11y-rules, and check:a11y-baseline passes on it and leaves its bytes as they were', () => {
+  it('has no baseline file until its seed lands with its first lines, and check:a11y-baseline reads none as no lines and writes none', () => {
     const file = path.join(ROOT, check.BASELINE);
-    const before = fs.readFileSync(file);
-    const { check: id, entries } = JSON.parse(before.toString('utf8'));
-    assert.deepEqual({ id, entries }, { id: 'a11y-rules', entries: [] });
+    assert.equal(fs.existsSync(file), false, `${check.BASELINE} lands with its seed`);
     const ok = run([]);
     assert.equal(ok.code, 0, ok.output);
-    assert.match(ok.output, /check:a11y-baseline: OK, 0 lines in test\/a11y\/baseline\.json listing 0 targets/);
+    assert.match(ok.output, /check:a11y-baseline: OK, no test\/a11y\/baseline\.json yet, so no lines/);
     for (const flag of ['--write', '--update', '--seed', '--base']) assert.equal(run([flag]).code, 2, flag);
-    assert.deepEqual(fs.readFileSync(file), before);
+    assert.equal(fs.existsSync(file), false);
     assert.equal(require('../package.json').scripts['check:a11y-baseline'], 'node scripts/check-a11y-baseline.js');
   });
 
@@ -92,6 +91,10 @@ describe("test:a11y's baseline (#24 slice 2)", () => {
     const violation = report([], tab([{ rule: 'button-name', target: '#menu' }]));
     assert.ok(violation.failed);
     assert.match(violation.said, /legacy-newtab's button-name fails "#menu"/);
+    // A line is one page's: popup's #add hides nothing on the legacy tab
+    const elsewhere = report([{ page: 'popup', rule: 'target-size', targets: ['#add'] }], tab([{ rule: 'target-size', target: '#add' }]));
+    assert.ok(elsewhere.failed);
+    assert.match(elsewhere.said, /legacy-newtab's target-size fails "#add", which test\/a11y\/baseline\.json doesn't list/);
   });
 
   it('fails a listed target a page that ran no longer fails, a line whose page has no spec, and a spec that ran without reporting, and keeps the lines of a spec the run left out', () => {
@@ -150,33 +153,59 @@ describe("test:a11y's baseline (#24 slice 2)", () => {
     assert.match(shape.said, /entries\[0\] needs a page and a rule/);
   });
 
-  it("fails a line whose page has no spec, and with --base a line or target the base's baseline lacks, passing where the base has none yet", () => {
+  it("fails a line whose page has no spec, and with --base a line or target the base's file lacks, or a file the base has and the head drops", () => {
     const root = scratch();
     fs.mkdirSync(path.join(root, 'test', 'a11y'), { recursive: true });
     fs.writeFileSync(path.join(root, 'test', 'a11y', 'legacy-newtab.spec.js'), '');
     fs.cpSync(path.join(ROOT, 'docs', 'accessibility', 'matrix.json'), path.join(root, 'docs', 'accessibility', 'matrix.json'));
     const line = { page: 'legacy-newtab', rule: 'target-size', targets: ['#add', '#drag'] };
-    fs.writeFileSync(path.join(root, check.BASELINE), JSON.stringify({ check: 'a11y-rules', entries: [line] }));
-    /** A git for a base whose baseline lists `entries`, a base with none (null), or a ref git can't read */
-    const at = (/** @type {object[] | null | 'unreadable'} */ entries) => ({
+    const write = (/** @type {object[]} */ entries) => fs.writeFileSync(path.join(root, check.BASELINE), JSON.stringify({ check: 'a11y-rules', entries }));
+    write([line]);
+    /**
+     * A git that answers by ref: `refs` gives each ref's baseline lines, or null where it has no file,
+     * and any other ref is one git can't read. HEAD holds the file under check, so a --base that read
+     * HEAD's file instead of the base's would pass what the base's fails.
+     */
+    const at = (/** @type {Record<string, object[] | null>} */ refs) => ({
       root,
       git: (/** @type {string[]} */ args) => {
-        if (entries === 'unreadable') throw new Error('fatal: Needed a single revision');
+        const ref = args[0] === 'rev-parse' ? args[3].replace(/\^\{commit\}$/, '') : args[0] === 'ls-tree' ? args[2] : args[1].split(':')[0];
+        if (!(ref in refs)) throw new Error(`fatal: Needed a single revision: ${ref}`);
         if (args[0] === 'rev-parse') return `${'a'.repeat(40)}\n`;
-        if (args[0] === 'ls-tree') return entries === null ? '' : `${check.BASELINE}\n`;
-        return JSON.stringify({ check: 'a11y-rules', entries });
+        if (args[0] === 'ls-tree') return refs[ref] === null ? '' : `${check.BASELINE}\n`;
+        assert.equal(args[1], `${ref}:${check.BASELINE}`);
+        return JSON.stringify({ check: 'a11y-rules', entries: refs[ref] });
       },
     });
-    assert.equal(run(['--base', 'next'], at([line])).code, 0);
-    assert.equal(run(['--base', 'next'], at([{ ...line, targets: ['#add', '#drag', '#menu'] }])).code, 0);
-    const higher = run(['--base', 'next'], at([{ ...line, targets: ['#add'] }]));
+    const head = [line];
+    assert.equal(run(['--base', 'next'], at({ next: [line], HEAD: head })).code, 0);
+    assert.equal(run(['--base', 'next'], at({ next: [{ ...line, targets: ['#add', '#drag', '#menu'] }], HEAD: head })).code, 0);
+    const higher = run(['--base', 'next'], at({ next: [{ ...line, targets: ['#add'] }], HEAD: head }));
     assert.equal(higher.code, 1, higher.output);
     assert.match(higher.output, /legacy-newtab's target-size lists "#drag", which next's baseline doesn't: the baseline only shrinks/);
-    assert.match(run(['--base', 'next'], at([])).output, /legacy-newtab's target-size lists "#add", "#drag", which next's baseline/);
-    const first = run(['--base', 'next'], at(null));
+    assert.match(run(['--base', 'next'], at({ next: [], HEAD: head })).output, /legacy-newtab's target-size lists "#add", "#drag", which next's baseline/);
+    const first = run(['--base', 'next'], at({ next: null, HEAD: head }));
     assert.equal(first.code, 0, first.output);
     assert.match(first.output, /OK, 1 line in test\/a11y\/baseline\.json listing 2 targets; next has no baseline yet/);
-    assert.equal(run(['--base', 'next'], at('unreadable')).code, 1);
+    assert.equal(run(['--base', 'next'], at({ HEAD: head })).code, 1);
+    // A line's page and its gate are part of it: a target moved to another page, or from a plain line
+    // onto a #16-dark one, is new to the base
+    const moved = run(['--base', 'next'], at({ next: [{ ...line, page: 'popup' }], HEAD: head }));
+    assert.match(moved.output, /legacy-newtab's target-size lists "#add", "#drag", which next's baseline doesn't/);
+    const plain = { page: 'legacy-newtab', rule: 'color-contrast', targets: ['.muted'] };
+    write([{ ...plain, ownerGate: '#16-dark' }]);
+    const gated = run(['--base', 'next'], at({ next: [plain], HEAD: [] }));
+    assert.equal(gated.code, 1, gated.output);
+    assert.match(gated.output, /legacy-newtab's color-contrast \(#16-dark\) lists "\.muted", which next's baseline doesn't/);
+    // Until the seed there's no file, which is no lines; a head that drops a base's file fails
+    fs.rmSync(path.join(root, check.BASELINE));
+    const none = run(['--base', 'next'], at({ next: null, HEAD: null }));
+    assert.equal(none.code, 0, none.output);
+    assert.match(none.output, /OK, no test\/a11y\/baseline\.json yet, so no lines; next has no baseline yet/);
+    const dropped = run(['--base', 'next'], at({ next: [line], HEAD: null }));
+    assert.equal(dropped.code, 1, dropped.output);
+    assert.match(dropped.output, /test\/a11y\/baseline\.json is gone, though next has one: empty its lines instead of dropping it/);
+    write([line]);
     const popup = { page: 'popup', rule: 'region', targets: ['main'] };
     fs.writeFileSync(path.join(root, check.BASELINE), JSON.stringify({ check: 'a11y-rules', entries: [line, popup] }));
     const unchecked = run([], { root });

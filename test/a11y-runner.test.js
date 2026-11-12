@@ -45,5 +45,8 @@ describe('test:a11y and its pinned axe (#24 slice 2)', () => {
     assert.equal(config.testMatch, '**/*.spec.js');
     assert.equal(config.retries, 0);
     assert.equal(config.workers, 1);
+    // The baseline reporter is what fails a run on a finding, and a shard lets a run with no test pass
+    assert.ok(config.reporter.some((/** @type {unknown[]} */ entry) => entry[0] === './baseline-reporter.js'), 'the baseline reporter');
+    assert.equal(config.shard, undefined);
   });
 });
