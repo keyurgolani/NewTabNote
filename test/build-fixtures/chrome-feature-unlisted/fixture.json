@@ -1,0 +1,13 @@
+{
+  "rule": "first-party code reads a chrome.* member build/chrome-features.json has no row for, so nothing says which Chrome first has it",
+  "expect": [
+    "chrome/feature"
+  ],
+  "securityEntry": true,
+  "edits": [
+    {
+      "file": "js/offscreen.js",
+      "append": "\nglobalThis.ntnFixtureFeature = chrome.ntnFixture.unlisted;\n"
+    }
+  ]
+}

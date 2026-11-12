@@ -1,0 +1,13 @@
+{
+  "rule": "a build/chrome-features.json row needs a Chrome above manifest.json's minimum_chrome_version, so an older Chrome would install an extension it can't run",
+  "expect": [
+    "chrome/version"
+  ],
+  "edits": [
+    {
+      "file": "build/chrome-features.json",
+      "replace": "\"chrome.runtime.getContexts\": { \"version\": 116,",
+      "with": "\"chrome.runtime.getContexts\": { \"version\": 117,"
+    }
+  ]
+}
