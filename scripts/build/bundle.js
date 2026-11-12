@@ -160,6 +160,34 @@ function measuredChunks(report, passAt) {
 }
 
 /**
+ * Where each pass's chunks and warnings start in the build's report and warnings, so each one is
+ * the pass's that made it (#321's review). The report labels recovery.html's chunks as the pages
+ * pass's, so only this tells them apart. begin(pass) marks a pass's start before it runs, and
+ * read(complete) gives each warning's pass and, once every pass ran, each JS chunk in the
+ * bundler's own measure with its pass.
+ * @param {BundleReport} report
+ * @param {string[]} warnings
+ */
+function passTies(report, warnings) {
+  /** @type {Array<{pass: string, chunks: number, warnings: number}>} */
+  const starts = [];
+  const passAt = (/** @type {'chunks' | 'warnings'} */ key, /** @type {number} */ index) => starts.filter((start) => start[key] <= index).at(-1)?.pass ?? 'pages';
+  return {
+    /** @param {string} pass */
+    begin(pass) {
+      starts.push({ pass, chunks: report.chunks.length, warnings: warnings.length });
+    },
+    /** @param {boolean} complete */
+    read(complete) {
+      return {
+        measured: complete ? measuredChunks(report, (i) => passAt('chunks', i)) : { chunks: [], problems: [] },
+        passes: warnings.map((_, i) => passAt('warnings', i)),
+      };
+    },
+  };
+}
+
+/**
  * A Vite logger that keeps each warning instead of printing it, and drops the rest
  * @param {Logger} base
  * @param {string[]} warnings
@@ -307,14 +335,11 @@ async function bundle({ root, outDir, mode, buildId, defineRows, allowlist, keep
   const problems = [];
   // Whether every pass ran: until then, a row's warning may be one a pass that didn't run prints
   let complete = false;
-  // Where each pass's chunks and warnings start, so each warning is its own pass's (#321's review)
-  /** @type {Array<{pass: string, chunks: number, warnings: number}>} */
-  const starts = [];
+  const ties = passTies(report, warnings);
   const run = async (/** @type {string} */ pass, /** @type {import('./vite-config.js').InlineConfig} */ config) => {
-    starts.push({ pass, chunks: report.chunks.length, warnings: warnings.length });
+    ties.begin(pass);
     await vite.build(config);
   };
-  const passAt = (/** @type {'chunks' | 'warnings'} */ key, /** @type {number} */ index) => starts.filter((start) => start[key] <= index).at(-1)?.pass ?? 'pages';
   try {
     await run('pages', pagesConfig(options));
     // recovery.html in a pass of its own, so it splits no chunk the other pages share
@@ -330,8 +355,8 @@ async function bundle({ root, outDir, mode, buildId, defineRows, allowlist, keep
   } catch (error) {
     problems.push(bundlerProblem(error, root));
   }
-  const measured = complete ? measuredChunks(report, (i) => passAt('chunks', i)) : { chunks: [], problems: [] };
-  const checked = checkWarnings(warnings, allowlist, { mode, complete, chunks: measured.chunks, passes: warnings.map((_, i) => passAt('warnings', i)) });
+  const { measured, passes } = ties.read(complete);
+  const checked = checkWarnings(warnings, allowlist, { mode, complete, chunks: measured.chunks, passes });
   problems.push(...measured.problems, ...checked.unlisted.map(warningProblem), ...checked.problems);
   if (problems.length > 0) return { problems, chunks: {}, modules: {}, graphs: { background: [], pages: [] }, report: [], allowed: [] };
 
@@ -350,4 +375,4 @@ async function bundle({ root, outDir, mode, buildId, defineRows, allowlist, keep
   };
 }
 
-module.exports = { bundle, bundlerProblem, warningProblem, measuredChunks, sideEffectsFor, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };
+module.exports = { bundle, bundlerProblem, warningProblem, measuredChunks, passTies, sideEffectsFor, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger };
