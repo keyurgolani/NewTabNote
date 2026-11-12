@@ -786,8 +786,8 @@
       "behavior": "#35 port commands",
       "protects": "A command still waiting at its deadline while the coordinator migrates answers migrating, retryable, not deadline-exceeded.",
       "file": "js/kernel/core/messaging/router.js",
-      "find": "    return now.status === 'degraded' && now.reason === MIGRATING;\n",
-      "replace": "    return false;\n",
+      "find": "    return now.status === 'degraded' && (now.reason === MIGRATING || now.reason === RESTORING) ? now.reason : null;\n",
+      "replace": "    return now.status === 'degraded' && now.reason === RESTORING ? now.reason : null;\n",
       "test": "test/kernel/worker-router.test.mjs",
       "name": "answers a command still waiting at its deadline while the coordinator migrates as unavailable, coordinator, migrating, retryable, and one outside a migration deadline-exceeded, as before (#35 slice 4d, rule 18)"
     },
