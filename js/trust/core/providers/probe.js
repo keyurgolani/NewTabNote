@@ -4,7 +4,7 @@
  * failure codes every command gets (#17's adapter or #12's legacy one, whichever the root
  * opened). A probe writes a `trust-probe` record, reads it back, and deletes it, all in one
  * readwrite transaction, so the database holds after it exactly what it held before, and no
- * other context ever sees the record. It passes only on commit.
+ * other context ever sees the record (core/application/trust-probe.js). It passes only on commit.
  *
  * - Capture probes what a capture writes, the `notes` and `blocks` stores, after reading the
  *   Daily Note template setting the way captureToDailyNote does first. It says whether capture
@@ -39,26 +39,16 @@
  * read-back that differs (`probe-readback-mismatch`).
  */
 
-import { committed, rejected, unavailableFrom, unknown } from '../../../kernel/core/contracts/outcomes.js';
+import { PROBE_COMMAND_ID, PROBE_KEY, probeWork } from '../../../kernel/core/application/trust-probe.js';
+import { unavailableFrom, unknown } from '../../../kernel/core/contracts/outcomes.js';
 import { failureEvidence, portOf } from './context.js';
 
 /** @typedef {import('../../../kernel/core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../../../kernel/core/ports/repository.js').StoreName} StoreName */
-/** @typedef {import('../../../kernel/core/ports/repository.js').Work} Work */
 /** @typedef {import('../../../kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../checks.js').CheckResult} CheckResult */
 
-/**
- * The key a probe writes under: an array, which no note, block, or folder key can be, since
- * every release and the kernel (isId) key them by strings, so an imported record can't take it
- */
-export const PROBE_KEY = Object.freeze(['ntn-trust-probe']);
-
-/**
- * The commandId a probe's work carries. A probe isn't a catalog command, so no adapter keeps a
- * record under it: #17's ledger keeps only catalog commands' (#17 PR 2a), and every run runs
- */
-const PROBE_COMMAND_ID = 'trust-probe';
+export { PROBE_KEY };
 
 /**
  * What a probe that committed looked at: every fault it observes, on CanvasTabDB, which it
@@ -144,55 +134,18 @@ const OPEN_CODES = Object.freeze(['open-failed', 'missing-core-stores', 'no-data
 /** The failures that need the user, not a retry: a full disk, or a newer build's database */
 const ACTION_CODES = Object.freeze(['quota', 'version-too-new']);
 
-/** Whether `record` is the probe's own */
-const isProbe = (/** @type {unknown} */ record) =>
-  record !== null &&
-  typeof record === 'object' &&
-  JSON.stringify(/** @type {{id?: unknown}} */ (record).id) === JSON.stringify(PROBE_KEY);
-
 /**
- * Writes, reads back, and deletes the probe record in each of `stores`, in one transaction. It
- * changes no entity (`changedIds` is empty), so a commit log that appends one entry per changed
- * entity, as #17's has since its PR 2a, gets none. A commit that answers without running the unit, or
- * replays an earlier answer, didn't verify anything, and answers `unknown`.
+ * Writes, reads back, and deletes the probe record in each of `stores`, in one transaction
+ * (probeWork). A commit that answers without running the unit, or replays an earlier answer,
+ * didn't verify anything, and answers `unknown`.
  * @param {KernelAdapter} adapter
  * @param {StoreName[]} stores
  * @returns {Promise<Outcome>}
  */
 export async function probeCommit(adapter, stores) {
-  const key = /** @type {string} */ (/** @type {unknown} */ ([...PROBE_KEY]));
-  let ran = false;
-  /** @type {Work} */
-  const work = {
-    commandId: PROBE_COMMAND_ID,
-    // A probe isn't a catalog command: an adapter with idempotency keeps no record of it, so
-    // nothing reads this
-    command: /** @type {any} */ ({ type: 'trust.probe', commandId: PROBE_COMMAND_ID }),
-    effect: {
-      kind: 'units',
-      units: [
-        {
-          stores,
-          async run(tx) {
-            ran = false;
-            for (const store of stores) {
-              if ((await tx.get(store, key)) !== undefined) return rejected('validation', 'probe-record-present');
-            }
-            for (const store of stores) tx.put(store, /** @type {any} */ ({ id: [...PROBE_KEY] }));
-            for (const store of stores) {
-              if (!isProbe(await tx.get(store, key))) return rejected('validation', 'probe-readback-mismatch');
-            }
-            for (const store of stores) tx.delete(store, key);
-            ran = true;
-            return undefined;
-          },
-        },
-      ],
-    },
-    done: () => committed('trust-probe', [], { severity: 'info' }),
-  };
+  const { work, ran } = probeWork(stores);
   const { outcome, replayed } = await adapter.commit(work);
-  if (outcome.kind === 'committed' && (replayed || !ran)) return unknown('probe-not-run', PROBE_COMMAND_ID);
+  if (outcome.kind === 'committed' && (replayed || !ran())) return unknown('probe-not-run', PROBE_COMMAND_ID);
   return outcome;
 }
 

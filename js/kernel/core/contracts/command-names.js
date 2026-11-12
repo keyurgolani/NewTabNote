@@ -1,7 +1,7 @@
 /**
  * Every command name the service worker's queue runs (#35 slice 4b-1, the lead's ruling): the
  * shared catalog's (commands.js), the worker's own (worker-catalog.js), and recovery.html's
- * rebuild batch (recovery-port.js, #35 slice 8), names only. The
+ * rebuild batch and probe (recovery-port.js, #35 slice 8), names only. The
  * coordinator names the turn its queue runs by one, in system.coordinatorHealth's `running` and in
  * `coordinator.turn-stuck`'s evidence (js/trust/core/evidence.js, `commandType`), and that queue
  * runs the worker's own commands too: its capture, and the drain's conflict record.
@@ -12,7 +12,7 @@
  * same set, so a command added to any of them fails there until it's here too.
  */
 
-/** @type {readonly (import('./commands.js').CommandType | 'rebuildSearchIndex')[]} */
+/** @type {readonly (import('./commands.js').CommandType | 'rebuildSearchIndex' | 'probeCommit')[]} */
 export const COMMAND_NAMES = Object.freeze([
   'createNote',
   'renameNote',
@@ -69,4 +69,5 @@ export const COMMAND_NAMES = Object.freeze([
   'keepJournalEntry',
   // recovery.html's (recovery-port.js)
   'rebuildSearchIndex',
+  'probeCommit',
 ]);

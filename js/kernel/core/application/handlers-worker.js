@@ -10,7 +10,7 @@
  * port runs here too, on their kernels' table below: the new tab's commands (#35 slice 4d), and
  * Popup's and Side Panel's own applies of a close-time draft, so the worker loads the applier, as
  * #35 slice 4b-2's rule 6 has it in place of #182's ruling for the worker. recovery.html's
- * rebuild batches run on a table of their own, on their own catalog (#35 slice 8).
+ * rebuild batches and probes run on a table of their own, on their own catalog (#35 slice 8).
  */
 
 import { RECOVERY_PORT_CATALOG } from '../contracts/recovery-port.js';
@@ -29,6 +29,7 @@ import { preferenceCommands } from './preferences.js';
 import { recordCatchUpCommands } from './record-catch-up.js';
 import { remoteChangesRefusal, remoteCommands } from './remote.js';
 import { rebuildCommands } from './search-rebuild.js';
+import { probeCommands } from './trust-probe.js';
 import { snapshotCommands } from './snapshots.js';
 import { workspaceDataCommands } from './workspace-data.js';
 
@@ -75,11 +76,16 @@ export const WORKER_PAGE_HANDLERS = handlerTable({
 });
 
 /**
- * What the worker runs for recovery.html over the port (#35 slice 8): rebuild-index's batches, on
- * the catalog only the worker and recovery.html load (contracts/recovery-port.js), so no other
- * page's kernel in the worker holds them
+ * What the worker runs for recovery.html over the port (#35 slice 8): rebuild-index's batches and
+ * Capture's and Storage's probes, on the catalog only the worker and recovery.html load
+ * (contracts/recovery-port.js), so no other page's kernel in the worker holds them
  */
 export const WORKER_RECOVERY_HANDLERS = handlerTable(
-  { commands: /** @type {any} */ ({ rebuildSearchIndex: rebuildCommands.rebuildSearchIndex }) },
+  {
+    commands: /** @type {any} */ ({
+      rebuildSearchIndex: rebuildCommands.rebuildSearchIndex,
+      probeCommit: probeCommands.probeCommit,
+    }),
+  },
   RECOVERY_PORT_CATALOG,
 );
