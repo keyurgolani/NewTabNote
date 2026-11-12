@@ -14,7 +14,8 @@
  *   run left out keeps them, since Playwright doesn't tell a reporter which filters a run had.
  * - npm run check:a11y-baseline checks the file's shape and each line's spec. With --base <ref>, a line
  *   or target the base's baseline doesn't have fails, and a base with no baseline yet passes.
- * Nothing writes the file, and no flag makes either one.
+ * The file lands with its seed, its first lines. Until then there's none, which is no lines, and a head
+ * that drops a file its base has fails --base. Nothing writes the file, and no flag makes either one.
  */
 
 const { execFileSync } = require('node:child_process');
@@ -154,8 +155,9 @@ function main(argv = process.argv.slice(2), options = {}) {
     }
     base = argv[(i += 1)];
   }
-  const file = JSON.parse(fs.readFileSync(path.join(root, BASELINE), 'utf8'));
-  const problems = fileProblems(file, gates(root));
+  const seeded = fs.existsSync(path.join(root, BASELINE));
+  const file = seeded ? JSON.parse(fs.readFileSync(path.join(root, BASELINE), 'utf8')) : { check: CHECK, entries: [] };
+  const problems = seeded ? fileProblems(file, gates(root)) : [];
   if (problems.length === 0) problems.push(...specProblems(file, path.join(root, SPECS)));
   let note = '';
   if (base !== null && problems.length === 0) {
@@ -166,6 +168,7 @@ function main(argv = process.argv.slice(2), options = {}) {
       return 1;
     }
     if (git(['ls-tree', '--name-only', base, '--', BASELINE]).trim() === '') note = `; ${base} has no baseline yet`;
+    else if (!seeded) problems.push(`${BASELINE} is gone, though ${base} has one: empty its lines instead of dropping it`);
     else {
       problems.push(...historyProblems(file, JSON.parse(git(['show', `${base}:${BASELINE}`])), base));
       note = `, none of them new since ${base}`;
@@ -178,7 +181,8 @@ function main(argv = process.argv.slice(2), options = {}) {
   }
   const count = (/** @type {number} */ n, /** @type {string} */ word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const targets = file.entries.reduce((/** @type {number} */ sum, /** @type {Line} */ line) => sum + line.targets.length, 0);
-  log(`check:a11y-baseline: OK, ${count(file.entries.length, 'line')} in ${BASELINE} listing ${count(targets, 'target')}${note}`);
+  const what = seeded ? `${count(file.entries.length, 'line')} in ${BASELINE} listing ${count(targets, 'target')}` : `no ${BASELINE} yet, so no lines`;
+  log(`check:a11y-baseline: OK, ${what}${note}`);
   return 0;
 }
 

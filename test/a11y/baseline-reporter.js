@@ -11,7 +11,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { BASELINE, ROOT, SPECS, fileProblems, gates, runProblems, specProblems } = require('../../scripts/check-a11y-baseline.js');
+const { BASELINE, CHECK, ROOT, SPECS, fileProblems, gates, runProblems, specProblems } = require('../../scripts/check-a11y-baseline.js');
 
 const NAME = 'a11y-findings';
 
@@ -72,7 +72,8 @@ class BaselineReporter {
   }
 
   onEnd() {
-    const file = JSON.parse(fs.readFileSync(this._baseline, 'utf8'));
+    // The file lands with its seed; until then there's none, which is no lines
+    const file = fs.existsSync(this._baseline) ? JSON.parse(fs.readFileSync(this._baseline, 'utf8')) : { check: CHECK, entries: [] };
     const shape = fileProblems(file, gates());
     const problems = [...this._problems, ...shape];
     if (shape.length === 0) {
