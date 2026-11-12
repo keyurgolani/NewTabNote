@@ -8,6 +8,7 @@
  * js/states/core/ is host-neutral under #12's module rules: no browser API, no legacy global, and
  * imports only from itself, #12's kernel core, #15's registry kit and the vendored Valibot, never
  * from the trust core, whose views move onto the states presenter (#26 slice 4).
+ * `npm run check:boundaries` holds it to that (`states-global`, `states-import`).
  */
 
 /**
