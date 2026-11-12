@@ -1,0 +1,5 @@
+{
+  "about": "#29's shared accessibility baseline, check ID a11y-rules (#24 slice 2): what test:a11y's checks find today, one line per page and rule with the targets that fail it, where a page is its spec's path under test/a11y/, and a line whose page has no spec fails. It only shrinks: a finding no line lists fails, a listed target that a page that ran no longer fails fails until its line is lowered, and with --base, check:a11y-baseline fails a line or target the base's baseline doesn't have. Only dark pairs may stay, each with ownerGate #16-dark. Nothing rewrites this file.",
+  "check": "a11y-rules",
+  "entries": []
+}
