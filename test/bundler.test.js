@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const config = require('../scripts/build/vite-config.js');
-const { bundlerProblem, warningProblem, writtenChunks, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
+const { bundlerProblem, warningProblem, measuredChunks, chunkNames, moduleMap, commonJsProblems, loaderProblems, sourcePath, keepingLogger } = require('../scripts/build/bundle.js');
 const { checkCommonJs } = require('../scripts/build/commonjs.js');
 const { BUILD_INPUTS, SOURCE_DIRS, listedInputs, buildEntries } = require('../scripts/build/inputs.js');
 const { checkBackgroundSources, pageGlobalReads, loadingProblems } = require('../scripts/build/background.js');
@@ -460,23 +460,30 @@ describe('what the build reads from the bundler (scripts/build/bundle.js)', () =
     assert.equal(warningProblem(Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n')).details.length, 12);
   });
 
-  it("reads each chunk's bytes as its pass wrote the file, which the bundler's chunk-size warning measured, and skips a chunk with no file (#300)", () => {
-    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ntn-written-'));
-    try {
-      fs.mkdirSync(path.join(dir, 'assets'));
-      fs.mkdirSync(path.join(dir, 'js'));
-      fs.writeFileSync(path.join(dir, 'assets', 'workspace-A1.js'), 'x'.repeat(1200));
-      fs.writeFileSync(path.join(dir, 'js', 'background.js'), 'é');
-      const report = { assets: [], chunks: [
-        chunk('pages', 'workspace', 'assets/workspace-A1.js'),
-        chunk('background', 'background', 'js/background.js'),
-        chunk('pages', 'gone', 'assets/gone-B2.js'),
-      ] };
-      // Bytes, not characters: é is two in UTF-8
-      assert.deepEqual(writtenChunks(report, dir), [{ name: 'workspace', bytes: 1200 }, { name: 'background', bytes: 2 }]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+  it("records each JS chunk's code in UTF-8 bytes as its pass writes it, the bundler's chunk-size measure, and reads them by the pass that wrote them (#300, #321's review)", () => {
+    const options = passOptions();
+    const [pagesReport] = config.pagesConfig(options).plugins;
+    const [backgroundReport] = config.backgroundConfig(options).plugins;
+    const entry = (/** @type {string} */ fileName, /** @type {string} */ name) => ({ type: 'chunk', fileName, name, isEntry: true, isDynamicEntry: false, facadeModuleId: null, moduleIds: [], imports: [] });
+    const css = { type: 'asset', fileName: 'assets/a-C3.css' };
+    pagesReport.generateBundle({}, { 'assets/workspace-A1.js': entry('assets/workspace-A1.js', 'workspace'), 'assets/a-C3.css': css });
+    backgroundReport.generateBundle({}, { 'js/background.js': entry('js/background.js', 'background') });
+    // é is one UTF-16 unit and two UTF-8 bytes: 250,001 of them are under 500 kB as characters and
+    // over it in bytes, which the bundler measures. A stylesheet is an asset, which it doesn't.
+    pagesReport.writeBundle({}, { 'assets/workspace-A1.js': { ...entry('assets/workspace-A1.js', 'workspace'), code: 'é'.repeat(250001) }, 'assets/a-C3.css': { ...css, source: 'x'.repeat(900000) } });
+    backgroundReport.writeBundle({}, { 'js/background.js': { ...entry('js/background.js', 'background'), code: 'x'.repeat(12) } });
+    // A module worker's chunk reaches its page's bundle as an asset, which the bundler doesn't measure either
+    options.report.chunks.push(chunk('worker', 'indexer', 'assets/indexer-D4.js'));
+    // A chunk a pass made and never wrote has no measure, so it fails rather than drop out of the check
+    options.report.chunks.push(chunk('pages', 'unwritten', 'assets/unwritten-E5.js'));
+    const passes = ['pages', 'background', 'pages', 'recovery'];
+    const measured = measuredChunks(options.report, (i) => passes[i]);
+    assert.deepEqual(measured.chunks, [{ pass: 'pages', name: 'workspace', bytes: 500002 }, { pass: 'background', name: 'background', bytes: 12 }]);
+    assert.deepEqual(measured.problems.map(({ code, subject }) => `${code} ${subject}`), ['build/bundle assets/unwritten-E5.js']);
+    assert.match(measured.problems[0].message, /the recovery pass made this chunk and never wrote it/);
+    const { checkWarnings } = require('../scripts/build/warning-allowlist.js');
+    const warned = checkWarnings(['\n(!) Some chunks are larger than 500 kB after minification. Consider:'], { chunks: {}, warnings: [] }, { mode: 'production', complete: true, chunks: measured.chunks, passes: ['pages'] });
+    assert.deepEqual(warned.problems.map(({ code, subject }) => `${code} ${subject}`), ['build/bundler-warning workspace']);
   });
 
   it('reads a module id as a source path, through the root\'s real path too, and nothing else as one', () => {

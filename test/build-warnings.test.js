@@ -25,19 +25,20 @@ const CHUNK_SIZE = '\n(!) Some chunks are larger than 500 kB after minification.
 const CLASSIC = '<script src="js/x.js"> in "/popup.html" can\'t be bundled without type="module" attribute';
 /** A stylesheet's warning, which fails the build as an error does */
 const CSS = '[vite:css][lightningcss] Unknown pseudo-class: ntn-unknown\n  css/premium-chat.css:900:13';
-/** What a production build's passes wrote: the workspace chunk over 500 kB, and two chunks not */
-const WRITTEN = Object.freeze([{ name: 'workspace', bytes: 591069 }, { name: 'host', bytes: 55942 }, { name: 'edge', bytes: 500000 }]);
+/** What a production build's pages pass wrote: the workspace chunk over 500 kB, and two chunks not */
+const WRITTEN = Object.freeze([{ pass: 'pages', name: 'workspace', bytes: 591069 }, { pass: 'pages', name: 'host', bytes: 55942 }, { pass: 'pages', name: 'edge', bytes: 500000 }]);
 
 const ROW = Object.freeze({ owner: 3, reason: 'why it stays, and what removes it' });
 
 /**
- * checkWarnings over `warnings`, with `chunks` and `rows` as the list's two kinds of row, in a
- * build whose passes all ran unless `complete` says otherwise
+ * checkWarnings over `warnings`, each printed by the pass `passes` names (the pages pass's by
+ * default), with `chunks` and `rows` as the list's two kinds of row, in a build whose passes all ran
+ * unless `complete` says otherwise
  * @param {string[]} warnings
- * @param {{chunks?: object, rows?: object[], mode?: string, complete?: boolean, written?: readonly object[]}} [build]
+ * @param {{chunks?: object, rows?: object[], mode?: string, complete?: boolean, written?: readonly object[], passes?: string[]}} [build]
  */
-function check(warnings, { chunks = {}, rows = [], mode = 'production', complete = true, written = WRITTEN } = {}) {
-  const found = allowlist().checkWarnings(warnings, { chunks, warnings: rows }, { mode, complete, chunks: written });
+function check(warnings, { chunks = {}, rows = [], mode = 'production', complete = true, written = WRITTEN, passes = warnings.map(() => 'pages') } = {}) {
+  const found = allowlist().checkWarnings(warnings, { chunks, warnings: rows }, { mode, complete, chunks: written, passes });
   return { ...found, problems: found.problems.map(({ code, subject }) => `${code} ${subject}`) };
 }
 
@@ -48,6 +49,12 @@ describe('build/warning-allowlist.json (#300)', () => {
     assert.deepEqual(check([CLASSIC]), { unlisted: [CLASSIC], allowed: [], problems: [] });
     const other = CLASSIC.replace('js/x.js', 'js/y.js');
     assert.deepEqual(check([other, CLASSIC], { rows: [row] }).unlisted, [other]);
+    // The row holds the first line, so the lines under it can differ, and holds it exactly, so a
+    // first line that starts with the row's text, or a warning that holds it lower down, is another
+    const below = [`${CLASSIC}\n  at popup.html:12`, `${CLASSIC}\n  at popup.html:40`];
+    assert.deepEqual(check(below, { rows: [row] }), { unlisted: [], allowed: [`"${CLASSIC}" (#3)`], problems: [] });
+    const near = [`${CLASSIC} again`, `PLUGIN_WARNING: another one\n${CLASSIC}`];
+    assert.deepEqual(check(near, { rows: [row] }), { unlisted: near, allowed: [], problems: ['build/warning-stale build/warning-allowlist.json'] });
     // A CSS warning fails as build/css (scripts/build/bundle.js's warningProblem), so its row matches nothing
     assert.deepEqual(check([CSS], { rows: [{ ...ROW, warning: CSS.split('\n')[0] }] }), { unlisted: [CSS], allowed: [], problems: ['build/warning-stale build/warning-allowlist.json'] });
     assert.match(allowlist().CSS_WARNING.source, /lightningcss/);
@@ -59,7 +66,7 @@ describe('build/warning-allowlist.json (#300)', () => {
       assert.deepEqual(check([], { rows, mode }).problems, ['build/warning-stale build/warning-allowlist.json'], mode);
       assert.deepEqual(check([], { rows, mode, complete: false }).problems, [], mode);
     }
-    const [stale] = allowlist().checkWarnings([], { chunks: {}, warnings: rows }, { mode: 'production', complete: true, chunks: [] }).problems;
+    const [stale] = allowlist().checkWarnings([], { chunks: {}, warnings: rows }, { mode: 'production', complete: true, chunks: [], passes: [] }).problems;
     assert.match(stale.message, /only shrinks/);
   });
 
@@ -69,28 +76,53 @@ describe('build/warning-allowlist.json (#300)', () => {
       allowed: ['"(!) Some chunks are larger than 500 kB after minification. Consider:" for the workspace chunk, 591069 bytes (#3)'],
       problems: [],
     });
-    const unrowed = allowlist().checkWarnings([CHUNK_SIZE], { chunks: {}, warnings: [] }, { mode: 'production', complete: true, chunks: WRITTEN }).problems;
+    const unrowed = allowlist().checkWarnings([CHUNK_SIZE], { chunks: {}, warnings: [] }, { mode: 'production', complete: true, chunks: WRITTEN, passes: ['pages'] }).problems;
     assert.deepEqual(unrowed.map(({ code, subject }) => `${code} ${subject}`), ['build/bundler-warning workspace']);
     assert.match(unrowed[0].message, /591069 bytes, over the bundler's 500 kB chunk-size limit/);
     // Over 500 kB is over 500,000 bytes, the bundler's measure, so the edge chunk isn't
     assert.deepEqual(check([CHUNK_SIZE], { chunks: { workspace: ROW, host: ROW, edge: ROW } }).problems, ['build/warning-stale build/warning-allowlist.json', 'build/warning-stale build/warning-allowlist.json']);
+    // and a kB is 1,000 bytes, as the bundler counts, so 500,001 bytes are over, under 500 KiB as they are
+    const margin = [...WRITTEN, { pass: 'pages', name: 'margin', bytes: 500001 }];
+    assert.deepEqual(check([CHUNK_SIZE], { chunks: { workspace: ROW }, written: margin }).problems, ['build/bundler-warning margin']);
     // The limit is the one the warning states
     assert.deepEqual(check([CHUNK_SIZE.replace('500 kB', '400 kB')], { chunks: { workspace: ROW } }).problems, ['build/bundler-warning edge']);
   });
 
   it("fails the chunk-size warning when no chunk a pass wrote is over its limit, and every chunk row when the warning doesn't come, as with its switch off again", () => {
     assert.deepEqual(check([CHUNK_SIZE.replace('500 kB', '600 kB')]).problems, ['build/bundler-warning the bundle']);
-    const [stale] = allowlist().checkWarnings([], { chunks: { workspace: ROW }, warnings: [] }, { mode: 'production', complete: true, chunks: WRITTEN }).problems;
+    const [stale] = allowlist().checkWarnings([], { chunks: { workspace: ROW }, warnings: [] }, { mode: 'production', complete: true, chunks: WRITTEN, passes: [] }).problems;
     assert.deepEqual([stale.code, stale.subject], ['build/warning-stale', 'build/warning-allowlist.json']);
     assert.match(stale.message, /workspace chunk/);
   });
 
   it("checks no chunk row in build:dev, whose passes the bundler doesn't measure since they aren't minified, nor in a build whose pass threw", () => {
-    const written = [{ name: 'workspace', bytes: 1800000 }];
+    const written = [{ pass: 'pages', name: 'workspace', bytes: 1800000 }];
     assert.deepEqual(check([], { chunks: { workspace: ROW }, mode: 'development', written }), { unlisted: [], allowed: [], problems: [] });
     // A chunk-size warning build:dev never gives isn't one a chunk row covers
     assert.deepEqual(check([CHUNK_SIZE], { chunks: { workspace: ROW }, mode: 'development', written }).unlisted, [CHUNK_SIZE]);
     assert.deepEqual(check([CHUNK_SIZE], { complete: false, written: [] }), { unlisted: [], allowed: [], problems: [] });
+  });
+
+  it("ties each pass's chunk-size warning to that pass's own chunks, so another pass's chunk can't answer for it (#321's review)", () => {
+    // recovery.html's pass warns, and only the pages pass has a chunk over the limit
+    const written = [...WRITTEN, { pass: 'recovery', name: 'recovery', bytes: 284351 }];
+    assert.deepEqual(check([CHUNK_SIZE], { chunks: { workspace: ROW }, written, passes: ['recovery'] }).problems, ['build/bundler-warning the bundle', 'build/warning-stale build/warning-allowlist.json']);
+    // Each pass that warns answers for its own chunks over the limit
+    const both = [...written, { pass: 'recovery', name: 'big', bytes: 600000 }];
+    assert.deepEqual(check([CHUNK_SIZE, CHUNK_SIZE], { chunks: { workspace: ROW }, written: both, passes: ['pages', 'recovery'] }).problems, ['build/bundler-warning big']);
+  });
+
+  it("fails two chunks over the limit that share a name, since one row would stand for both (#321's review)", () => {
+    const written = [{ pass: 'pages', name: 'blocks', bytes: 520000 }, { pass: 'recovery', name: 'blocks', bytes: 530000 }];
+    const found = check([CHUNK_SIZE, CHUNK_SIZE], { chunks: { blocks: ROW }, written, passes: ['pages', 'recovery'] });
+    assert.deepEqual([found.problems, found.allowed], [['build/bundler-warning blocks'], []]);
+  });
+
+  it("reads the chunk-size warning by its own first line, so another warning that quotes it below that line is matched and reported as itself (#321's review)", () => {
+    const quoting = 'PLUGIN_WARNING: a plugin warns about its own input\n  it quotes: (!) Some chunks are larger than 500 kB after minification. Consider:';
+    assert.deepEqual(check([quoting], { written: [] }).unlisted, [quoting]);
+    // A plugin's tag ahead of the reporter's text leaves it the chunk-size warning
+    assert.deepEqual(check([`[plugin builtin:vite-reporter]${CHUNK_SIZE}`], { chunks: { workspace: ROW } }).problems, []);
   });
 
   it("fails a file that is missing, doesn't parse, or has a row with no owner, no reason, no single first line or a field it doesn't take, each as build/warning-file", () => {
