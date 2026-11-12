@@ -3,16 +3,17 @@
  * run on, all in the page. Checks run in the page that asks (#20's scope), and the worker
  * serves none of the trust operations.
  *
- * - A kernel client on CanvasTabDB through #17's IndexedDB adapter, opened as the database is
- *   on disk (`existing`, as Popup's and Side Panel's roots open it: no repair, upgrade, or
- *   maintenance). Unlike theirs, it doesn't wait on the worker's migration run, so the page
- *   never asks the worker to migrate, and makes no database on a profile without one. It
- *   reads only the theme, with one query (core/application/handlers-recovery.js), and sends
- *   no note command, so it applies no closing tab's edit and journals nothing. Its adapter is
- *   also what capture and storage probe, and what rebuild-index reads the search index through.
- * - rebuild-index's writes go to the worker's queue over #13's port, a batch at a time, and only
- *   while the coordinator can't run them to the page's fallback, under Web Lock storage.restore
- *   (./recovery-fallback.js, which it loads at its first use, #35 slice 8).
+ * - A kernel client on CanvasTabDB through #17's read-only reader, opened as the database is on
+ *   disk, as Popup's and Side Panel's roots read it, with no repair, upgrade, or maintenance.
+ *   Unlike theirs, it doesn't wait on the worker's migration run, so the page never asks the
+ *   worker to migrate, and makes no database on a profile without one. It reads only the theme,
+ *   with one query (core/application/handlers-recovery.js), and sends no note command, so it
+ *   applies no closing tab's edit and journals nothing. The reader is also what the checks and
+ *   rebuild-index read CanvasTabDB through, and the page holds no writer (#35 slice 8).
+ * - What writes CanvasTabDB goes to the worker's queue over #13's port: capture's and storage's
+ *   probes, and rebuild-index's batches, which only while the coordinator can't run them go to
+ *   the page's fallback, under Web Lock storage.restore (./recovery-fallback.js, which it loads at
+ *   its first use).
  * - NewTabNoteTrust's records and journal, a #15 registry root on the `recovery` host with
  *   slice 2's providers and slice 3's remediations, the use cases over the providers' ports,
  *   and the remediation pipeline. Storage's check reads CanvasTabDB's version against the
@@ -32,9 +33,9 @@
  * probes run, on the first request the router serves.
  */
 
-import { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';
 import { createMigrationReader, createRecoveryReader, createVectorsReader } from '../adapters/indexeddb/health.js';
 import { createLegacySecretReader } from '../adapters/indexeddb/legacy-secrets.js';
+import { createIndexedDbReader } from '../adapters/indexeddb/reader.js';
 import { DB_VERSION } from '../adapters/indexeddb/schema.js';
 import { TRUST_DB_VERSION, createTrustDatabase } from '../adapters/indexeddb/trust.js';
 import { RECOVERY_HANDLERS } from '../core/application/handlers-recovery.js';
@@ -61,6 +62,7 @@ import { createTrustUseCases } from '../../trust/core/use-cases.js';
 import { createBlockRegistry } from './blocks.js';
 import { kernelClient } from './host.js';
 import { hostTimers, pageTransport, randomIds } from './messaging.js';
+import { readsKernel } from './page-reads.js';
 
 /** @typedef {import('./host.js').Client} KernelPageClient */
 /** @typedef {import('../core/messaging/client.js').Client} MessagingClient */
@@ -84,8 +86,8 @@ import { hostTimers, pageTransport, randomIds } from './messaging.js';
  * What recovery.html's root runs on: the browser's (browserRecoveryHost), or a test's
  * @typedef {object} RecoveryHost
  * @property {KernelAdapter & {open(): Promise<void>}} [adapter]
- *   The notes database's adapter: #17's over `indexedDB`, opened as the database is on disk,
- *   unless a test passes its own, which stays the test's to close
+ *   What the page reads the notes database through: #17's reader over `indexedDB`, opened as the
+ *   database is on disk, unless a test passes its own, which stays the test's to close
  * @property {IDBFactory} indexedDB
  * @property {typeof IDBKeyRange} keyRange
  * @property {SettingsPort & {getKeys?: () => Promise<string[]>}} settings - chrome.storage.local, with
@@ -116,7 +118,7 @@ import { hostTimers, pageTransport, randomIds } from './messaging.js';
  *   `system` when nothing is stored, when the notes database didn't open, and when the read fails
  * @property {MessagingClient} trust - #13's client to the page's router, for the rows only
  * @property {Ids} ids - for a command's id, made when the user asks
- * @property {() => void} close - closes both clients, and the adapter the root made
+ * @property {() => void} close - closes both clients, and the reader the root made
  */
 
 /**
@@ -250,11 +252,12 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
 
   // As the database is on disk, with no wait on the worker's run (no awaitUpgrade), so opening
   // the page never sets off a migration, and a profile with none is left with none
-  const made = host.adapter
-    ? null
-    : createIndexedDbAdapter({ indexedDB: host.indexedDB, settings: host.settings, keyRange: host.keyRange, mode: 'existing' });
-  const adapter = host.adapter || /** @type {NonNullable<typeof made>} */ (made);
-  const kernel = kernelClient({ adapter, surface: 'recovery', handlers: RECOVERY_HANDLERS });
+  const made = host.adapter ? null : createIndexedDbReader({ indexedDB: host.indexedDB, settings: host.settings });
+  // What the checks and rebuild-index read through, which commits nothing
+  const adapter = /** @type {KernelAdapter} */ (/** @type {unknown} */ (host.adapter || made));
+  const kernel = host.adapter
+    ? kernelClient({ adapter: host.adapter, surface: 'recovery', handlers: RECOVERY_HANDLERS })
+    : readsKernel(/** @type {NonNullable<typeof made>} */ (made), 'recovery', RECOVERY_HANDLERS);
 
   /** @type {RecoveryRoot['theme']} */
   const theme = async () => {
@@ -315,9 +318,18 @@ export function createRecoveryRoot({ host = browserRecoveryHost() } = {}) {
     return (await fallback).execute(batch);
   };
 
+  /**
+   * Capture's or Storage's probe on the worker's queue, where captures commit, never in the page
+   * (#35 slice 8): one the worker can't run doesn't pass
+   * @param {'capture' | 'storage'} provider
+   */
+  const probe = async provider =>
+    /** @type {Outcome} */ (await messaging.execute({ type: 'probeCommit', commandId: ids.next(), provider }));
+
   /** @type {ProviderContext & Record<string, unknown>} */
   const context = {
     storage: adapter,
+    probe,
     settings: host.settings,
     ...recoveryReadersOf(host),
     permissions: host.permissions,

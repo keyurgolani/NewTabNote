@@ -5,6 +5,8 @@
  * opened). A probe writes a `trust-probe` record, reads it back, and deletes it, all in one
  * readwrite transaction, so the database holds after it exactly what it held before, and no
  * other context ever sees the record (core/application/trust-probe.js). It passes only on commit.
+ * A context with a `probe` port commits it there instead: recovery.html's sends it to the worker's
+ * queue, where captures commit, and its page writes nothing (#35 slice 8).
  *
  * - Capture probes what a capture writes, the `notes` and `blocks` stores, after reading the
  *   Daily Note template setting the way captureToDailyNote does first. It says whether capture
@@ -150,6 +152,23 @@ export async function probeCommit(adapter, stores) {
 }
 
 /**
+ * Capture's or Storage's probe: on the context's `probe` port, recovery.html's to the worker's
+ * queue, or on `adapter`, capture's after reading the Daily Note template setting the way
+ * captureToDailyNote does first, so a settings area that fails it fails the capture
+ * @param {Readonly<Record<string, unknown>>} context
+ * @param {KernelAdapter} adapter
+ * @param {'capture' | 'storage'} provider
+ * @returns {Promise<Outcome>}
+ */
+async function committedProbe(context, adapter, provider) {
+  const port = /** @type {import('./context.js').ProviderContext} */ (context).probe;
+  if (typeof port === 'function') return port(provider);
+  if (provider === 'storage') return probeCommit(adapter, ['notes']);
+  await adapter.readSettings('preferences', ['dailyNoteTemplate']);
+  return probeCommit(adapter, ['notes', 'blocks']);
+}
+
+/**
  * What a probe that didn't commit means: `null` when it committed
  * @param {Outcome} outcome
  * @returns {{kind: 'action' | 'failed' | 'unverified', evidence: {cause?: string, errorCode?: string}, code: string | null} | null}
@@ -158,6 +177,9 @@ function failureOf(outcome) {
   if (outcome.kind === 'committed') return null;
   if (outcome.kind === 'unavailable') {
     const evidence = failureEvidence(outcome);
+    // The coordinator's own answer, as when it can't run recovery.html's probe on its queue (#35
+    // slice 8): no probe reached the database, so it verified nothing either way
+    if (outcome.cause === 'coordinator') return { kind: 'unverified', evidence, code: outcome.code };
     if (ACTION_CODES.includes(outcome.code)) return { kind: 'action', evidence, code: outcome.code };
     // A versioned open below the latest version isn't the path capture uses there: it probed
     // nothing, so it's never a failed probe (the connection answers it unretryable once the
@@ -222,13 +244,10 @@ export const capture = Object.freeze({
    */
   async check(context) {
     const adapter = portOf(context, 'storage');
-    // A capture reads the Daily Note template setting before its units run, so a settings
-    // area that fails it fails the capture
     /** @type {Outcome} */
     let outcome;
     try {
-      await adapter.readSettings('preferences', ['dailyNoteTemplate']);
-      outcome = await probeCommit(adapter, ['notes', 'blocks']);
+      outcome = await committedProbe(context, adapter, 'capture');
     } catch (error) {
       outcome = unavailableFrom(error);
     }
@@ -277,7 +296,7 @@ export const storage = Object.freeze({
     /** @type {Outcome} */
     let outcome;
     try {
-      outcome = await probeCommit(adapter, ['notes']);
+      outcome = await committedProbe(context, adapter, 'storage');
     } catch (error) {
       outcome = unavailableFrom(error);
     }

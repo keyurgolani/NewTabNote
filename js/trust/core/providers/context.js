@@ -77,7 +77,11 @@ import { FAIL_CAUSES } from '../../../kernel/core/contracts/outcomes.js';
  * @typedef {object} ProviderContext
  * @property {KernelAdapter} [storage]
  *   The repository adapter on the path capture uses, which capture and storage probe: #17's
- *   `existing` open below the latest version (the worker's, since PR 1b), `versioned` at it
+ *   `existing` open below the latest version (the worker's, since PR 1b), `versioned` at it. On
+ *   recovery.html it's #17's read-only reader, and `probe` commits the probes (#35 slice 8)
+ * @property {(provider: 'capture' | 'storage') => Promise<import('../../../kernel/core/contracts/outcomes.js').Outcome>} [probe]
+ *   Capture's or Storage's probe committed where captures commit, the worker's queue over #13's
+ *   port, in place of a commit on `storage`
  * @property {{current(): Promise<{version: number, latest: number, status: string | null, code: string | null, blocked?: boolean}>}} [migration]
  *   CanvasTabDB's version, the latest, the worker's last recorded run, and whether its upgrade
  *   is blocked now, for storage below the latest version. Storage's check needs this port at
