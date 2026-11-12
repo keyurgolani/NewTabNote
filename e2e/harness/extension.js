@@ -602,4 +602,4 @@ function harnessFor(worker) {
   return null;
 }
 
-module.exports = { launchExtension, resolveDist, harnessFor, SURFACES, VIEWPORT, TIME_ZONE };
+module.exports = { launchExtension, resolveDist, harnessFor, prepareExtension, SURFACES, VIEWPORT, TIME_ZONE };
