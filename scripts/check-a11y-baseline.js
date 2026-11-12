@@ -67,6 +67,7 @@ function fileProblems(file, known) {
     const { page, rule, targets, ownerGate, ...rest } = line ?? {};
     const at = `entries[${i}]`;
     if (typeof page !== 'string' || page === '' || typeof rule !== 'string' || rule === '') problems.push(`${at} needs a page and a rule`);
+    else if (page.startsWith('checks/')) problems.push(`${at}'s page is the check library's own spec, which no line holds`);
     if (!Array.isArray(targets) || targets.length === 0 || !targets.every(target => typeof target === 'string' && target !== '')) {
       problems.push(`${at} needs a list of targets`);
     } else if (new Set(targets).size !== targets.length) problems.push(`${at} lists a target twice`);

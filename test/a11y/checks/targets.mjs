@@ -32,3 +32,57 @@ export function smallTargets(boxes, min = TARGET_MIN) {
     .filter(box => box.width < min - FLOAT_ERROR || box.height < min - FLOAT_ERROR)
     .map(({ id, width, height }) => ({ id, width, height }));
 }
+
+/** The rule a small hit box fails, apart from axe's own `target-size` at 24px */
+export const RULE = 'ntn-target-size';
+
+/**
+ * In the page: a stable selector for `el`, its id if it has one, else its place under the nearest
+ * ancestor with one. It runs through Playwright evaluation, so it closes over nothing.
+ * @param {Element} el
+ */
+export function selectorOf(el) {
+  const parts = [];
+  for (let node = el; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+    if (node.id) {
+      parts.unshift(`#${CSS.escape(node.id)}`);
+      break;
+    }
+    const twins = node.parentElement ? [...node.parentElement.children].filter(child => child.localName === node.localName) : [node];
+    parts.unshift(twins.length > 1 ? `${node.localName}:nth-of-type(${twins.indexOf(node) + 1})` : node.localName);
+  }
+  return parts.join(' > ');
+}
+
+/**
+ * In the page: each pointer target that's rendered and not hidden or inert, with its box (the label
+ * that wraps a form control is its hit area), and its exemption, if it's the editing host as a whole
+ * or a link in running text inside a text block
+ * @param {(el: Element) => string} selectorOf
+ */
+function collectTargets(selectorOf) {
+  const POINTER =
+    'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"], [tabindex]:not([tabindex="-1"])';
+  return [...document.querySelectorAll(POINTER)].flatMap(el => {
+    const style = getComputedStyle(el);
+    if (el.closest('[inert], [hidden], [aria-hidden="true"]') || style.visibility !== 'visible' || el.getClientRects().length === 0) return [];
+    const { width, height } = (el.matches('input, select, textarea') ? (el.closest('label') ?? el) : el).getBoundingClientRect();
+    let exempt;
+    if (el instanceof HTMLElement && el.isContentEditable && !el.parentElement?.isContentEditable) exempt = 'editing-area';
+    else if (el.matches('a[href]') && style.display === 'inline') {
+      const block = el.parentElement?.closest('p, li, td, th, dd, dt, blockquote, figcaption');
+      if (block && block.textContent?.trim() !== el.textContent?.trim()) exempt = 'inline-link';
+    }
+    return [{ id: selectorOf(el), width, height, ...(exempt ? { exempt } : {}) }];
+  });
+}
+
+/**
+ * The hit boxes on `page` that fall short, as findings
+ * @param {import('@playwright/test').Page} page
+ */
+export async function targetFindings(page) {
+  /** @type {{id: string, width: number, height: number, exempt?: string}[]} */
+  const boxes = await page.evaluate(`(${collectTargets})(${selectorOf})`);
+  return smallTargets(boxes).map(({ id }) => ({ rule: RULE, target: id }));
+}
