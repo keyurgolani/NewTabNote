@@ -4,7 +4,7 @@
 /**
  * npm run verify:fixtures (#27 test plan): one fixture per build failure rule, under
  * test/build-fixtures/<name>/fixture.json. Each is a copy of this tree with one defect, written
- * as edits to it. Three kinds:
+ * as edits to it. Four kinds:
  *   build    the build fails, in production and development mode, reports exactly the
  *            fixture's codes, and leaves no dist/ and no staging directory
  *   package  the build passes, `distEdits` break dist/, and npm run package fails with exactly
@@ -12,6 +12,8 @@
  *   canary   with a made-up secret set in the environment under the names release secrets
  *            use, the build and npm run package pass, and the secret is in neither their logs
  *            nor dist/ nor the zip (#27 AC9)
+ *   output   the build passes in both modes, and dist/'s scripts, pages and stylesheets hold each
+ *            `present` marker and no `absent` one: what tree shaking keeps and drops (#27 AC8, #300)
  *
  * A fixture for another rule whose edits change what security/changes.json records sets
  * securityEntry: the runner adds the entry a reviewed change would, so the build reports the
@@ -50,6 +52,9 @@ const MODES = /** @type {const} */ (['production', 'development']);
  */
 const CANARY_NAMES = Object.freeze(['NTN_CANARY_SECRET', 'VITE_NTN_CANARY_SECRET', 'CHROME_CLIENT_ID', 'CHROME_CLIENT_SECRET', 'CHROME_REFRESH_TOKEN', 'CHROME_EXTENSION_ID', 'CHROME_PUBLISHER_ID', 'GITHUB_TOKEN', 'NPM_TOKEN']);
 
+/** The kinds a fixture can be */
+const KINDS = Object.freeze(['build', 'package', 'canary', 'output']);
+
 /** A start byte row in a copy of a fixture that doesn't test the rows: 2 MiB / 1 MiB, past any start */
 const LIFTED_ROW = Object.freeze({ raw: 2097152, gzip: 1048576 });
 
@@ -68,13 +73,15 @@ const LIFTED_ROW = Object.freeze({ raw: 2097152, gzip: 1048576 });
  * @typedef {object} Fixture
  * @property {string} name
  * @property {string} rule - what it breaks, in a sentence
- * @property {'build' | 'package' | 'canary'} [kind]
+ * @property {'build' | 'package' | 'canary' | 'output'} [kind]
  * @property {string[]} [expect] - every code the build or package has to report, and only those
  * @property {Array<'production' | 'development'>} [modes]
  * @property {Edit[]} [edits]
  * @property {Edit[]} [distEdits] - for a package fixture, edits to the built tree before packaging
  * @property {Record<string, string>} [env] - set in the build's environment
  * @property {boolean} [securityEntry] - add a security/changes.json entry for the edits
+ * @property {string[]} [present] - for an output fixture, text dist/ has to hold
+ * @property {string[]} [absent] - for an output fixture, text dist/ may not hold
  */
 
 /**
@@ -210,6 +217,21 @@ function sameCodes(expected, got) {
 }
 
 /**
+ * What an output fixture's dist/ gets wrong: a `present` marker in none of its scripts, pages or
+ * stylesheets, and each file that holds an `absent` one
+ * @param {import('./package-files.js').PackageFiles} files
+ * @param {Fixture} fixture
+ * @returns {string[]}
+ */
+function outputProblems(files, fixture) {
+  const texts = files.paths.filter((file) => /\.(?:m?js|html?|css)$/i.test(file)).map((file) => ({ file, text: files.text(file) }));
+  return [
+    ...(fixture.present || []).filter((marker) => !texts.some(({ text }) => text.includes(marker))).map((marker) => `${marker} is in no script, page or stylesheet`),
+    ...(fixture.absent || []).flatMap((marker) => texts.filter(({ text }) => text.includes(marker)).map(({ file }) => `${marker} is in ${file}`)),
+  ];
+}
+
+/**
  * Run one fixture. Returns what it proved, or why it failed.
  * @param {Fixture} fixture
  * @returns {Promise<{ok: boolean, lines: string[]}>} each line starting ✓ or ✗
@@ -219,7 +241,8 @@ async function runFixture(fixture) {
   const expected = fixture.expect || [];
   const unknown = expected.filter((code) => !Object.hasOwn(CODES, code));
   if (unknown.length > 0) return { ok: false, lines: [`✗ ${fixture.name}: expects unknown codes ${unknown.join(', ')}`] };
-  if (kind !== 'canary' && expected.length === 0) return { ok: false, lines: [`✗ ${fixture.name}: expects no code`] };
+  if (!KINDS.includes(kind)) return { ok: false, lines: [`✗ ${fixture.name}: is no kind the runner knows, ${kind}`] };
+  if (kind !== 'canary' && kind !== 'output' && expected.length === 0) return { ok: false, lines: [`✗ ${fixture.name}: expects no code`] };
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `ntn-fixture-${fixture.name}-`));
   /** @type {string[]} */
@@ -245,6 +268,14 @@ async function runFixture(fixture) {
         else if (!sameCodes(expected, codes)) failed(`${fixture.name} (${mode}): expected [${expected.join(', ')}], got [${codes.join(', ')}]\n${tail(run)}`);
         else if (left.length > 0) failed(`${fixture.name} (${mode}): the failed build left ${left.join(', ')}`);
         else passed(`${fixture.name} (${mode}): ${codes.join(', ')}, and no dist/`);
+      }
+    } else if (kind === 'output') {
+      for (const mode of fixture.modes || MODES) {
+        const run = await runScript(dir, 'scripts/build.js', mode === 'development' ? ['--dev'] : [], { ...process.env, ...fixture.env });
+        const wrong = run.status === 0 ? outputProblems(fromDirectory(path.join(dir, 'dist'), 'dist/'), fixture) : [];
+        if (run.status !== 0) failed(`${fixture.name} (${mode}): the build exited ${run.status}, not 0\n${tail(run)}`);
+        else if (wrong.length > 0) wrong.forEach((line) => failed(`${fixture.name} (${mode}): ${line}`));
+        else passed(`${fixture.name} (${mode}): ${plural((fixture.present || []).length, 'marker')} kept and ${plural((fixture.absent || []).length, 'marker')} dropped`);
       }
     } else if (kind === 'package') {
       const built = await runScript(dir, 'scripts/build.js', []);
@@ -345,4 +376,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }
 
-module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, runFixture, FIXTURES, CANARY_NAMES };
+module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, outputProblems, runFixture, FIXTURES, CANARY_NAMES, KINDS };
