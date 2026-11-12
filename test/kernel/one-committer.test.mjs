@@ -7,14 +7,15 @@
 // checked with no edit here. Three rules:
 // 1. Only the worker's graph reaches a module that writes CanvasTabDB (`indexeddb`'s writers),
 //    but for a page on `untilMoved`, whose graph may hold #17's adapter and what it imports until
-//    its own slice, and a module `reads` names for a page that loads it only to read.
+//    its own slice, a module `reads` names for a page that loads it only to read, and what a page
+//    reaches only through an `inContext` fallback under Web Lock storage.restore (#35 slice 8).
 // 2. A page writes only what the list names: each kernel module in its graph where
 //    scripts/write-paths.js's scanSource finds a persistence write is on `inContext` or `reads`,
 //    or is #17's adapter's on an `untilMoved` page. js/ outside js/kernel is write-paths.md's,
 //    which test/write-paths.test.js holds. A write through a handed-in handle is a `handles` row.
 // 3. `untilMoved` only shrinks: each row's page still reaches the adapter, and no page joins it.
-//    recovery.html joined once, with #20 slice 4b, by the lead's ruling of 2026-11-05, so its
-//    row is on a list of its own, and no other page can join.
+//    recovery.html joined once, with #20 slice 4b, by the lead's ruling of 2026-11-05, and left
+//    with #35 slice 8, so no page can join.
 // Every module under js/kernel/adapters/indexeddb/ is classified, and an import() whose specifier
 // is computed is one `computedImports` names. The planted cases break each rule on purpose.
 
@@ -41,10 +42,14 @@ const UNTIL_MOVED_4A = Object.freeze(['popup', 'sidepanel', 'newtab']);
 
 /**
  * The page that joined `untilMoved` after 4a, once: recovery.html, with #20 slice 4b, by the lead's
- * ruling of 2026-11-05, as #35's slice 4 plan foresaw. Its remediations commit in-process, as the
- * three pages' writes do, until #35 moves them onto #13's port. Only a row's removal changes it
+ * ruling of 2026-11-05. It left with #35 slice 8, once its writes went to the worker's queue, so no
+ * page is on it, and none may join
+ * @type {readonly string[]}
  */
-const UNTIL_MOVED_JOINED = Object.freeze(['recovery']);
+const UNTIL_MOVED_JOINED = Object.freeze([]);
+
+/** The one lock a fallback reaches the write adapter under (#35 slice 8) */
+const FALLBACK_LOCK = 'storage.restore';
 
 /** The folder every module of which `indexeddb` classifies */
 const INDEXEDDB = 'js/kernel/adapters/indexeddb';
@@ -128,6 +133,12 @@ function problemsOf({
   );
   const untilMoved = new Set(list.untilMoved.map(/** @param {{root: string}} row */ row => row.root));
   const inContext = new Set(list.inContext.map(/** @param {{file: string}} row */ row => row.file));
+  // What a page may reach the write adapter through alone: a fallback under FALLBACK_LOCK
+  const gates = new Set(
+    list.inContext
+      .filter(/** @param {{under?: unknown}} row */ row => row.under === FALLBACK_LOCK)
+      .map(/** @param {{file: string}} row */ row => row.file),
+  );
   /** @type {Map<string, Set<string>>} the roots each `reads` file may be loaded by */
   const reads = new Map(
     list.reads.map(/** @param {{file: string, roots: string[]}} row */ row => [row.file, new Set(row.roots)]),
@@ -180,16 +191,25 @@ function problemsOf({
     if (root.worker) continue;
     for (const file of graph) reachedByPages.add(file);
     const moving = untilMoved.has(root.name);
+    // What the page reaches with no gate followed: only that is held to rules 1 and 2
+    const ungated = new Set(
+      [
+        ...reachGraph(
+          root.entries.map(entry => path.join(ROOT, entry)),
+          { readFile: file => (gates.has(relative(file)) ? '' : readFile(file)) },
+        ).modules,
+      ].map(relative),
+    );
     // Rule 1: only the worker reaches a writer, but for #17's adapter's own on a page still moving
     for (const file of graph) {
-      if (!writers.has(file)) continue;
+      if (!writers.has(file) || !ungated.has(file)) continue;
       if (moving && adapterGraph.has(file)) continue;
       if (reads.get(file)?.has(root.name)) continue;
       problems.push(`${root.name} reaches ${file}, which writes CanvasTabDB: only the worker may (rule 1)`);
     }
     // Rule 2: a write the scan sees in a kernel module is one the list names for it
     for (const file of graph) {
-      if (!file.startsWith('js/kernel/')) continue;
+      if (!file.startsWith('js/kernel/') || !ungated.has(file)) continue;
       const { hits } = scanned(file, readFile(path.join(ROOT, file)));
       if (hits.length === 0) continue;
       if (inContext.has(file)) continue;
@@ -229,15 +249,12 @@ const planted = plants => (/** @type {string} */ file) => {
 };
 
 describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
-  it('finds nothing wrong in the tree: the worker commits, recovery.html moves in its slice, and each page write is one the list names', () => {
+  it('finds nothing wrong in the tree: the worker commits, recovery.html reaches the write adapter only through its fallback, and each page write is one the list names', () => {
     assert.deepEqual(problemsOf(), []);
   });
 
   it("reaches #17's reader from the new tab's start, with its untilMoved row gone: no writer but recovery-points.js, which its reads row names, and no write but the reader's open, which the list reads on the new tab too (#35 slice 4d, R12)", () => {
-    assert.deepEqual(
-      LIST.untilMoved.map(/** @param {{root: string}} row */ row => row.root),
-      ['recovery'],
-    );
+    assert.deepEqual(LIST.untilMoved, []);
     assert.deepEqual(
       problemsOf().filter(problem => problem.startsWith('newtab ')),
       [],
@@ -428,18 +445,25 @@ describe("one committer: #35's architecture test (scope AC1, slice 4a)", () => {
     );
   });
 
-  it('fails recovery.html without its untilMoved row, which reaches the write adapter (rule 1, #115)', () => {
-    const list = {
+  it("reaches #17's write adapter from recovery.html only through its fallback, whose inContext row is under storage.restore, with no untilMoved row (AC2, #35 slice 8)", () => {
+    const fallback = 'js/kernel/composition/recovery-fallback.js';
+    const adapter = 'recovery reaches js/kernel/adapters/indexeddb/adapter.js, which writes CanvasTabDB: only the worker may (rule 1)';
+    assert.deepEqual(LIST.untilMoved, []);
+    const row = LIST.inContext.find(/** @param {{file: string}} row */ row => row.file === fallback);
+    assert.equal(row?.under, 'storage.restore');
+    // Its row under any other lock gates nothing
+    const elsewhere = {
       ...LIST,
-      untilMoved: LIST.untilMoved.filter(/** @param {{root: string}} row */ row => row.root !== 'recovery'),
+      inContext: LIST.inContext.map(/** @param {{file: string}} other */ other => (other === row ? { ...other, under: 'storage.migrate' } : other)),
     };
-    const problems = problemsOf({ list });
-    assert.ok(
-      problems.includes(
-        'recovery reaches js/kernel/adapters/indexeddb/adapter.js, which writes CanvasTabDB: only the worker may (rule 1)',
-      ),
-      problems.join('\n'),
-    );
+    assert.ok(problemsOf({ list: elsewhere }).includes(adapter), problemsOf({ list: elsewhere }).join('\n'));
+    // A path to the adapter from recovery.html's start beside the fallback fails too
+    const beside = problemsOf({
+      readFile: planted({
+        'js/kernel/composition/recovery.js': text => `${text}\nexport { createIndexedDbAdapter } from '../adapters/indexeddb/adapter.js';\n`,
+      }),
+    });
+    assert.ok(beside.includes(adapter), beside.join('\n'));
   });
 
   it("reaches #17's reader alone from Popup's start, with its untilMoved row gone: no writer, and no write but the reader's open, which the list reads on popup (#35 slice 4b-2)", () => {

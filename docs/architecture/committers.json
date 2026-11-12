@@ -1,16 +1,8 @@
 {
-  "about": "#35's one committer (scope AC1, slice 4a): every repository write commits through the background coordinator, in the service worker, apart from the in-context writes listed here. test/kernel/one-committer.test.mjs reads this file against every root the build has: each page in scripts/build/vite-config.js's PAGES, by the scripts its HTML loads, and the worker from manifest.json, each through its static imports and every import() of a literal. Each module worker a root starts with new Worker(new URL(literal, import.meta.url)), as the new tab starts js/workers/indexer.js, is a root of its own, and so is each one that worker starts in turn; no module worker is on `untilMoved`. A root #2 or #3 adds is checked with no edit to the test. `untilMoved` lists the pages that still commit in-process, each until the slice that moves its writes onto #13's port, and only shrinks: recovery.html joined it once, with #20 slice 4b, by the lead's ruling of 2026-11-05. `inContext` lists what a page writes itself, or typing would wait on the worker. `reads` lists a module that writes, which a page loads only to read. `handles` lists a write through a handed-in handle, which no scan sees. `indexeddb` classifies every module under js/kernel/adapters/indexeddb/, so a new one can't land without a decision. #6's ntn.continuity, #16's appearance mirror and #1's product session (js/product/topology.js, which no root loads yet) join when they land. recovery.html's remediations (#20 slice 4b) commit in-process on its `untilMoved` row, rebuild-index's inline write included, until #35 moves them onto #13's port, when their fallback for when the coordinator is unavailable joins `inContext` under storage.restore.",
+  "about": "#35's one committer (scope AC1, slice 4a): every repository write commits through the background coordinator, in the service worker, apart from the in-context writes listed here. test/kernel/one-committer.test.mjs reads this file against every root the build has: each page in scripts/build/vite-config.js's PAGES, by the scripts its HTML loads, and the worker from manifest.json, each through its static imports and every import() of a literal. Each module worker a root starts with new Worker(new URL(literal, import.meta.url)), as the new tab starts js/workers/indexer.js, is a root of its own, and so is each one that worker starts in turn; no module worker is on `untilMoved`. A root #2 or #3 adds is checked with no edit to the test. `untilMoved` lists the pages that still commit in-process, each until the slice that moves its writes onto #13's port, and only shrinks: recovery.html joined it once, with #20 slice 4b, by the lead's ruling of 2026-11-05, and left it with #35 slice 8. `inContext` lists what a page writes itself, or typing would wait on the worker, and a fallback `under` Web Lock storage.restore, which alone may reach the write adapter from a page. `reads` lists a module that writes, which a page loads only to read. `handles` lists a write through a handed-in handle, which no scan sees. `indexeddb` classifies every module under js/kernel/adapters/indexeddb/, so a new one can't land without a decision. #6's ntn.continuity, #16's appearance mirror and #1's product session (js/product/topology.js, which no root loads yet) join when they land. recovery.html's remediations and its checks' probes commit on the worker's queue over #13's port since #35 slice 8, and rebuild-index's fallback for when the coordinator can't run it is its `inContext` row under storage.restore.",
   "worker": "js/background.js",
   "writeAdapter": "js/kernel/adapters/indexeddb/adapter.js",
-  "untilMoved": [
-    {
-      "root": "recovery",
-      "builds": "js/kernel/composition/recovery.js",
-      "writes": "CanvasTabDB and its settings, through #17's adapter, for #20's Trust Center and Recovery Center, rebuild-index's inline write included",
-      "owner": 35,
-      "removeWhen": "#35 moves recovery.html's remediations onto #13's port, and their fallback for when the coordinator is unavailable joins inContext under storage.restore"
-    }
-  ],
+  "untilMoved": [],
   "inContext": [
     {
       "file": "js/kernel/adapters/indexeddb/journal.js",
@@ -29,15 +21,21 @@
     },
     {
       "file": "js/kernel/composition/host.js",
-      "writes": "chrome.storage.local, through its settings handles: #11's and #19's holder settings and #17's session-state keys, which the new tab's root commits itself (#35 slice 4d), with #17's adapter's settings on recovery.html until it moves",
+      "writes": "chrome.storage.local, through its settings handles: #11's and #19's holder settings and #17's session-state keys, which the new tab's root commits itself (#35 slice 4d)",
       "owner": 17
+    },
+    {
+      "file": "js/kernel/composition/recovery-fallback.js",
+      "writes": "CanvasTabDB, through #17's adapter, for rebuild-index's batch on recovery.html while the coordinator can't run it, which pauses while the fallback holds the lock (#35 slice 8)",
+      "under": "storage.restore",
+      "owner": 35
     }
   ],
   "reads": [
     {
       "file": "js/kernel/adapters/indexeddb/connection.js",
-      "roots": ["popup", "sidepanel", "newtab"],
-      "why": "Popup, Side Panel and the new tab read through #17's read-only reader (reader.js), whose open in existing mode makes and upgrades nothing: its indexedDB.open is the one write the scan sees; their writes go to the worker over #13's port (#35 slices 4b-2, 4c and 4d), all but the new tab's session-state keys, which host.js's handles write",
+      "roots": ["popup", "sidepanel", "newtab", "recovery"],
+      "why": "Popup, Side Panel, the new tab and recovery.html read through #17's read-only reader (reader.js), whose open in existing mode makes and upgrades nothing: its indexedDB.open is the one write the scan sees; their writes go to the worker over #13's port (#35 slices 4b-2, 4c, 4d and 8), all but the new tab's session-state keys, which host.js's handles write, and recovery.html's fallback, which its inContext row names",
       "owner": 35
     },
     {
