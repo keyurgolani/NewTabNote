@@ -36,6 +36,7 @@
  * Nothing shipped registers these: no root has a `recovery.run` handler until slice 4.
  */
 
+import { REBUILD_BATCH, indexed, searchEntryOf } from '../../../kernel/core/application/search-rebuild.js';
 import { UnavailableError, committed, rejected } from '../../../kernel/core/contracts/outcomes.js';
 import { newNoteRecord, newSearchEntry } from '../../../kernel/core/domain/note.js';
 import * as v from '../../../lib/valibot/index.mjs';
@@ -50,8 +51,6 @@ import { readBack, readBackText, writeFile, writeText } from './saved-file.js';
 /** @typedef {import('../records.js').Incident} Incident */
 /** @typedef {import('../../../kernel/core/ports/repository.js').KernelAdapter} KernelAdapter */
 /** @typedef {import('../../../kernel/core/ports/repository.js').Work} Work */
-/** @typedef {import('../../../kernel/core/domain/note.js').NoteRecord} NoteRecord */
-/** @typedef {import('../../../kernel/core/domain/note.js').BlockRecord} BlockRecord */
 
 /**
  * What every step gets: the ports, the time and new ids, the run, the incident it answers,
@@ -99,9 +98,6 @@ import { readBack, readBackText, writeFile, writeText } from './saved-file.js';
 
 /** What an apply answers when the user closed the picker: not a failure, and nothing changed */
 export const CANCELLED_BY_USER = Object.freeze({ cancelledByUser: true });
-
-/** How many notes one rebuild transaction writes the entries of */
-export const REBUILD_BATCH = 100;
 
 /**
  * A port the run needs, or `not-applicable` when its root didn't pass it
@@ -207,28 +203,8 @@ const retryOpen = {
 
 // ============ rebuild-index ============
 
-/**
- * A note's search entry, as js/workers/indexer.js's buildNoteEntry makes it from the note and
- * its blocks in the order the `canvasId` index gives them
- * @param {NoteRecord} note
- * @param {readonly BlockRecord[]} blocks
- */
-export function searchEntryOf(note, blocks) {
-  const content = blocks
-    .map(block => block.content || '')
-    .join(' ')
-    .replace(/<[^>]*>?/gm, '');
-  const text = `${content} ${note.name || ''}`;
-  const tags = new Set();
-  for (const match of text.matchAll(/#([\w-]+)/g)) tags.add(match[1].toLowerCase());
-  return {
-    noteId: note.id,
-    name: note.name || 'Untitled',
-    content,
-    tags: Array.from(tags),
-    updatedAt: note.updatedAt,
-  };
-}
+// The entry it writes, as js/workers/indexer.js makes one (core/application/search-rebuild.js)
+export { searchEntryOf };
 
 /**
  * Whether a stored entry is the one `expected` would write
@@ -236,14 +212,6 @@ export function searchEntryOf(note, blocks) {
  * @param {ReturnType<typeof searchEntryOf>} expected
  */
 const sameEntry = (stored, expected) => JSON.stringify(stored) === JSON.stringify(expected);
-
-/**
- * Whether the app's indexer indexes `note`: the notes its list holds, outside trash and the
- * archive and not templates, so a rebuild and the indexer's own setSearchIndex never undo
- * each other
- * @param {NoteRecord} note
- */
-const indexed = note => !note.trashed && !note.archived && !note.isTemplate;
 
 /**
  * The entry of each note the indexer indexes, or of each of `only`, as stored and as it

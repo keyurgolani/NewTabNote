@@ -24,6 +24,7 @@ import { content, count, entityId, id } from '../../js/kernel/core/contracts/fie
 import * as hintChannel from '../../js/kernel/core/contracts/hint-channel.js';
 import { commandPayload } from '../../js/kernel/core/contracts/operation.js';
 import { bulkResultSchema, failedSchema, outcomeSchema } from '../../js/kernel/core/contracts/outcome-schemas.js';
+import { RECOVERY_PORT_COMMANDS } from '../../js/kernel/core/contracts/recovery-port.js';
 import * as settings from '../../js/kernel/core/contracts/settings.js';
 import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { isContent, walk } from '../../js/kernel/core/contracts/schema-walk.js';
@@ -282,14 +283,16 @@ export function lint(root, { role, carriesSecret = false, checkedElsewhere = [] 
 
 const CATALOG_URL = new URL('../../js/kernel/core/contracts/commands.js', import.meta.url);
 
-// Every operation of the shared catalog and of the worker's part (contracts/worker-catalog.js),
-// whose entries name their schemas from the same folder
+// Every operation of the shared catalog, of the worker's part (contracts/worker-catalog.js), and of
+// what recovery.html sends the worker (contracts/recovery-port.js, #35 slice 8), whose entries name
+// their schemas from the same folder
 /** @type {Array<{name: string, entry: Record<string, unknown>, payload: unknown, result: unknown}>} */
 const operations = [];
 for (const [name, entry] of [
   ...Object.entries(WORKER_COMMANDS),
   ...Object.entries(WORKER_QUERIES),
   ...Object.entries(SYSTEM_QUERIES),
+  ...Object.entries(RECOVERY_PORT_COMMANDS),
 ]) {
   const { payload, result } = await import(new URL(entry.schema, CATALOG_URL).href);
   operations.push({ name, entry, payload, result });
@@ -320,7 +323,10 @@ describe('the contract schema lint (#13, AC5)', () => {
   it('passes every operation payload', () => {
     assert.equal(
       operations.length,
-      Object.keys(WORKER_COMMANDS).length + Object.keys(WORKER_QUERIES).length + Object.keys(SYSTEM_QUERIES).length,
+      Object.keys(WORKER_COMMANDS).length +
+        Object.keys(WORKER_QUERIES).length +
+        Object.keys(SYSTEM_QUERIES).length +
+        Object.keys(RECOVERY_PORT_COMMANDS).length,
     );
     for (const { name, entry, payload } of operations) {
       assert.deepEqual(lint(payload, { role: 'payload', carriesSecret: entry.carriesSecret === true }), [], name);

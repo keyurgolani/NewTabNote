@@ -17,6 +17,7 @@ import { ENTITY_TYPES } from '../../js/kernel/core/contracts/fields.js';
 import * as limits from '../../js/kernel/core/contracts/limits.js';
 import { MAX_MESSAGE_BYTES, SMALL_MESSAGE_BYTES } from '../../js/kernel/core/contracts/limits.js';
 import { QUERIES, QUERY_TYPES } from '../../js/kernel/core/contracts/queries.js';
+import { RECOVERY_PORT_COMMANDS } from '../../js/kernel/core/contracts/recovery-port.js';
 import { SYSTEM_QUERIES } from '../../js/kernel/core/contracts/system.js';
 import { SURFACES } from '../../js/kernel/core/contracts/surfaces.js';
 import {
@@ -301,20 +302,21 @@ describe('the catalog (#13, "Desired behavior")', () => {
     }
   });
 
-  it("lists every command name the worker's catalog holds in command-names.js, and nothing else, with neither catalog imported (#35 slice 4b-1)", async () => {
+  it("lists every command name the worker's queue runs in command-names.js, its catalog's and recovery.html's rebuild batch, and nothing else, with neither catalog imported (#35 slices 4b-1 and 8)", async () => {
     // Imported here, so the file's other cases run on a build without the module
     const { COMMAND_NAMES } = await import('../../js/kernel/core/contracts/command-names.js');
-    const listed = new Set(COMMAND_NAMES);
+    const listed = new Set(/** @type {readonly string[]} */ (COMMAND_NAMES));
+    const queued = { ...WORKER_COMMANDS, ...RECOVERY_PORT_COMMANDS };
     assert.equal(listed.size, COMMAND_NAMES.length, 'each name once');
     assert.deepEqual(
-      WORKER_COMMAND_TYPES.filter(type => !listed.has(type)),
+      Object.keys(queued).filter(type => !listed.has(type)),
       [],
-      "a command the worker's catalog holds is missing from the list",
+      "a command the worker's queue runs is missing from the list",
     );
     assert.deepEqual(
-      COMMAND_NAMES.filter(name => !Object.hasOwn(WORKER_COMMANDS, name)),
+      COMMAND_NAMES.filter(name => !Object.hasOwn(queued, name)),
       [],
-      "the list names a command the worker's catalog doesn't hold",
+      "the list names a command the worker's queue doesn't run",
     );
     assert.ok(Object.isFrozen(COMMAND_NAMES));
     // A literal list: what reads it loads no catalog, and no schema

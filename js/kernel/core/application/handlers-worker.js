@@ -9,9 +9,11 @@
  * as a close-time draft by #33's rules (slice 3b, the lead's call on #182). What pages send over the
  * port runs here too, on their kernels' table below: the new tab's commands (#35 slice 4d), and
  * Popup's and Side Panel's own applies of a close-time draft, so the worker loads the applier, as
- * #35 slice 4b-2's rule 6 has it in place of #182's ruling for the worker.
+ * #35 slice 4b-2's rule 6 has it in place of #182's ruling for the worker. recovery.html's
+ * rebuild batches run on a table of their own, on their own catalog (#35 slice 8).
  */
 
+import { RECOVERY_PORT_CATALOG } from '../contracts/recovery-port.js';
 import { WORKER_CATALOG } from '../contracts/worker-catalog.js';
 import { captureCommands } from './capture.js';
 import { closeDraftCommands } from './close-drafts.js';
@@ -26,6 +28,7 @@ import { bulkRefusal, noteCommands } from './notes.js';
 import { preferenceCommands } from './preferences.js';
 import { recordCatchUpCommands } from './record-catch-up.js';
 import { remoteChangesRefusal, remoteCommands } from './remote.js';
+import { rebuildCommands } from './search-rebuild.js';
 import { snapshotCommands } from './snapshots.js';
 import { workspaceDataCommands } from './workspace-data.js';
 
@@ -70,3 +73,13 @@ export const WORKER_PAGE_HANDLERS = handlerTable({
   },
   refusals: { runBulkAction: bulkRefusal, applyRemoteChanges: remoteChangesRefusal },
 });
+
+/**
+ * What the worker runs for recovery.html over the port (#35 slice 8): rebuild-index's batches, on
+ * the catalog only the worker and recovery.html load (contracts/recovery-port.js), so no other
+ * page's kernel in the worker holds them
+ */
+export const WORKER_RECOVERY_HANDLERS = handlerTable(
+  { commands: /** @type {any} */ ({ rebuildSearchIndex: rebuildCommands.rebuildSearchIndex }) },
+  RECOVERY_PORT_CATALOG,
+);
