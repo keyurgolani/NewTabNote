@@ -1,0 +1,13 @@
+{
+  "rule": "a build/warning-allowlist.json row's owner isn't the number of the issue that owns it (#300)",
+  "expect": [
+    "build/warning-file"
+  ],
+  "edits": [
+    {
+      "file": "build/warning-allowlist.json",
+      "replace": "\"owner\": 3,",
+      "with": "\"owner\": \"#3\","
+    }
+  ]
+}

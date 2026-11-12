@@ -1,0 +1,15 @@
+{
+  "rule": "build/warning-allowlist.json has no row for the workspace chunk, which is over the bundler's 500 kB chunk-size limit, so the bundler's warning for it fails the build (#300)",
+  "expect": [
+    "build/bundler-warning"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/warning-allowlist.json",
+      "write": "{\n  \"about\": \"The list with no chunk row.\",\n  \"chunks\": {},\n  \"warnings\": []\n}\n"
+    }
+  ]
+}
