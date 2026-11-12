@@ -310,6 +310,13 @@ describe('how the closure check follows paths', () => {
       'js/a.js': "const host = { getURL: (file) => file }; fetch(host.getURL('build-info.json')); fetch(chrome.runtime.getURL('build-info.json'));",
     });
     assert.deepEqual(found(checkClosure(info, { staticAssets: NO_ASSETS, vendored: new Set() }).problems), []);
+    // Only the package root's: one under js/, or a name that ends or starts the same, is missing as any file is
+    const near = packageOf({
+      'manifest.json': MANIFEST,
+      'newtab.html': '<script src="js/a.js"></script>',
+      'js/a.js': "fetch(chrome.runtime.getURL('js/build-info.json')); fetch(chrome.runtime.getURL('old-build-info.json')); fetch(chrome.runtime.getURL('build-info.json.bak'));",
+    });
+    assert.deepEqual(found(checkClosure(near, { staticAssets: NO_ASSETS, vendored: new Set() }).problems), ['closure/missing build-info.json.bak', 'closure/missing js/build-info.json', 'closure/missing old-build-info.json']);
   });
 
   it('resolves a worker from the page that runs the script, and importScripts from the worker', () => {
