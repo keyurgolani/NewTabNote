@@ -625,8 +625,9 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.equal(recovery.planned, undefined);
     // Its start CSS gzip row is 4.75 KiB, about 5% over the 4,639 bytes that build job 130333246078 of PR
     // checks run 42962855381 measured with #292 in (2026-11-10). Its raw row stays 22.5 KiB, which that
-    // start isn't over
-    assert.deepEqual(recovery.start, { js: { raw: 395 * KIB, gzip: 123 * KIB }, css: { raw: 22.5 * KIB, gzip: 4.75 * KIB }, html: { raw: 2 * KIB, gzip: 1 * KIB }, fonts: null });
+    // start isn't over. Its start JS row is the 343,353 / 108,216 bytes that build job 131036732650 of
+    // push run 43174922769 measured at 14d7247b, after #35 slice 4f-3, plus 5%, rounded up (2026-11-12)
+    assert.deepEqual(recovery.start, { js: { raw: 360521, gzip: 113627 }, css: { raw: 22.5 * KIB, gzip: 4.75 * KIB }, html: { raw: 2 * KIB, gzip: 1 * KIB }, fonts: null });
     // The trust code is the page's own; every other category stays off its start
     assert.deepEqual(recovery.forbidden, [
       'chart-library',
