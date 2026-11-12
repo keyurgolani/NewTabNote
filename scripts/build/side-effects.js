@@ -139,12 +139,24 @@ function entryRoots(root = ROOT, sources = firstPartySources(root)) {
 }
 
 /**
- * The problems with the first-party imports made for side effects only, against the list
+ * Whether a path under `root` is a file
+ * @param {string} root
+ * @returns {(file: string) => boolean}
+ */
+function fileUnder(root) {
+  return (file) => fs.statSync(path.join(root, file), { throwIfNoEntry: false })?.isFile() === true;
+}
+
+/**
+ * The problems with the first-party imports made for side effects only, against the list. One of a
+ * file that isn't there is the bundler's to fail (build/bundle), so only a module that's there is
+ * unlisted.
  * @param {Source[]} sources
  * @param {Set<string>} listed
+ * @param {(file: string) => boolean} [exists] - whether a path under the root is a file
  * @returns {Problem[]}
  */
-function sideEffectProblems(sources, listed) {
+function sideEffectProblems(sources, listed, exists = fileUnder(ROOT)) {
   /** @type {Problem[]} */
   const problems = [];
   /** @type {Set<string>} */
@@ -154,7 +166,7 @@ function sideEffectProblems(sources, listed) {
       const module = kind === 'import' && bare && value !== null ? target(file, value) : null;
       if (module === null) continue;
       named.add(module);
-      if (!listed.has(module)) problems.push(problem('side-effects/unlisted', `${file}:${at}`, `imports ${module} for its side effects only, and ${LIST_FILE} doesn't list it, so the bundler would drop it. List it with its owner and reason, or import what it exports.`));
+      if (!listed.has(module) && exists(module)) problems.push(problem('side-effects/unlisted', `${file}:${at}`, `imports ${module} for its side effects only, and ${LIST_FILE} doesn't list it, so the bundler would drop it. List it with its owner and reason, or import what it exports.`));
     }
   }
   for (const module of listed) {
@@ -163,4 +175,4 @@ function sideEffectProblems(sources, listed) {
   return problems;
 }
 
-module.exports = { readSideEffects, fileProblems, firstPartySources, entryRoots, sideEffectProblems, LIST_FILE };
+module.exports = { readSideEffects, fileProblems, firstPartySources, entryRoots, sideEffectProblems, fileUnder, LIST_FILE };

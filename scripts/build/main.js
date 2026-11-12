@@ -46,7 +46,7 @@ const { CLASSIC_SCRIPTS, STATIC_FILES, terserOptions } = require('./vite-config.
 const { analyze, checkBudgets, readBudgets, startChunksOf } = require('./budgets.js');
 const { readAllowlist } = require('./define-allowlist.js');
 const { readAllowlist: readWarningList } = require('./warning-allowlist.js');
-const { readSideEffects, firstPartySources, entryRoots, sideEffectProblems } = require('./side-effects.js');
+const { readSideEffects, firstPartySources, entryRoots, sideEffectProblems, fileUnder } = require('./side-effects.js');
 const { readTable, chromeProblems } = require('./chrome-features.js');
 const { dependencyReport } = require('./dependencies.js');
 
@@ -342,7 +342,7 @@ async function build(argv = process.argv.slice(2)) {
   const sources = firstPartySources(ROOT_DIR);
   const features = readTable(ROOT_DIR);
   const missing = [...inputProblems(ROOT_DIR), ...defines.problems, ...warningList.problems, ...sideEffects.problems, ...features.problems];
-  if (sideEffects.problems.length === 0) missing.push(...sideEffectProblems(sources, sideEffects.modules));
+  if (sideEffects.problems.length === 0) missing.push(...sideEffectProblems(sources, sideEffects.modules, fileUnder(ROOT_DIR)));
   if (features.problems.length === 0) missing.push(...chromeProblems(ROOT_DIR, features.rows));
   if (missing.length > 0) {
     missing.forEach(report);
