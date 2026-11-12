@@ -73,6 +73,22 @@ describe("the accessibility checks' pure parts (#24 slice 2)", () => {
     // A translucent plane on a translucent backdrop can't be measured, and the check names the plane
     const veil = [{ id: 'veil', color: 'rgba(255, 255, 255, 0.5)', over: 'rgba(0, 0, 0, 0.5)' }];
     assert.throws(() => short({ outer: '#000000' }, veil), { name: 'TypeError', message: /plane veil: what's under it, "rgba\(0, 0, 0, 0\.5\)", isn't opaque/ });
+    // The bar is 3:1: #959595 on white is 2.995:1 and falls short, #949494 is 3.034:1 and passes
+    assert.equal(ring.RING_MIN, 3);
+    assert.deepEqual(short({ outer: '#959595' }, paper), ['paper']);
+    assert.deepEqual(short({ outer: '#949494' }, paper), []);
+    // Focus Blue alone on dark paper is 2.624:1, the case #16's inner ring is for
+    const darkPaper = [{ id: 'dark-paper', color: '#191919' }];
+    assert.deepEqual(short({ outer: '#315F8A' }, darkPaper), ['dark-paper']);
+    assert.deepEqual(short({ outer: '#315F8A', inner: '#ffffff' }, darkPaper), []);
+    // Chrome computes a color-mix() in sRGB as color(srgb …), with its alpha after a slash
+    const mixed = [{ id: 'active-row', color: 'color(srgb 0.897255 0.885961 0.942902)' }, { id: 'tint', color: 'color(srgb 0.431373 0.337255 0.811765 / 0.1)' }];
+    assert.deepEqual(short({ outer: '#000000' }, mixed), []);
+    assert.deepEqual(short({ outer: 'color(srgb 0.4 0.4 1)' }, paper), []);
+    assert.deepEqual(short({ outer: 'color(srgb 0.6 0.6 0.6)' }, paper), ['paper']);
+    // A color in another space is a TypeError that names the space
+    assert.throws(() => short({ outer: 'color(display-p3 0.2 0.3 0.9)' }, paper), { name: 'TypeError', message: /"color\(display-p3 0\.2 0\.3 0\.9\)" is in display-p3, not sRGB/ });
+    assert.throws(() => short({ outer: '#000000' }, [{ id: 'deep', color: 'oklch(0.3 0.1 250)' }]), { name: 'TypeError', message: /"oklch\(0\.3 0\.1 250\)" is in oklch, not sRGB/ });
     assert.equal(typeof contrast.measure, 'function');
   });
 
