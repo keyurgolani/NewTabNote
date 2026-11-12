@@ -430,12 +430,17 @@ function format(ratio) {
 
 /**
  * Measure one pair as rendered: a translucent bg over its backdrop, the foreground
- * over that, and a disabled control faded onto its backdrop
+ * over that, and a disabled control faded onto its backdrop. #24's focus-ring check measures the
+ * rendered ring this way too (test/a11y/checks/ring.mjs).
  * @param {{fg: Rgba, bg: Rgba, over: Rgba | null, inner: Rgba | null}} colors
  * @param {number} opacity
  * @returns {{ratio: number, outer: number, innerOnOuter: number | null, innerOnSurface: number | null}}
+ * @throws {TypeError} when a translucent bg or a faded pair has no opaque backdrop to composite onto
  */
-function measure(colors, opacity) {
+export function measure(colors, opacity) {
+  if ((colors.bg.a < 1 || opacity < 1) && !(colors.over && colors.over.a === 1)) {
+    throw new TypeError('measure() needs an opaque backdrop (over) under a translucent background or a faded pair');
+  }
   let bg = colors.bg.a < 1 ? compositeOver(colors.bg, colors.over) : colors.bg;
   let fg = compositeOver(colors.fg, bg);
   let inner = colors.inner ? compositeOver(colors.inner, bg) : null;
