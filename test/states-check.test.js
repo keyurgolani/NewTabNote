@@ -5,7 +5,8 @@
 // on a missing row the baseline doesn't list, on a written row it still lists, on an entry for a
 // contribution or a state that doesn't exist, and on a row whose message has no catalog string or
 // whose primary action is off the list. A run leaves the baseline's bytes as they were, and a flag
-// it doesn't know, a write flag among them, exits 2.
+// it doesn't know, a write flag among them, exits 2. With --base, an entry the base's baseline
+// doesn't have fails, so the baseline only shrinks from the first day (call 5).
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -29,11 +30,13 @@ after(() => temps.forEach(dir => fs.rmSync(dir, { recursive: true, force: true }
 /**
  * check:states on `root`, with what it said
  * @param {string[]} argv
+ * @param {Record<string, unknown>} [given] - the git it runs, when a test hands one in
  */
-async function run(argv, root = ROOT) {
+async function run(argv, root = ROOT, given = {}) {
   /** @type {string[]} */
   const lines = [];
-  const code = await check.main(argv, { root, log: (/** @type {string} */ line) => lines.push(line), error: (/** @type {string} */ line) => lines.push(line) });
+  const say = (/** @type {string} */ line) => lines.push(line);
+  const code = await check.main(argv, { root, ...given, log: say, error: say });
   return { code, output: lines.join('\n') };
 }
 
@@ -136,6 +139,29 @@ describe('npm run check:states (#26 slice 1)', () => {
     const before = fs.readFileSync(path.join(ROOT, check.BASELINE));
     await run([]);
     assert.deepEqual(fs.readFileSync(path.join(ROOT, check.BASELINE)), before);
-    for (const flag of ['--write', '--update', '--seed']) assert.equal((await run([flag])).code, 2, flag);
+    for (const flag of ['--write', '--update', '--seed', '--base']) assert.equal((await run([flag])).code, 2, flag);
+  });
+
+  it("with --base fails an entry the base's baseline lacks, and passes where the base has none yet", async () => {
+    const root = copy();
+    const seeded = baselineOf(root);
+    /** A git for a base whose baseline is `base`, a base with none (null), or a ref git can't read */
+    const gitFor = (/** @type {unknown} */ base) => ({
+      git: (/** @type {string[]} */ args) => {
+        if (base === 'unreadable') throw new Error("fatal: Needed a single revision");
+        if (args[0] === 'rev-parse') return `${'a'.repeat(40)}\n`;
+        if (args[0] === 'ls-tree') return base === null ? '' : `${check.BASELINE}\n`;
+        return JSON.stringify(base);
+      },
+    });
+    assert.equal((await run(['--base', 'next'], root, gitFor(seeded))).code, 0);
+    const shorter = { ...seeded, missing: { ...seeded.missing, 'command:create-note': without('failed')(seeded.missing['command:create-note']) } };
+    const grown = await run(['--base', 'next'], root, gitFor(shorter));
+    assert.equal(grown.code, 1, grown.output);
+    assert.match(grown.output, /command:create-note lists failed, which next's baseline doesn't: the baseline only shrinks/);
+    const first = await run(['--base', 'next'], root, gitFor(null));
+    assert.equal(first.code, 0, first.output);
+    assert.match(first.output, /next has no baseline yet/);
+    assert.equal((await run(['--base', 'next'], root, gitFor('unreadable'))).code, 1);
   });
 });

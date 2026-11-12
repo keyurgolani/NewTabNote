@@ -154,6 +154,14 @@ test("the kernel job holds security/changes.json's history to the same base (#21
   assert.match(step, /npm run check:security-baseline -- --history-only \$\{BASE:\+--base "\$BASE"\}/);
 });
 
+test('the kernel job holds ci/baselines/states.json to the same base, so the baseline only shrinks (#26 slice 1)', () => {
+  const steps = WORKFLOW.split(/\n(?= {6}- name: )/);
+  const step = steps.find(text => text.startsWith('      - name: npm run check:states'));
+  assert.ok(step, 'no check:states step in the kernel job');
+  assert.match(step, /BASE: \$\{\{ steps\.ledger-base\.outputs\.base \}\}/);
+  assert.match(step, /npm run check:states -- \$\{BASE:\+--base "\$BASE"\}/);
+});
+
 test("pr-gate prints the kernel job's own local command instead of working out the base again", () => {
   const kernel = WORKFLOW.split('\n').find(line => /"kernel":/.test(line));
   assert.ok(kernel, 'no "kernel" entry in pr-gate COMMANDS');
