@@ -4,7 +4,9 @@
 // its error state, and runs no row, when that database can't open. Once it opens, it draws the
 // stored receipts, runs the open check, and draws again. One problem's repair runs inline,
 // end to end, against a lagging search index this test seeds: #22 registers no pipeline yet,
-// so the test passes the root one whose checkpoint follows the index.
+// so the test passes the root one whose checkpoint follows the index. Its rebuild's writes go to
+// a stand-in for the worker, over the port, which runs them as the worker's queue does
+// (recovery-worker.mjs, #35 slice 8).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,6 +36,7 @@ import { REMEDIATIONS, searchEntryOf } from '../../js/trust/core/remediation/cat
 import { closeAll as closeContexts, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { KeyRange, profileWith, synthesized } from './migration-support.mjs';
 import { faultyFactory } from './storage-faults.mjs';
+import { recoveryWorker } from './recovery-worker.mjs';
 import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
 import { manualClock, realTimers, webLocks } from './trust-support.mjs';
 
@@ -46,8 +49,23 @@ const ROOT = path.join(import.meta.dirname, '..', '..');
 /** The commit feed's head the seeded pipeline reads, and how far behind it may fall */
 const HEAD = 12;
 
+/** The stand-in for the worker each context's page reaches, on its profile, closed with the context (closeAll) */
+/** @type {Map<LegacyContext, ReturnType<typeof recoveryWorker>>} */
+const workers = new Map();
+
+/** @param {LegacyContext} context */
+const workerOf = context => {
+  let worker = workers.get(context);
+  if (!worker) {
+    worker = recoveryWorker({ indexedDB: context.env.indexedDB, settings: context.env.chrome.api.storage.local });
+    workers.set(context, worker);
+  }
+  return worker;
+};
+
 /**
- * What the page's root reads from its globals, over `context`: its IndexedDB and chrome.*
+ * What the page's root reads from its globals, over `context`: its IndexedDB and chrome.*, with
+ * a runtime to the worker's stand-in on the same profile
  * @param {LegacyContext} context
  * @param {Partial<RecoveryHost>} [extra]
  * @returns {RecoveryHost}
@@ -70,6 +88,7 @@ function hostOf(context, extra = {}) {
     permissions: grantedAsDeclared(),
     manifest: MANIFEST,
     timers: realTimers,
+    runtime: workerOf(context).runtime,
     ...extra,
   };
 }
@@ -101,6 +120,8 @@ function closeAll(contexts) {
   for (const context of contexts) {
     for (const adapter of opened.get(context) || []) adapter.close();
     opened.delete(context);
+    workers.get(context)?.close();
+    workers.delete(context);
   }
   closeContexts(contexts);
 }
@@ -521,10 +542,12 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
     }
   });
 
-  it('repairs a seeded lagging search index end to end: its preview, the confirmed rebuild, the check after it, and Fixed just now', async () => {
+  it("repairs a seeded lagging search index end to end: its preview, the confirmed rebuild on the worker's queue, the check after it, and Fixed just now", async () => {
     const tab = await profileWithStaleIndex(3);
     const context = legacyContext(tab.env);
-    const root = createRecoveryRoot({ host: hostOf(context, searchPipeline(tab.env.indexedDB)) });
+    // What the page itself opens on its profile, apart from the worker's stand-in
+    const faults = faultyFactory(tab.env.indexedDB);
+    const root = createRecoveryRoot({ host: hostOf(context, { ...searchPipeline(tab.env.indexedDB), indexedDB: faults.factory }) });
     const page = openPage(root, { hash: '#recovery' });
     try {
       await page.ready;
@@ -546,9 +569,16 @@ describe("recovery.html's views on its root (#20 slice 4b)", () => {
       // The panel's heading takes focus as it opens
       same(page.doc.activeElement, panel().querySelector('h4'), "the panel's heading doesn't have focus");
 
+      const before = faults.transactions.length;
       control(page.doc, REBUILD.confirm, panel()).click();
       const fixed = () => page.doc.querySelectorAll('li.trust-incident').find((/** @type {any} */ li) => li.getAttribute('data-state') === 'resolved');
       await until(fixed, 'Fixed just now');
+      // The worker's queue took the rebuild, as one batch from recovery.html, and the page wrote
+      // nothing to CanvasTabDB for it: the check after it read back what the worker wrote (#35 slice 8)
+      const batches = workerOf(context).handed.filter(([type]) => type === 'rebuildSearchIndex');
+      assert.deepEqual(batches, [['rebuildSearchIndex', 'recovery']]);
+      const writes = faults.transactions.slice(before).filter(tx => tx.mode === 'readwrite' && tx.tx.db.name === 'CanvasTabDB');
+      assert.deepEqual(writes.map(tx => tx.names), [], 'the page wrote to CanvasTabDB');
       assert.equal(text(fixed().querySelector('h3')), `${RESOLVED['index/lagging']}${PAGE.fixed}`);
       assert.equal(text(page.doc.getElementById('h-fixed')), PAGE.fixedJustNow);
       // s5's line under the resolved title, and with nothing left open, nothing needs recovering

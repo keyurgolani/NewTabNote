@@ -616,6 +616,24 @@ describe("recovery.html's remediations on the port (#35 slice 8)", () => {
     });
   }
 
+  it("rebuilds on its fallback when the worker can't be reached, once its client stops trying to wake it, as for the reasons the coordinator names", { timeout: 10_000 }, async () => {
+    const of = await profileWithNotes(2);
+    // No worker runs: each port recovery.html opens ends at once, as Chrome ends one whose worker won't start
+    const fake = createChromeFake();
+    const spy = watched(of.faults.factory);
+    const { root } = await rootOn(of, { indexedDB: spy.indexedDB, locks: spy.locks, runtime: fake.page('recovery').chrome.runtime });
+    try {
+      const run = await rebuild(root);
+      assert.equal(run.state, 'succeeded', JSON.stringify(run));
+      assert.ok(spy.asked.includes('storage.restore'), `the fallback took storage.restore: ${spy.asked.join(', ')}`);
+      assert.ok(spy.opens.includes(true), 'the write adapter opened while the fallback held storage.restore');
+      assert.equal(spy.holding.has('storage.restore'), false, 'and let it go after');
+      assert.equal(await entriesOf(of), 2);
+    } finally {
+      root.close();
+    }
+  });
+
   it('runs nothing on its fallback without Web Locks: no write adapter opens, and it answers why', async () => {
     const { createRecoveryFallback } = await fallbackModule();
     const of = await profileWithNotes(1);
