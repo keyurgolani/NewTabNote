@@ -57,7 +57,10 @@ describe('the Chrome features scan (#300)', () => {
       'if (typeof chrome === "undefined") throw new Error("no chrome");',
       'const { tabs } = chrome;',
       'export function own(chrome) { return chrome.alarms.create("a"); }',
-    ].join('\n')), ['chrome.storage.local 1:1', 'chrome.runtime.onMessage 2:1', 'chrome.sidePanel.open 3:1', 'chrome.storage 4:14', 'chrome 6:18']);
+      // An && operand but the last only checks that chrome is there
+      'const runtime = globalThis.chrome && globalThis.chrome.runtime;',
+      'export const all = ok && chrome;',
+    ].join('\n')), ['chrome.storage.local 1:1', 'chrome.runtime.onMessage 2:1', 'chrome.sidePanel.open 3:1', 'chrome.storage 4:14', 'chrome 6:18', 'chrome.runtime 8:38', 'chrome 9:26']);
   });
 
   it('reads each listed web global, as a free name or through the global object, and leaves alone a property of another object, a binding of its own and typeof', () => {
@@ -70,7 +73,8 @@ describe('the Chrome features scan (#300)', () => {
       'settings.navigator.locks.request();',
       'export function own(structuredClone) { return structuredClone(1); }',
       'if (typeof structuredClone === "function") {}',
-    ].join('\n')), ['navigator.locks 1:1', 'crypto.randomUUID 2:1', 'structuredClone 3:14', 'documentPictureInPicture 4:1', 'Intl.Segmenter 5:22']);
+      'const Segmenter = /** @type {any} */ (Intl).Segmenter;',
+    ].join('\n')), ['navigator.locks 1:1', 'crypto.randomUUID 2:1', 'structuredClone 3:14', 'documentPictureInPicture 4:1', 'Intl.Segmenter 5:22', 'Intl.Segmenter 9:39']);
   });
 
   it('reads each listed CSS at-rule from a stylesheet, and no other at-rule', () => {

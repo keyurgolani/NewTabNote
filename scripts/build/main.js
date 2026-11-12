@@ -42,9 +42,10 @@ const { checkSecurityBaseline, firstPartyScripts } = require('./security-baselin
 const { sourceInfo, buildId: computeBuildId, kernelVersions, writeBuildInfo } = require('./build-info.js');
 const { bundle } = require('./bundle.js');
 const { listedInputs } = require('./inputs.js');
-const { CLASSIC_SCRIPTS, STATIC_FILES, MINIMUM_CHROME_VERSION, terserOptions } = require('./vite-config.js');
+const { CLASSIC_SCRIPTS, STATIC_FILES, terserOptions } = require('./vite-config.js');
 const { analyze, checkBudgets, readBudgets, startChunksOf } = require('./budgets.js');
 const { readAllowlist } = require('./define-allowlist.js');
+const { readTable, chromeProblems } = require('./chrome-features.js');
 
 /** @typedef {import('./diagnostics.js').Problem} Problem */
 /** @typedef {import('./bundle.js').Bundled} Bundled */
@@ -64,7 +65,8 @@ const ARGUMENTS = ['--dev', '--strict'];
 
 /**
  * Problems with manifest.json: it parses, is Manifest V3 with a name, a version, and a service
- * worker, and asks for at least MINIMUM_CHROME_VERSION
+ * worker, and asks for a whole-number minimum_chrome_version, which the Chrome features check holds
+ * to build/chrome-features.json's highest row (chrome/version, #300)
  * @param {string} text
  * @returns {Problem[]}
  */
@@ -84,8 +86,8 @@ function manifestProblems(text) {
   if (typeof manifest.version !== 'string' || !/^\d+(\.\d+){0,3}$/.test(manifest.version)) fail(`version ${JSON.stringify(manifest.version)} isn't one to four dot-separated numbers`);
   if (!manifest.background || typeof manifest.background.service_worker !== 'string') fail('names no background.service_worker');
   const minimum = manifest.minimum_chrome_version;
-  if (typeof minimum !== 'string' || !/^\d+$/.test(minimum) || Number(minimum) < MINIMUM_CHROME_VERSION) {
-    fail(`minimum_chrome_version is ${JSON.stringify(minimum)}; the APIs the extension uses need "${MINIMUM_CHROME_VERSION}" or later`);
+  if (typeof minimum !== 'string' || !/^\d+$/.test(minimum)) {
+    fail(`minimum_chrome_version is ${JSON.stringify(minimum)}, not a whole number; build/chrome-features.json's highest row is the least it can be`);
   }
   return problems;
 }
@@ -325,9 +327,12 @@ async function build(argv = process.argv.slice(2)) {
   }
   const buildId = computeBuildId(ROOT_DIR, source.info, mode);
 
-  // 2. The inputs, and the define allowlist the bundle inlines (#300)
+  // 2. The inputs, the define allowlist the bundle inlines, and the Chrome features table with its
+  // scan of the sources (#300)
   const defines = readAllowlist(ROOT_DIR);
-  const missing = [...inputProblems(ROOT_DIR), ...defines.problems];
+  const features = readTable(ROOT_DIR);
+  const missing = [...inputProblems(ROOT_DIR), ...defines.problems, ...features.problems];
+  if (features.problems.length === 0) missing.push(...chromeProblems(ROOT_DIR, features.rows));
   if (missing.length > 0) {
     missing.forEach(report);
     fail(missing);
