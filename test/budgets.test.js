@@ -261,11 +261,15 @@ describe('the budget gate', () => {
     assert.deepEqual(run(budgets), [missing('package', 'zipBytes'), missing('package', 'updateBytes')]);
   });
 
-  it("refuses a reads row outside the new tab's routes, and a reads or requests row that isn't a whole number, and lets waitsOn name either (#300)", () => {
+  it("refuses a reads number outside the new tab's routes, a reads row anywhere but those and Popup and the Side Panel, and a reads or requests row that isn't a whole number, and lets waitsOn name either (#300)", () => {
     const { newtab, popup } = budgetsFor().entries;
     const file = (/** @type {object} */ entries) => fileProblems(budgetsFor(entries)).map(({ message }) => message);
     assert.deepEqual(file({ newtab: { ...newtab, reads: 40, requests: 0 }, popup: { ...popup, requests: 2 } }), []);
-    assert.deepEqual(file({ popup: { ...popup, reads: 3 } }), ['entry popup has a reads row, which only the new tab and Moment have']);
+    // Popup and the Side Panel keep a null reads row until #4 and #5 give them a ready mark to count to (#27)
+    const sidepanel = { page: 'sidepanel.html', reason: 'the panel', start: {} };
+    assert.deepEqual(file({ popup: { ...popup, reads: null, waitsOn: { reads: '#4' } }, sidepanel: { ...sidepanel, reads: null, waitsOn: { reads: '#5' } } }), []);
+    assert.deepEqual(file({ popup: { ...popup, reads: 3 } }), ["entry popup's reads row stays null until its page has a ready mark to count reads to"]);
+    assert.deepEqual(file({ offscreen: { page: 'offscreen.html', reason: 'the document', start: {}, reads: null } }), ['entry offscreen has a reads row, which only the new tab, Moment, Popup and the Side Panel have']);
     for (const value of [1.5, -1, '3']) {
       assert.deepEqual(file({ newtab: { ...newtab, reads: value } }), ["entry newtab's reads row isn't a whole number"], String(value));
       assert.deepEqual(file({ popup: { ...popup, requests: value } }), ["entry popup's requests row isn't a whole number"], String(value));
@@ -672,10 +676,12 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(entries.moment.waitsOn, { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2' });
     assert.deepEqual([entries.background.coldStart, entries.background.waitsOn], [null, { coldStart: '#35' }]);
     assert.deepEqual([BUDGETS.package.updateBytes, BUDGETS.package.waitsOn], [null, { updateBytes: '#31' }]);
+    // Popup's and the Side Panel's reads wait for the ready marks #4 and #5 give them (#27)
+    assert.deepEqual([entries.popup.reads, entries.popup.waitsOn, entries.sidepanel.reads, entries.sidepanel.waitsOn], [null, { reads: '#4' }, null, { reads: '#5' }]);
     for (const [name, entry] of Object.entries(entries)) {
       if (name === 'moment') continue;
       assert.ok(Number.isSafeInteger(entry.modules), `${name}'s modules row`);
-      if (name !== 'background') assert.equal(entry.waitsOn, undefined, `${name} waits on nothing`);
+      if (!['background', 'popup', 'sidepanel'].includes(name)) assert.equal(entry.waitsOn, undefined, `${name} waits on nothing`);
     }
     assert.ok(Number.isSafeInteger(BUDGETS.package.zipBytes), "the zip's row");
   });
@@ -947,7 +953,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     });
     const rows = (/** @type {number | null} */ reads, /** @type {number | null} */ requests) => ({
       ...REPORTING,
-      entries: { newtab: { ...BUDGETS.entries.newtab, reads, requests }, popup: { ...BUDGETS.entries.popup, requests } },
+      entries: { newtab: { page: 'newtab.html', reason: 'the tab', reads, requests }, popup: { page: 'popup.html', reason: 'the popup', requests } },
     });
     const max = { newtab: { reads: 40, requests: 0 }, popup: { requests: 1 } };
     const verdicts = (/** @type {any} */ report) => report.countVerdicts.map((/** @type {any} */ v) => `${v.profile} ${v.entry} ${v.row} ${v.count} ${v.limit} ${v.verdict}`);
@@ -977,7 +983,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     const failed = probed({ runs: [run], failures: [{ run: 2, message: 'the new tab never marked itself ready' }] });
     const rows = (/** @type {number | null} */ reads, /** @type {number | null} */ requests) => ({
       ...REPORTING,
-      entries: { newtab: { ...BUDGETS.entries.newtab, reads, requests }, popup: { ...BUDGETS.entries.popup, requests } },
+      entries: { newtab: { page: 'newtab.html', reason: 'the tab', reads, requests }, popup: { page: 'popup.html', reason: 'the popup', requests } },
     });
     const typical = (/** @type {any} */ report) => [...new Set(report.countVerdicts.filter((/** @type {any} */ v) => v.profile === 'typical').map((/** @type {any} */ v) => v.verdict))];
     // Set rows: the profile short of a run has no count, so it fails, and the other passes
