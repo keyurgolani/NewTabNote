@@ -2,24 +2,30 @@
 
 /**
  * The IndexedDB request counter (#28 slice 4, #301): each request a page or the service worker
- * makes of IndexedDB, as it makes it, on the epoch clock. #27's IndexedDB reads before
- * interaction-ready (#300) read it, and so can any case that has to count a context's requests.
- * Nothing under test/support/ ships.
+ * makes on a store, an index or a cursor, as it makes it, on the epoch clock. #27's IndexedDB reads
+ * before interaction-ready (#300) read it, and so can any case that has to count a context's
+ * requests. Nothing under test/support/ ships.
  *
  * installIdbRequestCounter runs in the context it counts, and holds nothing from outside itself, so
  * it goes in as it is:
  *
- *   await countRequestsIn(extension.context);  // each page, from its first script
+ *   await countRequestsIn(extension.context);  // each page, from its next document's first script
  *   await countRequestsIn(extension.worker);   // the service worker, from now on
  *   const record = await readIdbRequests(page);
- *   countIdbRequests(record, { until: await interactionReadyAt(page) });
+ *   const ready = await interactionReadyAt(page);  // null for a page that never marks, such as 1.4.0's
+ *   countIdbRequests(record, { until: ready });    // throws on that null, rather than count it all
+ *
+ * The record lives on the context's global, so it lasts only as long as the page's document or the
+ * worker's global. A navigation or a reload starts a page's afresh. A worker that restarts or
+ * updates loses its own, so a spec calls countRequestsIn(extension.worker) again after either.
  *
  * In Node it takes fake-indexeddb's classes as its scope (test/idb-request-counter.test.js). It
- * wraps the request methods of IDBObjectStore and IDBIndex, and IDBCursor's steps and writes, and
- * each wrapper calls the method it replaced as it was: the same request comes back, at the same
- * time, and a call that throws throws as before and counts nothing. Opens, deletes and
- * transactions aren't requests on a store, so they aren't counted, and a dedicated worker or the
- * offscreen document, where no init script goes, isn't seen.
+ * wraps the request methods of IDBObjectStore and IDBIndex, and IDBCursor's steps and writes. Each
+ * wrapper calls the method it replaced as it was and adds no await, so the same request goes out
+ * in the same order, for one small object per request, and a call that throws throws as before and
+ * counts nothing. Database opens and deletes (indexedDB.open, deleteDatabase), databases() and
+ * transactions aren't counted, and a dedicated worker or the offscreen document, where no init
+ * script goes, isn't seen.
  *
  * An entry is one request: { kind, method, database, store, index, at }. `kind` is 'read' for get,
  * getKey, getAll, getAllKeys, getAllRecords, count, openCursor and openKeyCursor, on a store or an
@@ -117,7 +123,10 @@ function installIdbRequestCounter(scope = globalThis) {
 
 /**
  * How many reads, writes and cursor steps `record` holds, in all and by `<database>/<store>`: every
- * one, or with `until` (epoch ms), those made at or before it. A null or non-finite `until` throws
+ * one, or with `until` (epoch ms), those made at or before it. A null or non-finite `until` throws.
+ * The cut is inclusive, so a request in the interaction-ready mark's own clock tick (100 µs, where
+ * the page isn't cross-origin isolated) counts as made before it: for a budget, counting one request
+ * too many is safer than missing one
  * @param {IdbRequestRecord} record
  * @param {{until?: number}} [options]
  * @returns {IdbCounts & {byStore: Record<string, IdbCounts>}}
@@ -144,8 +153,10 @@ function countIdbRequests(record, { until } = {}) {
 
 /**
  * Starts counting in `target`: a Playwright BrowserContext or Page gets the counter as an init
- * script, so each page from now on counts from its first script; a Worker, such as the extension's
- * service worker, gets it through evaluate, so it counts from now on
+ * script, so each page's next document counts from its first script; a Worker, such as the
+ * extension's service worker, gets it through evaluate, so it counts from now on. The record lives
+ * only as long as that document or that worker's global, so count in the worker again after it
+ * restarts or updates
  * @param {any} target
  * @returns {Promise<void>}
  */
