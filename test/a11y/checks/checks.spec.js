@@ -36,7 +36,8 @@
 // - the announcement recorder reads back what a step makes the live regions say: a status and a
 //   polite region politely, an alert assertively, and nothing from a log that's off or from text
 //   outside any region. An alert added with its text is heard, as the legacy tab's note-gone notice is
-//   added, and one added inside a log that's off isn't.
+//   added, and one added inside a log that's off isn't. It keeps hearing after setContent() writes a
+//   new document into the page, which keeps the window.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -321,4 +322,14 @@ test("the announcement recorder hears an alert added with its text, and not one 
     document.querySelector('main').append(alert('gone', "This note was deleted, so these changes aren't saved."));
     document.getElementById('log').append(alert('quiet', 'Not said'));`);
   expect(await announce.readAnnouncements(page)).toEqual([{ region: '#gone', politeness: 'assertive', text: "This note was deleted, so these changes aren't saved." }]);
+});
+
+test('the announcement recorder keeps hearing after setContent() writes a new document into the same window', async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(html('<div id="status" role="status"></div>'));
+  await announce.recordAnnouncements(page);
+  await page.setContent(html('<div id="status" role="status"></div>'));
+  await announce.recordAnnouncements(page);
+  await page.evaluate(`document.getElementById('status').textContent = "Couldn't save"`);
+  expect(await announce.readAnnouncements(page)).toEqual([{ region: '#status', politeness: 'polite', text: "Couldn't save" }]);
 });
