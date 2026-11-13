@@ -1,7 +1,8 @@
 // #28 slice 4's hung-repository fault (#301) in Node, over fake-indexeddb: the store hold
 // (test/support/faults/store-hold.js) keeps a database's stores until its release, so #17's
 // adapter's write waits behind it, and a held upgrade keeps every other open of the database
-// waiting. e2e/store-hold.spec.js holds the same hold from an extension page and from the worker.
+// waiting, or fails inside a bound of its own while another connection keeps it from starting.
+// e2e/store-hold.spec.js holds the same hold from an extension page and from the worker.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,6 +48,36 @@ function versionOf(factory) {
     };
     request.onerror = () => reject(request.error);
   });
+}
+
+/**
+ * A connection to CanvasTabDB with no versionchange handler, so it stays open through another's
+ * upgrade, as a context that never lets go of its own does
+ * @param {IDBFactory} factory
+ * @returns {Promise<IDBDatabase>}
+ */
+function keptOpen(factory) {
+  return new Promise((resolve, reject) => {
+    const request = factory.open('CanvasTabDB');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/**
+ * `promise`, unless `ms` pass first, which rejects saying so
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @returns {Promise<T>}
+ */
+function answeredWithin(promise, ms) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer in ${ms / 1000} s`)), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 }
 
 /** A profile whose CanvasTabDB #17's adapter has made, and a kernel on it */
@@ -121,5 +152,22 @@ describe('the store hold, in Node', () => {
     assert.equal(answered(), false, 'the open waits behind the held upgrade');
     assert.equal(await hold.release(), 'abort');
     assert.equal(await opening, before);
+  });
+
+  it('fails inside a bound of its own, naming its database, when another connection stays open through the upgrade', async t => {
+    const { of } = await opened();
+    closeAll(of);
+    const kept = await keptOpen(of.real);
+    const holding = holdUpgrade(of.real);
+    // Its close lets the upgrade start: a hold that started then is released
+    t.after(async () => {
+      kept.close();
+      const hold = await holding.catch(() => null);
+      if (hold) await hold.release().catch(() => {});
+    });
+    await assert.rejects(
+      answeredWithin(holding, 15_000),
+      /the hold on CanvasTabDB's upgrade couldn't start: another connection to CanvasTabDB stayed open 10 s after its versionchange/,
+    );
   });
 });
