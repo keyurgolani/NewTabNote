@@ -8,7 +8,9 @@
  * key lands. And the probe's network-off mode (the harness's `network:
  * 'offline'`, no route) still stops every request outside the extension, from a page and from
  * the service worker, loopback included, where a control launch with the route taken off gets
- * through.
+ * through. A counted run (scripts/perf/counts.js, #300) counts the new tab's IndexedDB reads before
+ * its mark and the requests each page and the worker make outside the extension, on the build and
+ * on a written package with reads and requests on both sides of each window it counts.
  */
 
 const fs = require('fs');
@@ -189,6 +191,130 @@ function tryAll(list) {
   return Promise.all(list.map(url => fetch(url, { cache: 'no-store' }).then(response => `answered ${response.status}`, error => `failed: ${error.name}`)))
     .then(results => new Promise(resolve => setTimeout(() => resolve({ results, violations }), 200)));
 }
+
+test("a counted run counts the new tab's IndexedDB reads before its mark, the page's and the worker's, and each page's and the worker's requests outside the extension (#300)", async ({ playwright }) => {
+  test.setTimeout(180_000);
+  // Loaded here, so the rest of this file runs without it
+  const { countedRun, ENTRIES } = require('../scripts/perf/counts');
+  const { fixture } = await profileFixture('typical');
+  const run = await countedRun({ dist: resolveDist(), fixture, chromium: playwright.chromium });
+  // The new tab reads its settings and its notes before it marks itself ready
+  expect(run.newtab.pageReads).toBeGreaterThan(0);
+  expect(run.newtab.reads).toBe(run.newtab.pageReads + run.newtab.workerReads);
+  for (const name of ENTRIES) expect(Number.isInteger(run[name].requests), name).toBe(true);
+  // Each request it counted left the extension, and says where it went
+  expect(run.urls.length).toBe(ENTRIES.reduce((sum, name) => sum + run[name].requests, 0));
+  for (const { url, from } of run.urls) {
+    expect(url).not.toMatch(/^(chrome-extension|data|blob|about):/);
+    expect(ENTRIES).toContain(from);
+  }
+  // and none came from a page that's no entry, which no row would count
+  expect(run.unattributed).toEqual([]);
+});
+
+/**
+ * A package with IndexedDB reads and requests on both sides of each window a counted run counts
+ * (scripts/perf/counts.js, #300). Its new tab reads 3 times, has the worker read once and fetches
+ * once before it marks itself ready. In the mark's own task, where the probe can't read the
+ * record before they're in it, it then reads twice and has the worker read once, so only the cut
+ * at the mark keeps them out, and 2 s on it fetches once more. Popup, the Side Panel,
+ * recovery.html and the offscreen document each fetch once at their load, and once 2 s on, past
+ * their window. As Popup loads, it has the worker fetch once and open welcome.html, a page that's
+ * no entry, which fetches once as it loads. Each fetch goes to loopback, which the network-off
+ * mode's dead proxy fails, so nothing answers it. The package is written to a temporary
+ * directory, which the caller removes.
+ */
+function countingPackage() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-perf-counts-'));
+  const page = (/** @type {string} */ title, /** @type {string} */ script) => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body><script src="${script}"></script></body></html>\n`;
+  const files = {
+    'manifest.json': JSON.stringify({ manifest_version: 3, name: 'Counted in its windows', version: '1.0.0', background: { service_worker: 'background.js' } }),
+    'background.js': `
+const open = () => new Promise(resolve => {
+  const request = indexedDB.open('counted', 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('notes');
+  request.onsuccess = () => resolve(request.result);
+});
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (message === 'read') {
+    open().then(db => {
+      db.transaction('notes').objectStore('notes').get(1).onsuccess = () => reply(true);
+    });
+    return true;
+  }
+  if (message === 'fetch') fetch('http://localhost:9/worker').catch(() => {});
+  if (message === 'welcome') chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html'), active: false });
+  return false;
+});
+`,
+    'newtab.html': page('Counted', 'newtab.js'),
+    'newtab.js': `
+const fetchOnce = name => fetch('http://localhost:9/' + name).catch(() => {});
+const request = indexedDB.open('counted', 1);
+request.onupgradeneeded = () => request.result.createObjectStore('notes');
+request.onsuccess = async () => {
+  const read = () => new Promise(resolve => {
+    request.result.transaction('notes').objectStore('notes').get(1).onsuccess = resolve;
+  });
+  await read();
+  await read();
+  await read();
+  await chrome.runtime.sendMessage('read');
+  fetchOnce('newtab-before');
+  performance.mark('ntn:interaction-ready');
+  // In the mark's own task, 1 ms past its clock tick: two reads, and one the worker makes while
+  // the task holds, so all three are in the records before the probe can see the mark
+  const hold = ms => {
+    for (const until = performance.now() + ms; performance.now() < until;);
+  };
+  hold(1);
+  read();
+  read();
+  chrome.runtime.sendMessage('read').catch(() => {});
+  hold(300);
+  setTimeout(() => fetchOnce('newtab-after'), 2000);
+};
+`,
+    'later.js': `
+const name = location.pathname.slice(1, -'.html'.length);
+fetch('http://localhost:9/' + name + '-load').catch(() => {});
+if (name === 'popup') {
+  chrome.runtime.sendMessage('fetch').catch(() => {});
+  chrome.runtime.sendMessage('welcome').catch(() => {});
+}
+setTimeout(() => fetch('http://localhost:9/' + name + '-later').catch(() => {}), 2000);
+`,
+    ...Object.fromEntries(['popup', 'sidepanel', 'recovery', 'offscreen'].map(name => [`${name}.html`, page(name, 'later.js')])),
+    'welcome.html': page('Welcome', 'welcome.js'),
+    'welcome.js': "fetch('http://localhost:9/welcome').catch(() => {});\n",
+  };
+  for (const [file, text] of Object.entries(files)) fs.writeFileSync(path.join(root, file), text);
+  return root;
+}
+
+test('a counted run counts what each window holds and nothing past it, on a package with reads and requests on both sides of each (#300)', async ({ playwright }) => {
+  test.setTimeout(180_000);
+  const { countedRun, ENTRIES } = require('../scripts/perf/counts');
+  const dist = countingPackage();
+  try {
+    const run = await countedRun({ dist, fixture: null, chromium: playwright.chromium });
+    expect(run.newtab).toEqual({ reads: 4, pageReads: 3, workerReads: 1, requests: 1 });
+    for (const entry of ENTRIES.filter(entry => entry !== 'newtab')) expect(run[entry], entry).toEqual({ requests: 1 });
+    // The list holds what the counts hold, and nothing made past a window
+    expect(run.urls.map(({ url, from }) => `${from} ${new URL(url).pathname}`).sort()).toEqual([
+      'background /worker',
+      'newtab /newtab-before',
+      'offscreen /offscreen-load',
+      'popup /popup-load',
+      'recovery /recovery-load',
+      'sidepanel /sidepanel-load',
+    ]);
+    // The welcome tab's is on no entry's list, and held apart
+    expect(run.unattributed).toEqual([{ url: 'http://localhost:9/welcome', from: 'unknown' }]);
+  } finally {
+    fs.rmSync(dist, { recursive: true, force: true });
+  }
+});
 
 test("the probe's network-off mode stops requests outside the extension, from a page and the worker", async ({ playwright }) => {
   // A server the CSP lets the extension reach (connect-src allows http://localhost:*), on

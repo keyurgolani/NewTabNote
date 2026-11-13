@@ -12,7 +12,7 @@ const path = require('path');
 const zlib = require('zlib');
 
 const { packageBytes, moduleReferences, cssReferences, htmlReferences } = require('../scripts/perf/package-bytes');
-const { parseArgs, summary, roundOrder, fixtureProblems, gateProblems, packageDigest, main } = require('../scripts/perf-probe');
+const { parseArgs, summary, roundOrder, fixtureProblems, gateProblems, packageDigest, countedPackages, measureCounts, main } = require('../scripts/perf-probe');
 const { profileFixture, PROFILES } = require('../scripts/perf/profiles');
 
 const made = [];
@@ -311,6 +311,52 @@ describe("ref-desktop's fixture profiles (scripts/perf/profiles.js)", () => {
     const notes = profile => profile.fixture.databases[0].stores.find(store => store.name === 'canvases').records.length;
     assert.ok(notes(maximal) >= notes(typical));
     await assert.rejects(profileFixture('lib-1k'), /no profile "lib-1k"/);
+  });
+});
+
+describe("the probe's counts (scripts/perf/counts.js, #300)", () => {
+  it('counts a request to any URL outside the extension, and none to its own, data:, blob: or about: URLs', () => {
+    const { offOrigin } = require('../scripts/perf/counts');
+    for (const url of ['https://www.google.com/s2/favicons?domain=a.test', 'http://localhost:11434/api/tags', 'wss://sync.example.test/']) assert.equal(offOrigin(url), true, url);
+    for (const url of ['chrome-extension://abcdef/newtab.html', 'data:image/png;base64,AA==', 'blob:chrome-extension://abcdef/1', 'about:blank']) assert.equal(offOrigin(url), false, url);
+  });
+
+  it("counts the packages after the reference pair, or the one package, keeps the highest of each count over its runs and each run that failed, and logs a request from a page that's no entry apart from the counts", async () => {
+    const pkg = (/** @type {string} */ label, /** @type {string} */ digest) => ({ label, digest, dist: `/${label}` });
+    assert.deepEqual(countedPackages([pkg('candidate', 'c')]).map(entry => entry.label), ['candidate']);
+    assert.deepEqual(countedPackages([pkg('1.4.0', 'r'), pkg('candidate', 'c')]).map(entry => entry.label), ['candidate']);
+    assert.deepEqual(countedPackages([pkg('1.4.0', 'r'), pkg('1.4.0-again', 'r'), pkg('candidate', 'c')]).map(entry => entry.label), ['candidate']);
+    const counts = (reads, requests, worker, unattributed = []) => ({
+      newtab: { reads, pageReads: reads - 2, workerReads: 2, requests },
+      popup: { requests: 0 }, sidepanel: { requests: 0 }, recovery: { requests: 0 }, offscreen: { requests: 0 },
+      background: { requests: worker },
+      urls: [],
+      unattributed,
+    });
+    const runs = [counts(30, 0, 1, [{ url: 'http://localhost:9/welcome', from: 'unknown' }]), counts(32, 1, 0)];
+    const lines = [];
+    let made = 0;
+    const result = await measureCounts({
+      packages: [pkg('candidate', 'c')],
+      profiles: ['typical'],
+      runs: 3,
+      log: line => lines.push(line),
+      countedRun: async ({ dist, fixture }) => {
+        assert.equal(dist, '/candidate');
+        assert.equal(fixture.chromeStorageLocal.setting_hasCompletedOnboarding, true);
+        if (made === 2) throw new Error('the new tab never marked itself ready\nat line 2');
+        return runs[made++];
+      },
+    });
+    const candidate = result.profiles.typical.packages.candidate;
+    assert.deepEqual(candidate.runs, runs);
+    assert.deepEqual(candidate.failures, [{ run: 3, message: 'the new tab never marked itself ready' }]);
+    assert.deepEqual(candidate.max, { newtab: { reads: 32, requests: 1 }, popup: { requests: 0 }, sidepanel: { requests: 0 }, recovery: { requests: 0 }, offscreen: { requests: 0 }, background: { requests: 1 } });
+    assert.equal(result.runs, 3);
+    assert.equal(lines.length, 3);
+    // A request from a page that's no entry is in no count, and its run's line names it
+    assert.match(lines[0], /background 1; from a page that's no entry 1: http:\/\/localhost:9\/welcome$/);
+    assert.match(lines[1], /background 0$/);
   });
 });
 

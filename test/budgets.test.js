@@ -83,7 +83,7 @@ const PACKAGE_ROW = Object.freeze({ zipBytes: 10 * KIB * KIB, updateBytes: null,
 
 /**
  * A budget file for the fixture, `entries` merged over the default rows. Each row the fixture's
- * build needs holds a number, or names the issue it waits on (#300)
+ * build needs holds a number, or names the issue it waits on, the counts' among them (#300)
  */
 function budgetsFor(entries = {}) {
   return {
@@ -102,12 +102,14 @@ function budgetsFor(entries = {}) {
         reason: 'the tab',
         start: { js: { raw: 100 * KIB, gzip: 100 * KIB }, css: ROOMY, html: ROOMY, fonts: ROOMY },
         modules: 100,
+        reads: 40,
+        requests: 0,
         forbidden: ['chart-library', 'trust', 'model-runtime'],
         dependencies: ['@xenova/transformers', 'chart.js', 'fuse.js', 'jszip', 'some-parser', 'valibot'],
       },
-      popup: { page: 'popup.html', reason: 'the popup', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] },
-      background: { reason: 'the worker', start: { js: ROOMY }, modules: 100, coldStart: null, waitsOn: { coldStart: '#35' } },
-      moment: { chunk: 'moment', planned: true, reason: 'not built yet', start: {}, waitsOn: { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2' }, forbidden: ['remote-ai', 'trust', 'chart-library'], dependencies: [] },
+      popup: { page: 'popup.html', reason: 'the popup', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, requests: 0, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] },
+      background: { reason: 'the worker', start: { js: ROOMY }, modules: 100, requests: 0, coldStart: null, waitsOn: { coldStart: '#35' } },
+      moment: { chunk: 'moment', planned: true, reason: 'not built yet', start: {}, waitsOn: { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2', reads: '#2', requests: '#2' }, forbidden: ['remote-ai', 'trust', 'chart-library'], dependencies: [] },
       ...entries,
     },
   };
@@ -255,10 +257,39 @@ describe('the budget gate', () => {
     const { fonts, ...rest } = moment.waitsOn;
     assert.equal(fonts, '#2');
     assert.deepEqual(run(budgetsFor({ moment: { ...moment, waitsOn: rest } })), [missing('moment', 'start FONTS')]);
+    // The counts the probe holds to their rows: the new tab's reads, and each entry's requests
+    assert.deepEqual(run(budgetsFor({
+      newtab: { ...newtab, reads: undefined },
+      popup: { ...popup, requests: null },
+      background: { ...background, requests: undefined },
+    })), [missing('newtab', 'reads'), missing('popup', 'requests'), missing('background', 'requests')]);
+    assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, reads: null, waitsOn: { reads: '#16' } }, popup: { ...popup, requests: null, waitsOn: { requests: '#4' } } })), []);
+    // Popup's reads can't be a number until #4 gives it a ready mark, so the build doesn't need it yet
+    assert.deepEqual(run(budgetsFor({ popup: { ...popup, reads: undefined } })), []);
+    // A planned entry's reads and requests wait on the issue that builds it, as Moment's on #2
+    const { reads, requests, ...uncounted } = moment.waitsOn;
+    assert.deepEqual([reads, requests], ['#2', '#2']);
+    assert.deepEqual(run(budgetsFor({ moment: { ...moment, waitsOn: uncounted } })), [missing('moment', 'reads'), missing('moment', 'requests')]);
     // The package's rows: the zip's, and update size's, which #31's release gate sets (#31 slice 3)
     const budgets = budgetsFor();
     budgets.package = { ...PACKAGE_ROW, zipBytes: null, waitsOn: {} };
     assert.deepEqual(run(budgets), [missing('package', 'zipBytes'), missing('package', 'updateBytes')]);
+  });
+
+  it("refuses a reads number outside the new tab's routes, a reads row anywhere but those and Popup and the Side Panel, and a reads or requests row that isn't a whole number, and lets waitsOn name either (#300)", () => {
+    const { newtab, popup } = budgetsFor().entries;
+    const file = (/** @type {object} */ entries) => fileProblems(budgetsFor(entries)).map(({ message }) => message);
+    assert.deepEqual(file({ newtab: { ...newtab, reads: 40, requests: 0 }, popup: { ...popup, requests: 2 } }), []);
+    // Popup and the Side Panel keep a null reads row until #4 and #5 give them a ready mark to count to (#27)
+    const sidepanel = { page: 'sidepanel.html', reason: 'the panel', start: {} };
+    assert.deepEqual(file({ popup: { ...popup, reads: null, waitsOn: { reads: '#4' } }, sidepanel: { ...sidepanel, reads: null, waitsOn: { reads: '#5' } } }), []);
+    assert.deepEqual(file({ popup: { ...popup, reads: 3 } }), ["entry popup's reads row stays null until its page has a ready mark to count reads to"]);
+    assert.deepEqual(file({ offscreen: { page: 'offscreen.html', reason: 'the document', start: {}, reads: null } }), ['entry offscreen has a reads row, which only the new tab, Moment, Popup and the Side Panel have']);
+    for (const value of [1.5, -1, '3']) {
+      assert.deepEqual(file({ newtab: { ...newtab, reads: value } }), ["entry newtab's reads row isn't a whole number"], String(value));
+      assert.deepEqual(file({ popup: { ...popup, requests: value } }), ["entry popup's requests row isn't a whole number"], String(value));
+    }
+    assert.deepEqual(file({ newtab: { ...newtab, reads: null, waitsOn: { reads: '#16' } }, popup: { ...popup, requests: null, waitsOn: { requests: '#4' } } }), []);
   });
 
   it("refuses a waitsOn that names a row the entry can't have, a row with a number, or no issue, and a cold start or update size that isn't whole (#300)", () => {
@@ -308,7 +339,7 @@ describe('the budget gate', () => {
     'js/kernel/core/application/record-catch-up.js',
   ];
   /** Side Panel's row, for a fixture that has its page */
-  const sidePanelRow = { page: 'sidepanel.html', reason: 'the side panel', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] };
+  const sidePanelRow = { page: 'sidepanel.html', reason: 'the side panel', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, requests: 0, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] };
   const workerOnly = (/** @type {string} */ page, /** @type {string} */ file) => `budget/worker-only ${page}: its start holds ${file}, which only the service worker runs`;
 
   it("fails a page's start that holds a module only the service worker runs, by the module and the page, and passes the worker that holds it (#35 slice 3c)", () => {
@@ -454,12 +485,12 @@ describe('the budget gate', () => {
   }
   /** The fixture's rows: Popup allows valibot lazy only, in its send chunk */
   const layoutBudgets = () => {
-    const page = (/** @type {string} */ html, /** @type {object} */ rest = {}) => ({ page: html, reason: 'the page', start: { js: ROOMY, css: ROOMY, html: ROOMY, fonts: ROOMY }, modules: 1000, forbidden: [], dependencies: [], ...rest });
+    const page = (/** @type {string} */ html, /** @type {object} */ rest = {}) => ({ page: html, reason: 'the page', start: { js: ROOMY, css: ROOMY, html: ROOMY, fonts: ROOMY }, modules: 1000, requests: 0, forbidden: [], dependencies: [], ...rest });
     return {
       package: PACKAGE_ROW,
       forbidden: {},
       entries: {
-        newtab: page('newtab.html', { startChunks: ['workspace'] }),
+        newtab: page('newtab.html', { startChunks: ['workspace'], reads: 40 }),
         popup: page('popup.html', { lazyChunks: ['popup-send-chunk'], lazyDependencies: ['valibot'] }),
         sidepanel: page('sidepanel.html'),
         recovery: page('recovery.html'),
@@ -655,15 +686,18 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(readBudgets(ROOT).problems, []);
   });
 
-  it("names the issue each row it leaves null waits on: Moment's #2, the service worker's cold start #35, and update size #31, and every other module and zip row is a number (#300)", () => {
+  it("names the issue each row it leaves null waits on: Moment's #2, its reads and requests among them, the service worker's cold start #35, and update size #31, and every other module, zip and requests row is a number (#300)", () => {
     const { entries } = BUDGETS;
-    assert.deepEqual(entries.moment.waitsOn, { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2' });
+    assert.deepEqual(entries.moment.waitsOn, { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2', reads: '#2', requests: '#2' });
     assert.deepEqual([entries.background.coldStart, entries.background.waitsOn], [null, { coldStart: '#35' }]);
     assert.deepEqual([BUDGETS.package.updateBytes, BUDGETS.package.waitsOn], [null, { updateBytes: '#31' }]);
+    // Popup's and the Side Panel's reads wait for the ready marks #4 and #5 give them (#27)
+    assert.deepEqual([entries.popup.reads, entries.popup.waitsOn, entries.sidepanel.reads, entries.sidepanel.waitsOn], [null, { reads: '#4' }, null, { reads: '#5' }]);
     for (const [name, entry] of Object.entries(entries)) {
       if (name === 'moment') continue;
       assert.ok(Number.isSafeInteger(entry.modules), `${name}'s modules row`);
-      if (name !== 'background') assert.equal(entry.waitsOn, undefined, `${name} waits on nothing`);
+      assert.ok(Number.isSafeInteger(entry.requests), `${name}'s requests row`);
+      if (!['background', 'popup', 'sidepanel'].includes(name)) assert.equal(entry.waitsOn, undefined, `${name} waits on nothing`);
     }
     assert.ok(Number.isSafeInteger(BUDGETS.package.zipBytes), "the zip's row");
   });
@@ -699,6 +733,12 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     // The zip: 834,251 bytes in build job 131822570080 of PR checks run 43406673412, plus 5% rounded up,
     // #300 slice 6a's first CI round's figure: the shipped files are next's except the inlined build ID
     assert.equal(BUDGETS.package.zipBytes, 875964);
+    // The counts: the new tab's IndexedDB reads before its mark, 8 at typical and 7 at maximal in job
+    // 131926238843 of perf run 43437487224, plus 5% rounded up to the whole count, and each entry's requests
+    // outside the extension, 0 in every counted run of that job, since a 0 stays 0 (#300 slice 6b, 2026-11-13)
+    assert.deepEqual(Object.fromEntries(Object.entries(entries).map(([name, entry]) => [name, [entry.reads, entry.requests]])), {
+      newtab: [9, 0], popup: [null, 0], sidepanel: [null, 0], offscreen: [undefined, 0], recovery: [undefined, 0], background: [undefined, 0], moment: [null, null],
+    });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
     assert.equal(BUDGETS.timing.rounds, 12);
@@ -765,11 +805,15 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
   // The shipped rows with both set to report, for the cases that read a summary without failing
   const REPORTING = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'report' }, heap: { ...BUDGETS.heap, mode: 'report' } };
   const ratio = (median, extra = {}) => ({ median, q1: median - 0.01, q3: median + 0.01, values: Array(12).fill(median), ...extra });
+  // Two counted runs on each profile with counts the shipped rows take, so a case about timing
+  // and heap reads no counts verdict but a pass (#300)
+  const TAKEN = { newtab: { reads: 8, requests: 0 }, popup: { requests: 0 }, sidepanel: { requests: 0 }, offscreen: { requests: 0 }, recovery: { requests: 0 }, background: { requests: 0 } };
+  const COUNTED = { runs: 2, profiles: Object.fromEntries(['typical', 'maximal'].map(name => [name, { packages: { candidate: { runs: [TAKEN, TAKEN], max: TAKEN, failures: [] } } }])) };
   // The candidate's ratio to the first 1.4.0 copy alone is set apart from its ratio to both, so
   // a summary that read the first would show. Both profiles the rows gate get the same numbers.
   // `paired` is how many rounds have a run of every package: a package that recorded fewer, on
-  // either side, leaves its other rounds unpaired
-  const probe = (self, both, heapMiB, { first = both + 0.2, failures = [], problems = [], rounds = 12, paired = rounds } = {}) => ({
+  // either side, leaves its other rounds unpaired. `counts: null` leaves the counts out
+  const probe = (self, both, heapMiB, { first = both + 0.2, failures = [], problems = [], rounds = 12, paired = rounds, counts = COUNTED } = {}) => ({
     environment: { cpu: 'test', cores: 4, platform: 'linux' },
     timing: {
       browser: '156',
@@ -791,6 +835,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
         ]),
       ),
     },
+    ...(counts ? { counts } : {}),
     problems,
   });
   const each = verdict => ['typical', 'maximal'].map(profile => ({ profile, ...verdict }));
@@ -926,6 +971,69 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.equal(gateReport(probe(1.01, 1.05, 2.7), BUDGETS).failed, false);
     // The same slow, heavy candidate with both rows back on report passes the job
     assert.equal(gateReport(probe(1.01, 1.09, 3.5), REPORTING).failed, false);
+  });
+
+  it("holds each count to its row on each profile the timing row takes: a null row reports, a number fails a count over it, or a run with no count, and a request from a page that's no entry is listed, held to no row (#300)", () => {
+    const counted = (/** @type {any} */ max) => ({
+      ...probe(1.01, 1.05, 2.7),
+      counts: { runs: 2, profiles: Object.fromEntries(['typical', 'maximal'].map(name => [name, { packages: { candidate: { runs: [max, max], max, failures: [] } } }])) },
+    });
+    const rows = (/** @type {number | null} */ reads, /** @type {number | null} */ requests) => ({
+      ...REPORTING,
+      entries: { newtab: { page: 'newtab.html', reason: 'the tab', reads, requests }, popup: { page: 'popup.html', reason: 'the popup', requests } },
+    });
+    const max = { newtab: { reads: 40, requests: 0 }, popup: { requests: 1 } };
+    const verdicts = (/** @type {any} */ report) => report.countVerdicts.map((/** @type {any} */ v) => `${v.profile} ${v.entry} ${v.row} ${v.count} ${v.limit} ${v.verdict}`);
+    // Null rows report what the run counted, and fail nothing
+    const reported = gateReport(counted(max), rows(null, null));
+    assert.deepEqual(verdicts(reported), ['typical newtab reads 40 null report', 'typical newtab requests 0 null report', 'typical popup requests 1 null report', 'maximal newtab reads 40 null report', 'maximal newtab requests 0 null report', 'maximal popup requests 1 null report']);
+    assert.equal(reported.failed, false);
+    assert.match(reported.markdown, /\| typical \| newtab \| IndexedDB reads before its mark \| 40 \| none yet \| report \|/);
+    // Set, a count at its row passes and one over it fails, however timing and heap report
+    const gated = gateReport(counted(max), rows(40, 0));
+    assert.deepEqual(verdicts(gated).slice(0, 3), ['typical newtab reads 40 40 pass', 'typical newtab requests 0 0 pass', 'typical popup requests 1 0 fail']);
+    assert.equal(gated.failed, true);
+    assert.equal(gateReport(counted({ newtab: { reads: 40, requests: 0 }, popup: { requests: 0 } }), rows(40, 0)).failed, false);
+    // A set row the run has no count for fails, so a run that counted nothing can't pass
+    const none = gateReport(probe(1.01, 1.05, 2.7, { counts: null }), rows(40, 0));
+    assert.deepEqual(verdicts(none).slice(0, 2), ['typical newtab reads undefined 40 invalid', 'typical newtab requests undefined 0 invalid']);
+    assert.equal(none.failed, true);
+    // A request from a page that's no entry is listed under the table, once, and fails nothing
+    const welcome = counted(max);
+    const request = { url: 'http://localhost:9/welcome', from: 'unknown' };
+    welcome.counts.profiles.typical.packages.candidate.runs = [{ ...max, unattributed: [request] }, { ...max, unattributed: [request] }];
+    const listed = gateReport(welcome, rows(40, 1));
+    assert.equal(listed.failed, false);
+    assert.match(listed.markdown, /\n\nRequests outside the extension from a page that's no entry, which no row counts:\n\n- typical: http:\/\/localhost:9\/welcome\n\n/);
+    assert.doesNotMatch(listed.markdown, /- maximal: http/);
+  });
+
+  it("counts a profile whose counted run failed, or that has fewer runs than the probe asked, as one with no count, and names the run (#300)", () => {
+    const run = { newtab: { reads: 8, pageReads: 8, workerReads: 0, requests: 0 }, popup: { requests: 0 }, urls: [] };
+    const max = { newtab: { reads: 8, requests: 0 }, popup: { requests: 0 } };
+    const probed = (/** @type {any} */ typical) => ({
+      ...probe(1.01, 1.05, 2.7),
+      counts: { runs: 2, profiles: { typical: { packages: { candidate: { max, ...typical } } }, maximal: { packages: { candidate: { runs: [run, run], max, failures: [] } } } } },
+    });
+    const failed = probed({ runs: [run], failures: [{ run: 2, message: 'the new tab never marked itself ready' }] });
+    const rows = (/** @type {number | null} */ reads, /** @type {number | null} */ requests) => ({
+      ...REPORTING,
+      entries: { newtab: { page: 'newtab.html', reason: 'the tab', reads, requests }, popup: { page: 'popup.html', reason: 'the popup', requests } },
+    });
+    const typical = (/** @type {any} */ report) => [...new Set(report.countVerdicts.filter((/** @type {any} */ v) => v.profile === 'typical').map((/** @type {any} */ v) => v.verdict))];
+    // Set rows: the profile short of a run has no count, so it fails, and the other passes
+    const gated = gateReport(failed, rows(8, 0));
+    assert.equal(gated.failed, true);
+    assert.deepEqual(typical(gated), ['invalid']);
+    assert.deepEqual([...new Set(gated.countVerdicts.filter((/** @type {any} */ v) => v.profile === 'maximal').map((/** @type {any} */ v) => v.verdict))], ['pass']);
+    // Null rows: it reports, fails nothing, and says which run failed and why
+    const reported = gateReport(failed, rows(null, null));
+    assert.equal(reported.failed, false);
+    assert.match(reported.markdown, /- typical: counted run 2 failed: the new tab never marked itself ready/);
+    // A profile with fewer runs than asked and none failed is short too
+    const short = gateReport(probed({ runs: [run], failures: [] }), rows(8, 0));
+    assert.deepEqual(typical(short), ['invalid']);
+    assert.match(short.markdown, /- typical: 1 of the 2 counted runs/);
   });
 
   it('fails once a row is a gate', () => {

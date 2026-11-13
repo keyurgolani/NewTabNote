@@ -28,7 +28,7 @@ jobs:
   perf:
     name: perf (report)
     runs-on: ubuntu-24.04
-    # Two builds, Chromium, and 72 install-cold runs
+    # Two builds, Chromium, 72 timed install-cold runs and 4 counted ones (#300)
     timeout-minutes: 45
     steps:
       - name: Check out

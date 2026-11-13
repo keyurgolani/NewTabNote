@@ -21,9 +21,11 @@
  *                      start doesn't import(), or a chunk the page's start import()s that the
  *                      row names in neither, so the row can't fall back to measuring the root;
  *                      or a row it needs with no number and no issue named for it in waitsOn
- *                      (#300): a start type its build has, its modules, the service worker's
- *                      cold start, every row of a planned entry, and the zip's and update
- *                      size's, so a row that waits on another issue reads apart from a missing one
+ *                      (#300): a start type its build has, its modules and its requests, the
+ *                      new tab's reads, the service worker's cold start, a planned entry's
+ *                      start rows, modules, reads and requests, and the zip's and update
+ *                      size's, so a row that waits on another issue reads apart from a missing
+ *                      one
  *   budget/bytes       an entry's start over a row: JS, CSS, HTML, or fonts, raw or gzip at
  *                      level 9, the way npm run perf:probe measures them
  *   budget/modules     an entry's start over its module row: its modules, third-party and
@@ -72,6 +74,10 @@ const FONT = /\.(?:woff2?|ttf|otf)$/i;
 const START_TYPES = ['html', 'js', 'css', 'fonts'];
 /** The package row's rows: the zip's bytes, and update size, which #31's release gate sets (#300) */
 const PACKAGE_ROWS = ['zipBytes', 'updateBytes'];
+/** The entries whose reads row may hold a number: the new tab's routes, where #27 has IndexedDB reads before interaction-ready (#300) */
+const READ_ENTRIES = ['newtab', 'moment'];
+/** The entries whose reads row stays null until their page has a ready mark to count to: Popup (#4) and the Side Panel (#5), as #27 has them */
+const MARKLESS_READ_ENTRIES = ['popup', 'sidepanel'];
 /** An issue a null row waits on, in waitsOn */
 const ISSUE = /^#[1-9]\d*$/;
 /**
@@ -113,6 +119,10 @@ const LAZY_ONLY_MODULES = Object.freeze([
  * @property {Partial<Record<StartType, Limit | null>>} [start] - null: no approved number yet
  * @property {number | null} [modules] - the most modules its start may hold; null: no approved
  *   number yet
+ * @property {number | null} [reads] - the new tab's IndexedDB reads before its interaction-ready mark,
+ *   which npm run perf:probe counts and the perf job holds it to (#300); null: no approved number yet
+ * @property {number | null} [requests] - the requests its start makes outside the extension, which
+ *   the probe counts and the perf job holds it to (#300); null: no approved number yet
  * @property {number | null} [coldStart] - the service worker's cold start, in ms, #35's to set and
  *   gate at release; the build checks only its shape
  * @property {Record<string, string>} [waitsOn] - for each row it leaves null, the issue that sets it
@@ -473,6 +483,12 @@ function fileProblems(budgets) {
       if (!ok) fail(`entry ${name}'s ${type} row isn't whole numbers of bytes, raw and gzip`);
     }
     if (entry.modules !== undefined && entry.modules !== null && !wholeNumber(entry.modules)) fail(`entry ${name}'s modules row isn't a whole number of modules`);
+    for (const key of ['reads', 'requests']) {
+      if (entry[key] !== undefined && entry[key] !== null && !wholeNumber(entry[key])) fail(`entry ${name}'s ${key} row isn't a whole number`);
+    }
+    if (entry.reads !== undefined && MARKLESS_READ_ENTRIES.includes(name)) {
+      if (entry.reads !== null) fail(`entry ${name}'s reads row stays null until its page has a ready mark to count reads to`);
+    } else if (entry.reads !== undefined && !READ_ENTRIES.includes(name)) fail(`entry ${name} has a reads row, which only the new tab, Moment, Popup and the Side Panel have`);
     if (entry.coldStart !== undefined) {
       if (name !== 'background') fail(`entry ${name} has a coldStart row, which only the service worker has`);
       else if (entry.coldStart !== null && !wholeNumber(entry.coldStart)) fail(`entry ${name}'s coldStart row isn't a whole number of milliseconds`);
@@ -493,12 +509,13 @@ function fileProblems(budgets) {
 }
 
 /**
- * The rows an entry can have: its start rows, its modules, and the service worker's cold start
+ * The rows an entry can have: its start rows, its modules, its reads on the new tab's routes and
+ * on Popup and the Side Panel, its requests, and the service worker's cold start
  * @param {string} name
  * @returns {string[]}
  */
 function rowsOf(name) {
-  return [...START_TYPES, 'modules', ...(name === 'background' ? ['coldStart'] : [])];
+  return [...START_TYPES, 'modules', ...([...READ_ENTRIES, ...MARKLESS_READ_ENTRIES].includes(name) ? ['reads'] : []), 'requests', ...(name === 'background' ? ['coldStart'] : [])];
 }
 
 /**
@@ -531,9 +548,11 @@ function wholeNumber(value) {
 
 /**
  * Each row a build needs that has no number and no issue named for it in waitsOn (#300): the start
- * types an entry's build has, its modules, and the service worker's cold start; every row of a
- * planned entry, which waits on the issue that builds it; and the package's rows. A row that waits
- * on another issue names it, so it reads apart from one nobody set.
+ * types an entry's build has, its modules, its requests, the new tab's reads, and the service
+ * worker's cold start; a planned entry's start rows, modules, reads on the new tab's routes and
+ * requests, which wait on the issue that builds it; and the package's rows. Popup's and the Side
+ * Panel's reads can't be a number until #4 and #5 give them a ready mark, so the build needs
+ * neither yet. A row that waits on another issue names it, so it reads apart from one nobody set.
  * @param {Record<string, EntryGraph>} graphs
  * @param {BudgetFile} budgets
  * @returns {Problem[]}
@@ -545,9 +564,10 @@ function unsetProblems(graphs, budgets) {
   for (const [name, entry] of Object.entries(budgets.entries)) {
     const graph = graphs[name];
     if (!entry.planned && !graph) continue;
+    const counts = [...(READ_ENTRIES.includes(name) ? ['reads'] : []), 'requests'];
     const needs = entry.planned
-      ? rowsOf(name)
-      : [...START_TYPES.filter((type) => graph.start.bytes[type]), 'modules', ...(graph.kind === 'worker' ? ['coldStart'] : [])];
+      ? [...START_TYPES, 'modules', ...counts]
+      : [...START_TYPES.filter((type) => graph.start.bytes[type]), 'modules', ...counts, ...(graph.kind === 'worker' ? ['coldStart'] : [])];
     for (const row of needs) {
       const value = START_TYPES.includes(row) ? (entry.start || {})[/** @type {StartType} */ (row)] : /** @type {any} */ (entry)[row];
       if ((value === undefined || value === null) && !(entry.waitsOn && entry.waitsOn[row])) problems.push(unset(name, START_TYPES.includes(row) ? `start ${row.toUpperCase()}` : row));
