@@ -7,8 +7,10 @@
  * value it changes, as `width-320` or `scheme-dark`. The point the matrix gates, dark, carries its
  * gate, which a contrast finding there takes. emulate() puts a page at a point through its own CDP
  * session, so the harness's launch stays as it is. atPoints() declares a surface's tests, one a point,
- * on a test whose pointPage fixture opens the page they check. It's CommonJS so a spec can declare them
- * as it loads, and a test's page is its spec's whichever file declares it.
+ * each setting the point option withPoint() gives a spec's test. That test's pointPage fixture puts
+ * its page at the point before it opens it, so the page loads there, and sets the text spacing on
+ * what opened. It's CommonJS so a spec can declare them as it loads, and a test's page is its spec's
+ * whichever file declares it.
  */
 
 const fs = require('node:fs');
@@ -104,7 +106,8 @@ async function spaceText(page, point) {
 
 /**
  * Puts `page` at `point`: its viewport and device scale, touch for a coarse pointer, the default font
- * size, the text spacing, and the scheme, contrast, forced colors and motion media
+ * size, and the scheme, contrast, forced colors and motion media. A spec's pointPage calls it before
+ * it opens its page, so the page loads at its point, and then spaceText() on what opened.
  * @param {import('@playwright/test').Page} page
  * @param {Point} point
  * @param {string} surface
@@ -116,7 +119,6 @@ async function emulate(page, point, surface) {
   await session.send('Page.setFontSizes', { fontSizes: { standard: point.fontSize } });
   const media = { colorScheme: point.scheme, contrast: point.contrast, forcedColors: point.forcedColors, reducedMotion: point.motion };
   await page.emulateMedia(/** @type {any} */ (media));
-  await spaceText(page, point);
 }
 
 /** Settles once every transition running on the page has ended */
@@ -134,25 +136,38 @@ async function offPointer(page) {
 }
 
 /**
- * Declares one test of `surface` at each of its points, on `test`, which defines `pointPage`: the
- * page each one checks, opened as the spec opens its surface, through #34's harness for the
- * extension's own. Playwright reads a test's fixtures from its own function, so the spec names how to
- * open the page there. Each test puts the page at its point, text spacing included, takes the pointer
- * off it, checks it, and attaches what it found with its point.
- * @param {import('@playwright/test').TestType<{pointPage: import('@playwright/test').Page}, any>} test
+ * `test` with the option each point's test sets, `point`, which a spec's pointPage fixture reads
+ * @template T, W
+ * @param {import('@playwright/test').TestType<T, W>} test
+ * @returns {import('@playwright/test').TestType<T & {point: Point}, W>}
+ */
+function withPoint(test) {
+  return /** @type {any} */ (test.extend({ point: [undefined, { option: true }] }));
+}
+
+/**
+ * Declares one test of `surface` at each of its points, on `test`, a withPoint() test that defines
+ * `pointPage`: the page each one checks, opened as the spec opens its surface, through #34's harness
+ * for the extension's own. Playwright reads a test's fixtures from its own function, so the spec
+ * names how to open the page there, after it emulate()s the point the test sets, and spaceText()s
+ * what opened. Each test takes the pointer off the page, checks it, and attaches what it found with
+ * its point.
+ * @param {import('@playwright/test').TestType<{point: Point, pointPage: import('@playwright/test').Page}, any>} test
  * @param {string} surface
  * @param {{check: (page: import('@playwright/test').Page, point: Point) => Promise<{rule: string, target: string}[]>}} steps
  */
 function atPoints(test, surface, { check }) {
   const all = pointsOf(surface);
   for (const point of all) {
-    test(`${surface} at ${point.id}`, async ({ pointPage }, testInfo) => {
-      await emulate(pointPage, point, surface);
-      await offPointer(pointPage);
-      const findings = await check(pointPage, point);
-      await testInfo.attach('a11y-findings', { body: JSON.stringify(recordAt(point, all.length, findings)), contentType: 'application/json' });
+    test.describe(() => {
+      test.use({ point });
+      test(`${surface} at ${point.id}`, async ({ pointPage }, testInfo) => {
+        await offPointer(pointPage);
+        const findings = await check(pointPage, point);
+        await testInfo.attach('a11y-findings', { body: JSON.stringify(recordAt(point, all.length, findings)), contentType: 'application/json' });
+      });
     });
   }
 }
 
-module.exports = { CONTRAST_RULES, pointsOf, viewportOf, recordAt, emulate, spaceText, offPointer, atPoints };
+module.exports = { CONTRAST_RULES, pointsOf, viewportOf, recordAt, emulate, spaceText, offPointer, withPoint, atPoints };
