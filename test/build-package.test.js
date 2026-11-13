@@ -193,4 +193,19 @@ describe('npm run package (AC4, AC5)', () => {
     const { dir } = await smallBuild({ 'stray.txt': 'unnamed' });
     assert.deepEqual(makePackage(dir).problems.map(({ code, subject }) => `${code} ${subject}`), ['closure/unreferenced stray.txt']);
   });
+
+  it("refuses a zip over build/budgets.json's zip row, and gates nothing on a null row (#300)", async () => {
+    const { dir } = await smallBuild();
+    const real = JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'budgets.json'), 'utf8'));
+    const budgets = (/** @type {number | null} */ zipBytes) => ({ ...real, package: { ...real.package, zipBytes } });
+    const { zip } = makePackage(dir, { budgets: budgets(null) });
+    const kib = (/** @type {number} */ bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
+    assert.deepEqual(makePackage(dir, { budgets: budgets(null) }).problems, []);
+    assert.deepEqual(makePackage(dir, { budgets: budgets(zip.length) }).problems, []);
+    assert.deepEqual(makePackage(dir, { budgets: budgets(zip.length - 1) }).problems.map(({ code, subject, message }) => `${code} ${subject}: ${message}`), [
+      `budget/zip the zip: it is ${zip.length} bytes (${kib(zip.length)}), over its ${zip.length - 1} (${kib(zip.length - 1)}); a number over a row goes to the owner, not into the row`,
+    ]);
+    // With no budgets of its own, it reads build/budgets.json, as npm run package does
+    assert.deepEqual(makePackage(dir).problems, []);
+  });
 });

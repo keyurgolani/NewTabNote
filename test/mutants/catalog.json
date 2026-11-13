@@ -1149,7 +1149,7 @@
       "find": "  if ((fixture.expect || []).includes('budget/bytes')) return false;\n",
       "replace": "  if (false) return false;\n",
       "test": "test/build-fixtures.test.js",
-      "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
+      "name": "lifts every start byte row, module row and the zip row in a fixture's copy past any build, each unless the fixture expects that row's code, so a copy's -dirty build id trips no row, and the rows fixtures keep the real rows (#35 slice 4d, #300)"
     },
     {
       "id": "fixture-rows-never-lifted",
@@ -1159,7 +1159,7 @@
       "find": "  if ((fixture.expect || []).includes('budget/bytes')) return false;\n",
       "replace": "  if (true) return false;\n",
       "test": "test/build-fixtures.test.js",
-      "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
+      "name": "lifts every start byte row, module row and the zip row in a fixture's copy past any build, each unless the fixture expects that row's code, so a copy's -dirty build id trips no row, and the rows fixtures keep the real rows (#35 slice 4d, #300)"
     },
     {
       "id": "newtab-closing-save-sent",

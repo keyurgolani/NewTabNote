@@ -210,6 +210,30 @@ describe('the budget gate', () => {
     assert.match(gzipOnly.join('\n'), /^budget\/bytes popup: its start JS is \d+ bytes gzip/);
   });
 
+  it("fails an entry's start over its module row, the count the build's line prints, and gates nothing on a null row (#300)", () => {
+    const { popup, background } = budgetsFor().entries;
+    // The fixture's Popup starts with popup.html, js/popup.js and valibot, and the worker is its one module
+    assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: 3 }, background: { ...background, modules: 1 } })), []);
+    assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: 2 }, background: { ...background, modules: 0 } })), [
+      'budget/modules popup: its start has 3 modules, over its 2; a number over a row goes to the owner, not into the row',
+      'budget/modules background: its start has 1 module, over its 0; a number over a row goes to the owner, not into the row',
+    ]);
+    assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: null } })), []);
+  });
+
+  it("refuses a module row that isn't a whole number of modules, and a package row that isn't whole bytes with a reason (#300)", () => {
+    const { popup } = budgetsFor().entries;
+    for (const modules of [1.5, -1, '60', {}]) {
+      assert.deepEqual(fileProblems(budgetsFor({ popup: { ...popup, modules } })).map(({ message }) => message), ["entry popup's modules row isn't a whole number of modules"], String(modules));
+    }
+    const zip = (/** @type {unknown} */ row) => fileProblems({ ...budgetsFor(), package: row }).map(({ message }) => message);
+    assert.deepEqual(zip({ zipBytes: 1000, reason: 'the zip' }), []);
+    assert.deepEqual(zip({ zipBytes: null, reason: 'the zip' }), []);
+    for (const zipBytes of [1.5, -1, '1000', {}]) assert.deepEqual(zip({ zipBytes, reason: 'the zip' }), ["the package's zipBytes row isn't a whole number of bytes"], String(zipBytes));
+    assert.deepEqual(zip({ zipBytes: 1000 }), ['the package row has no reason']);
+    assert.deepEqual(zip('the zip'), ["the package row isn't a row"]);
+  });
+
   it('fails a forbidden module on the start path, not in a lazy chunk', () => {
     assert.deepEqual(run(budgetsFor(), bundleFixture({ extraStart: ['js/lib/chart.js'] })), [
       'budget/forbidden newtab: its start path holds chart-library (Chart.js): js/lib/chart.js',

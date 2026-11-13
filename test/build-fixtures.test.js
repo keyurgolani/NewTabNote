@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { CODES } = require('../scripts/build/diagnostics.js');
 const os = require('node:os');
-const { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, liftByteRows, outputProblems, CANARY_NAMES, KINDS } = require('../scripts/build/verify-fixtures.js');
+const { readFixtures, applyEdits, recordSecurityEntry, reportedCodes, liftRows, outputProblems, CANARY_NAMES, KINDS } = require('../scripts/build/verify-fixtures.js');
 const { packageOf } = require('./helpers/source-package.js');
 const { checkSecurityBaseline, firstPartyScripts, SOURCES, CHANGES_FILE } = require('../scripts/build/security-baseline.js');
 
@@ -65,29 +65,45 @@ describe('test/build-fixtures/', () => {
     }
   });
 
-  it("lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)", () => {
-    const bytes = fixtures.filter((fixture) => (fixture.expect || []).includes('budget/bytes')).map((fixture) => fixture.name);
-    assert.deepEqual(bytes.sort(), ['budget-bytes', 'budget-start-chunk']);
+  it("lifts every start byte row, module row and the zip row in a fixture's copy past any build, each unless the fixture expects that row's code, so a copy's -dirty build id trips no row, and the rows fixtures keep the real rows (#35 slice 4d, #300)", () => {
+    const keeping = (/** @type {string} */ code) => fixtures.filter((fixture) => (fixture.expect || []).includes(code)).map((fixture) => fixture.name).sort();
+    assert.deepEqual(keeping('budget/bytes'), ['budget-bytes', 'budget-start-chunk']);
+    assert.deepEqual(keeping('budget/modules'), ['budget-modules']);
+    assert.deepEqual(keeping('budget/zip'), ['package-zip-bytes']);
     for (const fixture of fixtures) {
       // The copy's build/budgets.json alone, with the fixture's own edits to it
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-fixture-rows-'));
+      const file = path.join(dir, 'build', 'budgets.json');
       try {
         fs.mkdirSync(path.join(dir, 'build'));
-        fs.copyFileSync(path.join(ROOT, 'build', 'budgets.json'), path.join(dir, 'build', 'budgets.json'));
+        fs.copyFileSync(path.join(ROOT, 'build', 'budgets.json'), file);
         applyEdits(dir, (fixture.edits || []).filter((edit) => edit.file === 'build/budgets.json'));
-        const edited = fs.readFileSync(path.join(dir, 'build', 'budgets.json'), 'utf8');
-        const lifted = liftByteRows(dir, fixture);
-        const text = fs.readFileSync(path.join(dir, 'build', 'budgets.json'), 'utf8');
-        if (bytes.includes(fixture.name) || fixture.name === 'budget-file') {
-          // A bytes fixture builds against the real rows, and budget-file's file doesn't parse, its rule
-          assert.equal(lifted, false, fixture.name);
-          assert.equal(text, edited, `${fixture.name} keeps its copy's rows`);
+        const edited = fs.readFileSync(file, 'utf8');
+        if (fixture.name === 'budget-file') {
+          // Its file doesn't parse, which is its rule
+          assert.equal(liftRows(dir, fixture), false);
+          assert.equal(fs.readFileSync(file, 'utf8'), edited, "budget-file keeps its copy's rows");
           continue;
         }
-        assert.equal(lifted, true, fixture.name);
-        const rows = Object.values(JSON.parse(text).entries).flatMap((entry) => Object.values(entry.start || {})).filter(Boolean);
-        assert.ok(rows.length >= 3, `${fixture.name}: the pages' rows`);
-        for (const row of rows) assert.deepEqual(row, { raw: 2097152, gzip: 1048576 }, fixture.name);
+        // A null row gates nothing, so each gets a number here, to see what lifts it
+        const before = JSON.parse(edited);
+        for (const entry of Object.values(before.entries)) if (entry.modules === null) entry.modules = 7;
+        if (before.package.zipBytes === null) before.package.zipBytes = 7;
+        fs.writeFileSync(file, JSON.stringify(before));
+        assert.equal(liftRows(dir, fixture), true, fixture.name);
+        const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const expects = (/** @type {string} */ code) => (fixture.expect || []).includes(code);
+        let rows = 0;
+        for (const [name, entry] of Object.entries(before.entries)) {
+          for (const [type, row] of Object.entries(entry.start || {})) {
+            if (!row) continue;
+            rows++;
+            assert.deepEqual(after.entries[name].start[type], expects('budget/bytes') ? row : { raw: 2097152, gzip: 1048576 }, `${fixture.name}: ${name}'s ${type}`);
+          }
+          if (entry.modules !== undefined) assert.equal(after.entries[name].modules, expects('budget/modules') ? entry.modules : 100000, `${fixture.name}: ${name}'s modules`);
+        }
+        assert.ok(rows >= 3, `${fixture.name}: the pages' rows`);
+        assert.equal(after.package.zipBytes, expects('budget/zip') ? before.package.zipBytes : 67108864, `${fixture.name}: the zip`);
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
