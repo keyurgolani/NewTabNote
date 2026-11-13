@@ -10,6 +10,8 @@
 
 import { tabWalk } from './ring.mjs';
 
+/** @typedef {{x: number, y: number, width: number, height: number}} Box */
+
 /** The rule a tab stop nobody sees fails */
 export const HIDDEN_RULE = 'ntn-hidden-focus';
 
@@ -31,8 +33,9 @@ export function hiddenStops(stops) {
 /**
  * The stops Tab reaches out of reading order: back along the line the stop before sits on, or up the
  * column it sits in. Two boxes share a line when they overlap by half the shorter one's height, and a
- * column when they overlap by half the narrower one's width.
- * @param {readonly {id: string, box: {x: number, y: number, width: number, height: number}}[]} stops - in tab order
+ * column when they overlap by half the narrower one's width. A stop that wraps starts at its `box`
+ * and ends at its `end`, so the next stop is read from where it ends.
+ * @param {readonly {id: string, box: Box, end?: Box}[]} stops - in tab order
  * @returns {string[]}
  */
 export function orderProblems(stops) {
@@ -41,7 +44,7 @@ export function orderProblems(stops) {
   return stops
     .filter((stop, i) => {
       if (i === 0) return false;
-      const [a, b] = [stops[i - 1].box, stop.box];
+      const [a, b] = [stops[i - 1].end ?? stops[i - 1].box, stop.box];
       const line = overlap(a.y, a.height, b.y, b.height);
       if (line) return b.x + b.width / 2 < a.x + a.width / 2;
       return overlap(a.x, a.width, b.x, b.width) && b.y + b.height <= a.y;
@@ -51,19 +54,30 @@ export function orderProblems(stops) {
 
 /**
  * In the page: the focused element, with whether the page shows any of it and its opacity with its
- * parents', or null when focus is on the page itself. A stop the pointer passes through is shown if
- * any of it is on screen. Its box is where it sits with nothing scrolled, each scrolled box around it
- * up to a fixed one added back, since Chrome scrolls each stop it tabs to into view and order compares
- * stops read at different scroll positions. A sticky box isn't followed.
+ * parents', or null when focus is on the page itself. It's read by its line boxes, so a link that wraps
+ * is shown if the page shows it where either part sits, and its box is its first part, with its last
+ * as its end. A stop the pointer passes through is shown if any of it is on screen. Its boxes are where
+ * it sits with nothing scrolled, each scrolled box around it up to a fixed one added back, since Chrome
+ * scrolls each stop it tabs to into view and order compares stops read at different scroll positions.
+ * A sticky box isn't followed.
  * @param {(el: Element) => string} selectorOf
  */
 function readStop(selectorOf) {
   const el = document.activeElement;
   if (!el || el === document.body || el === document.documentElement) return null;
-  const { left, top, width, height } = el.getBoundingClientRect();
-  const onScreen = width > 0 && height > 0 && left < innerWidth && top < innerHeight && left + width > 0 && top + height > 0;
-  const hits = [[0.5, 0.5], [0.1, 0.1], [0.9, 0.1], [0.1, 0.9], [0.9, 0.9]].map(([x, y]) => document.elementFromPoint(left + width * x, top + height * y));
-  const shown = onScreen && (getComputedStyle(el).pointerEvents === 'none' || hits.some(hit => hit !== null && (hit === el || el.contains(hit))));
+  const parts = [...el.getClientRects()].filter(({ width, height }) => width > 0 && height > 0);
+  const passes = getComputedStyle(el).pointerEvents === 'none';
+  const seen = (/** @type {DOMRect} */ { left, top, width, height }) =>
+    left < innerWidth &&
+    top < innerHeight &&
+    left + width > 0 &&
+    top + height > 0 &&
+    (passes ||
+      [[0.5, 0.5], [0.1, 0.1], [0.9, 0.1], [0.1, 0.9], [0.9, 0.9]].some(([x, y]) => {
+        const hit = document.elementFromPoint(left + width * x, top + height * y);
+        return hit !== null && (hit === el || el.contains(hit));
+      }));
+  const shown = parts.some(seen);
   let opacity = 1;
   for (let node = el; node; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
   let dx = 0;
@@ -72,7 +86,9 @@ function readStop(selectorOf) {
     dx += node.parentElement.scrollLeft;
     dy += node.parentElement.scrollTop;
   }
-  return { id: selectorOf(el), shown, opacity, box: { x: left + dx, y: top + dy, width, height } };
+  const at = (/** @type {DOMRect} */ { left, top, width, height }) => ({ x: left + dx, y: top + dy, width, height });
+  const [first = el.getBoundingClientRect()] = parts;
+  return { id: selectorOf(el), shown, opacity, box: at(first), ...(parts.length > 1 ? { end: at(parts[parts.length - 1]) } : {}) };
 }
 
 /**
