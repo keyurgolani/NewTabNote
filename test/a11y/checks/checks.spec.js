@@ -45,7 +45,8 @@
 //   recording, or that a reload has replaced since;
 // - under reduced motion, the motion check finds a transform transition, a keyframed rotation,
 //   smooth scroll and a canvas that keeps redrawing, and passes a fade, a keyframed pulse and a
-//   canvas drawn once;
+//   canvas drawn once. It reads what a step starts from the step's start, so a slide that ends
+//   before the check's wait does is found, and a fade as short passes;
 // - the clipping check finds an action a hidden-overflow bar cuts off and one partly before the
 //   page's start, and at 320 CSS px a block that makes the page scroll sideways, and passes a bar
 //   that scrolls. At 1280 and at 200, where nothing asks a page to reflow, only the cut-off actions
@@ -439,6 +440,19 @@ test('under reduced motion, the motion check finds a transform transition, a key
   ]);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(motion.motionFindings(page)).rejects.toThrow(/prefers-reduced-motion: reduce/);
+});
+
+test("the motion check reads what a step starts from the step's start, so a slide that ends before its wait does is found, and a fade as short passes", async ({ page }) => {
+  const motion = await import('./motion.mjs');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setContent(
+    html(`<style>@keyframes slide-in { from { transform: translateX(100%); } } @keyframes fade-in { from { opacity: 0; } }
+      .toast { animation: slide-in 1s; } .notice { animation: fade-in 1s; }</style>`),
+  );
+  await page.evaluate(`document.querySelector('main').append(
+    Object.assign(document.createElement('div'), { id: 'toast', className: 'toast', textContent: 'Saved' }),
+    Object.assign(document.createElement('div'), { id: 'notice', className: 'notice', textContent: 'Synced' }))`);
+  expect(await motion.motionFindings(page, { settle: 1500 })).toEqual([{ rule: 'transform-animation', target: '#toast' }]);
 });
 
 /** The clipping check's page: a button a bar cuts off, a bar that scrolls, a button partly before the page's start, and a block wider than 320 CSS px */
