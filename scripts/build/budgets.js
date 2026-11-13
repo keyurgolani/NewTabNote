@@ -508,8 +508,8 @@ function fileProblems(budgets) {
 }
 
 /**
- * The rows an entry can have: its start rows, its modules, the new tab's routes' reads, its
- * requests, and the service worker's cold start
+ * The rows an entry can have: its start rows, its modules, its reads on the new tab's routes and
+ * on Popup and the Side Panel, its requests, and the service worker's cold start
  * @param {string} name
  * @returns {string[]}
  */
