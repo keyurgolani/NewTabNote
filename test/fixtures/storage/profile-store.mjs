@@ -16,10 +16,11 @@
 // Each call opens CanvasTabDB as it is, at whatever version, makes no database and upgrades
 // none, and closes it before it answers, so it never blocks another context's upgrade. An open
 // with no answer in OPEN_BOUND_MS fails, naming CanvasTabDB's open, so a stall behind another
-// context's upgrade reads as one in a test's report, not as the test's timeout (#286). A store
-// the profile lacks reads as empty where 1.4.x read it as empty (folders, themes), and a write
-// to it throws. It runs on Node, and in an extension page or the service worker through
-// e2e/harness/profile-store.js, which evaluates this file's body there: it imports nothing.
+// context's upgrade or delete reads as one in a test's report, not as the test's timeout
+// (#286). A store the profile lacks reads as empty where 1.4.x read it as empty (folders,
+// themes), and a write to it throws. It runs on Node, and in an extension page or the service
+// worker through e2e/harness/profile-store.js, which evaluates this file's body there: it
+// imports nothing.
 
 /** The database 1.4.x's Storage kept notes in */
 export const PROFILE_DATABASE = 'CanvasTabDB';
@@ -199,8 +200,9 @@ function committed(tx) {
 
 /**
  * CanvasTabDB as it is, at its version, closing on another context's upgrade. A profile without
- * one is refused, and none is made. An open with no answer in OPEN_BOUND_MS fails, saying whether
- * a connection another context keeps open blocked it, and lets the database go if it opens after.
+ * one is refused, and none is made. An open with no version never hears blocked: it waits only
+ * behind another context's upgrade or delete of the database, so one with no answer in
+ * OPEN_BOUND_MS fails, naming that wait, and lets the database go if it opens after.
  * @param {IDBFactory} factory
  * @returns {Promise<IDBDatabase>}
  */
@@ -208,16 +210,12 @@ function openAsItIs(factory) {
   return new Promise((resolve, reject) => {
     const request = factory.open(PROFILE_DATABASE);
     let none = false;
-    let blocked = false;
     let late = false;
     const bound = setTimeout(() => {
       late = true;
-      const why = blocked ? ', blocked by a connection another context keeps open' : '';
-      reject(new Error(`profile store: ${PROFILE_DATABASE}'s open got no answer in ${OPEN_BOUND_MS / 1000} s${why}`));
+      reject(new Error(`profile store: ${PROFILE_DATABASE}'s open got no answer in ${OPEN_BOUND_MS / 1000} s, `
+        + "waiting behind another context's upgrade or delete of it, which is all an open with no version waits on"));
     }, OPEN_BOUND_MS);
-    request.onblocked = () => {
-      blocked = true;
-    };
     request.onupgradeneeded = () => {
       none = true;
       if (request.transaction) request.transaction.abort();
