@@ -4,7 +4,10 @@
 // - the hit boxes find a 43 by 43 button, and pass a 44 by 44 one, a link in running text, and a
 //   checkbox whose label is its hit area. They measure a control that only takes clicks, and a
 //   pointer-only one under aria-hidden: a 24 by 24 handle, an 18 by 18 checkbox and a 20 by 20 Close
-//   are found, and a 44 by 44 one and a shape inside a button pass. A link in running text is exempt
+//   are found, and a 44 by 44 one and a shape inside a button pass. A pointer-only control is also one
+//   by its own click listener or a resize cursor: a 16 by 16 Close inside a tab's button, a 4px
+//   col-resize strip and an 18 by 18 checkbox under a row with the same cursor are found, and a toggle's
+//   slider is part of its label, so the toggle is one finding. A link in running text is exempt
 //   in any text block, a note's div and its editing host included, and a link alone in one isn't;
 // - the focus ring finds a ring under 3:1 against the page and a control with no ring, and passes a
 //   strong ring and two two-tone rings on a dark plane whose inner ring carries the contrast: one
@@ -70,6 +73,26 @@ test("the hit boxes measure a control that only takes clicks, and a pointer-only
     { rule: 'ntn-target-size', target: '#handle' },
     { rule: 'ntn-target-size', target: '#check' },
     { rule: 'ntn-target-size', target: '#close' },
+  ]);
+});
+
+test("the hit boxes find a pointer-only control by its own click listener or a resize cursor, and count a label's slider as its control", async ({ page }) => {
+  await page.setContent(
+    html(`<style>.tab { width: 120px; height: 44px; padding: 0; } #tab-close { display: inline-block; width: 16px; height: 16px; }
+      #resize { width: 4px; height: 200px; cursor: col-resize; } #row { width: 300px; height: 48px; cursor: pointer; }
+      #select { width: 18px; height: 18px; } #toggle { display: inline-block; width: 40px; height: 22px; }
+      #toggle input { opacity: 0; width: 0; height: 0; margin: 0; } .slider { display: inline-block; width: 40px; height: 22px; cursor: pointer; }</style>
+      <button class="tab" id="tab">Note <span id="tab-close">×</span></button>
+      <div id="resize"></div>
+      <div id="row"><div id="select"></div> A note</div>
+      <label id="toggle"><input type="checkbox" id="toggle-input"><span class="slider"></span></label>
+      <script>for (const id of ['tab-close', 'select']) document.getElementById(id).addEventListener('click', () => {});</script>`),
+  );
+  expect(await targets.targetFindings(page)).toEqual([
+    { rule: 'ntn-target-size', target: '#tab-close' },
+    { rule: 'ntn-target-size', target: '#resize' },
+    { rule: 'ntn-target-size', target: '#select' },
+    { rule: 'ntn-target-size', target: '#toggle-input' },
   ]);
 });
 
