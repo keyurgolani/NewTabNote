@@ -198,12 +198,12 @@ jobs:
         if: failure() || cancelled()
         run: node scripts/ci/failure-excerpt.js "$RUNNER_TEMP/job.log" build
 
-  # #27: each build failure rule fails its fixture, which builds once in each mode it runs, both
-  # unless it names one, so there are more builds than fixtures. Half the fixtures run in each
-  # of these jobs, beside build, so the package and e2e don't wait on them (#29). --shard i/2
-  # takes every second fixture by name from the ith, so the two jobs hold each fixture exactly
-  # once. Two named jobs rather than a matrix, since pr-gate reads each one's excerpt and a
-  # matrix keeps one leg's.
+  # #27: each build failure rule fails its fixture. A build or output fixture builds once in each
+  # mode it names, both by default, and a package fixture or the canary once, in production, so
+  # there are more builds than fixtures. Half the fixtures run in each of these jobs, beside
+  # build, so the package and e2e don't wait on them (#29). --shard i/2 takes every second
+  # fixture by name from the ith, so the two jobs hold each fixture exactly once. Two named jobs
+  # rather than a matrix, since pr-gate reads each one's excerpt and a matrix keeps one leg's.
   fixtures-1:
     name: fixtures-1
     runs-on: ubuntu-24.04

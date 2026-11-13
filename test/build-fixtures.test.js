@@ -3,7 +3,7 @@
 // The fixtures npm run verify:fixtures builds (test/build-fixtures/, #27 test plan), checked
 // without building: each is well formed, its edits still match today's tree, and every build
 // failure rule has one. A fixture whose edit stopped matching would fail verify:fixtures
-// anyway, but only in the build job, minutes later.
+// anyway, but only in CI's fixtures-1 and fixtures-2 jobs, minutes later.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
