@@ -79,9 +79,9 @@
     "sidepanel": {
       "page": "sidepanel.html",
       "lazyChunks": ["close-drafts-applier", "journal-chunk", "sidepanel-send-chunk"],
-      "reason": "The Side Panel's start JS: its start on #35 slice 4d, whose host chunk no longer carries the commands' domain code, 73,534 / 25,555 bytes as build job 128853943289 of PR checks run 42520909498 read it, with no headroom (2026-11-08; it was 94,600 / 32,200 bytes, #35 slice 4c's start plus 5%). Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #5's ready mark.",
+      "reason": "The Side Panel's start JS: its start on #300 slice 5b, 73,534 / 25,553 bytes as build job 131711018907 of push run 43372411837 read it at 1fcbef1a, with no headroom (2026-11-12). Slice 5b's tree shaking renamed its chunks, which took 2 bytes off its gzip. It was 73,534 / 25,555 on #35 slice 4d, whose host chunk no longer carries the commands' domain code (2026-11-08), and 94,600 / 32,200 bytes before that, #35 slice 4c's start plus 5%. Its CSS and HTML have no approved numbers yet, and its timing and heap wait for #5's ready mark.",
       "start": {
-        "js": { "raw": 73534, "gzip": 25555 },
+        "js": { "raw": 73534, "gzip": 25553 },
         "css": null,
         "html": null,
         "fonts": null
@@ -100,7 +100,7 @@
     "recovery": {
       "page": "recovery.html",
       "lazyChunks": ["index-lag", "legacy", "permissions", "platform", "probe", "recovery-fallback", "recovery-readiness"],
-      "reason": "The Trust Center and the Recovery Center (#20 slice 4b). Its rows are today's size plus about 5%, the rule the owner set for these rows, decided for the owner on 2026-11-01 (docs/performance/budgets.md). Its start CSS gzip row is 4.75 KiB, about 5% over the 4,639 bytes that build job 130333246078 of PR checks run 42962855381 measured with #292 in, by that rule (2026-11-10; it was 4.5 KiB). Its raw row stays 22.5 KiB, which that start isn't over. Its start JS row is 360,032 / 113,498 bytes, the 342,887 / 108,093 that build job 131711018907 of push run 43372411837 measured at 1fcbef1a, after #300 slice 5b's tree shaking took two modules nothing used off its start, plus 5%, rounded up, by that rule (2026-11-12; it was 360,521 / 113,627 after #35 slice 4f-3 moved its rebuild and checks to the worker, and 395 / 123 KiB before). The trust code is its own, so its start holds it; the providers' checks load after it opens, and the fallback a repair commits on while the coordinator can't run it loads at its first use (#35 slice 8). Its forbidden list is every other category and its dependencies are what its graph holds, both as the build reported them on 2026-10-31, so anything added later is deliberate.",
+      "reason": "The Trust Center and the Recovery Center (#20 slice 4b). Its rows are today's size plus about 5%, the rule the owner set for these rows, decided for the owner on 2026-11-01 (docs/performance/budgets.md). Its start CSS gzip row is 4.75 KiB, about 5% over the 4,639 bytes that build job 130333246078 of PR checks run 42962855381 measured with #292 in, by that rule (2026-11-10; it was 4.5 KiB). Its raw row stays 22.5 KiB, which that start isn't over. Its start JS row is 360,032 / 113,498 bytes, the 342,887 / 108,093 that build job 131711018907 of push run 43372411837 measured at 1fcbef1a, after #300 slice 5b's tree shaking took three modules nothing used off its start, plus 5%, rounded up, by that rule (2026-11-12; it was 360,521 / 113,627 after #35 slice 4f-3 moved its rebuild and checks to the worker, and 395 / 123 KiB before). The trust code is its own, so its start holds it; the providers' checks load after it opens, and the fallback a repair commits on while the coordinator can't run it loads at its first use (#35 slice 8). Its forbidden list is every other category and its dependencies are what its graph holds, both as the build reported them on 2026-10-31, so anything added later is deliberate.",
       "start": {
         "js": { "raw": 360032, "gzip": 113498 },
         "css": { "raw": 23040, "gzip": 4864 },

@@ -591,11 +591,12 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
     assert.deepEqual(entries.background.dependencies, ['valibot']);
-    // Popup's and Side Panel's start JS rows: their starts on #35 slice 4d as build job 128853943289 of
-    // PR checks run 42520909498 read them, with no headroom, since neither start loads js/runtime/lazy.js
-    // (2026-11-08)
+    // Popup's and Side Panel's start JS rows are their starts with no headroom, since neither start loads
+    // js/runtime/lazy.js. Popup's is its start on #35 slice 4d as build job 128853943289 of PR checks run
+    // 42520909498 read it (2026-11-08). Side Panel's is its start on #300 slice 5b as build job 131711018907
+    // of push run 43372411837 read it at 1fcbef1a (2026-11-12)
     assert.deepEqual(entries.popup.start.js, { raw: 76913, gzip: 26638 });
-    assert.deepEqual(entries.sidepanel.start.js, { raw: 73534, gzip: 25555 });
+    assert.deepEqual(entries.sidepanel.start.js, { raw: 73534, gzip: 25553 });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
     assert.equal(BUDGETS.timing.rounds, 12);
