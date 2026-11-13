@@ -4,7 +4,8 @@
 // - the hit boxes find a 43 by 43 button, and pass a 44 by 44 one, a link in running text, and a
 //   checkbox whose label is its hit area. They measure a control that only takes clicks, and a
 //   pointer-only one under aria-hidden: a 24 by 24 handle, an 18 by 18 checkbox and a 20 by 20 Close
-//   are found, and a 44 by 44 one and a shape inside a button pass;
+//   are found, and a 44 by 44 one and a shape inside a button pass. A link in running text is exempt
+//   in any text block, a note's div and its editing host included, and a link alone in one isn't;
 // - the focus ring finds a ring under 3:1 against the page and a control with no ring, and passes a
 //   strong ring and two two-tone rings on a dark plane whose inner ring carries the contrast: one
 //   outlined, its inner ring beside the outline, and one of box-shadows, its inner ring stacked on
@@ -62,6 +63,15 @@ test("the hit boxes measure a control that only takes clicks, and a pointer-only
     { rule: 'ntn-target-size', target: '#check' },
     { rule: 'ntn-target-size', target: '#close' },
   ]);
+});
+
+test("the hit boxes pass a link in running text in any text block, a note's editing host and its wiki links included, and find one alone in its block", async ({ page }) => {
+  await page.setContent(
+    html(`<div class="block"><div class="block-content" contenteditable="true">Read <a href="https://example.com/guide" id="guide">the guide</a> first, then <a href="#" class="wiki-link" id="wiki">Note</a>.</div></div>
+      <div class="note-text">See <a href="#more" id="more">more</a> below.</div>
+      <div><a href="#solo" id="solo">Solo</a></div>`),
+  );
+  expect(await targets.targetFindings(page)).toEqual([{ rule: 'ntn-target-size', target: '#solo' }]);
 });
 
 test('the focus ring finds a faint ring and a missing one, and passes a strong ring and two-tone rings, outlined or stacked, on a dark plane', async ({ page }) => {
