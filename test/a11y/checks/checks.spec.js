@@ -28,7 +28,8 @@
 // - the layers check finds a tab stop nobody sees, in a collapsed, off-screen or transparent layer,
 //   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus. A step
 //   that leaves focus on body is found, and one that returns it to its invoker passes. Tab order
-//   that runs back along a row or up a column, as CSS reversed them, is found, and a row read left
+//   that runs back along a row or up a column, as CSS reversed them, or up to the column before, as in
+//   a reversed row of two-stop columns, is found, and a row read left
 //   to right passes, and so does a column read top to bottom that's taller than the page, where the
 //   walk scrolls. A link that wraps is read by its line boxes, so it shows where either part sits and
 //   a link after it on its second line reads in order;
@@ -248,18 +249,20 @@ test('the layers check finds a step that leaves focus on body, and passes one th
   expect(await layers.focusLost(page, 'close the menu')).toEqual([]);
 });
 
-test('the layers check finds a tab stop out of the order the page reads in, back along a row or up a column, and passes a row in order', async ({ page }) => {
+test('the layers check finds a tab stop out of the order the page reads in, back along a row, up a column or up to the column before, and passes a row in order', async ({ page }) => {
   const layers = await import('./layers.mjs');
   await page.setContent(
     html(`<style>button { width: 44px; height: 44px; } .row { display: flex; gap: 8px; } .reversed { flex-direction: row-reverse; justify-content: flex-end; }
-      .column { display: flex; flex-direction: column-reverse; align-items: flex-start; }</style>
+      .column { display: flex; flex-direction: column-reverse; align-items: flex-start; } .stack { display: flex; flex-direction: column; gap: 8px; }</style>
       <div class="row"><button id="a1">1</button><button id="a2">2</button></div>
       <div class="row reversed"><button id="b1">1</button><button id="b2">2</button></div>
-      <div class="column"><button id="c1">1</button><button id="c2">2</button></div>`),
+      <div class="column"><button id="c1">1</button><button id="c2">2</button></div>
+      <div class="row reversed"><div class="stack"><button id="d1">1</button><button id="d2">2</button></div><div class="stack"><button id="d3">3</button><button id="d4">4</button></div></div>`),
   );
   expect(await layers.layerFindings(page)).toEqual([
     { rule: 'ntn-tab-order', target: '#b2' },
     { rule: 'ntn-tab-order', target: '#c2' },
+    { rule: 'ntn-tab-order', target: '#d3' },
   ]);
 });
 

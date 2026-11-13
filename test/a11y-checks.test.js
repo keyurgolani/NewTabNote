@@ -211,12 +211,14 @@ describe("the layers checks' pure parts (#24 slice 2)", () => {
     assert.deepEqual(await layers.focusLost(page(false), 'close the menu'), []);
   });
 
-  it('finds a tab stop out of the order the page reads in: back along a line, or up a column, from the stop before', () => {
+  it('finds a tab stop out of the order the page reads in: back along a line, up a column, or up to an earlier column, from the stop before', () => {
     const at = (/** @type {string} */ id, /** @type {number} */ x, /** @type {number} */ y) => ({ id, box: { x, y, width: 44, height: 44 } });
     // Along a line, down to the next, then up to the top of the next column
     assert.deepEqual(layers.orderProblems([at('#a', 0, 0), at('#b', 52, 0), at('#c', 0, 52), at('#d', 200, 0)]), []);
     assert.deepEqual(layers.orderProblems([at('#b', 52, 0), at('#a', 0, 0)]), ['#a']);
     assert.deepEqual(layers.orderProblems([at('#low', 0, 52), at('#high', 0, 0)]), ['#high']);
+    // A row of two-stop columns that CSS reversed: the step up and back to the column before
+    assert.deepEqual(layers.orderProblems([at('#a', 60, 8), at('#b', 60, 60), at('#c', 8, 8), at('#d', 8, 60)]), ['#c']);
     assert.equal(layers.ORDER_RULE, 'ntn-tab-order');
   });
 });
