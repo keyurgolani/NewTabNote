@@ -11,7 +11,8 @@
 //   outlined, its inner ring beside the outline, and one of box-shadows, its inner ring stacked on
 //   the outer one. An inner ring that's painted over doesn't count: a white shadow under an outline
 //   with no offset, or under a wider shadow listed before it, leaves a #555555 ring on slate, found,
-//   and the same shadows listed the other way round pass;
+//   and the same shadows listed the other way round pass. A ring fades with opacity on the control
+//   or a parent: a #1869ba ring at 0.6 on white is found, and the same ring at full opacity passes;
 // - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
 //   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
@@ -119,5 +120,17 @@ test('the focus ring finds an inner ring that is painted over: under an outline 
   expect(await ring.ringFindings(page)).toEqual([
     { rule: 'ntn-focus-ring', target: '#covered' },
     { rule: 'ntn-focus-ring', target: '#buried' },
+  ]);
+});
+
+test('the focus ring finds a ring faded by opacity on the control or on a parent', async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { outline: none; background: transparent; border: 0; }
+      button:focus-visible { outline: 2px solid #1869ba; outline-offset: 2px; } #busy, .dim { opacity: 0.6; }</style>
+      <button id="busy">A</button><div class="dim"><button id="in-dim">B</button></div><button id="clear">C</button>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([
+    { rule: 'ntn-focus-ring', target: '#busy' },
+    { rule: 'ntn-focus-ring', target: '#in-dim' },
   ]);
 });

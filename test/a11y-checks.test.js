@@ -162,6 +162,15 @@ describe("the browser halves' pure parts (#24 slice 2)", () => {
     assert.deepEqual(ring.ringShortfalls(halfWhite, slate).map((/** @type {any} */ s) => s.plane), ['slate']);
   });
 
+  it('fades a ring by the opacity it shows at over a plane, as on a control with opacity or under a parent with it', () => {
+    const blue = { outer: '#1869ba' };
+    const white = { id: 'around', color: '#ffffff' };
+    assert.deepEqual(ring.ringShortfalls(blue, [white]), []);
+    const faded = ring.ringShortfalls(blue, [{ ...white, ringOpacity: 0.6 }]);
+    assert.deepEqual(faded.map((/** @type {any} */ s) => s.plane), ['around']);
+    assert.equal(faded[0].ratio.toFixed(2), '2.59');
+  });
+
   it('reports the custom checks under their own rule IDs, apart from axe\'s', () => {
     assert.equal(targets.RULE, 'ntn-target-size');
     assert.equal(ring.RULE, 'ntn-focus-ring');
