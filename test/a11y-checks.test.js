@@ -7,7 +7,8 @@
 // - the chords Chrome keeps for itself;
 // - what reduced motion forbids;
 // - a tab stop nobody sees, in a collapsed, off-screen or transparent layer, a step that leaves
-//   focus on body, and tab order that runs back along a line or up a column.
+//   focus on body, and tab order that runs back along a line or up a column;
+// - how a live region announces, for the announcement recorder.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -216,5 +217,23 @@ describe("the layers checks' pure parts (#24 slice 2)", () => {
     assert.deepEqual(layers.orderProblems([at('#b', 52, 0), at('#a', 0, 0)]), ['#a']);
     assert.deepEqual(layers.orderProblems([at('#low', 0, 52), at('#high', 0, 0)]), ['#high']);
     assert.equal(layers.ORDER_RULE, 'ntn-tab-order');
+  });
+});
+
+describe("the announcement recorder's pure part (#24 slice 2)", () => {
+  /** @type {any} */ let announce;
+  before(async () => {
+    announce = await import('./a11y/checks/announce.mjs');
+  });
+
+  it("reads how a live region announces from its aria-live, else its role, and nothing from one that's off", () => {
+    const how = (/** @type {string | null} */ live, /** @type {string | null} */ role, tag = 'div') => announce.politenessOf({ live, role, tag });
+    assert.equal(how(null, 'status'), 'polite');
+    assert.equal(how(null, 'log'), 'polite');
+    assert.equal(how(null, 'alert'), 'assertive');
+    assert.equal(how(null, null, 'output'), 'polite');
+    assert.equal(how('assertive', 'status'), 'assertive');
+    assert.equal(how('off', 'log'), null);
+    assert.equal(how(null, null), null);
   });
 });

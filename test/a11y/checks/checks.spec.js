@@ -29,7 +29,10 @@
 //   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus. A step
 //   that leaves focus on body is found, and one that returns it to its invoker passes. Tab order
 //   that runs back along a row or up a column, as CSS reversed them, is found, and a row read left
-//   to right passes.
+//   to right passes;
+// - the announcement recorder reads back what a step makes the live regions say: a status and a
+//   polite region politely, an alert assertively, and nothing from a log that's off or from text
+//   outside any region.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -256,4 +259,24 @@ test('the layers check finds a tab stop out of the order the page reads in, back
     { rule: 'ntn-tab-order', target: '#b2' },
     { rule: 'ntn-tab-order', target: '#c2' },
   ]);
+});
+
+test("the announcement recorder reads back what a step makes the live regions say, and nothing from a region that's off or from no region", async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(
+    html(`<div id="status" role="status"></div><div id="alert" role="alert"></div><div id="log" role="log" aria-live="off"></div>
+      <div id="count" aria-live="polite"><span id="number">0</span> notes</div><div id="plain"></div>`),
+  );
+  await announce.recordAnnouncements(page);
+  await page.evaluate(`document.getElementById('status').textContent = 'Saved';
+    document.getElementById('alert').textContent = "Couldn't save";
+    document.getElementById('log').textContent = 'Responding';
+    document.getElementById('plain').textContent = 'Not a region';
+    document.getElementById('number').textContent = '3';`);
+  expect(await announce.readAnnouncements(page)).toEqual([
+    { region: '#status', politeness: 'polite', text: 'Saved' },
+    { region: '#alert', politeness: 'assertive', text: "Couldn't save" },
+    { region: '#count', politeness: 'polite', text: '3 notes' },
+  ]);
+  expect(await announce.readAnnouncements(page)).toEqual([]);
 });
