@@ -12,7 +12,9 @@
 //   the outer one. An inner ring that's painted over doesn't count: a white shadow under an outline
 //   with no offset, or under a wider shadow listed before it, leaves a #555555 ring on slate, found,
 //   and the same shadows listed the other way round pass. A ring fades with opacity on the control
-//   or a parent: a #1869ba ring at 0.6 on white is found, and the same ring at full opacity passes;
+//   or a parent: a #1869ba ring at 0.6 on white is found, and the same ring at full opacity passes.
+//   The walk reports where it stops short, at a control that keeps focus on Tab or at its cap, as
+//   ntn-focus-walk, with a faint ring past it unread;
 // - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
 //   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
@@ -133,4 +135,16 @@ test('the focus ring finds a ring faded by opacity on the control or on a parent
     { rule: 'ntn-focus-ring', target: '#busy' },
     { rule: 'ntn-focus-ring', target: '#in-dim' },
   ]);
+});
+
+test('the focus walk reports where it stops short: at a control that keeps focus on Tab, or at its cap', async ({ page }) => {
+  const rings = `<style>button { outline: none; } button:focus-visible { outline: 2px solid #000000; outline-offset: 2px; }
+    .faint:focus-visible { outline-color: #cccccc; }</style>`;
+  await page.setContent(
+    html(`${rings}<button id="first">A</button><button id="indent">B</button><button class="faint">C</button>
+      <script>document.getElementById('indent').addEventListener('keydown', event => { if (event.key === 'Tab') event.preventDefault(); });</script>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-walk', target: '#indent' }]);
+  await page.setContent(html(`${rings}<button id="one">1</button><button id="two">2</button><button id="three">3</button><button class="faint">4</button>`));
+  expect(await ring.ringFindings(page, { max: 2 })).toEqual([{ rule: 'ntn-focus-walk', target: '#two' }]);
 });
