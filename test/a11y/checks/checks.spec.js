@@ -30,7 +30,8 @@
 //   that leaves focus on body is found, and one that returns it to its invoker passes. Tab order
 //   that runs back along a row or up a column, as CSS reversed them, is found, and a row read left
 //   to right passes, and so does a column read top to bottom that's taller than the page, where the
-//   walk scrolls;
+//   walk scrolls. A link that wraps is read by its line boxes, so it shows where either part sits and
+//   a link after it on its second line reads in order;
 // - the announcement recorder reads back what a step makes the live regions say: a status and a
 //   polite region politely, an alert assertively, and nothing from a log that's off or from text
 //   outside any region.
@@ -271,6 +272,16 @@ test('the layers check reads tab order in one frame, so a column read top to bot
   );
   // The room below lets Chrome scroll the last stop it tabs to into the middle of the page, above where
   // the stop before it was read
+  expect(await layers.layerFindings(page)).toEqual([]);
+});
+
+test('the layers check reads a link that wraps by its line boxes: shown where either part sits, and a stop after it on its second line in order', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>p { font: 16px/24px monospace; margin: 0 0 24px; } .wide { width: 40ch; } .narrow { width: 20ch; }</style>
+      <p class="wide">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa <a href="#wrapped" id="wrapped">bb cc</a> <a href="#help" id="help">help</a></p>
+      <p class="narrow">aaaa <a href="#long" id="long">bbbbbbbbbbbbbbb cc</a> <a href="#more" id="more">more</a></p>`),
+  );
   expect(await layers.layerFindings(page)).toEqual([]);
 });
 
