@@ -1,6 +1,6 @@
-// Test contexts for #17's IndexedDB adapter: fake-indexeddb behind the fault-injecting
-// wrapper (storage-faults.mjs), with legacy-env's chrome.storage.local stub for settings.
-// Adapters over one profile's factory and stub are contexts of one browser profile.
+// Test contexts for #17's IndexedDB adapter: fake-indexeddb behind the fault-injecting wrapper
+// (test/support/faults/storage-faults.mjs), with legacy-env's chrome.storage.local stub for
+// settings. Adapters over one profile's factory and stub are contexts of one browser profile.
 
 import { createRequire } from 'node:module';
 
@@ -11,7 +11,7 @@ import { WORKER_TASKS } from '../../js/kernel/adapters/indexeddb/worker-tasks.js
 import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { catalogFor, createKernel } from './test-kernel.mjs';
-import { faultyFactory } from './storage-faults.mjs';
+import { faultyFactory } from '../support/faults/storage-faults.mjs';
 import { CALLERS, isSettingsArea, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('../../js/kernel/adapters/indexeddb/adapter.js').IndexedDbAdapter} IndexedDbAdapter */
@@ -19,7 +19,7 @@ import { CALLERS, isSettingsArea, testClock, testIds } from './support.mjs';
 /** @typedef {import('../../js/kernel/core/ports/repository.js').StoreName} StoreName */
 /** @typedef {import('../../js/kernel/core/ports/policy.js').Caller} Caller */
 /** @typedef {import('../../js/kernel/core/application/kernel.js').Kernel} Kernel */
-/** @typedef {import('./storage-faults.mjs').Faults} Faults */
+/** @typedef {import('../support/faults/storage-faults.mjs').Faults} Faults */
 /** @typedef {import('./support.mjs').ContractFixture} ContractFixture */
 
 // The helper is CommonJS and outside the strict kernel program, so it comes in untyped

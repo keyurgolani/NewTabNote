@@ -791,7 +791,7 @@ describe('background capture on a version-8 database', () => {
   it('a failed save notifies instead of failing silently', async () => {
     // The worker's kernel is on #17's adapter (#17 PR 1b), over a factory that can fail its writes
     const real = new (require('fake-indexeddb').IDBFactory)();
-    const { faultyFactory } = await import('./kernel/storage-faults.mjs');
+    const { faultyFactory } = await import('./support/faults/storage-faults.mjs');
     const faults = faultyFactory(real);
     const env = createLegacyEnv({ context: 'worker', indexedDB: faults.factory });
     await fixture(real);

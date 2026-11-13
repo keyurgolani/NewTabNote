@@ -35,6 +35,7 @@ const VIEWPORT = { width: 1280, height: 800 };
 const WORKER_TIMEOUT_MS = 10_000;
 const ACTIVATION_TIMEOUT_MS = 10_000;
 const WORKER_READ_TIMEOUT_MS = 5_000;
+const OFFLINE_TIMEOUT_MS = 5_000;
 const LOCALE = 'en-US';
 // UTC, unless a run names another zone, as a pass on the local Daily Note key does (#17 PR 3b)
 const TIME_ZONE = process.env.NTN_E2E_TIME_ZONE || 'UTC';
@@ -277,9 +278,19 @@ class ExtensionSession {
     OPEN_SESSIONS.delete(this);
     try {
       // A pop-out window whose setup was skipped still has its requests hanging, and taking the
-      // routes off lets them go, so the network goes off first
-      await this.context.setOffline(true).catch(() => {});
-      await this.context.unrouteAll({ behavior: 'ignoreErrors' });
+      // routes off lets them go, so the network goes off first. While the worker Chrome stopped
+      // through CDP stays stopped, setOffline can go unanswered (#244), so past a bound the routes
+      // stay on, still holding those requests, as the context closes
+      const offline = this.context.setOffline(true).catch(() => {});
+      const answered = await withTimeout(
+        offline,
+        OFFLINE_TIMEOUT_MS,
+        `setOffline didn't answer within ${OFFLINE_TIMEOUT_MS / 1000} seconds, so the context closes with its routes on`,
+      ).then(() => true, error => {
+        this._record(error.message);
+        return false;
+      });
+      if (answered) await this.context.unrouteAll({ behavior: 'ignoreErrors' });
       await this.context.close();
     } finally {
       fs.rmSync(this._root, { recursive: true, force: true, maxRetries: 3 });

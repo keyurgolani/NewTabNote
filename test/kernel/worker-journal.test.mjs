@@ -19,7 +19,7 @@ import { journalEntry } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryAdapter } from '../../js/kernel/core/memory/adapter.js';
 import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
-import { faultyFactory } from './storage-faults.mjs';
+import { faultyFactory } from '../support/faults/storage-faults.mjs';
 import { CALLERS, NOW, testClock, testIds } from './support.mjs';
 import { createKernel } from './test-kernel.mjs';
 

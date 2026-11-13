@@ -1,7 +1,7 @@
 // Test contexts for #17's migration runner (migrate.js): a profile of fake-indexeddb behind the
-// fault-injecting wrapper (storage-faults.mjs) and legacy-env's chrome.storage.local stub, the
-// storage fixtures (test/fixtures/storage/), and a run with a still clock, Web Crypto, Web
-// Locks, a roomy estimate, and a logger that keeps every line.
+// fault-injecting wrapper (test/support/faults/storage-faults.mjs) and legacy-env's
+// chrome.storage.local stub, the storage fixtures (test/fixtures/storage/), and a run with a
+// still clock, Web Crypto, Web Locks, a roomy estimate, and a logger that keeps every line.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,14 +17,14 @@ import { catalogFor, createKernel } from './test-kernel.mjs';
 import { WORKER_COMMANDS } from '../../js/kernel/core/contracts/worker-catalog.js';
 import { createBaselinePolicy } from '../../js/kernel/core/ports/policy.js';
 import { dumpFixture, fillCanaries, loadFixture } from '../fixtures/storage/load-fixture.mjs';
-import { faultyFactory } from './storage-faults.mjs';
+import { faultyFactory } from '../support/faults/storage-faults.mjs';
 import { CALLERS, NOW } from './support.mjs';
 
 /** @typedef {import('../fixtures/storage/load-fixture.mjs').Fixture} Fixture */
 /** @typedef {import('../../js/kernel/adapters/indexeddb/migrate.js').MigrationOptions} MigrationOptions */
 /** @typedef {import('../../js/kernel/adapters/indexeddb/migrate.js').MigrationRun} MigrationRun */
 /** @typedef {import('../../js/kernel/adapters/indexeddb/transforms.js').TransformOptions} TransformOptions */
-/** @typedef {import('./storage-faults.mjs').Faults} Faults */
+/** @typedef {import('../support/faults/storage-faults.mjs').Faults} Faults */
 
 const requireCommonJs = createRequire(import.meta.url);
 /** @type {any} */

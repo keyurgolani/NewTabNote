@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { createTrustDatabase } from '../../js/kernel/adapters/indexeddb/trust.js';
 import { UnavailableError } from '../../js/kernel/core/contracts/outcomes.js';
 import { createTrustRecords } from '../../js/trust/core/trust-records.js';
-import { faultyFactory } from './storage-faults.mjs';
+import { faultyFactory } from '../support/faults/storage-faults.mjs';
 import { NOW } from './support.mjs';
 
 /** @typedef {import('../../js/trust/core/ports.js').TrustStore} TrustStore */

@@ -1,7 +1,7 @@
 'use strict';
 
 // The new tab on fake-indexeddb behind #17's fault-injecting wrapper
-// (test/kernel/storage-faults.mjs): its writes answer committed only for what they stored, and
+// (test/support/faults/): its writes answer committed only for what they stored, and
 // the Storage global's exportAll, sync's upload, exports what the database holds. The writes are
 // the kernel's createNote and saveNoteContent, which App makes where 1.4.x called Storage's
 // createNote and saveElement, so KD-003 and KD-004 closed with js/storage.js's own code (#17 PR
@@ -28,7 +28,7 @@ const FAULT = 'QuotaExceededError';
  */
 async function started(records) {
   const real = new IDBFactory();
-  const { faultyFactory } = await import('./kernel/storage-faults.mjs');
+  const { faultyFactory } = await import('./support/faults/storage-faults.mjs');
   const faults = faultyFactory(real);
   // With no records, the database the worker's run makes on a fresh profile (#17 PR 1b)
   if (records) await createDatabase(real, { records });
