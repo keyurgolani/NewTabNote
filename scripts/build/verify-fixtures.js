@@ -7,8 +7,8 @@
  * as edits to it. Four kinds:
  *   build    the build fails, in production and development mode, reports exactly the
  *            fixture's codes, and leaves no dist/ and no staging directory
- *   package  the build passes, `distEdits` break dist/, and npm run package fails with exactly
- *            the fixture's codes and leaves no zip
+ *   package  the build passes, its `edits` or `distEdits` break the tree or dist/, and npm run
+ *            package fails with exactly the fixture's codes and leaves no zip
  *   canary   with a made-up secret set in the environment under the names release secrets
  *            use, the build and npm run package pass, and the secret is in neither their logs
  *            nor dist/ nor the zip (#27 AC9)
@@ -19,11 +19,12 @@
  * securityEntry: the runner adds the entry a reviewed change would, so the build reports the
  * fixture's rule and not security/drift as well (#21 slice 1b).
  *
- * A fixture whose codes don't include budget/bytes, a package fixture's or the canary's among
- * them, builds with every start byte row in its copy's build/budgets.json lifted, so it reports
+ * A fixture builds with every start byte row, module row and the zip row in its copy's
+ * build/budgets.json lifted, each unless the fixture expects that row's code (#300), so it reports
  * its rule alone: a copy isn't a git checkout, so its build id carries -dirty (build-info.js), six
- * more characters on the new tab's start, and the rows have no room (#35 slice 4d). A fixture
- * that expects budget/bytes builds against the real rows.
+ * more characters on the new tab's start, and the rows have no room (#35 slice 4d), and a fixture
+ * for another rule can add modules. A fixture that expects budget/bytes, budget/modules or
+ * budget/zip builds against the real rows of that kind.
  *
  *   npm run verify:fixtures                        every fixture
  *   npm run verify:fixtures -- <name>...           the ones named

@@ -22,8 +22,9 @@
  *                      row names in neither, so the row can't fall back to measuring the root
  *   budget/bytes       an entry's start over a row: JS, CSS, HTML, or fonts, raw or gzip at
  *                      level 9, the way npm run perf:probe measures them
- *   budget/modules     an entry's start over its module row: the modules, classic scripts,
- *                      stylesheets, fonts and page the build's line counts for it (#300)
+ *   budget/modules     an entry's start over its module row: its modules, third-party and
+ *                      Vite's own among them, classic scripts, stylesheets, fonts and page, as
+ *                      the build's line counts them (#300)
  *   budget/forbidden   a module, classic script, or file a forbidden category names on the
  *                      entry's start path
  *   budget/worker-only a module only the service worker runs (WORKER_ONLY_MODULES) on a page's
