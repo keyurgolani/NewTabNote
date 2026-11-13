@@ -6,9 +6,9 @@
  * every surface is checked at, one change from the default. A point's id is `default` or the axis and
  * value it changes, as `width-320` or `scheme-dark`. The point the matrix gates, dark, carries its
  * gate, which a contrast finding there takes. emulate() puts a page at a point through its own CDP
- * session, so the harness's launch stays as it is. atPoints() declares a surface's tests, one a point.
- * It's CommonJS so a spec can declare them as it loads, and a test's page is its spec's whichever file
- * declares it.
+ * session, so the harness's launch stays as it is. atPoints() declares a surface's tests, one a point,
+ * on a test whose pointPage fixture opens the page they check. It's CommonJS so a spec can declare them
+ * as it loads, and a test's page is its spec's whichever file declares it.
  */
 
 const fs = require('node:fs');
@@ -120,20 +120,21 @@ async function emulate(page, point, surface) {
 }
 
 /**
- * Declares one test of `surface` at each of its points. Each puts the page at its point, opens the
- * surface, sets the text spacing on what opened, checks it, and attaches what it found with its point.
- * @param {import('@playwright/test').TestType<any, any>} test - the spec's test, with its fixtures
+ * Declares one test of `surface` at each of its points, on `test`, which defines `pointPage`: the
+ * page each one checks, opened as the spec opens its surface, through #34's harness for the
+ * extension's own. Playwright reads a test's fixtures from its own function, so the spec names how to
+ * open the page there. Each test puts the page at its point, text spacing included, checks it, and
+ * attaches what it found with its point.
+ * @param {import('@playwright/test').TestType<{pointPage: import('@playwright/test').Page}, any>} test
  * @param {string} surface
- * @param {{open: (page: any) => Promise<unknown>, check: (page: any, point: Point) => Promise<{rule: string, target: string}[]>}} steps
+ * @param {{check: (page: import('@playwright/test').Page, point: Point) => Promise<{rule: string, target: string}[]>}} steps
  */
-function atPoints(test, surface, { open, check }) {
+function atPoints(test, surface, { check }) {
   const all = pointsOf(surface);
   for (const point of all) {
-    test(`${surface} at ${point.id}`, async ({ page }, testInfo) => {
-      await emulate(page, point, surface);
-      await open(page);
-      await spaceText(page, point);
-      const findings = await check(page, point);
+    test(`${surface} at ${point.id}`, async ({ pointPage }, testInfo) => {
+      await emulate(pointPage, point, surface);
+      const findings = await check(pointPage, point);
       await testInfo.attach('a11y-findings', { body: JSON.stringify(recordAt(point, all.length, findings)), contentType: 'application/json' });
     });
   }
