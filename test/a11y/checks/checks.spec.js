@@ -29,15 +29,17 @@
 //   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus. A step
 //   that leaves focus on body is found, and one that returns it to its invoker passes. Tab order
 //   that runs back along a row or up a column, as CSS reversed them, or up to the column before, as in
-//   a reversed row of two-stop columns, is found, and a row read left
-//   to right passes, and so does a column read top to bottom that's taller than the page, where the
-//   walk scrolls. A link that wraps is read by its line boxes, so it shows where either part sits and
-//   a link after it on its second line reads in order;
+//   a reversed row of two-stop columns, is found, and a row read left to right passes, and so does a
+//   column read top to bottom that's taller than the page, where the walk scrolls. A link that wraps
+//   is read by its line boxes, so it shows where either part sits and a link after it on its second
+//   line reads in order;
 // - the announcement recorder reads back what a step makes the live regions say: a status and a
 //   polite region politely, an alert assertively, and nothing from a log that's off or from text
-//   outside any region. An alert added with its text is heard, as the legacy tab's note-gone notice is
-//   added, and one added inside a log that's off isn't. It keeps hearing after setContent() writes a
-//   new document into the page, which keeps the window.
+//   outside any region. A region that isn't atomic says what was added, so a count reads `3`, and an
+//   atomic one its whole text, `3 notes`. Each toast added to a toast region is read alone, and one
+//   leaving says nothing. An alert added with its text is heard, as the legacy tab's note-gone notice
+//   is added, and one added inside a log that's off isn't. It keeps hearing after setContent() writes
+//   a new document into the page, which keeps the window.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -290,22 +292,25 @@ test('the layers check reads a link that wraps by its line boxes: shown where ei
   expect(await layers.layerFindings(page)).toEqual([]);
 });
 
-test("the announcement recorder reads back what a step makes the live regions say, and nothing from a region that's off or from no region", async ({ page }) => {
+test("the announcement recorder reads back what a step makes the live regions say: what was added, or the whole text of an atomic one, and nothing from a region that's off or from no region", async ({ page }) => {
   const announce = await import('./announce.mjs');
   await page.setContent(
     html(`<div id="status" role="status"></div><div id="alert" role="alert"></div><div id="log" role="log" aria-live="off"></div>
-      <div id="count" aria-live="polite"><span id="number">0</span> notes</div><div id="plain"></div>`),
+      <div id="count" aria-live="polite"><span id="number">0</span> notes</div><div id="plain"></div>
+      <div id="total" aria-live="polite" aria-atomic="true"><span id="sum">0</span> notes</div>`),
   );
   await announce.recordAnnouncements(page);
   await page.evaluate(`document.getElementById('status').textContent = 'Saved';
     document.getElementById('alert').textContent = "Couldn't save";
     document.getElementById('log').textContent = 'Responding';
     document.getElementById('plain').textContent = 'Not a region';
-    document.getElementById('number').textContent = '3';`);
+    document.getElementById('number').textContent = '3';
+    document.getElementById('sum').textContent = '3';`);
   expect(await announce.readAnnouncements(page)).toEqual([
     { region: '#status', politeness: 'polite', text: 'Saved' },
     { region: '#alert', politeness: 'assertive', text: "Couldn't save" },
-    { region: '#count', politeness: 'polite', text: '3 notes' },
+    { region: '#count', politeness: 'polite', text: '3' },
+    { region: '#total', politeness: 'polite', text: '3 notes' },
   ]);
   expect(await announce.readAnnouncements(page)).toEqual([]);
 });
@@ -332,4 +337,18 @@ test('the announcement recorder keeps hearing after setContent() writes a new do
   await announce.recordAnnouncements(page);
   await page.evaluate(`document.getElementById('status').textContent = "Couldn't save"`);
   expect(await announce.readAnnouncements(page)).toEqual([{ region: '#status', politeness: 'polite', text: "Couldn't save" }]);
+});
+
+test('the announcement recorder reads each toast a region adds alone, and nothing when one leaves, as a screen reader says them', async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(html('<div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>'));
+  await announce.recordAnnouncements(page);
+  const toast = (/** @type {string} */ text) =>
+    page.evaluate(`document.getElementById('toasts').append(Object.assign(document.createElement('div'), { textContent: ${JSON.stringify(text)} }))`);
+  await toast('Copied');
+  expect(await announce.readAnnouncements(page)).toEqual([{ region: '#toasts', politeness: 'polite', text: 'Copied' }]);
+  await toast('Exported');
+  expect(await announce.readAnnouncements(page)).toEqual([{ region: '#toasts', politeness: 'polite', text: 'Exported' }]);
+  await page.evaluate("document.querySelector('#toasts > div').remove()");
+  expect(await announce.readAnnouncements(page)).toEqual([]);
 });
