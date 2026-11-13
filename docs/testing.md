@@ -81,6 +81,8 @@ The store hold (`store-hold.js`, #301) is #28's hung-repository fault at the dat
 - A hold has no time limit. A case ends it after what it holds across, such as a tab's close or a worker's stop, and `stillHeld(when)` fails unless the hold still held then. `release()` answers `complete`, or `abort` for an upgrade, and fails at once, naming the database and stores, when the hold ended first. `releaseHolds()` lets go of every hold a Page or Worker still has, for a test's teardown.
 - In Node it runs over fake-indexeddb, and `test/kernel/store-hold.test.mjs` holds it to #17's adapter. `e2e/store-hold.spec.js` holds it in an extension page and in the worker.
 
+A hung port (`hang-calls.js`) is the same fault a level up, for a page's repository or kernel port: `hangCalls(port)` holds each call until `release()`, which makes them on the real port in order and passes each answer or rejection through. Nothing a held call would do happens before its release, a frozen port hangs too, and `methods` hangs some calls and lets the rest through.
+
 ## The performance probe
 
 `npm run perf:probe` (#27 slice 4a) measures a built extension from the outside: its pages, its marks, and CDP. It never reads how the package was built, so it runs the same on the legacy build, the 1.4.0 package, and a bundler's output. It writes JSON to `dist-report/`, which git ignores.
