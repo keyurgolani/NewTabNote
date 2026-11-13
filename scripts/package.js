@@ -94,11 +94,21 @@ function createPackage() {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   fs.writeFileSync(outputPath, result.zip);
   console.log(`✅ Package created: ${filename}`);
-  // The exact bytes too, since CI's log is where the zip row's number is read (#300)
-  console.log(`   Size: ${formatBytes(result.zip.length)} (${result.zip.length} bytes), ${result.files} files`);
+  console.log(sizeLine(result.zip.length, result.files));
   console.log(`   SHA-256: ${sha256(result.zip)}`);
   console.log(`   Path: ${outputPath}`);
   console.log('');
+}
+
+/**
+ * The zip's Size line: its size in KB or MB, then its exact bytes, since CI's log is where the zip
+ * row's number is read (#300), and how many files it holds
+ * @param {number} bytes
+ * @param {number} files
+ * @returns {string}
+ */
+function sizeLine(bytes, files) {
+  return `   Size: ${formatBytes(bytes)} (${bytes} bytes), ${files} files`;
 }
 
 /**
@@ -120,4 +130,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { makePackage };
+module.exports = { makePackage, sizeLine };
