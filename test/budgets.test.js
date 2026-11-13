@@ -83,7 +83,7 @@ const PACKAGE_ROW = Object.freeze({ zipBytes: 10 * KIB * KIB, updateBytes: null,
 
 /**
  * A budget file for the fixture, `entries` merged over the default rows. Each row the fixture's
- * build needs holds a number, or names the issue it waits on (#300)
+ * build needs holds a number, or names the issue it waits on, the counts' among them (#300)
  */
 function budgetsFor(entries = {}) {
   return {
@@ -102,12 +102,14 @@ function budgetsFor(entries = {}) {
         reason: 'the tab',
         start: { js: { raw: 100 * KIB, gzip: 100 * KIB }, css: ROOMY, html: ROOMY, fonts: ROOMY },
         modules: 100,
+        reads: 40,
+        requests: 0,
         forbidden: ['chart-library', 'trust', 'model-runtime'],
         dependencies: ['@xenova/transformers', 'chart.js', 'fuse.js', 'jszip', 'some-parser', 'valibot'],
       },
-      popup: { page: 'popup.html', reason: 'the popup', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] },
-      background: { reason: 'the worker', start: { js: ROOMY }, modules: 100, coldStart: null, waitsOn: { coldStart: '#35' } },
-      moment: { chunk: 'moment', planned: true, reason: 'not built yet', start: {}, waitsOn: { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2' }, forbidden: ['remote-ai', 'trust', 'chart-library'], dependencies: [] },
+      popup: { page: 'popup.html', reason: 'the popup', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, requests: 0, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] },
+      background: { reason: 'the worker', start: { js: ROOMY }, modules: 100, requests: 0, coldStart: null, waitsOn: { coldStart: '#35' } },
+      moment: { chunk: 'moment', planned: true, reason: 'not built yet', start: {}, waitsOn: { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2', reads: '#2', requests: '#2' }, forbidden: ['remote-ai', 'trust', 'chart-library'], dependencies: [] },
       ...entries,
     },
   };
@@ -255,6 +257,19 @@ describe('the budget gate', () => {
     const { fonts, ...rest } = moment.waitsOn;
     assert.equal(fonts, '#2');
     assert.deepEqual(run(budgetsFor({ moment: { ...moment, waitsOn: rest } })), [missing('moment', 'start FONTS')]);
+    // The counts the probe holds to their rows: the new tab's reads, and each entry's requests
+    assert.deepEqual(run(budgetsFor({
+      newtab: { ...newtab, reads: undefined },
+      popup: { ...popup, requests: null },
+      background: { ...background, requests: undefined },
+    })), [missing('newtab', 'reads'), missing('popup', 'requests'), missing('background', 'requests')]);
+    assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, reads: null, waitsOn: { reads: '#16' } }, popup: { ...popup, requests: null, waitsOn: { requests: '#4' } } })), []);
+    // Popup's reads can't be a number until #4 gives it a ready mark, so the build doesn't need it yet
+    assert.deepEqual(run(budgetsFor({ popup: { ...popup, reads: undefined } })), []);
+    // A planned entry's reads and requests wait on the issue that builds it, as Moment's on #2
+    const { reads, requests, ...uncounted } = moment.waitsOn;
+    assert.deepEqual([reads, requests], ['#2', '#2']);
+    assert.deepEqual(run(budgetsFor({ moment: { ...moment, waitsOn: uncounted } })), [missing('moment', 'reads'), missing('moment', 'requests')]);
     // The package's rows: the zip's, and update size's, which #31's release gate sets (#31 slice 3)
     const budgets = budgetsFor();
     budgets.package = { ...PACKAGE_ROW, zipBytes: null, waitsOn: {} };
@@ -324,7 +339,7 @@ describe('the budget gate', () => {
     'js/kernel/core/application/record-catch-up.js',
   ];
   /** Side Panel's row, for a fixture that has its page */
-  const sidePanelRow = { page: 'sidepanel.html', reason: 'the side panel', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] };
+  const sidePanelRow = { page: 'sidepanel.html', reason: 'the side panel', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, requests: 0, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] };
   const workerOnly = (/** @type {string} */ page, /** @type {string} */ file) => `budget/worker-only ${page}: its start holds ${file}, which only the service worker runs`;
 
   it("fails a page's start that holds a module only the service worker runs, by the module and the page, and passes the worker that holds it (#35 slice 3c)", () => {
@@ -470,12 +485,12 @@ describe('the budget gate', () => {
   }
   /** The fixture's rows: Popup allows valibot lazy only, in its send chunk */
   const layoutBudgets = () => {
-    const page = (/** @type {string} */ html, /** @type {object} */ rest = {}) => ({ page: html, reason: 'the page', start: { js: ROOMY, css: ROOMY, html: ROOMY, fonts: ROOMY }, modules: 1000, forbidden: [], dependencies: [], ...rest });
+    const page = (/** @type {string} */ html, /** @type {object} */ rest = {}) => ({ page: html, reason: 'the page', start: { js: ROOMY, css: ROOMY, html: ROOMY, fonts: ROOMY }, modules: 1000, requests: 0, forbidden: [], dependencies: [], ...rest });
     return {
       package: PACKAGE_ROW,
       forbidden: {},
       entries: {
-        newtab: page('newtab.html', { startChunks: ['workspace'] }),
+        newtab: page('newtab.html', { startChunks: ['workspace'], reads: 40 }),
         popup: page('popup.html', { lazyChunks: ['popup-send-chunk'], lazyDependencies: ['valibot'] }),
         sidepanel: page('sidepanel.html'),
         recovery: page('recovery.html'),
@@ -671,9 +686,9 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(readBudgets(ROOT).problems, []);
   });
 
-  it("names the issue each row it leaves null waits on: Moment's #2, the service worker's cold start #35, and update size #31, and every other module and zip row is a number (#300)", () => {
+  it("names the issue each row it leaves null waits on: Moment's #2, its reads and requests among them, the service worker's cold start #35, and update size #31, and every other module, zip and requests row is a number (#300)", () => {
     const { entries } = BUDGETS;
-    assert.deepEqual(entries.moment.waitsOn, { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2' });
+    assert.deepEqual(entries.moment.waitsOn, { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2', reads: '#2', requests: '#2' });
     assert.deepEqual([entries.background.coldStart, entries.background.waitsOn], [null, { coldStart: '#35' }]);
     assert.deepEqual([BUDGETS.package.updateBytes, BUDGETS.package.waitsOn], [null, { updateBytes: '#31' }]);
     // Popup's and the Side Panel's reads wait for the ready marks #4 and #5 give them (#27)
@@ -681,6 +696,7 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     for (const [name, entry] of Object.entries(entries)) {
       if (name === 'moment') continue;
       assert.ok(Number.isSafeInteger(entry.modules), `${name}'s modules row`);
+      assert.ok(Number.isSafeInteger(entry.requests), `${name}'s requests row`);
       if (!['background', 'popup', 'sidepanel'].includes(name)) assert.equal(entry.waitsOn, undefined, `${name} waits on nothing`);
     }
     assert.ok(Number.isSafeInteger(BUDGETS.package.zipBytes), "the zip's row");
@@ -721,7 +737,7 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     // 131926238843 of perf run 43437487224, plus 5% rounded up to the whole count, and each entry's requests
     // outside the extension, 0 in every counted run of that job, since a 0 stays 0 (#300 slice 6b, 2026-11-13)
     assert.deepEqual(Object.fromEntries(Object.entries(entries).map(([name, entry]) => [name, [entry.reads, entry.requests]])), {
-      newtab: [9, 0], popup: [null, 0], sidepanel: [null, 0], offscreen: [undefined, 0], recovery: [undefined, 0], background: [undefined, 0], moment: [undefined, undefined],
+      newtab: [9, 0], popup: [null, 0], sidepanel: [null, 0], offscreen: [undefined, 0], recovery: [undefined, 0], background: [undefined, 0], moment: [null, null],
     });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
