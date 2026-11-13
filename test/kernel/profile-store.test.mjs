@@ -342,6 +342,22 @@ describe('the profile store the e2e specs and the driver write and read through 
     upgraded.close();
   });
 
+  it("fails an open behind another context's upgrade inside its bound, naming the open, what it waited behind and for how long", async t => {
+    const env = await emptyProfile();
+    // Another context's upgrade, which a connection kept open through its versionchange blocks, so
+    // an open with no version waits behind it
+    const kept = await legacyEnv.requestToPromise(env.indexedDB.open('CanvasTabDB'));
+    const upgrade = env.indexedDB.open('CanvasTabDB', kept.version + 1);
+    t.after(async () => {
+      kept.close();
+      (await legacyEnv.requestToPromise(upgrade)).close();
+    });
+    await assert.rejects(
+      createProfileStore(env.indexedDB).getAllNotes(true),
+      /profile store: CanvasTabDB's open got no answer in 10 s, waiting behind another context's upgrade or delete of it, which is all an open with no version waits on/,
+    );
+  });
+
   it("offers each of the store's calls through the browser host, with ids in the form Utils.generateId gives", async () => {
     const env = await emptyProfile();
     assert.deepEqual([...host.PROFILE_STORE_METHODS].sort(), Object.keys(createProfileStore(env.indexedDB)).sort());
