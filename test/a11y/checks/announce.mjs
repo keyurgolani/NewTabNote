@@ -4,10 +4,11 @@
  * politely, an alert assertively) or an output, and records what a change says, as a screen reader
  * reads it: the text added, or the region's whole text when it's atomic, by aria-atomic or as a status
  * or alert is, with the region and how it's announced. A removal says nothing, as aria-relevant's
- * default, additions and text, has it, and a region's own aria-relevant isn't read. An alert speaks
- * when it's added with its text too, as the legacy tab's note-gone notice is added. A region with aria-live="off", as the AI
- * transcript's log is, says nothing, alerts added inside it included, and neither does text outside
- * every region. It starts through Playwright evaluation, which the extension's CSP doesn't apply to,
+ * default, additions and text, has it, and a region's own aria-relevant isn't read. An alert is a region
+ * of its own wherever it lands, as Chrome treats one: added with its text, as the legacy tab's
+ * note-gone notice is, it speaks once, assertively, inside a log that's off too, and its text stays out
+ * of the region around it. A region with aria-live="off", as the AI transcript's log is, says nothing
+ * else, and neither does text outside every region. It starts through Playwright evaluation, which the extension's CSP doesn't apply to,
  * and lasts as long as the page's window: a navigation ends it, and a new document written into the
  * same window, as setContent() writes one, keeps it, since it watches the document itself. A change
  * that comes after the step resolves, from a timer say, needs the spec to wait.
@@ -28,7 +29,7 @@ export function politenessOf({ live, role, tag }) {
 }
 
 /**
- * In the page: starts recording into window.__ntnAnnouncements, once per document. It closes over
+ * In the page: starts recording into window.__ntnAnnouncements, once per window. It closes over
  * nothing, since it runs through evaluation.
  * @param {(el: Element) => string} selectorOf
  * @param {typeof politenessOf} politenessOf
@@ -48,6 +49,10 @@ function install(selectorOf, politenessOf) {
     }
     return null;
   };
+  const isAlert = (/** @type {Node} */ node) => node instanceof Element && node.getAttribute('role') === 'alert';
+  // A node's text without any alert's inside it, since an alert speaks for itself
+  /** @type {(node: Node) => string} */
+  const ownText = node => (node instanceof Element ? [...node.childNodes].map(child => (isAlert(child) ? '' : ownText(child))).join('') : (node.textContent ?? ''));
   const atomic = (/** @type {Element} */ el) => {
     const set = el.getAttribute('aria-atomic');
     return set === 'true' || set === 'false' ? set === 'true' : ['status', 'alert'].includes(el.getAttribute('role') ?? '');
@@ -65,18 +70,19 @@ function install(selectorOf, politenessOf) {
       if (record.type === 'childList' && record.addedNodes.length === 0) continue;
       for (const node of record.addedNodes) {
         if (!(node instanceof Element)) continue;
-        for (const alert of [node, ...node.querySelectorAll('[role="alert"]')]) {
-          if (alert.getAttribute('role') !== 'alert' || alert.parentElement?.closest('[aria-live="off"]')) continue;
+        for (const alert of [node, ...node.querySelectorAll('[role="alert"]')].filter(isAlert)) {
           const added = regionOf(alert);
-          if (added) heard(added, alert.textContent ?? '');
+          if (added) heard(added, ownText(alert));
         }
       }
       const region = regionOf(record.target);
       if (!region) continue;
-      heard(region, record.type === 'characterData' ? (record.target.textContent ?? '') : [...record.addedNodes].map(node => node.textContent ?? '').join(' '));
+      const text = record.type === 'characterData' ? (record.target.textContent ?? '') : [...record.addedNodes].map(node => (isAlert(node) ? '' : ownText(node))).join(' ');
+      if (record.type === 'childList' && !text.trim()) continue;
+      heard(region, text);
     }
     for (const [el, { politeness, added }] of changed) {
-      const text = (atomic(el) ? (el.textContent ?? '') : added.join(' ')).replace(/\s+/g, ' ').trim();
+      const text = (atomic(el) ? ownText(el) : added.join(' ')).replace(/\s+/g, ' ').trim();
       if (text) said.push({ region: selectorOf(el), politeness, text });
     }
   }).observe(document, { subtree: true, childList: true, characterData: true });
