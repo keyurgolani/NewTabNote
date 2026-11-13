@@ -3,7 +3,7 @@
 // The fixtures npm run verify:fixtures builds (test/build-fixtures/, #27 test plan), checked
 // without building: each is well formed, its edits still match today's tree, and every build
 // failure rule has one. A fixture whose edit stopped matching would fail verify:fixtures
-// anyway, but only in the build job, minutes later.
+// anyway, but only in CI's fixtures-1 and fixtures-2 jobs, minutes later.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -135,6 +135,50 @@ describe('test/build-fixtures/', () => {
       'ntn-missing is in no script, page or stylesheet',
       'ntn-dropped is in c.css',
     ]);
+  });
+
+  it('splits the fixtures into shards by name, so n shards hold each fixture exactly once and differ in size by one at most (#29)', () => {
+    const { shardOf, parseShard } = require('../scripts/build/verify-fixtures.js');
+    const names = fixtures.map(({ name }) => name).sort();
+    for (const count of [1, 2, 3]) {
+      const shards = Array.from({ length: count }, (_, i) => shardOf(fixtures, { index: i + 1, count }).map(({ name }) => name));
+      assert.deepEqual(shards.flat().sort(), names, `${count} shards hold every fixture`);
+      assert.equal(new Set(shards.flat()).size, names.length, `${count} shards hold no fixture twice`);
+      const sizes = shards.map((shard) => shard.length);
+      assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `${count} shards: ${sizes.join(', ')}`);
+    }
+    // In name order, whatever order it's handed the fixtures in
+    assert.deepEqual(shardOf([{ name: 'c' }, { name: 'a' }, { name: 'b' }], { index: 1, count: 2 }), [{ name: 'a' }, { name: 'c' }]);
+    assert.deepEqual(parseShard('2/2'), { index: 2, count: 2 });
+    for (const text of ['0/2', '3/2', '1/0', '1', '1/2/3', 'a/b', ' 1/2', '-1/2', '']) assert.equal(parseShard(text), null, JSON.stringify(text));
+  });
+
+  it("reads its arguments into the run's plan: the fixtures named, or all, and then the shard's of those, so a shard job runs only its own (#29)", () => {
+    const { planRun } = require('../scripts/build/verify-fixtures.js');
+    const all = ['d', 'a', 'c', 'b'].map((name) => ({ name }));
+    const names = (/** @type {any} */ plan) => plan.fixtures.map((/** @type {{name: string}} */ { name }) => name);
+    assert.deepEqual(names(planRun([], all, 8)), ['d', 'a', 'c', 'b']);
+    assert.deepEqual([names(planRun(['--shard', '1/2'], all, 8)), names(planRun(['--shard', '2/2'], all, 8))], [['a', 'c'], ['b', 'd']]);
+    assert.deepEqual(planRun(['--shard', '2/2'], all, 8).shard, { index: 2, count: 2 });
+    // The names first, then the shard of them
+    assert.deepEqual(names(planRun(['--shard', '2/2', 'a', 'c', 'd'], all, 8)), ['c']);
+    assert.deepEqual(names(planRun(['b', '--shard', '2/2'], all, 8)), []);
+    assert.deepEqual([planRun([], all, 8), planRun([], all, 2), planRun(['--jobs', '3'], all, 8)].map((plan) => plan.jobs), [4, 2, 3]);
+    for (const argv of [['--shard', '3/2'], ['--shard'], ['--jobs', '0'], ['--jobs']]) assert.deepEqual(planRun(argv, all, 8), { usage: true }, argv.join(' '));
+    assert.deepEqual(planRun(['a', 'gone'], all, 8), { missing: ['gone'] });
+  });
+
+  it("runs the fixtures in CI only in fixtures-1 and fixtures-2, each its own --shard i/2 with 30 minutes and no job to wait on, and leaves the build job no fixtures and 30 minutes (#29)", () => {
+    const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pr-checks.yml'), 'utf8');
+    // Each job's block, by its id: the lines from `  <id>:` to the next job's
+    const jobs = Object.fromEntries(workflow.slice(workflow.indexOf('\njobs:\n') + 7).split(/\n(?= {2}[a-z0-9-]+:\n)/).map((block) => [/^ {2}([a-z0-9-]+):/.exec(block)?.[1], block]));
+    const shards = /** @type {Record<string, string[]>} */ ({ 'fixtures-1': [' -- --shard 1/2'], 'fixtures-2': [' -- --shard 2/2'] });
+    for (const [job, block] of Object.entries(jobs)) {
+      const runs = [...block.matchAll(/^ +run: npm run verify:fixtures(.*?) 2>&1/gm)].map((match) => match[1]);
+      assert.deepEqual(runs, shards[job] || [], `${job} runs the fixtures it should, and only those`);
+    }
+    for (const job of ['build', 'fixtures-1', 'fixtures-2']) assert.match(jobs[job] || '', /\n {4}timeout-minutes: 30\n/, `${job} has 30 minutes`);
+    for (const job of ['fixtures-1', 'fixtures-2']) assert.doesNotMatch(jobs[job] || '', /\n {4}needs:/, `${job} waits on no job`);
   });
 
   it('reads the codes a build or package run reported from its problem lines', () => {

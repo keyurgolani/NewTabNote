@@ -868,7 +868,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.ok(!/\n {4}defaults:|\n {8}shell:/.test(workflow), 'no job or step overrides the shell');
     assert.match(step('Summarize'), /node scripts\/perf\/gate-report\.js .* \| tee -a "\$GITHUB_STEP_SUMMARY"/);
     const gate = fs.readFileSync(path.join(ROOT, '.github/workflows/pr-checks.yml'), 'utf8');
-    assert.match(gate, /needs: \[unit, typecheck, kernel, build, extension\]/, "timing blocks a merge only once pr-gate needs it, or a ruleset requires it: the owner's call");
+    assert.match(gate, /needs: \[unit, typecheck, kernel, build, fixtures-1, fixtures-2, extension\]/, "timing blocks a merge only once pr-gate needs it, or a ruleset requires it: the owner's call");
     assert.ok(!/uses: \.\/\.github\/workflows\/perf\.yml|workflow_run/.test(gate), "pr-gate doesn't call or wait on the perf workflow");
     // Every ruleset that requires a check requires pr-gate alone, not perf
     for (const name of fs.readdirSync(path.join(ROOT, '.github/rulesets'))) {

@@ -49,10 +49,12 @@ test('starts a build excerpt at the failed build\'s summary, which lists every p
   assert.match(lines[2], /\[build\/css\] css\/c\.css: .*Broken @import/);
 });
 
-test('starts a build excerpt at a failed verify script, and a typecheck excerpt at the type gate\'s report', () => {
-  for (const script of ['verify:fixtures', 'verify:reproducible']) {
-    const log = [`> new-tab-note@1.4.1 ${script}`, ...numbered(30, '  ✓ fixture'), `${script} failed: 1 of 34 fixtures`, '  terser (production): ...'].join('\n');
-    assert.equal(excerpt(log, MARKERS.build).split('\n')[0], `${script} failed: 1 of 34 fixtures`);
+test('starts a build excerpt at a failed verify:reproducible, a fixtures excerpt at verify:fixtures\' summary in either shard, and a typecheck excerpt at the type gate\'s report', () => {
+  const failed = (/** @type {string} */ script) => [`> new-tab-note@1.4.1 ${script}`, ...numbered(30, '  ✓ fixture'), `${script} failed: 1 of 34 fixtures`, '  terser (production): ...'].join('\n');
+  assert.equal(excerpt(failed('verify:reproducible'), MARKERS.build).split('\n')[0], 'verify:reproducible failed: 1 of 34 fixtures');
+  // The fixtures run in fixtures-1 and fixtures-2, beside build (#29)
+  for (const job of ['fixtures-1', 'fixtures-2']) {
+    assert.equal(excerpt(failed('verify:fixtures'), MARKERS[job]).split('\n')[0], 'verify:fixtures failed: 1 of 34 fixtures', job);
   }
   const gate = ['> node scripts/build/type-gate.js', '', 'type gate failed: 1 problem', "  [type/strict] scripts/build/a.js:3:7: TS7006 Parameter 'x' implicitly has an 'any' type."].join('\n');
   assert.equal(excerpt(gate, MARKERS.typecheck).split('\n')[0], 'type gate failed: 1 problem');
