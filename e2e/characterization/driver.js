@@ -14,14 +14,11 @@ const os = require('os');
 const path = require('path');
 const { expect, launchExtension, resolveDist, builtFiles, TIME_ZONE } = require('../harness');
 const { profileStore } = require('../harness/profile-store');
+const { UPGRADE_BOUND_MS, DELETE_BOUND_MS } = require('../harness/worker-bounds');
 
 // BlockEditor.loadNote (js/editor.js) focuses the note's first block this long after it renders
 const EDITOR_FOCUS_DELAY_MS = 50;
 const SETTLE_TIMEOUT_MS = 10_000;
-/** How long the worker's storage upgrade may take before the harness says so: past 1.7.0's slowest, 10.7 s (#286) */
-const UPGRADE_BOUND_MS = 15_000;
-/** How long one of the harness's deletes in the worker may go unanswered before it says so (#286) */
-const DELETE_BOUND_MS = 10_000;
 
 // ─── Startup ───
 
