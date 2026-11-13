@@ -213,11 +213,13 @@ test("a counted run counts the new tab's IndexedDB reads before its mark, the pa
 /**
  * A package with IndexedDB reads and requests on both sides of each window a counted run counts
  * (scripts/perf/counts.js, #300). Its new tab reads 3 times, has the worker read once and fetches
- * once before it marks itself ready, then reads twice and fetches once after. Popup, the Side
- * Panel, recovery.html and the offscreen document each fetch once at their load, and once 2 s
- * on, past their window, and Popup has the worker fetch once as it loads. Each fetch goes to
- * loopback, which the network-off mode's dead proxy fails, so nothing answers it. The package is
- * written to a temporary directory, which the caller removes.
+ * once before it marks itself ready. In the mark's own task, where the probe can't read the
+ * record before they're in it, it then reads twice and has the worker read once, so only the cut
+ * at the mark keeps them out, and 2 s on it fetches once more. Popup, the Side Panel,
+ * recovery.html and the offscreen document each fetch once at their load, and once 2 s on, past
+ * their window, and Popup has the worker fetch once as it loads. Each fetch goes to loopback,
+ * which the network-off mode's dead proxy fails, so nothing answers it. The package is written to
+ * a temporary directory, which the caller removes.
  */
 function countingPackage() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-perf-counts-'));
@@ -256,8 +258,16 @@ request.onsuccess = async () => {
   await chrome.runtime.sendMessage('read');
   fetchOnce('newtab-before');
   performance.mark('ntn:interaction-ready');
-  // Past the mark's own clock tick, and past the probe's reading of the new tab's counts
-  setTimeout(() => { read(); read(); }, 100);
+  // In the mark's own task, 1 ms past its clock tick: two reads, and one the worker makes while
+  // the task holds, so all three are in the records before the probe can see the mark
+  const hold = ms => {
+    for (const until = performance.now() + ms; performance.now() < until;);
+  };
+  hold(1);
+  read();
+  read();
+  chrome.runtime.sendMessage('read').catch(() => {});
+  hold(300);
   setTimeout(() => fetchOnce('newtab-after'), 2000);
 };
 `,
