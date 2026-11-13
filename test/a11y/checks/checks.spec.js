@@ -38,8 +38,9 @@
 //   polite region politely, an alert assertively, and nothing from a log that's off or from text
 //   outside any region. A region that isn't atomic says what was added, so a count reads `3`, and an
 //   atomic one its whole text, `3 notes`. Each toast added to a toast region is read alone, and one
-//   leaving says nothing. An alert added with its text is heard, as the legacy tab's note-gone notice
-//   is added, and one added inside a log that's off isn't. It keeps hearing after setContent() writes
+//   leaving says nothing. An alert added with its text is heard as its own region, once, as the legacy
+//   tab's note-gone notice is added: inside a log that's off too, and not again as part of a polite
+//   region it lands in. It keeps hearing after setContent() writes
 //   a new document into the page, which keeps the window, and refuses a page that never started
 //   recording, or that a reload has replaced since.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
@@ -348,9 +349,9 @@ test("the announcement recorder reads back what a step makes the live regions sa
   expect(await announce.readAnnouncements(page)).toEqual([]);
 });
 
-test("the announcement recorder hears an alert added with its text, and not one added inside a region that's off", async ({ page }) => {
+test('the announcement recorder hears an alert added with its text as its own region, once, inside a log that is off or a polite region alike', async ({ page }) => {
   const announce = await import('./announce.mjs');
-  await page.setContent(html('<div id="log" role="log" aria-live="off"></div>'));
+  await page.setContent(html('<div id="log" role="log" aria-live="off"></div><div id="feed" aria-live="polite"></div>'));
   await announce.recordAnnouncements(page);
   await page.evaluate(`const alert = (id, text) => {
       const el = Object.assign(document.createElement('div'), { id, textContent: text });
@@ -358,8 +359,13 @@ test("the announcement recorder hears an alert added with its text, and not one 
       return el;
     };
     document.querySelector('main').append(alert('gone', "This note was deleted, so these changes aren't saved."));
-    document.getElementById('log').append(alert('quiet', 'Not said'));`);
-  expect(await announce.readAnnouncements(page)).toEqual([{ region: '#gone', politeness: 'assertive', text: "This note was deleted, so these changes aren't saved." }]);
+    document.getElementById('log').append(alert('stopped', 'The answer stopped'));
+    document.getElementById('feed').append(alert('error', "Couldn't reach the model"));`);
+  expect(await announce.readAnnouncements(page)).toEqual([
+    { region: '#gone', politeness: 'assertive', text: "This note was deleted, so these changes aren't saved." },
+    { region: '#stopped', politeness: 'assertive', text: 'The answer stopped' },
+    { region: '#error', politeness: 'assertive', text: "Couldn't reach the model" },
+  ]);
 });
 
 test('the announcement recorder keeps hearing after setContent() writes a new document into the same window', async ({ page }) => {
