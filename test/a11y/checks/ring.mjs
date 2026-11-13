@@ -164,32 +164,49 @@ export function tabStopFollows() {
 }
 
 /**
- * Tabs through `page` from where focus is, and finds each control whose ring is under 3:1 against a
- * plane beside it, or that shows none, until focus leaves the page or comes back round. A walk that
- * stops short says where: at a control that keeps focus on Tab, as an editor does that indents on
- * it, at one whose Tab leaves focus on body though a tab stop follows it, as a table's last cell does
- * when it re-renders its block, or at the last control it read when it hits its cap.
+ * Tabs through `page` from where focus is, reading each stop with `read`, until focus leaves the page
+ * or comes back round. A walk that stops short says where: at a control that keeps focus on Tab, as
+ * an editor does that indents on it, at one whose Tab leaves focus on body though a tab stop follows
+ * it, as a table's last cell does when it re-renders its block, or at the last stop it read when it
+ * hits its cap.
  * @param {Pick<import('@playwright/test').Page, 'keyboard' | 'evaluate'>} page
+ * @param {(selectorOf: (el: Element) => string, first: boolean) => {id: string} | null} read - in the
+ *   page: the focused element's reading, or null when focus is on the page itself, told whether it's
+ *   the walk's first
  * @param {{max?: number}} [options] - the most Tab presses
+ * @returns {Promise<{reads: any[], stopped: {rule: string, target: string} | null}>}
  */
-export async function ringFindings(page, { max = 200 } = {}) {
-  /** @type {{rule: string, target: string}[]} */
-  const findings = [];
+export async function tabWalk(page, read, { max = 200 } = {}) {
+  /** @type {any[]} */
+  const reads = [];
   const seen = new Set();
   /** @type {string | null} */
   let last = null;
   let followed = false;
   for (let press = 0; press < max; press += 1) {
     await page.keyboard.press('Tab');
-    /** @type {{id: string, ring: {outer: string, inner?: string} | null, planes: {id: string, color: string, over?: string}[], followed?: boolean} | null} */
-    const read = await page.evaluate(`((read) => read && { ...read, followed: (${tabStopFollows})() })((${readRing})(${selectorOf}))`);
-    if (read !== null && read.id === last) return [...findings, { rule: WALK_RULE, target: read.id }];
-    if (read === null) return followed && last !== null ? [...findings, { rule: WALK_RULE, target: last }] : findings;
-    if (seen.has(read.id)) return findings;
-    seen.add(read.id);
-    last = read.id;
-    followed = read.followed === true;
-    if (read.ring === null || ringShortfalls(read.ring, read.planes).length > 0) findings.push({ rule: RULE, target: read.id });
+    /** @type {{id: string, followed?: boolean} | null} */
+    const stop = await page.evaluate(`((stop) => stop && { ...stop, followed: (${tabStopFollows})() })((${read})(${selectorOf}, ${press === 0}))`);
+    if (stop !== null && stop.id === last) return { reads, stopped: { rule: WALK_RULE, target: stop.id } };
+    if (stop === null) return { reads, stopped: followed && last !== null ? { rule: WALK_RULE, target: last } : null };
+    if (seen.has(stop.id)) return { reads, stopped: null };
+    seen.add(stop.id);
+    last = stop.id;
+    followed = stop.followed === true;
+    reads.push(stop);
   }
-  return last === null ? findings : [...findings, { rule: WALK_RULE, target: last }];
+  return { reads, stopped: last === null ? null : { rule: WALK_RULE, target: last } };
+}
+
+/**
+ * Tabs through `page` from where focus is, and finds each control whose ring is under 3:1 against a
+ * plane beside it, or that shows none, with where the walk stopped short, if it did
+ * @param {Pick<import('@playwright/test').Page, 'keyboard' | 'evaluate'>} page
+ * @param {{max?: number}} [options] - the most Tab presses
+ */
+export async function ringFindings(page, options = {}) {
+  const { reads, stopped } = await tabWalk(page, readRing, options);
+  /** @type {{rule: string, target: string}[]} */
+  const findings = reads.filter(read => read.ring === null || ringShortfalls(read.ring, read.planes).length > 0).map(({ id }) => ({ rule: RULE, target: id }));
+  return stopped ? [...findings, stopped] : findings;
 }

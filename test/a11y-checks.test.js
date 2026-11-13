@@ -5,7 +5,11 @@
 // - the focus ring's contrast against each plane beside it, with alpha composited first and a
 //   two-tone ring measured as #16 measures one;
 // - the chords Chrome keeps for itself;
-// - what reduced motion forbids.
+// - what reduced motion forbids;
+// - a tab stop nobody sees, in a collapsed, off-screen or transparent layer, a step that leaves
+//   focus on body, and tab order that runs back along a line or up a column;
+// - how a live region announces, for the announcement recorder, which won't read a page it isn't
+//   recording.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -186,5 +190,76 @@ describe("the browser halves' pure parts (#24 slice 2)", () => {
   it('reports the custom checks under their own rule IDs, apart from axe\'s', () => {
     assert.equal(targets.RULE, 'ntn-target-size');
     assert.equal(ring.RULE, 'ntn-focus-ring');
+  });
+});
+
+describe("the layers checks' pure parts (#24 slice 2)", () => {
+  /** @type {any} */ let layers;
+  before(async () => {
+    layers = await import('./a11y/checks/layers.mjs');
+  });
+
+  it('finds a tab stop nobody sees: one the page shows none of where it sits, or a transparent one', () => {
+    const stop = (/** @type {string} */ id, /** @type {boolean} */ shown, opacity = 1) => ({ id, shown, opacity });
+    assert.deepEqual(layers.hiddenStops([stop('#seen', true), stop('#collapsed', false), stop('#clear', true, 0), stop('#faded', true, 0.4)]), ['#collapsed', '#clear']);
+    assert.equal(layers.HIDDEN_RULE, 'ntn-hidden-focus');
+  });
+
+  it('finds a step that leaves focus on body, named for the step, and passes one that leaves it on a control', async () => {
+    const page = (/** @type {boolean} */ lost) => ({ evaluate: async () => lost });
+    assert.deepEqual(await layers.focusLost(page(true), 'close the menu'), [{ rule: 'ntn-focus-lost', target: 'close the menu' }]);
+    assert.deepEqual(await layers.focusLost(page(false), 'close the menu'), []);
+  });
+
+  it('finds a tab stop out of the order the page reads in: back along a line, up a column, or up to an earlier column, from the stop before', () => {
+    const at = (/** @type {string} */ id, /** @type {number} */ x, /** @type {number} */ y) => ({ id, box: { x, y, width: 44, height: 44 } });
+    // Along a line, down to the next, then up to the top of the next column
+    assert.deepEqual(layers.orderProblems([at('#a', 0, 0), at('#b', 52, 0), at('#c', 0, 52), at('#d', 200, 0)]), []);
+    assert.deepEqual(layers.orderProblems([at('#b', 52, 0), at('#a', 0, 0)]), ['#a']);
+    assert.deepEqual(layers.orderProblems([at('#low', 0, 52), at('#high', 0, 0)]), ['#high']);
+    // A row of two-stop columns that CSS reversed: the step up and back to the column before
+    assert.deepEqual(layers.orderProblems([at('#a', 60, 8), at('#b', 60, 60), at('#c', 8, 8), at('#d', 8, 60)]), ['#c']);
+    // A stop read after a scroll is held to the stop before it as the same read measured it
+    assert.deepEqual(layers.orderProblems([at('#a', 0, 400), { ...at('#b', 0, 300), before: { x: 0, y: 200, width: 44, height: 44 } }]), []);
+    assert.equal(layers.ORDER_RULE, 'ntn-tab-order');
+  });
+
+  it("reports where its walk stops short, as the ring's does, and keeps a hidden stop out of the order", async () => {
+    const stop = (/** @type {string} */ id, /** @type {number} */ x, shown = true) => ({ id, shown, opacity: 1, box: { x, y: 0, width: 44, height: 44 } });
+    /** A page whose Tab presses read `reads` in turn, then nothing, as when focus leaves the page */
+    const walk = (/** @type {any[]} */ reads, /** @type {object} */ options = {}) =>
+      layers.layerFindings({ keyboard: { press: async () => {} }, evaluate: async () => reads.shift() ?? null }, options);
+    const short = [{ rule: 'ntn-focus-walk', target: '#b' }];
+    assert.deepEqual(await walk([stop('#a', 0), stop('#b', 52), stop('#b', 52)]), short);
+    assert.deepEqual(await walk([stop('#a', 0), { ...stop('#b', 52), followed: true }]), short);
+    assert.deepEqual(await walk([stop('#a', 0), stop('#b', 52), stop('#c', 104)], { max: 2 }), short);
+    // A hidden stop back along the line is hidden, and the stops around it read in order
+    assert.deepEqual(await walk([stop('#a', 52), stop('#gone', 0, false), stop('#b', 104)]), [{ rule: 'ntn-hidden-focus', target: '#gone' }]);
+  });
+});
+
+describe("the announcement recorder's pure part (#24 slice 2)", () => {
+  /** @type {any} */ let announce;
+  before(async () => {
+    announce = await import('./a11y/checks/announce.mjs');
+  });
+
+  it("reads how a live region announces from its aria-live, else its role, and nothing from one that's off", () => {
+    const how = (/** @type {string | null} */ live, /** @type {string | null} */ role, tag = 'div') => announce.politenessOf({ live, role, tag });
+    assert.equal(how(null, 'status'), 'polite');
+    assert.equal(how(null, 'log'), 'polite');
+    assert.equal(how(null, 'alert'), 'assertive');
+    assert.equal(how(null, null, 'output'), 'polite');
+    assert.equal(how('assertive', 'status'), 'assertive');
+    assert.equal(how('off', 'log'), null);
+    assert.equal(how(null, null), null);
+  });
+
+  it("refuses to read a page that isn't recording, as after a navigation, rather than hear nothing", async () => {
+    const page = (/** @type {unknown} */ said) => ({ evaluate: async () => said });
+    const saved = [{ region: '#status', politeness: 'polite', text: 'Saved' }];
+    assert.deepEqual(await announce.readAnnouncements(page(saved)), saved);
+    assert.deepEqual(await announce.readAnnouncements(page([])), []);
+    await assert.rejects(announce.readAnnouncements(page(null)), /^TypeError: the page isn't recording/);
   });
 });

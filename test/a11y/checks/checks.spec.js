@@ -24,7 +24,25 @@
 //   target, and a white ring at no offset on a white button in a #333333 toolbar clears the toolbar
 //   but fails against the button's fill;
 // - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
-//   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix.
+//   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix;
+// - the layers check finds a tab stop nobody sees, in a collapsed, off-screen or transparent layer,
+//   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus. A step
+//   that leaves focus on body is found, and one that returns it to its invoker passes. Tab order
+//   that runs back along a row or up a column, as CSS reversed them, or up to the column before, as in
+//   a reversed row of two-stop columns, is found, and a row read left to right passes, and so does a
+//   column read top to bottom that's taller than the page, where the walk scrolls. Each step is read in
+//   the frame it's read in, so the steps out of a scroller and onto a fixed bar read in order, and a
+//   column read back up after a scroll is found. A link that wraps is read by its line boxes, so it
+//   shows where either part sits and a link after it on its second line reads in order;
+// - the announcement recorder reads back what a step makes the live regions say: a status and a
+//   polite region politely, an alert assertively, and nothing from a log that's off or from text
+//   outside any region. A region that isn't atomic says what was added, so a count reads `3`, and an
+//   atomic one its whole text, `3 notes`. Each toast added to a toast region is read alone, and one
+//   leaving says nothing. An alert added with its text is heard as its own region, once, as the legacy
+//   tab's note-gone notice is added: inside a log that's off too, and not again as part of a polite
+//   region it lands in. It keeps hearing after setContent() writes
+//   a new document into the page, which keeps the window, and refuses a page that never started
+//   recording, or that a reload has replaced since.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -193,4 +211,192 @@ test("the hit boxes find a small link alone in its list item, and the ring finds
       <div class="toolbar"><button id="on-fill">A</button></div>`),
   );
   expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-ring', target: '#on-fill' }]);
+});
+
+test('the layers check finds a tab stop nobody sees, in a collapsed, off-screen or transparent layer, and passes an inert layer and a skip link that shows on focus', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { width: 44px; height: 44px; } .collapsed { width: 0; overflow: hidden; } .off { position: absolute; left: -9999px; }
+      .clear { opacity: 0; } .skip { position: absolute; left: -9999px; } .skip:focus { left: 0; top: 0; }</style>
+      <a href="#shown" class="skip" id="skip">Skip</a><button id="shown">A</button>
+      <div class="collapsed"><button id="in-collapsed">B</button></div>
+      <div class="off"><button id="off-screen">C</button></div>
+      <div class="clear"><button id="transparent">D</button></div>
+      <div class="collapsed" inert><button id="in-inert">E</button></div>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([
+    { rule: 'ntn-hidden-focus', target: '#in-collapsed' },
+    { rule: 'ntn-hidden-focus', target: '#off-screen' },
+    { rule: 'ntn-hidden-focus', target: '#transparent' },
+  ]);
+});
+
+test('the layers check finds a step that leaves focus on body, and passes one that returns it to its invoker', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<button id="open">Menu</button>
+      <script>
+        document.getElementById('open').addEventListener('click', () => {
+          const close = Object.assign(document.createElement('button'), { id: 'close', textContent: 'Close' });
+          close.addEventListener('click', () => { if (window.returnFocus) document.getElementById('open').focus(); close.remove(); });
+          document.querySelector('main').append(close);
+          close.focus();
+        });
+      </script>`),
+  );
+  const openAndClose = async () => {
+    await page.focus('#open');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+  };
+  await openAndClose();
+  expect(await layers.focusLost(page, 'close the menu')).toEqual([{ rule: 'ntn-focus-lost', target: 'close the menu' }]);
+  await page.evaluate('window.returnFocus = true');
+  await openAndClose();
+  expect(await layers.focusLost(page, 'close the menu')).toEqual([]);
+});
+
+test('the layers check finds a tab stop out of the order the page reads in, back along a row, up a column or up to the column before, and passes a row in order', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { width: 44px; height: 44px; } .row { display: flex; gap: 8px; } .reversed { flex-direction: row-reverse; justify-content: flex-end; }
+      .column { display: flex; flex-direction: column-reverse; align-items: flex-start; } .stack { display: flex; flex-direction: column; gap: 8px; }</style>
+      <div class="row"><button id="a1">1</button><button id="a2">2</button></div>
+      <div class="row reversed"><button id="b1">1</button><button id="b2">2</button></div>
+      <div class="column"><button id="c1">1</button><button id="c2">2</button></div>
+      <div class="row reversed"><div class="stack"><button id="d1">1</button><button id="d2">2</button></div><div class="stack"><button id="d3">3</button><button id="d4">4</button></div></div>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([
+    { rule: 'ntn-tab-order', target: '#b2' },
+    { rule: 'ntn-tab-order', target: '#c2' },
+    { rule: 'ntn-tab-order', target: '#d3' },
+  ]);
+});
+
+test('the layers check reads tab order in one frame, so a column read top to bottom passes though the walk scrolls down it', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { display: block; width: 44px; height: 44px; } .gap { height: 520px; } .room { height: 1200px; }</style>
+      <button id="top">1</button><div class="gap"></div><button id="middle">2</button><div class="gap"></div><button id="bottom">3</button>
+      <div class="room"></div>`),
+  );
+  // The room below lets Chrome scroll the last stop it tabs to into the middle of the page, above where
+  // the stop before it was read
+  expect(await layers.layerFindings(page)).toEqual([]);
+});
+
+test('the layers check reads a step out of a scroller in the frame it is read in, so a button after the scroller reads in order', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { display: block; width: 44px; height: 44px; } .scroller { height: 200px; overflow-y: auto; } .gap { height: 150px; }</style>
+      <div class="scroller"><button id="in1">1</button><div class="gap"></div><button id="in2">2</button><div class="gap"></div><button id="in3">3</button></div>
+      <button id="after">After</button>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([]);
+});
+
+test('the layers check reads a step onto a fixed bar in the frame it is read in, so the bar after a scrolled page reads in order', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { display: block; width: 44px; height: 44px; } .gap { height: 900px; } .room { height: 1200px; } .bar { position: fixed; bottom: 0; left: 0; }</style>
+      <button id="first">1</button><div class="gap"></div><button id="last">2</button><div class="room"></div>
+      <div class="bar"><button id="bar">Bar</button></div>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([]);
+});
+
+test('the layers check still finds a column read back up after a scroll, in the frame each step is read in', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  // CSS order shows the column top, mid, low, where Tab reads it top, low, mid
+  await page.setContent(
+    html(`<style>main { display: flex; flex-direction: column; } button { width: 44px; height: 44px; } .short { height: 300px; } .long { height: 900px; } .room { height: 1200px; }</style>
+      <button id="top" style="order: 1">1</button><div class="short" style="order: 2"></div><button id="low" style="order: 5">2</button>
+      <div class="long" style="order: 4"></div><button id="mid" style="order: 3">3</button><div class="room" style="order: 6"></div>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([{ rule: 'ntn-tab-order', target: '#mid' }]);
+});
+
+test('the layers check reads a link that wraps by its line boxes: shown where either part sits, and a stop after it on its second line in order', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>p { font: 16px/24px monospace; margin: 0 0 24px; } .wide { width: 40ch; } .narrow { width: 20ch; }</style>
+      <p class="wide">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa <a href="#wrapped" id="wrapped">bb cc</a> <a href="#help" id="help">help</a></p>
+      <p class="narrow">aaaa <a href="#long" id="long">bbbbbbbbbbbbbbb cc</a> <a href="#more" id="more">more</a></p>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([]);
+});
+
+test("the announcement recorder reads back what a step makes the live regions say: what was added, or the whole text of an atomic one, and nothing from a region that's off or from no region", async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(
+    html(`<div id="status" role="status"></div><div id="alert" role="alert"></div><div id="log" role="log" aria-live="off"></div>
+      <div id="count" aria-live="polite"><span id="number">0</span> notes</div><div id="plain"></div>
+      <div id="total" aria-live="polite" aria-atomic="true"><span id="sum">0</span> notes</div>`),
+  );
+  await announce.recordAnnouncements(page);
+  await page.evaluate(`document.getElementById('status').textContent = 'Saved';
+    document.getElementById('alert').textContent = "Couldn't save";
+    document.getElementById('log').textContent = 'Responding';
+    document.getElementById('plain').textContent = 'Not a region';
+    document.getElementById('number').textContent = '3';
+    document.getElementById('sum').textContent = '3';`);
+  expect(await announce.readAnnouncements(page)).toEqual([
+    { region: '#status', politeness: 'polite', text: 'Saved' },
+    { region: '#alert', politeness: 'assertive', text: "Couldn't save" },
+    { region: '#count', politeness: 'polite', text: '3' },
+    { region: '#total', politeness: 'polite', text: '3 notes' },
+  ]);
+  expect(await announce.readAnnouncements(page)).toEqual([]);
+});
+
+test('the announcement recorder hears an alert added with its text as its own region, once, inside a log that is off or a polite region alike', async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(html('<div id="log" role="log" aria-live="off"></div><div id="feed" aria-live="polite"></div>'));
+  await announce.recordAnnouncements(page);
+  await page.evaluate(`const alert = (id, text) => {
+      const el = Object.assign(document.createElement('div'), { id, textContent: text });
+      el.setAttribute('role', 'alert');
+      return el;
+    };
+    document.querySelector('main').append(alert('gone', "This note was deleted, so these changes aren't saved."));
+    document.getElementById('log').append(alert('stopped', 'The answer stopped'));
+    document.getElementById('feed').append(alert('error', "Couldn't reach the model"));`);
+  expect(await announce.readAnnouncements(page)).toEqual([
+    { region: '#gone', politeness: 'assertive', text: "This note was deleted, so these changes aren't saved." },
+    { region: '#stopped', politeness: 'assertive', text: 'The answer stopped' },
+    { region: '#error', politeness: 'assertive', text: "Couldn't reach the model" },
+  ]);
+});
+
+test('the announcement recorder keeps hearing after setContent() writes a new document into the same window', async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(html('<div id="status" role="status"></div>'));
+  await announce.recordAnnouncements(page);
+  await page.setContent(html('<div id="status" role="status"></div>'));
+  await announce.recordAnnouncements(page);
+  await page.evaluate(`document.getElementById('status').textContent = "Couldn't save"`);
+  expect(await announce.readAnnouncements(page)).toEqual([{ region: '#status', politeness: 'polite', text: "Couldn't save" }]);
+});
+
+test('the announcement recorder reads each toast a region adds alone, and nothing when one leaves, as a screen reader says them', async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(html('<div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>'));
+  await announce.recordAnnouncements(page);
+  const toast = (/** @type {string} */ text) =>
+    page.evaluate(`document.getElementById('toasts').append(Object.assign(document.createElement('div'), { textContent: ${JSON.stringify(text)} }))`);
+  await toast('Copied');
+  expect(await announce.readAnnouncements(page)).toEqual([{ region: '#toasts', politeness: 'polite', text: 'Copied' }]);
+  await toast('Exported');
+  expect(await announce.readAnnouncements(page)).toEqual([{ region: '#toasts', politeness: 'polite', text: 'Exported' }]);
+  await page.evaluate("document.querySelector('#toasts > div').remove()");
+  expect(await announce.readAnnouncements(page)).toEqual([]);
+});
+
+test("the announcement recorder refuses a page that never started recording, and one a reload has replaced since", async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(html('<div id="status" role="status"></div>'));
+  await expect(announce.readAnnouncements(page)).rejects.toThrow(/^the page isn't recording/);
+  await announce.recordAnnouncements(page);
+  await page.reload();
+  await expect(announce.readAnnouncements(page)).rejects.toThrow(/^the page isn't recording/);
 });
