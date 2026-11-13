@@ -59,6 +59,9 @@ const KINDS = Object.freeze(['build', 'package', 'canary', 'output']);
 
 /** A start byte row in a copy of a fixture that doesn't test the rows: 2 MiB / 1 MiB, past any start */
 const LIFTED_ROW = Object.freeze({ raw: 2097152, gzip: 1048576 });
+/** A module row and the zip row in such a copy, past any start and any zip (#300) */
+const LIFTED_MODULES = 100000;
+const LIFTED_ZIP = 64 * 1024 * 1024;
 
 /**
  * @typedef {object} Edit
@@ -150,15 +153,18 @@ function recordSecurityEntry(dir, fixture) {
 }
 
 /**
- * Lift every start byte row in the build/budgets.json of the tree at `dir`, a fixture's copy as
- * edited, to LIFTED_ROW, unless the fixture expects budget/bytes, which builds against the real
- * rows. A budgets.json that doesn't parse is the fixture's own defect, and stays as it is.
+ * Lift the rows in the build/budgets.json of the tree at `dir`, a fixture's copy as edited, past
+ * anything the copy builds: every start byte row to LIFTED_ROW, unless the fixture expects
+ * budget/bytes, every module row to LIFTED_MODULES, unless it expects budget/modules, and the zip
+ * row to LIFTED_ZIP, unless it expects budget/zip (#300). A fixture that expects a row's code
+ * builds against the real rows of that kind. A budgets.json that doesn't parse is the fixture's
+ * own defect, and stays as it is.
  * @param {string} dir
  * @param {Fixture} fixture
- * @returns {boolean} whether it lifted them
+ * @returns {boolean} whether it read the file and wrote it back lifted
  */
-function liftByteRows(dir, fixture) {
-  if ((fixture.expect || []).includes('budget/bytes')) return false;
+function liftRows(dir, fixture) {
+  const expects = (/** @type {string} */ code) => (fixture.expect || []).includes(code);
   const file = path.join(dir, 'build', 'budgets.json');
   /** @type {any} */
   let budgets;
@@ -168,10 +174,12 @@ function liftByteRows(dir, fixture) {
     return false;
   }
   for (const entry of Object.values(budgets.entries || {})) {
-    for (const row of Object.values(entry.start || {})) {
+    for (const row of Object.values(expects('budget/bytes') ? {} : entry.start || {})) {
       if (row && Number.isSafeInteger(row.raw) && Number.isSafeInteger(row.gzip)) Object.assign(row, LIFTED_ROW);
     }
+    if (!expects('budget/modules') && Number.isSafeInteger(entry.modules)) entry.modules = LIFTED_MODULES;
   }
+  if (!expects('budget/zip') && budgets.package && Number.isSafeInteger(budgets.package.zipBytes)) budgets.package.zipBytes = LIFTED_ZIP;
   fs.writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
   return true;
 }
@@ -259,7 +267,7 @@ async function runFixture(fixture) {
     copyTree(ROOT, dir);
     applyEdits(dir, fixture.edits || []);
     if (fixture.securityEntry) recordSecurityEntry(dir, fixture);
-    liftByteRows(dir, fixture);
+    liftRows(dir, fixture);
 
     if (kind === 'build') {
       for (const mode of fixture.modes || MODES) {
@@ -427,4 +435,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }
 
-module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, outputProblems, runFixture, parseShard, shardOf, planRun, FIXTURES, CANARY_NAMES, KINDS };
+module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftRows, reportedCodes, outputProblems, runFixture, parseShard, shardOf, planRun, FIXTURES, CANARY_NAMES, KINDS };

@@ -9,8 +9,8 @@
  * Before writing, it checks dist/ is one whole build: build-info.json's outputDigest is the
  * SHA-256 of asset-manifest.json, which lists every other file as it is. After, it reads the
  * zip back and runs the closure check on it (#27 AC5), so every path the package names is in
- * the zip and the zip holds nothing unnamed. A problem leaves no zip, an older one of the same
- * name included.
+ * the zip and the zip holds nothing unnamed, and holds the zip to build/budgets.json's package
+ * row (#27 AC3, #300). A problem leaves no zip, an older one of the same name included.
  */
 
 const fs = require('fs');
@@ -21,6 +21,7 @@ const { fromDirectory, fromZip } = require('./build/package-files.js');
 const { readBuildInfo, sha256 } = require('./build/build-info.js');
 const { checkClosure } = require('./build/closure.js');
 const { writeZip } = require('./build/zip.js');
+const { readBudgets, checkZip } = require('./build/budgets.js');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
@@ -28,8 +29,11 @@ const OUTPUT_DIR = path.join(ROOT_DIR, 'releases');
 
 /**
  * The zip for the build in `dir` (dist/), or the problems that stop it
+ * @param {string} [dir]
+ * @param {{budgets?: import('./build/budgets.js').BudgetFile}} [options] - the budgets to hold the
+ *   zip to; build/budgets.json without them
  */
-function makePackage(dir = DIST_DIR) {
+function makePackage(dir = DIST_DIR, { budgets } = {}) {
   const problems = [...checkNode(ROOT_DIR)];
   if (!fs.existsSync(path.join(dir, 'manifest.json'))) {
     return { problems: [...problems, problem('package/no-build', 'dist/', 'dist/manifest.json not found. Run `npm run build` first.')] };
@@ -46,6 +50,8 @@ function makePackage(dir = DIST_DIR) {
     || packed.paths.some((file, i) => file !== files.paths[i] || !packed.read(file).equals(files.read(file)));
   if (differs) problems.push(problem('package/write', 'the zip', "doesn't hold dist/'s files as they are"));
   problems.push(...checkClosure(packed).problems);
+  const read = budgets ? { budgets, problems: [] } : readBudgets(ROOT_DIR);
+  problems.push(...read.problems, ...(read.budgets ? checkZip(zip.length, read.budgets) : []));
   return { problems, zip, files: files.paths.length };
 }
 
@@ -88,7 +94,8 @@ function createPackage() {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   fs.writeFileSync(outputPath, result.zip);
   console.log(`✅ Package created: ${filename}`);
-  console.log(`   Size: ${formatBytes(result.zip.length)}, ${result.files} files`);
+  // The exact bytes too, since CI's log is where the zip row's number is read (#300)
+  console.log(`   Size: ${formatBytes(result.zip.length)} (${result.zip.length} bytes), ${result.files} files`);
   console.log(`   SHA-256: ${sha256(result.zip)}`);
   console.log(`   Path: ${outputPath}`);
   console.log('');

@@ -22,6 +22,8 @@
  *                      row names in neither, so the row can't fall back to measuring the root
  *   budget/bytes       an entry's start over a row: JS, CSS, HTML, or fonts, raw or gzip at
  *                      level 9, the way npm run perf:probe measures them
+ *   budget/modules     an entry's start over its module row: the modules, classic scripts,
+ *                      stylesheets, fonts and page the build's line counts for it (#300)
  *   budget/forbidden   a module, classic script, or file a forbidden category names on the
  *                      entry's start path
  *   budget/worker-only a module only the service worker runs (WORKER_ONLY_MODULES) on a page's
@@ -38,6 +40,8 @@
  *                      the adapter's list, another pages-pass start with it, or recovery.html's
  *                      start with a chunk named for either
  *   budget/file        build/budgets.json doesn't read as a budget file
+ * The zip's row is npm run package's (scripts/package.js, checkZip): a zip over it fails as
+ * budget/zip, and no zip is written. A null row has no approved number yet, and gates nothing.
  * Timing and heap aren't the build's: npm run perf:probe measures them against the frozen
  * 1.4.0 package with the rows here (docs/performance/budgets.md). Budgets hold for production
  * builds; a development build isn't checked.
@@ -46,7 +50,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const { problem } = require('./diagnostics.js');
+const { problem, plural } = require('./diagnostics.js');
 const { htmlTags, cssUrls } = require('./markup.js');
 const { sourcePath } = require('./bundle.js');
 const { PAGES, OWN_PASS_PAGES, BACKGROUND_ENTRY, CLASSIC_SCRIPTS } = require('./vite-config.js');
@@ -98,6 +102,8 @@ const LAZY_ONLY_MODULES = Object.freeze([
  * @property {string[]} [lazyChunks] - loader chunks the page's start loads later, with import()
  * @property {boolean} [planned] - not built yet: the gate refuses a build that has it
  * @property {Partial<Record<StartType, Limit | null>>} [start] - null: no approved number yet
+ * @property {number | null} [modules] - the most modules its start may hold; null: no approved
+ *   number yet
  * @property {string[]} [forbidden] - categories gated on the start path
  * @property {string[]} [dependencies] - third-party packages its graph may hold
  * @property {string[]} [lazyDependencies] - third-party packages its lazy chunks and workers may
@@ -109,6 +115,8 @@ const LAZY_ONLY_MODULES = Object.freeze([
  * @typedef {object} BudgetFile
  * @property {Record<string, BudgetEntry>} entries
  * @property {Record<string, {about: string, paths: string[]}>} forbidden - categories, by name
+ * @property {{zipBytes: number | null, reason: string}} [package] - the zip npm run package
+ *   writes, at most zipBytes bytes; null: no approved number yet
  */
 
 /**
@@ -450,8 +458,25 @@ function fileProblems(budgets) {
       const ok = limit && Number.isSafeInteger(limit.raw) && Number.isSafeInteger(limit.gzip) && limit.raw >= 0 && limit.gzip >= 0;
       if (!ok) fail(`entry ${name}'s ${type} row isn't whole numbers of bytes, raw and gzip`);
     }
+    if (entry.modules !== undefined && entry.modules !== null && !wholeNumber(entry.modules)) fail(`entry ${name}'s modules row isn't a whole number of modules`);
+  }
+  if (budgets.package !== undefined) {
+    const row = budgets.package;
+    if (!row || typeof row !== 'object') fail("the package row isn't a row");
+    else {
+      if (row.zipBytes !== null && !wholeNumber(row.zipBytes)) fail("the package's zipBytes row isn't a whole number of bytes");
+      if (typeof row.reason !== 'string' || row.reason === '') fail('the package row has no reason');
+    }
   }
   return problems;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is number}
+ */
+function wholeNumber(value) {
+  return Number.isSafeInteger(value) && /** @type {number} */ (value) >= 0;
 }
 
 /**
@@ -548,6 +573,9 @@ function checkBudgets(graphs, budgets, { loaderChunks, files, chunks }) {
         }
       }
     }
+    if (wholeNumber(entry.modules) && graph.start.modules.length > entry.modules) {
+      problems.push(problem('budget/modules', name, `its start has ${plural(graph.start.modules.length, 'module')}, over its ${entry.modules}; a number over a row goes to the owner, not into the row`));
+    }
     for (const category of entry.forbidden || []) {
       const { paths } = budgets.forbidden[category];
       const found = graph.start.modules.filter((file) => paths.some((glob) => matches(glob, file)));
@@ -581,6 +609,18 @@ function checkBudgets(graphs, budgets, { loaderChunks, files, chunks }) {
 }
 
 /**
+ * The zip's problems against the package row: one over it fails (#300). A null row gates nothing.
+ * @param {number} bytes - the zip's size
+ * @param {BudgetFile} budgets
+ * @returns {Problem[]}
+ */
+function checkZip(bytes, budgets) {
+  const limit = budgets.package ? budgets.package.zipBytes : null;
+  if (!wholeNumber(limit) || bytes <= limit) return [];
+  return [problem('budget/zip', 'the zip', `it is ${bytes} bytes (${kib(bytes)}), over its ${limit} (${kib(limit)}); a number over a row goes to the owner, not into the row`)];
+}
+
+/**
  * Read build/budgets.json from `root`
  * @param {string} [root]
  * @returns {{budgets: BudgetFile | null, problems: Problem[]}}
@@ -597,4 +637,4 @@ function readBudgets(root = ROOT) {
   }
 }
 
-module.exports = { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE, WORKER_ONLY_MODULES, LAZY_ONLY_MODULES };
+module.exports = { analyze, checkBudgets, checkZip, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE, WORKER_ONLY_MODULES, LAZY_ONLY_MODULES };
