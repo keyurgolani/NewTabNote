@@ -60,6 +60,8 @@ node scripts/fixtures/derive-expected.mjs
 
 The recorder `git archive`s the tag into a scratch directory, loads it unpacked in the harness, headless, writes the seed through the release's own `Storage`, Popup, and settings, and dumps it with each canary back to its placeholder. A canary the release changed fails the run. The header pins the tag's commit and tree, and lists the write paths that ran. `test/kernel/storage-recorded.test.mjs` checks those pins against the tags. CI's unit job fetches the tags and sets `NTN_RELEASE_TAGS=required`, so a missing tag fails there; a local clone without them shows the check as skipped. Nothing is downloaded, and a release Chromium won't load falls back to #17's synthesized fixture for its row, listed in the test's `FALLBACKS`.
 
+`test/fixtures/releases/manifest.json` lists each public release's tag, the commit it points at, and the SHA-256 of each of its assets, as the releases API reports them, so nothing is downloaded. After a release is published and `git fetch --tags origin`, `node scripts/fixtures/release-manifest.mjs` writes it again. `test/release-manifest.test.js` holds each entry to its tag, and fails on a release tag with no entry, except the newest, which may wait for its entry's PR, so tagging a release never turns `next` red.
+
 ## Faults
 
 `test/support/faults/` holds what #28's slice 4 names for tests on either host, and its `index.js` exports it. Nothing under `test/support/` ships. Fixture rule 5's factory wrapper stays in `test/kernel/storage-faults.mjs`, beside the kernel tests that import it.

@@ -1,0 +1,73 @@
+{
+  "about": "Each public release of NewTabNote: its tag, the commit the tag points at, and each asset GitHub serves for it, with the size and SHA-256 the releases API reports. scripts/fixtures/release-manifest.mjs writes it, and nothing is downloaded to make it. #30's release corpus checks the zips it downloads against these hashes, and test/release-manifest.test.js holds every entry to its tag.",
+  "releases": [
+    { "tag": "v1.0.0", "commit": "400545d312babe26e2e34495b0148dcb365472b3", "assets": [
+      {"name":"new-tab-note-v1.0.0.zip","size":46437,"sha256":"12c652c3d0bcaacd5c5b603256c8928b11f1372bf5799057069ae3d14b9cbfc7"}
+    ] },
+    { "tag": "v1.1.0", "commit": "12ca8755df5e40b0b47aed5a333cf8808bc95560", "assets": [
+      {"name":"new-tab-note-v1.1.0.crx","size":57280,"sha256":"1d6bbfa0e977f564e2f40a62baacc9a085d0f8bb0d9f55b176f0b9266963da21"}
+    ] },
+    { "tag": "v1.1.1", "commit": "5d8d87e392247c78b3bc74b8ebd23062947e3a16", "assets": [
+      {"name":"new-tab-note-v1.1.1.crx","size":58417,"sha256":"03fd455e8d6f594e51fa9e2573a31331782cf0dfc080bfbb6b7eedea8eef3b1b"},
+      {"name":"new-tab-note-v1.1.1.zip","size":57300,"sha256":"efb4def02da13c704c08b5045f7cacf6bc4689e827f07632b07429558aaec44c"}
+    ] },
+    { "tag": "v1.1.2", "commit": "5fe472c4906e9d56151b25e3402699394186331f", "assets": [
+      {"name":"new-tab-note-v1.1.2.crx","size":58392,"sha256":"77378ecb6eabb177c76efc03f5444e40acfd0115eda7c33b15244b0cffab9c12"},
+      {"name":"new-tab-note-v1.1.2.zip","size":57275,"sha256":"8cd31a072c047ee3e27d834eec05830ee60635909829dd30db070365791a5e44"}
+    ] },
+    { "tag": "v1.1.3", "commit": "719f9e1344c17125f51f72ce86e0161f73d415f1", "assets": [
+      {"name":"new-tab-note-v1.1.3.zip","size":62190,"sha256":"dc33981f5fba1a424d593d7ebad847e7e3ee5e2090e8d1eaa30693ab4a6d969e"}
+    ] },
+    { "tag": "v1.1.4", "commit": "5bc09cd439766c064109a1cf0459849ccf9a5438", "assets": [
+      {"name":"new-tab-note-v1.1.4.zip","size":62882,"sha256":"6dd09705811ae5cdddbf98a0f4a250649291987b136171dd89ec467413d43916"}
+    ] },
+    { "tag": "v1.1.5", "commit": "3cf96981b4b68e0aaff9f30da81ae57f3d587df9", "assets": [
+      {"name":"new-tab-note-v1.1.5.zip","size":64628,"sha256":"7aaa34edd3e2491d5aaa899c6c4a8b4cd24fcb9fa33327827bff7f3beeef4e19"}
+    ] },
+    { "tag": "v1.2.0", "commit": "804687e3e9c069a915319c97b4100fc438c385ae", "assets": [
+      {"name":"new-tab-note-v1.2.0.zip","size":406980,"sha256":"6a343735709fbc5bd2a4c25fd1f2bfb9ff2fe4fac25e42d4ee199b32174410ca"}
+    ] },
+    { "tag": "v1.3.0", "commit": "b0451bb7886aac51e037c9d5983af7e4dfa23bd4", "assets": [
+      {"name":"new-tab-note-v1.3.0.zip","size":500138,"sha256":"c68101c671cd5bc029c05d9976b420419fbbf8601cb91f81b559e331391f8edb"}
+    ] },
+    { "tag": "v1.4.0", "commit": "e93b21e6acf065c198a71646fc0ee185cfd416ba", "assets": [
+      {"name":"new-tab-note-v1.4.0.zip","size":504064,"sha256":"a0a424a817c01a7a52c99e2e21159da9d8731549536ca9dd3d34d93a6554e1dc"}
+    ] },
+    { "tag": "v1.4.1", "commit": "65822ffe1de0311579fe6f163d8584d94bb0fc62", "assets": [
+      {"name":"new-tab-note-v1.4.1.zip","size":533641,"sha256":"3c91ce8024f5afe4bc6cc523fd7b1593b3f0a496f94ee82ddb61e9039b7c8894"},
+      {"name":"new-tab-note-v1.4.1.zip.sha256","size":90,"sha256":"c96d7621ac5ac9b2878f04922ee1eed37a6757e15c9eda3c6a8b28e4beda0fb9"}
+    ] },
+    { "tag": "v1.4.2", "commit": "ab6b9db91f16f03b9fc6ef2802ca135895c21f01", "assets": [
+      {"name":"new-tab-note-v1.4.2.zip","size":538278,"sha256":"add882db802882a220e6a1262d323fcb0783ddd8f2e6b6754f6fc71b11fe5612"},
+      {"name":"new-tab-note-v1.4.2.zip.sha256","size":90,"sha256":"ebd7b2009bf00a58d4eddd4ef42deb18458f26194cfc19d8b85fced3471b09dc"}
+    ] },
+    { "tag": "v1.4.3", "commit": "aa38934f8bac7db189c238f1ffac70c036888248", "assets": [
+      {"name":"new-tab-note-v1.4.3.zip","size":547762,"sha256":"5a4007ff84d73eb33a5d17238cf0bd05220da762d631bcf7e66d9cc1792ad1ae"},
+      {"name":"new-tab-note-v1.4.3.zip.sha256","size":90,"sha256":"f30c533cadc6849b5fa0f12627239c84df2b12a41f8d9e62b6035a85095f6b3a"}
+    ] },
+    { "tag": "v1.4.4", "commit": "05043e9c5987f318a9ac920e4611703f43614673", "assets": [
+      {"name":"new-tab-note-v1.4.4.zip","size":531688,"sha256":"424061bdea7128bf55fc83867a89af7fe707e83526d3811a1e0b2e2435da44fe"},
+      {"name":"new-tab-note-v1.4.4.zip.sha256","size":90,"sha256":"70b0ea0f21ca20afe5fdf7013d3b062fa6604fa06fd45085e8326bb551ba65ed"}
+    ] },
+    { "tag": "v1.4.5", "commit": "ee36a9a6cdd5f1c19f516184a86d5cc99886aee7", "assets": [
+      {"name":"new-tab-note-v1.4.5.zip","size":532300,"sha256":"f9028af002b6051f75b1e472285cff77d433f66284c6cdcc5759775c046ad4e2"},
+      {"name":"new-tab-note-v1.4.5.zip.sha256","size":90,"sha256":"1f79789147b0a349448b18280bdbc593996afb26d5ca57405bcdd1090498c1af"}
+    ] },
+    { "tag": "v1.5.0", "commit": "10681721d63902d0e371de32b96abd32414ee807", "assets": [
+      {"name":"new-tab-note-v1.5.0.zip","size":669585,"sha256":"38d42882947301f6b08e37dcb1074b13bd064e37d482de88f532715b7320de8a"},
+      {"name":"new-tab-note-v1.5.0.zip.sha256","size":90,"sha256":"680cf12fdb3207e666973641716fe98aad03798ddf5c017a123e9e3f7ffa2baf"}
+    ] },
+    { "tag": "v1.6.0", "commit": "504d7eb9c1ac8082aecf7b45a4a1359fd564a08b", "assets": [
+      {"name":"new-tab-note-v1.6.0.zip","size":822434,"sha256":"108b251de899e16c444855b38adb5eb43b95af63bf9c81a718361797af6297a7"},
+      {"name":"new-tab-note-v1.6.0.zip.sha256","size":90,"sha256":"b93843f32fc7007418ed02ebd5ad2248839c88f9fd30bd734e4bea4d938f49ff"}
+    ] },
+    { "tag": "v1.7.0", "commit": "0e057bfd7cc500d1286ebae083f3aeef0d775511", "assets": [
+      {"name":"new-tab-note-v1.7.0.zip","size":828687,"sha256":"e96159a456dbd7285b799cd7836693cf9b599a28aaa1ee1ec0770b52d8392cbb"},
+      {"name":"new-tab-note-v1.7.0.zip.sha256","size":90,"sha256":"30890d726f274399154218d115318a97c5a4b37db194aa3e17c5f0896bd82251"}
+    ] },
+    { "tag": "v1.7.1", "commit": "72399b5eae4030a5e15f02c1923b9fca6cc1860e", "assets": [
+      {"name":"new-tab-note-v1.7.1.zip","size":829388,"sha256":"ddf20c790b0d52d0229d6ff593e88835ddd4612630345851b5581f8595487e58"},
+      {"name":"new-tab-note-v1.7.1.zip.sha256","size":90,"sha256":"f2204e2ae4c7e422861cb7f5c1465efaba8c1c0f7fea64bd6eee38cdfc6040d3"}
+    ] }
+  ]
+}
