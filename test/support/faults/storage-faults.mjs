@@ -4,8 +4,9 @@
 // its transaction abort the way one the disk refuses at commit does, or the next read of a
 // store fail. #17 PR 1a adds the open (the next open of a database fails, as a VersionError
 // does), cursors among the reads, and the stores a `versionchange` creates or reaches, so a
-// fault lands inside an upgrade too, on CanvasTabDB and NewTabNoteRecovery alike. Everything
-// else passes through to fake-indexeddb unchanged.
+// fault lands inside an upgrade too, on CanvasTabDB and NewTabNoteRecovery alike. #301 adds a
+// store's or an index's count and openKeyCursor, which production reads too (health.js,
+// integrity.js). Everything else passes through to fake-indexeddb unchanged.
 
 /**
  * @typedef {object} OpenedTransaction
@@ -29,9 +30,10 @@
  *   Resolves once the abort has reached every listener the transaction had when it aborted,
  *   the adapter's included, so a unit that awaits it is still away when the adapter hears.
  * @property {(store: string, name: string, key?: string) => void} failNextRead
- *   The next read of `store` fails with a DOMException called `name` and its transaction aborts,
- *   as a read of a damaged file does (NotReadableError, UnknownError). With `key`, the next read
- *   of that key alone, so every other read of the store goes through.
+ *   The next read of `store`, on it or one of its indexes (get, getAll, getAllKeys, getKey, count,
+ *   openCursor or openKeyCursor), fails with a DOMException called `name` and its transaction
+ *   aborts, as a read of a damaged file does (NotReadableError, UnknownError). With `key`, the next
+ *   read of that key alone, so every other read of the store goes through.
  * @property {string[]} deletes - every database name the wrapped factory was asked to delete
  * @property {(database: string, name: string) => void} failNextOpen
  *   The next open of `database` fails with a DOMException called `name`, touching nothing, as
@@ -116,7 +118,7 @@ export function faultyFactory(real) {
      * @returns {Record<string, unknown>}
      */
     const reads = (storeName, source) => {
-      /** @param {'get' | 'getAll' | 'getAllKeys' | 'getKey' | 'count' | 'openCursor'} method */
+      /** @param {'get' | 'getAll' | 'getAllKeys' | 'getKey' | 'count' | 'openCursor' | 'openKeyCursor'} method */
       const read =
         method =>
         (/** @type {unknown[]} */ ...args) => {
@@ -138,7 +140,9 @@ export function faultyFactory(real) {
         getAll: read('getAll'),
         getAllKeys: read('getAllKeys'),
         getKey: read('getKey'),
+        count: read('count'),
         openCursor: read('openCursor'),
+        openKeyCursor: read('openKeyCursor'),
       };
     };
 
