@@ -76,9 +76,18 @@ function bundleFixture({ extraStart = [], popupBytes = 10, sidePanel = false } =
   return { files: fromMap(files, 'the fixture'), chunks, loaderChunks: sidePanel ? { ...loaderChunks, sidepanel: 'assets/sidepanel.js' } : loaderChunks };
 }
 
-/** A budget file for the fixture, `entries` merged over the default rows */
+/** A row with room for anything the fixtures build */
+const ROOMY = Object.freeze({ raw: 100 * KIB, gzip: 100 * KIB });
+/** The package row: the zip's number, and update size waiting on #31's release gate (#300) */
+const PACKAGE_ROW = Object.freeze({ zipBytes: 10 * KIB * KIB, updateBytes: null, waitsOn: { updateBytes: '#31' }, reason: 'the zip' });
+
+/**
+ * A budget file for the fixture, `entries` merged over the default rows. Each row the fixture's
+ * build needs holds a number, or names the issue it waits on (#300)
+ */
 function budgetsFor(entries = {}) {
   return {
+    package: PACKAGE_ROW,
     forbidden: {
       'chart-library': { about: 'Chart.js', paths: ['js/lib/chart.js'] },
       trust: { about: 'the trust code', paths: ['js/trust/**'] },
@@ -91,13 +100,14 @@ function budgetsFor(entries = {}) {
         page: 'newtab.html',
         startChunks: ['workspace'],
         reason: 'the tab',
-        start: { js: { raw: 100 * KIB, gzip: 100 * KIB }, css: null, html: null, fonts: null },
+        start: { js: { raw: 100 * KIB, gzip: 100 * KIB }, css: ROOMY, html: ROOMY, fonts: ROOMY },
+        modules: 100,
         forbidden: ['chart-library', 'trust', 'model-runtime'],
         dependencies: ['@xenova/transformers', 'chart.js', 'fuse.js', 'jszip', 'some-parser', 'valibot'],
       },
-      popup: { page: 'popup.html', reason: 'the popup', start: { js: { raw: 1000, gzip: 1000 } }, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] },
-      background: { reason: 'the worker', start: {} },
-      moment: { chunk: 'moment', planned: true, reason: 'not built yet', start: {}, forbidden: ['remote-ai', 'trust', 'chart-library'], dependencies: [] },
+      popup: { page: 'popup.html', reason: 'the popup', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] },
+      background: { reason: 'the worker', start: { js: ROOMY }, modules: 100, coldStart: null, waitsOn: { coldStart: '#35' } },
+      moment: { chunk: 'moment', planned: true, reason: 'not built yet', start: {}, waitsOn: { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2' }, forbidden: ['remote-ai', 'trust', 'chart-library'], dependencies: [] },
       ...entries,
     },
   };
@@ -206,11 +216,12 @@ describe('the budget gate', () => {
     const problems = run(budgetsFor(), bundleFixture({ popupBytes: 1200 }));
     assert.equal(problems.length, 1, problems.join('\n'));
     assert.match(problems[0], /^budget\/bytes popup: its start JS is \d+ bytes raw \(1\.\d KiB\), over its 1000 \(1\.0 KiB\)/);
-    const gzipOnly = run(budgetsFor({ popup: { ...budgetsFor().entries.popup, start: { js: { raw: 1e6, gzip: 1 } } } }));
+    const { popup } = budgetsFor().entries;
+    const gzipOnly = run(budgetsFor({ popup: { ...popup, start: { ...popup.start, js: { raw: 1e6, gzip: 1 } } } }));
     assert.match(gzipOnly.join('\n'), /^budget\/bytes popup: its start JS is \d+ bytes gzip/);
   });
 
-  it("fails an entry's start over its module row, the count the build's line prints, and gates nothing on a null row (#300)", () => {
+  it("fails an entry's start over its module row, the count the build's line prints, and gates nothing on a null row that names the issue it waits on (#300)", () => {
     const { newtab, popup, background } = budgetsFor().entries;
     // The fixture's Popup starts with popup.html, js/popup.js and valibot, and the worker is its one module
     assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: 3 }, background: { ...background, modules: 1 } })), []);
@@ -224,7 +235,44 @@ describe('the budget gate', () => {
     assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, modules: 10 } })), [
       'budget/modules newtab: its start has 11 modules, over its 10; a number over a row goes to the owner, not into the row',
     ]);
-    assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: null } })), []);
+    assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: null, waitsOn: { modules: '#4' } } })), []);
+  });
+
+  it("fails a row an entry needs that's null or missing with no issue named for it in waitsOn, so a deferred row reads apart from a missing one (#300)", () => {
+    const { newtab, popup, background, moment } = budgetsFor().entries;
+    const missing = (/** @type {string} */ name, /** @type {string} */ row) => `budget/entry ${name}: its ${row} row has no number and no issue named for it in waitsOn: set its number by review, from CI's figure, or name the issue it waits on`;
+    // Rows the build has something for: the new tab's start CSS, Popup's modules, the worker's cold start
+    assert.deepEqual(run(budgetsFor({
+      newtab: { ...newtab, start: { ...newtab.start, css: null } },
+      popup: { ...popup, modules: undefined },
+      background: { ...background, waitsOn: undefined },
+    })), [missing('newtab', 'start CSS'), missing('popup', 'modules'), missing('background', 'coldStart')]);
+    // Named, each waits on its issue and gates nothing
+    assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, start: { ...newtab.start, css: null }, waitsOn: { css: '#16' } }, popup: { ...popup, modules: null, waitsOn: { modules: '#4' } } })), []);
+    // A type the start doesn't have needs no row: the fixture's Popup loads no stylesheet
+    assert.deepEqual(run(budgetsFor({ popup: { ...popup, start: { ...popup.start, css: null } } })), []);
+    // A planned row names the issue that builds it, for each row it leaves null
+    const { fonts, ...rest } = moment.waitsOn;
+    assert.equal(fonts, '#2');
+    assert.deepEqual(run(budgetsFor({ moment: { ...moment, waitsOn: rest } })), [missing('moment', 'start FONTS')]);
+    // The package's rows: the zip's, and update size's, which #31's release gate sets (#31 slice 3)
+    const budgets = budgetsFor();
+    budgets.package = { ...PACKAGE_ROW, zipBytes: null, waitsOn: {} };
+    assert.deepEqual(run(budgets), [missing('package', 'zipBytes'), missing('package', 'updateBytes')]);
+  });
+
+  it("refuses a waitsOn that names a row the entry can't have, a row with a number, or no issue, and a cold start or update size that isn't whole (#300)", () => {
+    const { popup, background } = budgetsFor().entries;
+    const file = (/** @type {object} */ entries, /** @type {object} */ row = {}) => fileProblems({ ...budgetsFor(entries), package: { ...PACKAGE_ROW, ...row } }).map(({ message }) => message);
+    assert.deepEqual(file({ popup: { ...popup, waitsOn: '#4' } }), ["entry popup's waitsOn isn't a map of rows to issues"]);
+    assert.deepEqual(file({ popup: { ...popup, waitsOn: { jss: '#4' } } }), ["entry popup's waitsOn names jss, which isn't one of its rows"]);
+    assert.deepEqual(file({ popup: { ...popup, waitsOn: { coldStart: '#35' } } }), ["entry popup's waitsOn names coldStart, which isn't one of its rows"]);
+    assert.deepEqual(file({ popup: { ...popup, waitsOn: { css: '4' } } }), ["entry popup's waitsOn gives css 4, which isn't an issue like #31"]);
+    assert.deepEqual(file({ popup: { ...popup, waitsOn: { modules: '#4' } } }), ["entry popup's modules row has a number, and waitsOn still names #4 for it"]);
+    assert.deepEqual(file({ popup: { ...popup, coldStart: 900 } }), ['entry popup has a coldStart row, which only the service worker has']);
+    for (const coldStart of [1.5, -1, '900']) assert.deepEqual(file({ background: { ...background, coldStart, waitsOn: undefined } }), ["entry background's coldStart row isn't a whole number of milliseconds"], String(coldStart));
+    for (const updateBytes of [1.5, -1, '900']) assert.deepEqual(file({}, { updateBytes, waitsOn: undefined }), ["the package's updateBytes row isn't a whole number of bytes"], String(updateBytes));
+    assert.deepEqual(file({}, { waitsOn: { zipBytes: '#31', updateBytes: '#31' } }), ["the package's zipBytes row has a number, and waitsOn still names #31 for it"]);
   });
 
   it("refuses a module row that isn't a whole number of modules, and a package row that isn't whole bytes with a reason (#300)", () => {
@@ -260,7 +308,7 @@ describe('the budget gate', () => {
     'js/kernel/core/application/record-catch-up.js',
   ];
   /** Side Panel's row, for a fixture that has its page */
-  const sidePanelRow = { page: 'sidepanel.html', reason: 'the side panel', start: { js: { raw: 1000, gzip: 1000 } }, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] };
+  const sidePanelRow = { page: 'sidepanel.html', reason: 'the side panel', start: { js: { raw: 1000, gzip: 1000 }, html: ROOMY }, modules: 100, forbidden: ['remote-ai', 'trust'], dependencies: ['valibot'] };
   const workerOnly = (/** @type {string} */ page, /** @type {string} */ file) => `budget/worker-only ${page}: its start holds ${file}, which only the service worker runs`;
 
   it("fails a page's start that holds a module only the service worker runs, by the module and the page, and passes the worker that holds it (#35 slice 3c)", () => {
@@ -406,15 +454,16 @@ describe('the budget gate', () => {
   }
   /** The fixture's rows: Popup allows valibot lazy only, in its send chunk */
   const layoutBudgets = () => {
-    const page = (/** @type {string} */ html, /** @type {object} */ rest = {}) => ({ page: html, reason: 'the page', start: { js: { raw: 100 * KIB, gzip: 100 * KIB } }, forbidden: [], dependencies: [], ...rest });
+    const page = (/** @type {string} */ html, /** @type {object} */ rest = {}) => ({ page: html, reason: 'the page', start: { js: ROOMY, css: ROOMY, html: ROOMY, fonts: ROOMY }, modules: 1000, forbidden: [], dependencies: [], ...rest });
     return {
+      package: PACKAGE_ROW,
       forbidden: {},
       entries: {
         newtab: page('newtab.html', { startChunks: ['workspace'] }),
         popup: page('popup.html', { lazyChunks: ['popup-send-chunk'], lazyDependencies: ['valibot'] }),
         sidepanel: page('sidepanel.html'),
         recovery: page('recovery.html'),
-        background: { reason: 'the worker', start: {} },
+        background: budgetsFor().entries.background,
       },
     };
   };
@@ -519,7 +568,7 @@ describe('the budget gate', () => {
     const fixture = bundleFixture();
     fixture.chunks = fixture.chunks.map(entry => (entry.pass === 'background' ? { ...entry, moduleIds: [...entry.moduleIds, id('node_modules/nanoid/index.js')] } : entry));
     assert.deepEqual(run(budgetsFor(), fixture), ["budget/dependency background: its graph holds nanoid, which its row doesn't allow"]);
-    assert.deepEqual(run(budgetsFor({ background: { reason: 'the worker', start: {}, dependencies: ['nanoid'] } }), fixture), []);
+    assert.deepEqual(run(budgetsFor({ background: { ...budgetsFor().entries.background, dependencies: ['nanoid'] } }), fixture), []);
   });
 
   it('fails a built entry with no row, and a row for an entry the build lacks', () => {
@@ -604,6 +653,19 @@ describe("the build's line for each entry's start (scripts/build/main.js, #27)",
 describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
   it('reads as a budget file', () => {
     assert.deepEqual(readBudgets(ROOT).problems, []);
+  });
+
+  it("names the issue each row it leaves null waits on: Moment's #2, the service worker's cold start #35, and update size #31, and every other module and zip row is a number (#300)", () => {
+    const { entries } = BUDGETS;
+    assert.deepEqual(entries.moment.waitsOn, { js: '#2', css: '#2', html: '#2', fonts: '#2', modules: '#2' });
+    assert.deepEqual([entries.background.coldStart, entries.background.waitsOn], [null, { coldStart: '#35' }]);
+    assert.deepEqual([BUDGETS.package.updateBytes, BUDGETS.package.waitsOn], [null, { updateBytes: '#31' }]);
+    for (const [name, entry] of Object.entries(entries)) {
+      if (name === 'moment') continue;
+      assert.ok(Number.isSafeInteger(entry.modules), `${name}'s modules row`);
+      if (name !== 'background') assert.equal(entry.waitsOn, undefined, `${name} waits on nothing`);
+    }
+    assert.ok(Number.isSafeInteger(BUDGETS.package.zipBytes), "the zip's row");
   });
 
   it('holds the approved rows exactly', () => {

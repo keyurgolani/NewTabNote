@@ -1,0 +1,16 @@
+{
+  "rule": "the service worker's cold-start row is null with no issue named for it in waitsOn, so the build can't tell a deferred row from a missing one (#27 AC3, #300)",
+  "expect": [
+    "budget/entry"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "replace": "\"coldStart\": null,\n      \"waitsOn\": { \"coldStart\": \"#35\" },",
+      "with": "\"coldStart\": null,"
+    }
+  ]
+}
