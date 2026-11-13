@@ -26,7 +26,8 @@
 // - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
 //   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix;
 // - the layers check finds a tab stop nobody sees, in a collapsed, off-screen or transparent layer,
-//   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus.
+//   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus. A step
+//   that leaves focus on body is found, and one that returns it to its invoker passes.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -213,4 +214,29 @@ test('the layers check finds a tab stop nobody sees, in a collapsed, off-screen 
     { rule: 'ntn-hidden-focus', target: '#off-screen' },
     { rule: 'ntn-hidden-focus', target: '#transparent' },
   ]);
+});
+
+test('the layers check finds a step that leaves focus on body, and passes one that returns it to its invoker', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<button id="open">Menu</button>
+      <script>
+        document.getElementById('open').addEventListener('click', () => {
+          const close = Object.assign(document.createElement('button'), { id: 'close', textContent: 'Close' });
+          close.addEventListener('click', () => { if (window.returnFocus) document.getElementById('open').focus(); close.remove(); });
+          document.querySelector('main').append(close);
+          close.focus();
+        });
+      </script>`),
+  );
+  const openAndClose = async () => {
+    await page.focus('#open');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+  };
+  await openAndClose();
+  expect(await layers.focusLost(page, 'close the menu')).toEqual([{ rule: 'ntn-focus-lost', target: 'close the menu' }]);
+  await page.evaluate('window.returnFocus = true');
+  await openAndClose();
+  expect(await layers.focusLost(page, 'close the menu')).toEqual([]);
 });

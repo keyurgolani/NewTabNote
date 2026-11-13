@@ -6,7 +6,8 @@
 //   two-tone ring measured as #16 measures one;
 // - the chords Chrome keeps for itself;
 // - what reduced motion forbids;
-// - a tab stop nobody sees, in a collapsed, off-screen or transparent layer.
+// - a tab stop nobody sees, in a collapsed, off-screen or transparent layer, and a step that leaves
+//   focus on body.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -200,5 +201,11 @@ describe("the layers checks' pure parts (#24 slice 2)", () => {
     const stop = (/** @type {string} */ id, /** @type {boolean} */ shown, opacity = 1) => ({ id, shown, opacity });
     assert.deepEqual(layers.hiddenStops([stop('#seen', true), stop('#collapsed', false), stop('#clear', true, 0), stop('#faded', true, 0.4)]), ['#collapsed', '#clear']);
     assert.equal(layers.HIDDEN_RULE, 'ntn-hidden-focus');
+  });
+
+  it('finds a step that leaves focus on body, named for the step, and passes one that leaves it on a control', async () => {
+    const page = (/** @type {boolean} */ lost) => ({ evaluate: async () => lost });
+    assert.deepEqual(await layers.focusLost(page(true), 'close the menu'), [{ rule: 'ntn-focus-lost', target: 'close the menu' }]);
+    assert.deepEqual(await layers.focusLost(page(false), 'close the menu'), []);
   });
 });
