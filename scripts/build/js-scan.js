@@ -23,6 +23,8 @@ const { isDeclaredInScope } = require('./js-scope.js');
  * @property {ReferenceKind} kind
  * @property {string | null} value - the path as written, or null when it's built at run time
  * @property {string} at - line:column, both counted from 1
+ * @property {boolean} [bare] - an import of nothing, `import './x.js'`, made for the module's side
+ *   effects alone (scripts/build/side-effects.js, #300)
  */
 
 /**
@@ -312,6 +314,7 @@ function scanScript(file, text) {
   const visit = (node, context) => {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
       reference('import', node.moduleSpecifier, node);
+      if (ts.isImportDeclaration(node) && !node.importClause) scan.references[scan.references.length - 1].bare = true;
       ts.forEachChild(node, (child) => visit(child, child === node.moduleSpecifier ? 'import' : context));
       return;
     }

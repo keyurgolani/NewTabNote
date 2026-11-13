@@ -1,0 +1,13 @@
+{
+  "rule": "a build/side-effects.json row names a module no import for side effects only names, so the list didn't shrink with the code (#300)",
+  "expect": [
+    "side-effects/stale"
+  ],
+  "edits": [
+    {
+      "file": "build/side-effects.json",
+      "replace": "\"js/kernel/composition/network-guard-first.js\"",
+      "with": "\"js/kernel/composition/network-guard-first.js\",\n        \"js/popup.js\""
+    }
+  ]
+}

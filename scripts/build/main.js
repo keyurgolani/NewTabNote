@@ -46,6 +46,7 @@ const { CLASSIC_SCRIPTS, STATIC_FILES, terserOptions } = require('./vite-config.
 const { analyze, checkBudgets, readBudgets, startChunksOf } = require('./budgets.js');
 const { readAllowlist } = require('./define-allowlist.js');
 const { readAllowlist: readWarningList } = require('./warning-allowlist.js');
+const { readSideEffects, firstPartySources, entryRoots, sideEffectProblems, fileUnder } = require('./side-effects.js');
 const { readTable, chromeProblems } = require('./chrome-features.js');
 const { dependencyReport } = require('./dependencies.js');
 
@@ -333,11 +334,15 @@ async function build(argv = process.argv.slice(2)) {
   const buildId = computeBuildId(ROOT_DIR, source.info, mode);
 
   // 2. The inputs, the define allowlist the bundle inlines, the warning allowlist its warnings
-  // answer to, and the Chrome features table with its scan of the sources (#300)
+  // answer to, the side-effects list its tree shaking keeps, with the sources' imports for side
+  // effects only, and the Chrome features table with its scan of the sources (#300)
   const defines = readAllowlist(ROOT_DIR);
   const warningList = readWarningList(ROOT_DIR);
+  const sideEffects = readSideEffects(ROOT_DIR);
+  const sources = firstPartySources(ROOT_DIR);
   const features = readTable(ROOT_DIR);
-  const missing = [...inputProblems(ROOT_DIR), ...defines.problems, ...warningList.problems, ...features.problems];
+  const missing = [...inputProblems(ROOT_DIR), ...defines.problems, ...warningList.problems, ...sideEffects.problems, ...features.problems];
+  if (sideEffects.problems.length === 0) missing.push(...sideEffectProblems(sources, sideEffects.modules, fileUnder(ROOT_DIR)));
   if (features.problems.length === 0) missing.push(...chromeProblems(ROOT_DIR, features.rows));
   if (missing.length > 0) {
     missing.forEach(report);
@@ -349,7 +354,8 @@ async function build(argv = process.argv.slice(2)) {
   try {
     // 3. The bundle, then what no page or script imports
     console.log('📦 Bundling the pages, their workers, and the service worker...');
-    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId, defineRows: defines.rows, allowlist: warningList.allowlist });
+    const keep = new Set([...entryRoots(ROOT_DIR, sources), ...sideEffects.modules]);
+    const bundled = await bundle({ root: ROOT_DIR, outDir: staging, mode, buildId, defineRows: defines.rows, allowlist: warningList.allowlist, keep });
     const copied = bundled.problems.length > 0 ? [] : await copyUnbundled(ROOT_DIR, staging, mode);
     const built = [...bundled.problems, ...copied];
     if (built.length > 0) {
