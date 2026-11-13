@@ -67,12 +67,19 @@ async function countedRun({ dist, fixture, chromium }) {
   try {
     if (fixture) await fixtureHost(extension.worker).loadFixture(fixture);
     await new Promise(resolve => setTimeout(resolve, SETTLE_MS));
+    /** @type {Array<{url: string, from: string}>} every request seen, and those each window held */
+    const seen = [];
     /** @type {Array<{url: string, from: string}>} */
     const urls = [];
     extension.context.on('request', request => {
-      if (offOrigin(request.url())) urls.push({ url: request.url(), from: entryOf(request) });
+      if (offOrigin(request.url())) seen.push({ url: request.url(), from: entryOf(request) });
     });
-    const requestsOf = (/** @type {string} */ entry) => urls.filter(request => request.from === entry).length;
+    // An entry's count and its share of the list, as its window closes: a request made later is in neither
+    const requestsOf = (/** @type {string} */ entry) => {
+      const held = seen.filter(request => request.from === entry);
+      urls.push(...held);
+      return held.length;
+    };
     await countRequestsIn(extension.context);
     await countRequestsIn(extension.worker);
 
@@ -95,7 +102,7 @@ async function countedRun({ dist, fixture, chromium }) {
       await new Promise(resolve => setTimeout(resolve, SETTLE_MS));
       counts[entry] = { requests: requestsOf(entry) };
     }
-    return { ...counts, background: { requests: requestsOf('background') }, urls: [...urls] };
+    return { ...counts, background: { requests: requestsOf('background') }, urls };
   } finally {
     await extension.close();
   }
