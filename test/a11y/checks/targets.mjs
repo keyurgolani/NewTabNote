@@ -57,15 +57,24 @@ export function selectorOf(el) {
 /**
  * In the page: each pointer target that's rendered and not hidden or inert, with its box (the label
  * that wraps a form control is its hit area), and its exemption, if it's the editing host as a whole
- * or a link in running text inside a text block
+ * or a link in running text inside a text block. A target is a control by its tag, role or tab stop,
+ * or an element that only takes clicks, which the pointer's cursor shows: the one the cursor starts
+ * at, not a part that inherits it, and not one inside a target already counted. aria-hidden leaves
+ * a target one, since the contract builds its pointer-only controls that way.
  * @param {(el: Element) => string} selectorOf
  */
 function collectTargets(selectorOf) {
   const POINTER =
     'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"], [tabindex]:not([tabindex="-1"])';
-  return [...document.querySelectorAll(POINTER)].flatMap(el => {
+  const CLICKS = ['pointer', 'grab', 'grabbing'];
+  const clicks = (/** @type {Element} */ el) => {
+    const { cursor } = getComputedStyle(el);
+    if (!CLICKS.includes(cursor) || el.localName === 'label' || el.parentElement?.closest(POINTER)) return false;
+    return !el.parentElement || getComputedStyle(el.parentElement).cursor !== cursor;
+  };
+  return [...document.querySelectorAll('*')].filter(el => el.matches(POINTER) || clicks(el)).flatMap(el => {
     const style = getComputedStyle(el);
-    if (el.closest('[inert], [hidden], [aria-hidden="true"]') || style.visibility !== 'visible' || el.getClientRects().length === 0) return [];
+    if (el.closest('[inert], [hidden]') || style.visibility !== 'visible' || el.getClientRects().length === 0) return [];
     const { width, height } = (el.matches('input, select, textarea') ? (el.closest('label') ?? el) : el).getBoundingClientRect();
     let exempt;
     if (el instanceof HTMLElement && el.isContentEditable && !el.parentElement?.isContentEditable) exempt = 'editing-area';
