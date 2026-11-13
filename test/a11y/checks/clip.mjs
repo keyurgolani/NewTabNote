@@ -4,8 +4,8 @@
  * 320 CSS px wide the page doesn't scroll sideways (WCAG 1.4.10). The browser half reads each pointer
  * target's box in page coordinates and, on each axis, the parents around it: each one that clips it
  * there, and each scroll container with the area it scrolls, the page last. The pure part judges
- * whether some scroll of each brings the action into view whole. An action wholly before the page's
- * start is hidden, the layers check's, as a skip link is until it's focused.
+ * whether some scroll of each brings every part of the action into view. An action wholly before the
+ * page's start is hidden, the layers check's, as a skip link is until it's focused.
  */
 
 import { markListened, pointerTargets, selectorOf } from './targets.mjs';
@@ -29,20 +29,19 @@ const SLACK = 0.5;
  */
 
 /**
- * Whether some scroll of each container around a span brings it into view whole, through `parents`
- * from it out. It tracks where the span can start: each parent that clips it, before any container,
- * keeps it inside, and each container lets it move as far as the container scrolls, and then keeps it
- * inside the part of its own visible part that the parents up to the next container leave.
- * @param {Span} span
+ * Whether some scroll of each container around a point brings it into view, through `parents` from
+ * it out. It tracks where the point can be: each parent that clips it, before any container, keeps it
+ * inside, and each container lets it move as far as the container scrolls, and then keeps it inside
+ * the part of its own visible part that the parents up to the next container leave.
+ * @param {number} at
  * @param {readonly Parent[]} parents
  */
-function shows({ start, end }, parents) {
-  const size = end - start;
-  let [low, high] = [start, start];
+function reaches(at, parents) {
+  let [low, high] = [at, at];
   /** @type {Span | null} */
   let shown = null;
   const inside = (/** @type {Span} */ part) => {
-    [low, high] = [Math.max(low, part.start - SLACK), Math.min(high, part.end - size + SLACK)];
+    [low, high] = [Math.max(low, part.start - SLACK), Math.min(high, part.end + SLACK)];
     return low <= high;
   };
   for (const { visible, area } of parents) {
@@ -59,13 +58,15 @@ function shows({ start, end }, parents) {
 }
 
 /**
- * Whether an action is cut off: on either axis no scroll brings it into view whole, while some of it
- * is on the page
+ * Whether an action is cut off: on either axis some part of it no scroll brings into view, while some
+ * of it is on the page. The points a scroll can bring in on an axis run unbroken, so with both of its
+ * ends in reach every part of it is, though not every part at once.
  * @param {{box: Box, parents: {x: readonly Parent[], y: readonly Parent[]}}} action - in page coordinates
  */
 export function cutOff({ box, parents }) {
   if (box.right <= 0 || box.bottom <= 0) return false;
-  return !shows({ start: box.left, end: box.right }, parents.x) || !shows({ start: box.top, end: box.bottom }, parents.y);
+  const inReach = (/** @type {number[]} */ ends, /** @type {readonly Parent[]} */ around) => ends.every(at => reaches(at, around));
+  return !inReach([box.left, box.right], parents.x) || !inReach([box.top, box.bottom], parents.y);
 }
 
 /**
