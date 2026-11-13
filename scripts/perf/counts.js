@@ -25,6 +25,8 @@
  * - What the worker sends through the offscreen document it creates, the requests to the Ollama
  *   URL, isn't seen at all: Playwright doesn't attach to that document (e2e/network-guard.spec.js),
  *   so those requests land on no row. Counting them takes a CDP session on the offscreen target.
+ * - A request from a page that's no entry, such as a tab the extension opens, lands on no row
+ *   either: the run holds it apart, as `unattributed`, and the perf summary lists it.
  * - A request outside the extension is one to any URL but a chrome-extension:// one, of any
  *   extension, and data:, blob: and about:. The network is off in Chromium itself, so none is
  *   answered, and each one still counts as made. One the network guard refuses is never made, and
@@ -69,7 +71,7 @@ function entryOf(request) {
 
 /**
  * @param {{dist: string, fixture: object | null, chromium?: any}} options
- * @returns {Promise<{newtab: {reads: number, pageReads: number, workerReads: number, requests: number}, popup: {requests: number}, sidepanel: {requests: number}, recovery: {requests: number}, offscreen: {requests: number}, background: {requests: number}, urls: Array<{url: string, from: string}>}>}
+ * @returns {Promise<{newtab: {reads: number, pageReads: number, workerReads: number, requests: number}, popup: {requests: number}, sidepanel: {requests: number}, recovery: {requests: number}, offscreen: {requests: number}, background: {requests: number}, urls: Array<{url: string, from: string}>, unattributed: Array<{url: string, from: string}>}>}
  */
 async function countedRun({ dist, fixture, chromium }) {
   const extension = await launchExtension({ dist, network: 'offline', ...(chromium ? { chromium } : {}) });
@@ -111,7 +113,8 @@ async function countedRun({ dist, fixture, chromium }) {
       await new Promise(resolve => setTimeout(resolve, SETTLE_MS));
       counts[entry] = { requests: requestsOf(entry) };
     }
-    return { ...counts, background: { requests: requestsOf('background') }, urls };
+    const unattributed = seen.filter(({ from }) => from === 'unknown');
+    return { ...counts, background: { requests: requestsOf('background') }, urls, unattributed };
   } finally {
     await extension.close();
   }

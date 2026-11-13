@@ -254,16 +254,17 @@ function countedPackages(packages) {
 }
 
 /**
- * The entries a counted run's counts name, each with its requests
+ * The entries a counted run's counts name, each with its requests: every key but its two lists
  * @param {Record<string, any>} counts
  */
 function entriesOf(counts) {
-  return Object.keys(counts).filter(key => key !== 'urls');
+  return Object.keys(counts).filter(key => key !== 'urls' && key !== 'unattributed');
 }
 
 /**
  * Counts `runs` untimed runs of each package on each profile (scripts/perf/counts.js), and keeps
- * each run, each one that failed, and each count's highest over the runs that didn't (#300)
+ * each run, each one that failed, and each count's highest over the runs that didn't (#300). A
+ * request from a page that's no entry stays in its run, named in its log line, and in no count
  * @param {{packages: Array<{label: string, dist: string}>, profiles: string[], runs?: number, log: (line: string) => void, countedRun?: (options: {dist: string, fixture: object | null}) => Promise<any>}} options
  */
 async function measureCounts({ packages, profiles, runs = COUNT_RUNS, log, countedRun = require('./perf/counts').countedRun }) {
@@ -278,7 +279,9 @@ async function measureCounts({ packages, profiles, runs = COUNT_RUNS, log, count
         try {
           const counts = await countedRun({ dist, fixture });
           entry.runs.push(counts);
-          log(`${name} counted ${label} ${run}/${runs}: the new tab's IndexedDB reads before its mark ${counts.newtab.reads} (the page's ${counts.newtab.pageReads}, the worker's ${counts.newtab.workerReads}); requests outside the extension ${entriesOf(counts).map(key => `${key} ${counts[key].requests}`).join(', ')}`);
+          const apart = /** @type {Array<{url: string}>} */ (counts.unattributed || []);
+          const named = apart.length > 0 ? `; from a page that's no entry ${apart.length}: ${apart.map(({ url }) => url).join(', ')}` : '';
+          log(`${name} counted ${label} ${run}/${runs}: the new tab's IndexedDB reads before its mark ${counts.newtab.reads} (the page's ${counts.newtab.pageReads}, the worker's ${counts.newtab.workerReads}); requests outside the extension ${entriesOf(counts).map(key => `${key} ${counts[key].requests}`).join(', ')}${named}`);
         } catch (error) {
           entry.failures.push({ run, message: String(error && error.message ? error.message : error).split('\n')[0] });
           log(`${name} counted ${label} ${run}/${runs} failed: ${entry.failures[entry.failures.length - 1].message}`);

@@ -45,20 +45,22 @@ const ms = value => (value === null || value === undefined ? 'n/a' : `${Math.rou
 
 /**
  * The counts on `profile`, the highest of the last package the probe counted, or none with the
- * reasons why: a run of it failed, or it has fewer runs than the probe asked for (#300)
+ * reasons why: a run of it failed, or it has fewer runs than the probe asked for (#300). With
+ * them, each URL its runs requested from a page that's no entry, once, which no row counts
  * @param {any} probe
  * @param {string} profile
- * @returns {{max: Record<string, any>, problems: string[]}}
+ * @returns {{max: Record<string, any>, problems: string[], unattributed: string[]}}
  */
 function countsOn(probe, profile) {
   const asked = (probe.counts && probe.counts.runs) || 0;
   const measured = probe.counts && probe.counts.profiles && probe.counts.profiles[profile];
   const counted = Object.values((measured && measured.packages) || {});
-  if (counted.length === 0) return { max: {}, problems: [] };
+  if (counted.length === 0) return { max: {}, problems: [], unattributed: [] };
   const last = /** @type {any} */ (counted[counted.length - 1]);
   const problems = (last.failures || []).map((/** @type {{run: number, message: string}} */ failure) => `counted run ${failure.run} failed: ${failure.message}`);
   if ((last.runs || []).length < asked) problems.push(`${(last.runs || []).length} of the ${asked} counted runs`);
-  return { max: problems.length > 0 ? {} : last.max || {}, problems };
+  const unattributed = [...new Set((last.runs || []).flatMap((/** @type {any} */ run) => (run.unattributed || []).map((/** @type {{url: string}} */ request) => request.url)))];
+  return { max: problems.length > 0 ? {} : last.max || {}, problems, unattributed };
 }
 
 /**
@@ -190,6 +192,8 @@ function gateReport(probe, budgets) {
   );
   const short = takes(timing).flatMap(profile => countsOn(probe, profile).problems.map(problem => `- ${profile}: ${problem}`));
   if (short.length > 0) lines.push('', 'No count, so no row is read:', '', ...short);
+  const apart = takes(timing).flatMap(profile => countsOn(probe, profile).unattributed.map(url => `- ${profile}: ${url}`));
+  if (apart.length > 0) lines.push('', "Requests outside the extension from a page that's no entry, which no row counts:", '', ...apart);
   const environment = probe.environment || {};
   lines.push('', `Machine: ${environment.cpu || 'unknown'}, ${environment.cores || '?'} cores, ${environment.platform || ''}; Chromium ${(probe.timing && probe.timing.browser) || 'unknown'}.`);
   return { markdown: `${lines.join('\n')}\n`, failed, verdicts, countVerdicts: counts };
