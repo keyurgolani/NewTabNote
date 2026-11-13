@@ -27,6 +27,8 @@
  *
  *   npm run verify:fixtures                        every fixture
  *   npm run verify:fixtures -- <name>...           the ones named
+ *   npm run verify:fixtures -- --shard <i>/<n> ... the ith of n shards: every nth fixture by name
+ *                                                  from the ith (CI runs two, #29)
  *   npm run verify:fixtures -- --jobs <n> ...      at most n at once (4 by default)
  */
 
@@ -320,19 +322,54 @@ async function runFixture(fixture) {
   return { ok, lines };
 }
 
+const USAGE = 'usage: node scripts/build/verify-fixtures.js [--jobs <n>] [--shard <i>/<n>] [<fixture>...]';
+
+/**
+ * The shard `--shard <i>/<n>` names, the ith of n counted from 1, or null for text that names none
+ * @param {string} text
+ * @returns {{index: number, count: number} | null}
+ */
+function parseShard(text) {
+  const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(text);
+  if (!match) return null;
+  const index = Number(match[1]);
+  const count = Number(match[2]);
+  return index <= count ? { index, count } : null;
+}
+
+/**
+ * The fixtures in a shard: every nth by name from the ith, so the n shards hold each fixture
+ * exactly once and differ in size by one at most (#29)
+ * @template {{name: string}} F
+ * @param {F[]} fixtures
+ * @param {{index: number, count: number}} shard
+ * @returns {F[]}
+ */
+function shardOf(fixtures, { index, count }) {
+  return [...fixtures].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).filter((_, i) => i % count === index - 1);
+}
+
 /**
  * @param {string[]} argv
  * @returns {Promise<number>} the exit code
  */
 async function main(argv) {
   let jobs = Math.max(1, Math.min(4, os.availableParallelism()));
+  /** @type {{index: number, count: number} | null} */
+  let shard = null;
   /** @type {string[]} */
   const names = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--jobs') {
       jobs = Number(argv[++i]);
       if (!Number.isInteger(jobs) || jobs < 1) {
-        console.error('usage: node scripts/build/verify-fixtures.js [--jobs <n>] [<fixture>...]');
+        console.error(USAGE);
+        return 2;
+      }
+    } else if (argv[i] === '--shard') {
+      shard = parseShard(argv[++i] ?? '');
+      if (!shard) {
+        console.error(USAGE);
         return 2;
       }
     } else {
@@ -345,8 +382,9 @@ async function main(argv) {
     console.error(`verify:fixtures failed: no fixture named ${missing.join(', ')} in test/build-fixtures/`);
     return 1;
   }
-  const fixtures = names.length > 0 ? all.filter((fixture) => names.includes(fixture.name)) : all;
-  console.log(`verify:fixtures: ${plural(fixtures.length, 'fixture')}, ${jobs} at a time`);
+  const chosen = names.length > 0 ? all.filter((fixture) => names.includes(fixture.name)) : all;
+  const fixtures = shard ? shardOf(chosen, shard) : chosen;
+  console.log(`verify:fixtures: ${plural(fixtures.length, 'fixture')}${shard ? `, shard ${shard.index} of ${shard.count}` : ''}, ${jobs} at a time`);
 
   const started = Date.now();
   /** @type {Array<{ok: boolean, lines: string[]}>} */
@@ -376,4 +414,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }
 
-module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, outputProblems, runFixture, FIXTURES, CANARY_NAMES, KINDS };
+module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, outputProblems, runFixture, parseShard, shardOf, FIXTURES, CANARY_NAMES, KINDS };
