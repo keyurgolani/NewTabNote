@@ -90,8 +90,8 @@ async function sessionOf(page) {
 
 /**
  * Sets the text-spacing override on the page's document, or takes it off, through CDP's inspector
- * style sheet, which the extension's CSP doesn't block as it would a style tag. A new document needs
- * it again.
+ * style sheet, which a style-src without 'unsafe-inline' doesn't block, as it would a style tag. A new
+ * document needs it again.
  * @param {import('@playwright/test').Page} page
  * @param {Point} point
  */
