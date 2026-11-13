@@ -1,0 +1,16 @@
+{
+  "rule": "the Popup's start holds more modules than its build/budgets.json row (#27 AC3, #300)",
+  "expect": [
+    "budget/modules"
+  ],
+  "modes": [
+    "production"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "replace": "\"page\": \"popup.html\",\n      \"modules\": 63,",
+      "with": "\"page\": \"popup.html\",\n      \"modules\": 1,"
+    }
+  ]
+}

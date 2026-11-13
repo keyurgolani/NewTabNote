@@ -14,7 +14,7 @@ const { execFileSync } = require('node:child_process');
 const { ZIP_EPOCH, FILE_MODE, dosDateTime, writeZip, readZip } = require('../scripts/build/zip.js');
 const { fromDirectory } = require('../scripts/build/package-files.js');
 const { sourceInfo, buildId, kernelVersions, assetManifest, writeBuildInfo, readBuildInfo, sha256 } = require('../scripts/build/build-info.js');
-const { makePackage } = require('../scripts/package.js');
+const { makePackage, sizeLine } = require('../scripts/package.js');
 const { ROOT } = require('./helpers/source-package.js');
 
 // 2026-10-20T22:53:21Z, an odd second
@@ -192,5 +192,26 @@ describe('npm run package (AC4, AC5)', () => {
   it('refuses a build whose zip would hold a file nothing names', async () => {
     const { dir } = await smallBuild({ 'stray.txt': 'unnamed' });
     assert.deepEqual(makePackage(dir).problems.map(({ code, subject }) => `${code} ${subject}`), ['closure/unreferenced stray.txt']);
+  });
+
+  it("refuses a zip over build/budgets.json's zip row, and gates nothing on a null row (#300)", async () => {
+    const { dir } = await smallBuild();
+    const real = JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'budgets.json'), 'utf8'));
+    const budgets = (/** @type {number | null} */ zipBytes) => ({ ...real, package: { ...real.package, zipBytes } });
+    const { zip } = makePackage(dir, { budgets: budgets(null) });
+    const kib = (/** @type {number} */ bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
+    assert.deepEqual(makePackage(dir, { budgets: budgets(null) }).problems, []);
+    assert.deepEqual(makePackage(dir, { budgets: budgets(zip.length) }).problems, []);
+    assert.deepEqual(makePackage(dir, { budgets: budgets(zip.length - 1) }).problems.map(({ code, subject, message }) => `${code} ${subject}: ${message}`), [
+      `budget/zip the zip: it is ${zip.length} bytes (${kib(zip.length)}), over its ${zip.length - 1} (${kib(zip.length - 1)}); a number over a row goes to the owner, not into the row`,
+    ]);
+    // With no budgets of its own, it reads build/budgets.json, as npm run package does
+    assert.deepEqual(makePackage(dir).problems, []);
+  });
+
+  it("prints the zip's size with its exact bytes beside the KB or MB, since CI's log is where the zip row's number is read (#300)", () => {
+    // Build job 131822570080 of PR checks run 43406673412 printed this line
+    assert.equal(sizeLine(834251, 62), '   Size: 814.7 KB (834251 bytes), 62 files');
+    assert.equal(sizeLine(2000000, 120), '   Size: 1.91 MB (2000000 bytes), 120 files');
   });
 });

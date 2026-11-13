@@ -1,0 +1,14 @@
+{
+  "rule": "the zip npm run package writes is bigger than its build/budgets.json row (#27 AC3, #300)",
+  "kind": "package",
+  "expect": [
+    "budget/zip"
+  ],
+  "edits": [
+    {
+      "file": "build/budgets.json",
+      "replace": "\"zipBytes\": 875964",
+      "with": "\"zipBytes\": 1"
+    }
+  ]
+}

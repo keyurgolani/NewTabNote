@@ -1146,20 +1146,20 @@
       "behavior": "#35 fixture byte rows",
       "protects": "A fixture that expects budget/bytes builds against the real rows, so a start over its row still fails the build.",
       "file": "scripts/build/verify-fixtures.js",
-      "find": "  if ((fixture.expect || []).includes('budget/bytes')) return false;\n",
-      "replace": "  if (false) return false;\n",
+      "find": "Object.values(expects('budget/bytes') ? {} : entry.start || {})",
+      "replace": "Object.values(entry.start || {})",
       "test": "test/build-fixtures.test.js",
-      "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
+      "name": "lifts every start byte row, module row and the zip row in a fixture's copy past any build, each unless the fixture expects that row's code, so a copy's -dirty build id trips no row, and the rows fixtures keep the real rows (#35 slice 4d, #300)"
     },
     {
       "id": "fixture-rows-never-lifted",
       "behavior": "#35 fixture byte rows",
       "protects": "A fixture for another rule builds past every start byte row, so its copy's -dirty build id adds no budget/bytes to the codes it expects.",
       "file": "scripts/build/verify-fixtures.js",
-      "find": "  if ((fixture.expect || []).includes('budget/bytes')) return false;\n",
-      "replace": "  if (true) return false;\n",
+      "find": "Object.values(expects('budget/bytes') ? {} : entry.start || {})",
+      "replace": "Object.values({})",
       "test": "test/build-fixtures.test.js",
-      "name": "lifts every start byte row in a fixture's copy unless the fixture expects budget/bytes, so a copy's -dirty build id trips no row, and the bytes fixtures keep the real rows (#35 slice 4d)"
+      "name": "lifts every start byte row, module row and the zip row in a fixture's copy past any build, each unless the fixture expects that row's code, so a copy's -dirty build id trips no row, and the rows fixtures keep the real rows (#35 slice 4d, #300)"
     },
     {
       "id": "newtab-closing-save-sent",

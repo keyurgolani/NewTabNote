@@ -7,8 +7,8 @@
  * as edits to it. Four kinds:
  *   build    the build fails, in production and development mode, reports exactly the
  *            fixture's codes, and leaves no dist/ and no staging directory
- *   package  the build passes, `distEdits` break dist/, and npm run package fails with exactly
- *            the fixture's codes and leaves no zip
+ *   package  the build passes, its `edits` or `distEdits` break the tree or dist/, and npm run
+ *            package fails with exactly the fixture's codes and leaves no zip
  *   canary   with a made-up secret set in the environment under the names release secrets
  *            use, the build and npm run package pass, and the secret is in neither their logs
  *            nor dist/ nor the zip (#27 AC9)
@@ -19,11 +19,12 @@
  * securityEntry: the runner adds the entry a reviewed change would, so the build reports the
  * fixture's rule and not security/drift as well (#21 slice 1b).
  *
- * A fixture whose codes don't include budget/bytes, a package fixture's or the canary's among
- * them, builds with every start byte row in its copy's build/budgets.json lifted, so it reports
+ * A fixture builds with every start byte row, module row and the zip row in its copy's
+ * build/budgets.json lifted, each unless the fixture expects that row's code (#300), so it reports
  * its rule alone: a copy isn't a git checkout, so its build id carries -dirty (build-info.js), six
- * more characters on the new tab's start, and the rows have no room (#35 slice 4d). A fixture
- * that expects budget/bytes builds against the real rows.
+ * more characters on the new tab's start, and the rows have no room (#35 slice 4d), and a fixture
+ * for another rule can add modules. A fixture that expects budget/bytes, budget/modules or
+ * budget/zip builds against the real rows of that kind.
  *
  *   npm run verify:fixtures                        every fixture
  *   npm run verify:fixtures -- <name>...           the ones named
@@ -59,6 +60,9 @@ const KINDS = Object.freeze(['build', 'package', 'canary', 'output']);
 
 /** A start byte row in a copy of a fixture that doesn't test the rows: 2 MiB / 1 MiB, past any start */
 const LIFTED_ROW = Object.freeze({ raw: 2097152, gzip: 1048576 });
+/** A module row and the zip row in such a copy, past any start and any zip (#300) */
+const LIFTED_MODULES = 100000;
+const LIFTED_ZIP = 64 * 1024 * 1024;
 
 /**
  * @typedef {object} Edit
@@ -150,15 +154,18 @@ function recordSecurityEntry(dir, fixture) {
 }
 
 /**
- * Lift every start byte row in the build/budgets.json of the tree at `dir`, a fixture's copy as
- * edited, to LIFTED_ROW, unless the fixture expects budget/bytes, which builds against the real
- * rows. A budgets.json that doesn't parse is the fixture's own defect, and stays as it is.
+ * Lift the rows in the build/budgets.json of the tree at `dir`, a fixture's copy as edited, past
+ * anything the copy builds: every start byte row to LIFTED_ROW, unless the fixture expects
+ * budget/bytes, every module row to LIFTED_MODULES, unless it expects budget/modules, and the zip
+ * row to LIFTED_ZIP, unless it expects budget/zip (#300). A fixture that expects a row's code
+ * builds against the real rows of that kind. A budgets.json that doesn't parse is the fixture's
+ * own defect, and stays as it is.
  * @param {string} dir
  * @param {Fixture} fixture
- * @returns {boolean} whether it lifted them
+ * @returns {boolean} whether it read the file and wrote it back lifted
  */
-function liftByteRows(dir, fixture) {
-  if ((fixture.expect || []).includes('budget/bytes')) return false;
+function liftRows(dir, fixture) {
+  const expects = (/** @type {string} */ code) => (fixture.expect || []).includes(code);
   const file = path.join(dir, 'build', 'budgets.json');
   /** @type {any} */
   let budgets;
@@ -168,10 +175,12 @@ function liftByteRows(dir, fixture) {
     return false;
   }
   for (const entry of Object.values(budgets.entries || {})) {
-    for (const row of Object.values(entry.start || {})) {
+    for (const row of Object.values(expects('budget/bytes') ? {} : entry.start || {})) {
       if (row && Number.isSafeInteger(row.raw) && Number.isSafeInteger(row.gzip)) Object.assign(row, LIFTED_ROW);
     }
+    if (!expects('budget/modules') && Number.isSafeInteger(entry.modules)) entry.modules = LIFTED_MODULES;
   }
+  if (!expects('budget/zip') && budgets.package && Number.isSafeInteger(budgets.package.zipBytes)) budgets.package.zipBytes = LIFTED_ZIP;
   fs.writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
   return true;
 }
@@ -259,7 +268,7 @@ async function runFixture(fixture) {
     copyTree(ROOT, dir);
     applyEdits(dir, fixture.edits || []);
     if (fixture.securityEntry) recordSecurityEntry(dir, fixture);
-    liftByteRows(dir, fixture);
+    liftRows(dir, fixture);
 
     if (kind === 'build') {
       for (const mode of fixture.modes || MODES) {
@@ -427,4 +436,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }
 
-module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, outputProblems, runFixture, parseShard, shardOf, planRun, FIXTURES, CANARY_NAMES, KINDS };
+module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftRows, reportedCodes, outputProblems, runFixture, parseShard, shardOf, planRun, FIXTURES, CANARY_NAMES, KINDS };

@@ -19,9 +19,16 @@
  *                      an entry the build has (its numbers have to be set first), a
  *                      `startChunks` or `lazyChunks` name the build doesn't have or the page's
  *                      start doesn't import(), or a chunk the page's start import()s that the
- *                      row names in neither, so the row can't fall back to measuring the root
+ *                      row names in neither, so the row can't fall back to measuring the root;
+ *                      or a row it needs with no number and no issue named for it in waitsOn
+ *                      (#300): a start type its build has, its modules, the service worker's
+ *                      cold start, every row of a planned entry, and the zip's and update
+ *                      size's, so a row that waits on another issue reads apart from a missing one
  *   budget/bytes       an entry's start over a row: JS, CSS, HTML, or fonts, raw or gzip at
  *                      level 9, the way npm run perf:probe measures them
+ *   budget/modules     an entry's start over its module row: its modules, third-party and
+ *                      Vite's own among them, classic scripts, stylesheets, fonts and page, as
+ *                      the build's line counts them (#300)
  *   budget/forbidden   a module, classic script, or file a forbidden category names on the
  *                      entry's start path
  *   budget/worker-only a module only the service worker runs (WORKER_ONLY_MODULES) on a page's
@@ -38,6 +45,8 @@
  *                      the adapter's list, another pages-pass start with it, or recovery.html's
  *                      start with a chunk named for either
  *   budget/file        build/budgets.json doesn't read as a budget file
+ * The zip's row is npm run package's (scripts/package.js, checkZip): a zip over it fails as
+ * budget/zip, and no zip is written. A null row has no approved number yet, and gates nothing.
  * Timing and heap aren't the build's: npm run perf:probe measures them against the frozen
  * 1.4.0 package with the rows here (docs/performance/budgets.md). Budgets hold for production
  * builds; a development build isn't checked.
@@ -46,7 +55,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const { problem } = require('./diagnostics.js');
+const { problem, plural } = require('./diagnostics.js');
 const { htmlTags, cssUrls } = require('./markup.js');
 const { sourcePath } = require('./bundle.js');
 const { PAGES, OWN_PASS_PAGES, BACKGROUND_ENTRY, CLASSIC_SCRIPTS } = require('./vite-config.js');
@@ -61,6 +70,10 @@ const BUDGETS_FILE = 'build/budgets.json';
 const FONT = /\.(?:woff2?|ttf|otf)$/i;
 /** The start rows an entry can have */
 const START_TYPES = ['html', 'js', 'css', 'fonts'];
+/** The package row's rows: the zip's bytes, and update size, which #31's release gate sets (#300) */
+const PACKAGE_ROWS = ['zipBytes', 'updateBytes'];
+/** An issue a null row waits on, in waitsOn */
+const ISSUE = /^#[1-9]\d*$/;
 /**
  * Only the service worker runs these: the modules a run-time filter once kept on a page's start
  * (#35 slice 3c), and the payload schemas of every command a page sends the worker, which only the
@@ -98,6 +111,11 @@ const LAZY_ONLY_MODULES = Object.freeze([
  * @property {string[]} [lazyChunks] - loader chunks the page's start loads later, with import()
  * @property {boolean} [planned] - not built yet: the gate refuses a build that has it
  * @property {Partial<Record<StartType, Limit | null>>} [start] - null: no approved number yet
+ * @property {number | null} [modules] - the most modules its start may hold; null: no approved
+ *   number yet
+ * @property {number | null} [coldStart] - the service worker's cold start, in ms, #35's to set and
+ *   gate at release; the build checks only its shape
+ * @property {Record<string, string>} [waitsOn] - for each row it leaves null, the issue that sets it
  * @property {string[]} [forbidden] - categories gated on the start path
  * @property {string[]} [dependencies] - third-party packages its graph may hold
  * @property {string[]} [lazyDependencies] - third-party packages its lazy chunks and workers may
@@ -109,6 +127,10 @@ const LAZY_ONLY_MODULES = Object.freeze([
  * @typedef {object} BudgetFile
  * @property {Record<string, BudgetEntry>} entries
  * @property {Record<string, {about: string, paths: string[]}>} forbidden - categories, by name
+ * @property {{zipBytes: number | null, updateBytes?: number | null, waitsOn?: Record<string, string>, reason: string}} [package] -
+ *   the zip npm run package writes, at most zipBytes bytes, and update size, the bytes new or
+ *   changed against the previous release, which #31's release gate sets and holds (#31 slice 3);
+ *   null: no approved number yet
  */
 
 /**
@@ -450,6 +472,90 @@ function fileProblems(budgets) {
       const ok = limit && Number.isSafeInteger(limit.raw) && Number.isSafeInteger(limit.gzip) && limit.raw >= 0 && limit.gzip >= 0;
       if (!ok) fail(`entry ${name}'s ${type} row isn't whole numbers of bytes, raw and gzip`);
     }
+    if (entry.modules !== undefined && entry.modules !== null && !wholeNumber(entry.modules)) fail(`entry ${name}'s modules row isn't a whole number of modules`);
+    if (entry.coldStart !== undefined) {
+      if (name !== 'background') fail(`entry ${name} has a coldStart row, which only the service worker has`);
+      else if (entry.coldStart !== null && !wholeNumber(entry.coldStart)) fail(`entry ${name}'s coldStart row isn't a whole number of milliseconds`);
+    }
+    waitsOnProblems(entry.waitsOn, rowsOf(name), (row) => (START_TYPES.includes(row) ? (entry.start || {})[row] : entry[row]), `entry ${name}`).forEach(fail);
+  }
+  if (budgets.package !== undefined) {
+    const row = budgets.package;
+    if (!row || typeof row !== 'object') fail("the package row isn't a row");
+    else {
+      if (row.zipBytes !== null && !wholeNumber(row.zipBytes)) fail("the package's zipBytes row isn't a whole number of bytes");
+      if (row.updateBytes !== undefined && row.updateBytes !== null && !wholeNumber(row.updateBytes)) fail("the package's updateBytes row isn't a whole number of bytes");
+      if (typeof row.reason !== 'string' || row.reason === '') fail('the package row has no reason');
+      waitsOnProblems(row.waitsOn, PACKAGE_ROWS, (name) => row[name], 'the package').forEach(fail);
+    }
+  }
+  return problems;
+}
+
+/**
+ * The rows an entry can have: its start rows, its modules, and the service worker's cold start
+ * @param {string} name
+ * @returns {string[]}
+ */
+function rowsOf(name) {
+  return [...START_TYPES, 'modules', ...(name === 'background' ? ['coldStart'] : [])];
+}
+
+/**
+ * What's wrong with a waitsOn: it maps each row its holder leaves null to the issue that sets it,
+ * as #31, so it names only rows the holder can have, and never one that has a number (#300)
+ * @param {unknown} waitsOn
+ * @param {readonly string[]} rows - the rows the holder can have
+ * @param {(row: string) => unknown} valueOf - a row's value
+ * @param {string} who - the holder, as a message names it
+ * @returns {string[]}
+ */
+function waitsOnProblems(waitsOn, rows, valueOf, who) {
+  if (waitsOn === undefined) return [];
+  if (!waitsOn || typeof waitsOn !== 'object' || Array.isArray(waitsOn)) return [`${who}'s waitsOn isn't a map of rows to issues`];
+  return Object.entries(waitsOn).flatMap(([row, issue]) => {
+    if (!rows.includes(row)) return [`${who}'s waitsOn names ${row}, which isn't one of its rows`];
+    if (typeof issue !== 'string' || !ISSUE.test(issue)) return [`${who}'s waitsOn gives ${row} ${issue}, which isn't an issue like #31`];
+    const value = valueOf(row);
+    return value === undefined || value === null ? [] : [`${who}'s ${row} row has a number, and waitsOn still names ${issue} for it`];
+  });
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is number}
+ */
+function wholeNumber(value) {
+  return Number.isSafeInteger(value) && /** @type {number} */ (value) >= 0;
+}
+
+/**
+ * Each row a build needs that has no number and no issue named for it in waitsOn (#300): the start
+ * types an entry's build has, its modules, and the service worker's cold start; every row of a
+ * planned entry, which waits on the issue that builds it; and the package's rows. A row that waits
+ * on another issue names it, so it reads apart from one nobody set.
+ * @param {Record<string, EntryGraph>} graphs
+ * @param {BudgetFile} budgets
+ * @returns {Problem[]}
+ */
+function unsetProblems(graphs, budgets) {
+  /** @type {Problem[]} */
+  const problems = [];
+  const unset = (/** @type {string} */ subject, /** @type {string} */ row) => problem('budget/entry', subject, `its ${row} row has no number and no issue named for it in waitsOn: set its number by review, from CI's figure, or name the issue it waits on`);
+  for (const [name, entry] of Object.entries(budgets.entries)) {
+    const graph = graphs[name];
+    if (!entry.planned && !graph) continue;
+    const needs = entry.planned
+      ? rowsOf(name)
+      : [...START_TYPES.filter((type) => graph.start.bytes[type]), 'modules', ...(graph.kind === 'worker' ? ['coldStart'] : [])];
+    for (const row of needs) {
+      const value = START_TYPES.includes(row) ? (entry.start || {})[/** @type {StartType} */ (row)] : /** @type {any} */ (entry)[row];
+      if ((value === undefined || value === null) && !(entry.waitsOn && entry.waitsOn[row])) problems.push(unset(name, START_TYPES.includes(row) ? `start ${row.toUpperCase()}` : row));
+    }
+  }
+  const row = /** @type {Record<string, any>} */ (budgets.package || {});
+  for (const name of PACKAGE_ROWS) {
+    if ((row[name] === undefined || row[name] === null) && !(row.waitsOn && row.waitsOn[name])) problems.push(unset('package', name));
   }
   return problems;
 }
@@ -525,6 +631,7 @@ function checkBudgets(graphs, budgets, { loaderChunks, files, chunks }) {
   for (const [name, entry] of Object.entries(budgets.entries)) {
     if (!built.has(name) && !entry.planned) problems.push(problem('budget/entry', name, `${BUDGETS_FILE} has a row for it, and the build doesn't have it`));
   }
+  problems.push(...unsetProblems(graphs, budgets));
 
   for (const [name, graph] of Object.entries(graphs)) {
     const entry = budgets.entries[name];
@@ -547,6 +654,9 @@ function checkBudgets(graphs, budgets, { loaderChunks, files, chunks }) {
           problems.push(problem('budget/bytes', name, `its start ${type.toUpperCase()} is ${measured[how]} bytes ${how} (${kib(measured[how])}), over its ${limit[how]} (${kib(limit[how])}); a number over a row goes to the owner, not into the row`));
         }
       }
+    }
+    if (wholeNumber(entry.modules) && graph.start.modules.length > entry.modules) {
+      problems.push(problem('budget/modules', name, `its start has ${plural(graph.start.modules.length, 'module')}, over its ${entry.modules}; a number over a row goes to the owner, not into the row`));
     }
     for (const category of entry.forbidden || []) {
       const { paths } = budgets.forbidden[category];
@@ -581,6 +691,18 @@ function checkBudgets(graphs, budgets, { loaderChunks, files, chunks }) {
 }
 
 /**
+ * The zip's problems against the package row: one over it fails (#300). A null row gates nothing.
+ * @param {number} bytes - the zip's size
+ * @param {BudgetFile} budgets
+ * @returns {Problem[]}
+ */
+function checkZip(bytes, budgets) {
+  const limit = budgets.package ? budgets.package.zipBytes : null;
+  if (!wholeNumber(limit) || bytes <= limit) return [];
+  return [problem('budget/zip', 'the zip', `it is ${bytes} bytes (${kib(bytes)}), over its ${limit} (${kib(limit)}); a number over a row goes to the owner, not into the row`)];
+}
+
+/**
  * Read build/budgets.json from `root`
  * @param {string} [root]
  * @returns {{budgets: BudgetFile | null, problems: Problem[]}}
@@ -597,4 +719,4 @@ function readBudgets(root = ROOT) {
   }
 }
 
-module.exports = { analyze, checkBudgets, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE, WORKER_ONLY_MODULES, LAZY_ONLY_MODULES };
+module.exports = { analyze, checkBudgets, checkZip, readBudgets, fileProblems, matches, packageOf, vendoredPackages, sizesOf, startChunksOf, BUDGETS_FILE, WORKER_ONLY_MODULES, LAZY_ONLY_MODULES };
