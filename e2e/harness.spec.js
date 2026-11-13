@@ -211,6 +211,35 @@ test('still sees what the worker throws after it restarts, and fails while it is
     .toContain('service worker |  | self-test: thrown after a restart');
 });
 
+// While the worker Chrome stopped through CDP stays stopped, the context's setOffline can go
+// unanswered, and close() starts with it, so a case that failed with the worker stopped ran its
+// teardown to the test's timeout (#244)
+test('closes in seconds while the worker Chrome stopped through CDP is still stopped, with its routes still on, and its log says why', async ({ playwright, headless }) => {
+  const extension = await launchExtension({ chromium: playwright.chromium, headless });
+  const page = await extension.openSurface('popup');
+  await expect(page.locator('#page-list')).not.toContainText('Loading...');
+  const cdp = await extension.context.newCDPSession(page);
+  await cdp.send('ServiceWorker.enable');
+  await cdp.send('ServiceWorker.stopAllWorkers');
+  await expect(extension.uncaught()).rejects.toThrow('may be stopped');
+  await cdp.detach();
+
+  const unrouted = [];
+  const unrouteAll = extension.context.unrouteAll.bind(extension.context);
+  extension.context.unrouteAll = (...args) => {
+    unrouted.push(args);
+    return unrouteAll(...args);
+  };
+  // A bound of the case's own, under the test's timeout, so a close that waits says so
+  let timer;
+  const waited = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('The close was still waiting 10 s in')), 10_000);
+  });
+  await Promise.race([extension.close(), waited]).finally(() => clearTimeout(timer));
+  expect(unrouted, 'the routes stayed on').toEqual([]);
+  expect(extension.log()).toMatch(/setOffline didn't answer within \d+ seconds, so the context closes with its routes on/);
+});
+
 test("reads the worker's own record, and fails when the worker runs without the hooks", async ({ extension }) => {
   // A report whose console line never arrived, as when the worker logs before the harness listens
   await extension.worker.evaluate(() => {
