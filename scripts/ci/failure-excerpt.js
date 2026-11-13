@@ -4,7 +4,9 @@
  * Write the start of a failed or cancelled CI job's output to the step output
  * `excerpt`, which pr-gate shows in its job summary. Takes up to 20 lines from the
  * first line that matches the job's marker, or the last 20 lines when none does,
- * as after a timeout. Without GITHUB_OUTPUT, as in a local run, it prints them.
+ * as after a timeout. In a job SECTIONS names, the marker is looked for from the start
+ * of the last command it ran, the one that failed. Without GITHUB_OUTPUT, as in a
+ * local run, it prints them.
  *
  *   node scripts/ci/failure-excerpt.js <log> <job>
  */
@@ -30,11 +32,19 @@ const MARKERS = {
   extension: /^ {2}1\) |^Error: |^test:a11y's findings don't match/,
 };
 
-function excerpt(text, marker) {
+// Where each command starts in a job that runs several, npm's banner for its script. The job stops
+// at the first that fails, so the excerpt looks for its marker from the last one: past
+// test:extension's list of a flaky test, numbered like a failure, when test:a11y failed after it
+const SECTIONS = {
+  extension: /^> \S+@\S+ \S/,
+};
+
+function excerpt(text, marker, section = null) {
   const lines = text.replace(ANSI_ESCAPE, '').split(/\r?\n/);
   while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
 
-  let start = marker ? lines.findIndex(line => marker.test(line)) : -1;
+  const from = section ? Math.max(0, lines.findLastIndex(line => section.test(line))) : 0;
+  let start = marker ? lines.findIndex((line, i) => i >= from && marker.test(line)) : -1;
   if (start < 0) start = Math.max(0, lines.length - MAX_LINES);
 
   return lines
@@ -55,7 +65,7 @@ if (require.main === module) {
     // Nothing was captured, for example when checkout failed
   }
   const marker = Object.hasOwn(MARKERS, job) ? MARKERS[job] : null;
-  const body = excerpt(text, marker) || '(no output captured)';
+  const body = excerpt(text, marker, Object.hasOwn(SECTIONS, job) ? SECTIONS[job] : null) || '(no output captured)';
   if (process.env.GITHUB_OUTPUT) {
     const delimiter = `EXCERPT_${crypto.randomBytes(16).toString('hex')}`;
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `excerpt<<${delimiter}\n${body}\n${delimiter}\n`);
@@ -64,4 +74,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { excerpt, MARKERS, MAX_LINES };
+module.exports = { excerpt, MARKERS, SECTIONS, MAX_LINES };
