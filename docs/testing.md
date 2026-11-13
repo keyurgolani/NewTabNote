@@ -154,7 +154,7 @@ A new module under `js/kernel/`, or a new fake of a port anywhere, fails the che
 
 Most mutants edit production code. A mutant may edit test infrastructure when that code is itself a gate that protects a behavior, as the conformance runs' two mutants edit #64's inventory and its coverage check.
 
-`npm run test:mutants` copies the tree to a scratch directory (`node_modules` is linked) and never touches the working tree. It runs each named test file once as it is, with the flags `npm test` uses, and stops if a named test fails there. Then it makes each mutant in the copy, checks the mutated file still parses (`node --check`), runs its test file, and puts the file back. A mutant is:
+`npm run test:mutants` copies the tree to a scratch directory (`node_modules` is linked) and never touches the working tree. The copy leaves out `.git`, `node_modules`, `dist`, `test-results`, `playwright-report` and `.claude` at any depth, and the build's `releases/` at the root only, so every release file under `test/` goes with it. It runs each named test file once as it is, with the flags `npm test` uses, and stops if a named test fails there. Then it makes each mutant in the copy, checks the mutated file still parses (`node --check`), runs its test file, and puts the file back. A mutant is:
 
 - killed when its named test fails and at least one other test in the file still passes;
 - survived when its named test passes, or doesn't run. The report lists any other test that failed, which usually means the catalog names the wrong test;

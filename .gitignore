@@ -3,13 +3,11 @@ node_modules/
 
 # Build output
 dist/
-releases/
+/releases/
 # What scripts/build.js writes before its checks pass and it renames it to dist/
 /.dist-staging-*/
 # Build reports, such as #27's chunk graph, source maps and perf:probe's JSON, which never ship
 dist-report/
-# Release files frozen as #17's test fixtures, not build output
-!/test/fixtures/storage/releases/
 
 # OS files
 .DS_Store
