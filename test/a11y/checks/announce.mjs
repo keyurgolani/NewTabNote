@@ -1,9 +1,11 @@
 /**
  * The announcement recorder (#24, "Announcements"): what a step makes the live regions say, read back
  * after it. It watches each region that announces, by its aria-live, else its role (a status or log
- * politely, an alert assertively) or an output, and when a region's text changes it records the
- * region's whole text, with the region and how it's announced. An alert speaks when it's added with
- * its text too, as the legacy tab's note-gone notice is added. A region with aria-live="off", as the AI
+ * politely, an alert assertively) or an output, and records what a change says, as a screen reader
+ * reads it: the text added, or the region's whole text when it's atomic, by aria-atomic or as a status
+ * or alert is, with the region and how it's announced. A removal says nothing, as aria-relevant's
+ * default, additions and text, has it, and a region's own aria-relevant isn't read. An alert speaks
+ * when it's added with its text too, as the legacy tab's note-gone notice is added. A region with aria-live="off", as the AI
  * transcript's log is, says nothing, alerts added inside it included, and neither does text outside
  * every region. It starts through Playwright evaluation, which the extension's CSP doesn't apply to,
  * and lasts as long as the page's window: a navigation ends it, and a new document written into the
@@ -46,25 +48,35 @@ function install(selectorOf, politenessOf) {
     }
     return null;
   };
+  const atomic = (/** @type {Element} */ el) => {
+    const set = el.getAttribute('aria-atomic');
+    return set === 'true' || set === 'false' ? set === 'true' : ['status', 'alert'].includes(el.getAttribute('role') ?? '');
+  };
   new MutationObserver(records => {
-    /** @type {Map<Element, string>} */
+    /** @type {Map<Element, {politeness: string, added: string[]}>} */
     const changed = new Map();
+    const heard = (/** @type {{el: Element, politeness: string}} */ { el, politeness }, /** @type {string} */ text) => {
+      if (!changed.has(el)) changed.set(el, { politeness, added: [] });
+      changed.get(el)?.added.push(text);
+    };
     for (const record of records) {
       // The document's own children come and go only when a new document is written in, which says nothing
       if (record.target === document) continue;
+      if (record.type === 'childList' && record.addedNodes.length === 0) continue;
       for (const node of record.addedNodes) {
         if (!(node instanceof Element)) continue;
         for (const alert of [node, ...node.querySelectorAll('[role="alert"]')]) {
           if (alert.getAttribute('role') !== 'alert' || alert.parentElement?.closest('[aria-live="off"]')) continue;
           const added = regionOf(alert);
-          if (added) changed.set(added.el, added.politeness);
+          if (added) heard(added, alert.textContent ?? '');
         }
       }
       const region = regionOf(record.target);
-      if (region) changed.set(region.el, region.politeness);
+      if (!region) continue;
+      heard(region, record.type === 'characterData' ? (record.target.textContent ?? '') : [...record.addedNodes].map(node => node.textContent ?? '').join(' '));
     }
-    for (const [el, politeness] of changed) {
-      const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+    for (const [el, { politeness, added }] of changed) {
+      const text = (atomic(el) ? (el.textContent ?? '') : added.join(' ')).replace(/\s+/g, ' ').trim();
       if (text) said.push({ region: selectorOf(el), politeness, text });
     }
   }).observe(document, { subtree: true, childList: true, characterData: true });
