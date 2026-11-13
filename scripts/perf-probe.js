@@ -13,7 +13,9 @@
  *   lazy here; the build's budget check counts it as start (scripts/build/budgets.js);
  * - with --timing: on `ref-desktop`, for each fixture profile, the install-cold
  *   interaction-ready time and the JS heap at it, over --runs rounds, each run on a fresh
- *   profile (scripts/perf/timing.js). With two or more packages the runs interleave: every
+ *   profile (scripts/perf/timing.js), and then COUNT_RUNS untimed runs of each package it counts
+ *   (countedPackages), each counting the new tab's IndexedDB reads before its mark and each
+ *   page's and the service worker's requests outside the extension (scripts/perf/counts.js, #300). With two or more packages the runs interleave: every
  *   round runs each package once, the order rotated each round (AB, BA for two; ABC, BCA, CAB
  *   for three), so the
  *   machine's drift lands on all of them alike, and each package's time is also given as its
@@ -41,6 +43,8 @@ const ROOT = path.join(__dirname, '..');
 const FORMAT = 'ntn-perf-probe/2';
 const DEFAULT_RUNS = 11;
 const TIMED = ['interactionReadyMs', 'markMs', 'heapBytes', 'saveMs', 'driverMs', 'throttledAtMs', 'documentAtMs', 'domContentLoadedMs', 'keyTries'];
+/** The counted runs of each counted package on each profile; the perf summary takes each count's highest */
+const COUNT_RUNS = 2;
 
 /**
  * The options in `argv`, or a thrown Error that names what's wrong
@@ -236,6 +240,64 @@ async function measureTiming({ packages, runs, profiles, log }) {
 }
 
 /**
+ * The packages a run counts: those after the reference pair in a gate run, after the first
+ * package when there are two or more, or the one package. 1.4.0 has no interaction-ready mark to
+ * cut its reads at, and the counts hold the candidate alone to its rows (#300)
+ * @template {{digest: string}} P
+ * @param {P[]} packages
+ * @returns {P[]}
+ */
+function countedPackages(packages) {
+  if (packages.length === 1) return packages;
+  const twin = packages.length > 2 && packages[1].digest === packages[0].digest;
+  return packages.slice(twin ? 2 : 1);
+}
+
+/**
+ * The entries a counted run's counts name, each with its requests
+ * @param {Record<string, any>} counts
+ */
+function entriesOf(counts) {
+  return Object.keys(counts).filter(key => key !== 'urls');
+}
+
+/**
+ * Counts `runs` untimed runs of each package on each profile (scripts/perf/counts.js), and keeps
+ * each run, each one that failed, and each count's highest over the runs that didn't (#300)
+ * @param {{packages: Array<{label: string, dist: string}>, profiles: string[], runs?: number, log: (line: string) => void, countedRun?: (options: {dist: string, fixture: object | null}) => Promise<any>}} options
+ */
+async function measureCounts({ packages, profiles, runs = COUNT_RUNS, log, countedRun = require('./perf/counts').countedRun }) {
+  const result = { runs, profiles: /** @type {Record<string, any>} */ ({}) };
+  for (const name of profiles) {
+    const { fixture } = await profileFixture(name);
+    /** @type {Record<string, {runs: any[], max: Record<string, {reads?: number, requests: number}>, failures: Array<{run: number, message: string}>}>} */
+    const counted = {};
+    for (const { label, dist } of packages) {
+      const entry = { runs: /** @type {any[]} */ ([]), max: {}, failures: /** @type {Array<{run: number, message: string}>} */ ([]) };
+      for (let run = 1; run <= runs; run++) {
+        try {
+          const counts = await countedRun({ dist, fixture });
+          entry.runs.push(counts);
+          log(`${name} counted ${label} ${run}/${runs}: the new tab's IndexedDB reads before its mark ${counts.newtab.reads} (the page's ${counts.newtab.pageReads}, the worker's ${counts.newtab.workerReads}); requests outside the extension ${entriesOf(counts).map(key => `${key} ${counts[key].requests}`).join(', ')}`);
+        } catch (error) {
+          entry.failures.push({ run, message: String(error && error.message ? error.message : error).split('\n')[0] });
+          log(`${name} counted ${label} ${run}/${runs} failed: ${entry.failures[entry.failures.length - 1].message}`);
+        }
+      }
+      /** @type {Record<string, {reads?: number, requests: number}>} */
+      const max = {};
+      for (const key of entry.runs.length > 0 ? entriesOf(entry.runs[0]) : []) {
+        const highest = (/** @type {'reads' | 'requests'} */ count) => Math.max(...entry.runs.map(counts => counts[key][count]));
+        max[key] = { ...(key === 'newtab' ? { reads: highest('reads') } : {}), requests: highest('requests') };
+      }
+      counted[label] = { ...entry, max };
+    }
+    result.profiles[name] = { packages: counted };
+  }
+  return result;
+}
+
+/**
  * What makes a run against `file` (build/budgets.json, or a baseline report such as
  * docs/performance/baseline-1.4.0.json)
  * not a valid gate run, before any timing: the first package isn't the baseline's reference
@@ -312,6 +374,7 @@ async function main(argv, { log = line => process.stderr.write(`perf:probe: ${li
       return { label, version: manifest.version, name: manifest.name, digest, bytes: bytes.pages, problems: bytes.problems };
     }),
     timing: null,
+    counts: null,
     problems: [],
   };
   if (options.baseline) {
@@ -322,6 +385,7 @@ async function main(argv, { log = line => process.stderr.write(`perf:probe: ${li
   if (options.timing) {
     report.timing = await measureTiming({ packages, runs: options.runs, profiles: options.profiles, log });
     if (options.baseline) report.problems.push(...fixtureProblems(report.timing, options.baseline));
+    report.counts = await measureCounts({ packages: countedPackages(packages), profiles: options.profiles, log });
   }
 
   const out = path.resolve(options.out || path.join(ROOT, 'dist-report', `perf-probe-${packages.map(entry => entry.label).join('-vs-')}.json`));
@@ -347,8 +411,11 @@ async function main(argv, { log = line => process.stderr.write(`perf:probe: ${li
   const failed = report.timing
     ? Object.values(report.timing.profiles).some(profile => Object.values(profile.packages).some(entry => entry.failures.length > 0))
     : false;
+  const countFailed = report.counts
+    ? Object.values(report.counts.profiles).some(profile => Object.values(profile.packages).some(entry => entry.failures.length > 0))
+    : false;
   const problems = report.problems.length + report.packages.reduce((sum, entry) => sum + entry.problems.length, 0);
-  return problems > 0 || failed ? 1 : 0;
+  return problems > 0 || failed || countFailed ? 1 : 0;
 }
 
 if (require.main === module) {
@@ -361,4 +428,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { parseArgs, summary, roundOrder, packagesOf, packageDigest, measureTiming, gateProblems, fixtureProblems, main };
+module.exports = { parseArgs, summary, roundOrder, packagesOf, packageDigest, measureTiming, countedPackages, measureCounts, gateProblems, fixtureProblems, main, COUNT_RUNS };

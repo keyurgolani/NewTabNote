@@ -72,6 +72,8 @@ const FONT = /\.(?:woff2?|ttf|otf)$/i;
 const START_TYPES = ['html', 'js', 'css', 'fonts'];
 /** The package row's rows: the zip's bytes, and update size, which #31's release gate sets (#300) */
 const PACKAGE_ROWS = ['zipBytes', 'updateBytes'];
+/** The entries a reads row goes on: the new tab's routes, where #27 has IndexedDB reads before interaction-ready (#300) */
+const READ_ENTRIES = ['newtab', 'moment'];
 /** An issue a null row waits on, in waitsOn */
 const ISSUE = /^#[1-9]\d*$/;
 /**
@@ -113,6 +115,10 @@ const LAZY_ONLY_MODULES = Object.freeze([
  * @property {Partial<Record<StartType, Limit | null>>} [start] - null: no approved number yet
  * @property {number | null} [modules] - the most modules its start may hold; null: no approved
  *   number yet
+ * @property {number | null} [reads] - the new tab's IndexedDB reads before its interaction-ready mark,
+ *   which npm run perf:probe counts and the perf job holds it to (#300); null: no approved number yet
+ * @property {number | null} [requests] - the requests its start makes outside the extension, which
+ *   the probe counts and the perf job holds it to (#300); null: no approved number yet
  * @property {number | null} [coldStart] - the service worker's cold start, in ms, #35's to set and
  *   gate at release; the build checks only its shape
  * @property {Record<string, string>} [waitsOn] - for each row it leaves null, the issue that sets it
@@ -473,6 +479,10 @@ function fileProblems(budgets) {
       if (!ok) fail(`entry ${name}'s ${type} row isn't whole numbers of bytes, raw and gzip`);
     }
     if (entry.modules !== undefined && entry.modules !== null && !wholeNumber(entry.modules)) fail(`entry ${name}'s modules row isn't a whole number of modules`);
+    for (const key of ['reads', 'requests']) {
+      if (entry[key] !== undefined && entry[key] !== null && !wholeNumber(entry[key])) fail(`entry ${name}'s ${key} row isn't a whole number`);
+    }
+    if (entry.reads !== undefined && !READ_ENTRIES.includes(name)) fail(`entry ${name} has a reads row, which only the new tab and Moment have`);
     if (entry.coldStart !== undefined) {
       if (name !== 'background') fail(`entry ${name} has a coldStart row, which only the service worker has`);
       else if (entry.coldStart !== null && !wholeNumber(entry.coldStart)) fail(`entry ${name}'s coldStart row isn't a whole number of milliseconds`);
@@ -493,12 +503,13 @@ function fileProblems(budgets) {
 }
 
 /**
- * The rows an entry can have: its start rows, its modules, and the service worker's cold start
+ * The rows an entry can have: its start rows, its modules, the new tab's routes' reads, its
+ * requests, and the service worker's cold start
  * @param {string} name
  * @returns {string[]}
  */
 function rowsOf(name) {
-  return [...START_TYPES, 'modules', ...(name === 'background' ? ['coldStart'] : [])];
+  return [...START_TYPES, 'modules', ...(READ_ENTRIES.includes(name) ? ['reads'] : []), 'requests', ...(name === 'background' ? ['coldStart'] : [])];
 }
 
 /**
@@ -546,7 +557,7 @@ function unsetProblems(graphs, budgets) {
     const graph = graphs[name];
     if (!entry.planned && !graph) continue;
     const needs = entry.planned
-      ? rowsOf(name)
+      ? [...START_TYPES, 'modules']
       : [...START_TYPES.filter((type) => graph.start.bytes[type]), 'modules', ...(graph.kind === 'worker' ? ['coldStart'] : [])];
     for (const row of needs) {
       const value = START_TYPES.includes(row) ? (entry.start || {})[/** @type {StartType} */ (row)] : /** @type {any} */ (entry)[row];

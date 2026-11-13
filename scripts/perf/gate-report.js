@@ -22,6 +22,12 @@
  * it fails on a profile it takes, when the run of one is invalid, or when it names no profile.
  * The probe lists its problems for the whole run, not by profile, so one about a profile a row
  * doesn't take still makes that row's profiles invalid.
+ *
+ * Then the counts (#300): on each profile the timing row takes, the counted package's highest
+ * over its runs, the new tab's IndexedDB reads before its mark and each entry's requests outside
+ * the extension, against the entry's reads and requests rows. A null row reports what was
+ * counted. A number exits 1 on a count over it, and on a profile the run has no count of, so a
+ * run that counted nothing can't pass.
  */
 
 const fs = require('fs');
@@ -30,13 +36,44 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..', '..');
 const MIB = 1024 * 1024;
 
+/** What each count row holds, as the summary names it */
+const COUNTS = Object.freeze({ reads: 'IndexedDB reads before its mark', requests: 'requests outside the extension' });
+
 const pct = ratio => `${ratio >= 1 ? '+' : ''}${((ratio - 1) * 100).toFixed(1)}%`;
 const ms = value => (value === null || value === undefined ? 'n/a' : `${Math.round(value)} ms`);
 
 /**
+ * Each count against its row (#300), on each of `profiles`: the counted package's highest over
+ * its runs, the last package the probe counted
+ * @param {any} probe
+ * @param {any} budgets
+ * @param {string[]} profiles
+ * @returns {Array<{profile: string, entry: string, row: string, count: number | undefined, limit: number | null, verdict: 'pass' | 'fail' | 'invalid' | 'report'}>}
+ */
+function countVerdicts(probe, budgets, profiles) {
+  const measured = (probe.counts && probe.counts.profiles) || {};
+  const verdicts = [];
+  for (const profile of profiles) {
+    const counted = Object.values((measured[profile] && measured[profile].packages) || {});
+    const max = counted.length > 0 ? /** @type {any} */ (counted[counted.length - 1]).max || {} : {};
+    for (const [entry, row] of Object.entries(budgets.entries || {})) {
+      if (/** @type {any} */ (row).planned) continue;
+      for (const name of Object.keys(COUNTS)) {
+        if (!(name in /** @type {any} */ (row))) continue;
+        const limit = /** @type {any} */ (row)[name];
+        const count = max[entry] ? max[entry][name] : undefined;
+        const verdict = limit === null ? 'report' : count === undefined ? 'invalid' : count <= limit ? 'pass' : 'fail';
+        verdicts.push({ profile, entry, row: name, count, limit, verdict });
+      }
+    }
+  }
+  return /** @type {any} */ (verdicts);
+}
+
+/**
  * @param {any} probe - the probe's JSON
  * @param {any} budgets - build/budgets.json
- * @returns {{markdown: string, failed: boolean, verdicts: Array<{profile: string, valid: boolean, timing: string, heap: string, problems: string[]}>}}
+ * @returns {{markdown: string, failed: boolean, verdicts: Array<{profile: string, valid: boolean, timing: string, heap: string, problems: string[]}>, countVerdicts: ReturnType<typeof countVerdicts>}}
  */
 function gateReport(probe, budgets) {
   const timing = budgets.timing;
@@ -122,9 +159,21 @@ function gateReport(probe, budgets) {
     verdicts.push({ profile: name, valid, timing: timingVerdict, heap: heapVerdict, problems });
   }
   if (notes.length > 0) lines.push('', 'Invalid, so neither row is read:', '', ...notes);
+  const counts = countVerdicts(probe, budgets, takes(timing));
+  if (counts.some(verdict => verdict.verdict === 'fail' || verdict.verdict === 'invalid')) failed = true;
+  lines.push(
+    '',
+    '## perf: counts against their rows',
+    '',
+    `On ${on(timing)}: the counted package's highest over ${(probe.counts && probe.counts.runs) || 0} untimed runs (#300). A row with no number yet reports; one with a number fails a count over it, or a profile with no count.`,
+    '',
+    '| Profile | Entry | Count | Counted | Row | Verdict |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...counts.map(({ profile, entry, row, count, limit, verdict }) => `| ${profile} | ${entry} | ${COUNTS[/** @type {'reads' | 'requests'} */ (row)]} | ${count === undefined ? 'n/a' : count} | ${limit === null ? 'none yet' : limit} | ${verdict} |`),
+  );
   const environment = probe.environment || {};
   lines.push('', `Machine: ${environment.cpu || 'unknown'}, ${environment.cores || '?'} cores, ${environment.platform || ''}; Chromium ${(probe.timing && probe.timing.browser) || 'unknown'}.`);
-  return { markdown: `${lines.join('\n')}\n`, failed, verdicts };
+  return { markdown: `${lines.join('\n')}\n`, failed, verdicts, countVerdicts: counts };
 }
 
 if (require.main === module) {
@@ -138,4 +187,4 @@ if (require.main === module) {
   process.exit(report.failed ? 1 : 0);
 }
 
-module.exports = { gateReport };
+module.exports = { gateReport, countVerdicts };
