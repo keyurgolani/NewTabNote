@@ -16,7 +16,7 @@ export const CLIP_RULE = 'ntn-clipped-action';
 /** The rule a page that scrolls sideways at a narrow width fails */
 export const REFLOW_RULE = 'ntn-reflow';
 
-/** The widest a page is held to reflow at, in CSS px */
+/** The width a page is held to reflow at, in CSS px, as WCAG 1.4.10 asks. A narrower page may scroll sideways, as long as nothing's cut off. */
 export const REFLOW_WIDTH = 320;
 
 /** What a box may stick out by: rounding, and nothing more */
@@ -41,8 +41,8 @@ export function cutOff({ box, holds }) {
 }
 
 /**
- * In the page: each pointer target's box and what it's held inside, and at `narrow` CSS px or less,
- * the outermost elements that make the page scroll sideways. On each axis an action is held inside
+ * In the page: each pointer target's box and what it's held inside, and at `narrow` CSS px wide, the
+ * outermost elements that make the page scroll sideways. On each axis an action is held inside
  * each parent that clips it there, up to the first that scrolls there, and inside the area that one
  * scrolls. Above it, the container's visible part takes the action's place and is held the same way,
  * and what's held last, inside the page's scroll extent. A parent holds an element unless the
@@ -103,7 +103,7 @@ function readClips(selectorOf, pointerTargets, narrow) {
   });
   /** @type {Element[]} */
   const sideways = [];
-  if (innerWidth <= narrow && root.scrollWidth > root.clientWidth + 0.5) {
+  if (innerWidth === narrow && root.scrollWidth > root.clientWidth + 0.5) {
     for (const el of document.body.querySelectorAll('*')) {
       if (sideways.some(outer => outer.contains(el)) || inPage(el).right <= root.clientWidth + 0.5) continue;
       let contained = false;
@@ -113,13 +113,13 @@ function readClips(selectorOf, pointerTargets, narrow) {
       if (!contained) sideways.push(el);
     }
   }
-  const wide = root.scrollWidth > root.clientWidth + 0.5 && innerWidth <= narrow;
+  const wide = root.scrollWidth > root.clientWidth + 0.5 && innerWidth === narrow;
   return { actions, sideways: sideways.length > 0 ? sideways.map(selectorOf) : wide ? ['html'] : [] };
 }
 
 /**
- * The actions on `page` that are cut off, and at 320 CSS px or less what makes it scroll sideways, as
- * findings
+ * The actions on `page` that are cut off at any width, and at 320 CSS px wide what makes it scroll
+ * sideways, as findings
  * @param {import('@playwright/test').Page} page
  */
 export async function clipFindings(page) {
