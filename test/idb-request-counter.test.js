@@ -7,7 +7,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { IDBFactory, IDBObjectStore, IDBIndex, IDBCursor } = require('fake-indexeddb');
-const { installIdbRequestCounter, countIdbRequests } = require('./support/faults');
+const { installIdbRequestCounter, countIdbRequests, readIdbRequests } = require('./support/faults');
 
 const done = (request) => new Promise((resolve, reject) => {
   request.onsuccess = () => resolve(request.result);
@@ -169,5 +169,19 @@ describe('the IndexedDB request counter', () => {
       reads: 2, writes: 1, cursorSteps: 1,
       byStore: { 'CanvasTabDB/canvases': { reads: 1, writes: 0, cursorSteps: 0 }, 'CanvasTabDB/elements': { reads: 1, writes: 1, cursorSteps: 1 } },
     });
+  });
+
+  it('cuts only at a time: a null, NaN, infinite or text until throws, and a left-out one counts every request', () => {
+    // interactionReadyAt answers null for a page that never marked, which must not count the whole record
+    const record = { entries: [{ kind: 'read', method: 'get', database: 'd', store: 's', index: null, at: 10 }], cursorSteps: [] };
+    for (const until of [null, NaN, Infinity, '30']) {
+      assert.throws(() => countIdbRequests(record, { until }), /until is an epoch time in ms/, `until ${String(until)}`);
+    }
+    for (const options of [undefined, {}, { until: undefined }]) assert.equal(countIdbRequests(record, options).reads, 1);
+  });
+
+  it('says why a context has no record: a page that loaded first, or a worker that restarted or updated', async () => {
+    // The record lives on the context's global, and this context has none
+    await assert.rejects(readIdbRequests({ evaluate: async (read) => read() }), /before the page loads, and the worker again after it restarts or updates/);
   });
 });
