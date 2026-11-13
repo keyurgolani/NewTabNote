@@ -8,9 +8,9 @@
  * with --experimental-vm-modules (npm test passes it).
  *
  * A module's import() resolves as a static import does, through the same modules and the same
- * relative-only rule, and its module is linked and evaluated before it's handed back, as
- * Chrome's is (#237), so a case of a path behind a lazy chunk runs that path. A case of a failed
- * load passes `dynamicImports: false`, and each import() then rejects.
+ * relative-only rule, and its module is linked and evaluated once before it's handed back, however
+ * loads overlap, as Chrome's is (#237), so a case of a path behind a lazy chunk runs that path. A
+ * case of a failed load passes `dynamicImports: false`, and each import() then rejects.
  */
 
 const fs = require('node:fs');
@@ -44,11 +44,15 @@ async function loadPageModule(env, file, { dynamicImports = true } = {}) {
     }
     return moduleFor(fileURLToPath(new URL(specifier, referencing.identifier)));
   };
+  /** The links import() runs, one at a time, so none instantiates on a module another is linking */
+  let linking = Promise.resolve();
   const importModuleDynamically = (specifier, referencing) => {
     const module = linker(specifier, referencing);
     if (!imported.has(module)) {
+      const link = linking.then(() => (module.status === 'unlinked' ? module.link(linker) : undefined));
+      linking = link.catch(() => {});
       imported.set(module, (async () => {
-        if (module.status === 'unlinked') await module.link(linker);
+        await link;
         if (module.status !== 'evaluated') await module.evaluate();
         return module;
       })());
