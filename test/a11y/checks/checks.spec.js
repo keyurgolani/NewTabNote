@@ -2,7 +2,9 @@
 // find a planted fault and pass its clean twin:
 // - axe, with #29's tags, finds a button with no name and passes one with a name;
 // - the hit boxes find a 43 by 43 button, and pass a 44 by 44 one, a link in running text, and a
-//   checkbox whose label is its hit area;
+//   checkbox whose label is its hit area. They measure a control that only takes clicks, and a
+//   pointer-only one under aria-hidden: a 24 by 24 handle, an 18 by 18 checkbox and a 20 by 20 Close
+//   are found, and a 44 by 44 one and a shape inside a button pass;
 // - the focus ring finds a ring under 3:1 against the page and a control with no ring, and passes a
 //   strong ring and two two-tone rings on a dark plane whose inner ring carries the contrast: one
 //   outlined, its inner ring beside the outline, and one of box-shadows, its inner ring stacked on
@@ -42,6 +44,24 @@ test('the hit boxes find a 43 by 43 button, and pass a 44 by 44 one, a link in r
       <label><input type="checkbox" id="done"> Done</label>`),
   );
   expect(await targets.targetFindings(page)).toEqual([{ rule: 'ntn-target-size', target: '#small' }]);
+});
+
+test("the hit boxes measure a control that only takes clicks, and a pointer-only one under aria-hidden, as the contract's handle, checkbox and Close are", async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { width: 44px; height: 44px; padding: 0; } #close { width: 20px; height: 20px; }
+      .handle { width: 24px; height: 24px; cursor: grab; } .check { width: 18px; height: 18px; cursor: pointer; }
+      .roomy { width: 44px; height: 44px; cursor: pointer; } svg { width: 12px; height: 12px; }</style>
+      <div class="handle" id="handle" aria-hidden="true"></div>
+      <div class="check" id="check"><svg viewBox="0 0 24 24"></svg></div>
+      <div class="roomy" id="roomy" aria-hidden="true"><svg viewBox="0 0 24 24"></svg></div>
+      <button id="close" tabindex="-1" aria-hidden="true">×</button>
+      <button id="fits"><svg viewBox="0 0 24 24" style="cursor: pointer"></svg></button>`),
+  );
+  expect(await targets.targetFindings(page)).toEqual([
+    { rule: 'ntn-target-size', target: '#handle' },
+    { rule: 'ntn-target-size', target: '#check' },
+    { rule: 'ntn-target-size', target: '#close' },
+  ]);
 });
 
 test('the focus ring finds a faint ring and a missing one, and passes a strong ring and two-tone rings, outlined or stacked, on a dark plane', async ({ page }) => {
