@@ -2,10 +2,10 @@
  * Clipping and reflow (#24's Targets and Responsive): every action stays whole and reachable, so
  * none is cut off by an overflow: hidden or clip parent or placed where scrolling can't reach, and at
  * 320 CSS px wide the page doesn't scroll sideways (WCAG 1.4.10). The browser half reads each pointer
- * target's box in page coordinates and, on each axis, what it's held inside: each parent that clips
- * it, the area its scroll container scrolls, with that container's visible part held in its place
- * further up, and the page's own scroll extent. The pure part judges them. An action wholly before the
- * page's start is hidden, the layers check's, as a skip link is until it's focused.
+ * target's box in page coordinates and, on each axis, the parents around it: each one that clips it
+ * there, and each scroll container with the area it scrolls, the page last. The pure part judges
+ * whether some scroll of each brings the action into view whole. An action wholly before the page's
+ * start is hidden, the layers check's, as a skip link is until it's focused.
  */
 
 import { markListened, pointerTargets, selectorOf } from './targets.mjs';
@@ -24,49 +24,72 @@ const SLACK = 0.5;
 
 /**
  * @typedef {{left: number, top: number, right: number, bottom: number}} Box
- * @typedef {{box: Box, edge: Box}} Hold - a box and the edge it stays inside, open far out on the axis it isn't held on
+ * @typedef {{start: number, end: number}} Span
+ * @typedef {{visible: Span, area?: Span}} Parent - on one axis, a parent's visible part, and if it scrolls there, the area it scrolls
  */
 
 /**
- * Whether an action is cut off: a box it's held to reaches past the edge it's held inside, while some
- * of the action is on the page
- * @param {{box: Box, holds: readonly Hold[]}} action - in page coordinates
+ * Whether some scroll of each container around a span brings it into view whole, through `parents`
+ * from it out. It tracks where the span can start: each parent that clips it, before any container,
+ * keeps it inside, and each container lets it move as far as the container scrolls, and then keeps it
+ * inside the part of its own visible part that the parents up to the next container leave.
+ * @param {Span} span
+ * @param {readonly Parent[]} parents
  */
-export function cutOff({ box, holds }) {
-  if (box.right <= 0 || box.bottom <= 0) return false;
-  return holds.some(
-    ({ box: held, edge }) =>
-      held.left < edge.left - SLACK || held.top < edge.top - SLACK || held.right > edge.right + SLACK || held.bottom > edge.bottom + SLACK,
-  );
+function shows({ start, end }, parents) {
+  const size = end - start;
+  let [low, high] = [start, start];
+  /** @type {Span | null} */
+  let shown = null;
+  const inside = (/** @type {Span} */ part) => {
+    [low, high] = [Math.max(low, part.start - SLACK), Math.min(high, part.end - size + SLACK)];
+    return low <= high;
+  };
+  for (const { visible, area } of parents) {
+    if (area === undefined) {
+      if (shown) shown = { start: Math.max(shown.start, visible.start), end: Math.min(shown.end, visible.end) };
+      else if (!inside(visible)) return false;
+      continue;
+    }
+    if (shown && !inside(shown)) return false;
+    [low, high] = [low - (area.end - visible.end), high + (visible.start - area.start)];
+    shown = visible;
+  }
+  return shown === null || inside(shown);
 }
 
 /**
- * In the page: each pointer target's box and what it's held inside, and at `narrow` CSS px wide, the
- * outermost elements that make the page scroll sideways. On each axis an action is held inside
- * each parent that clips it there, up to the first that scrolls there, and inside the area that one
- * scrolls. Above it, the container's visible part takes the action's place and is held the same way,
- * and what's held last, inside the page's scroll extent. A parent holds an element unless the
- * element's position takes it out: fixed escapes every parent, and absolute each one up to the nearest
- * positioned one. It closes over nothing, since it runs through evaluation.
+ * Whether an action is cut off: on either axis no scroll brings it into view whole, while some of it
+ * is on the page
+ * @param {{box: Box, parents: {x: readonly Parent[], y: readonly Parent[]}}} action - in page coordinates
+ */
+export function cutOff({ box, parents }) {
+  if (box.right <= 0 || box.bottom <= 0) return false;
+  return !shows({ start: box.left, end: box.right }, parents.x) || !shows({ start: box.top, end: box.bottom }, parents.y);
+}
+
+/**
+ * In the page: each pointer target's box and its parents on each axis, and at `narrow` CSS px wide,
+ * the outermost elements that make the page scroll sideways. A parent counts on an axis where it hides
+ * overflow, by its visible part, or scrolls, with the area it scrolls too: its padding box less its
+ * scroll offset, as far as its scroll extent. The page comes last, by what the viewport shows and how
+ * far it scrolls, unless it hides overflow there or the action is fixed, which its scroll doesn't
+ * move. A parent holds an element unless the element's position takes it out: fixed escapes every
+ * parent, and absolute each one up to the nearest positioned one. It closes over nothing, since it runs
+ * through evaluation.
  * @param {(el: Element) => string} selectorOf
  * @param {() => Element[]} pointerTargets
  * @param {number} narrow
  */
 function readClips(selectorOf, pointerTargets, narrow) {
-  const FAR = 1e9;
-  const OPEN = { left: -FAR, top: -FAR, right: FAR, bottom: FAR };
   const root = document.scrollingElement ?? document.documentElement;
   const hides = (/** @type {string} */ value) => value === 'hidden' || value === 'clip';
   const scrolls = (/** @type {string} */ value) => value === 'auto' || value === 'scroll';
   const [page, body] = [getComputedStyle(document.documentElement), getComputedStyle(document.body)];
-  const reach = {
-    right: hides(page.overflowX) || hides(body.overflowX) ? innerWidth : root.scrollWidth,
-    bottom: hides(page.overflowY) || hides(body.overflowY) ? innerHeight : root.scrollHeight,
-  };
-  // Each axis's sides and the properties that read it
+  // Each axis's start and the properties that read it
   const axes = /** @type {const} */ ([
-    { start: 'left', end: 'right', overflow: 'overflowX', border: 'clientLeft', size: 'clientWidth', scrolled: 'scrollLeft', extent: 'scrollWidth' },
-    { start: 'top', end: 'bottom', overflow: 'overflowY', border: 'clientTop', size: 'clientHeight', scrolled: 'scrollTop', extent: 'scrollHeight' },
+    { name: 'x', start: 'left', overflow: 'overflowX', border: 'clientLeft', size: 'clientWidth', scrolled: 'scrollLeft', extent: 'scrollWidth', viewStart: () => scrollX },
+    { name: 'y', start: 'top', overflow: 'overflowY', border: 'clientTop', size: 'clientHeight', scrolled: 'scrollTop', extent: 'scrollHeight', viewStart: () => scrollY },
   ]);
   const inPage = (/** @type {Element} */ el) => {
     const { left, top, right, bottom } = el.getBoundingClientRect();
@@ -75,11 +98,9 @@ function readClips(selectorOf, pointerTargets, narrow) {
   const actions = pointerTargets().flatMap(el => {
     const box = inPage(el);
     if (box.right - box.left === 0 || box.bottom - box.top === 0) return [];
-    /** @type {{box: typeof box, edge: typeof box}[]} */
-    const holds = [];
+    /** @type {{x: {visible: {start: number, end: number}, area?: {start: number, end: number}}[], y: {visible: {start: number, end: number}, area?: {start: number, end: number}}[]}} */
+    const parents = { x: [], y: [] };
     for (const axis of axes) {
-      // What's held on this axis: the action, then the visible part of each scroll container it's in
-      let held = box;
       let position = getComputedStyle(el).position;
       for (let node = el.parentElement; node && node !== document.body && node !== document.documentElement && position !== 'fixed'; node = node.parentElement) {
         const style = getComputedStyle(node);
@@ -88,18 +109,15 @@ function readClips(selectorOf, pointerTargets, narrow) {
         const overflow = style[axis.overflow];
         if (!hides(overflow) && !scrolls(overflow)) continue;
         const from = inPage(node)[axis.start] + node[axis.border];
-        const visible = { ...OPEN, [axis.start]: from, [axis.end]: from + node[axis.size] };
-        if (hides(overflow)) {
-          holds.push({ box: held, edge: visible });
-          continue;
-        }
+        const visible = { start: from, end: from + node[axis.size] };
         const origin = from - node[axis.scrolled];
-        holds.push({ box: held, edge: { ...OPEN, [axis.start]: origin, [axis.end]: origin + node[axis.extent] } });
-        held = visible;
+        parents[axis.name].push(hides(overflow) ? { visible } : { visible, area: { start: origin, end: origin + node[axis.extent] } });
       }
-      holds.push({ box: held, edge: { ...OPEN, [axis.start]: 0, [axis.end]: reach[axis.end] } });
+      const view = { start: axis.viewStart(), end: axis.viewStart() + root[axis.size] };
+      const still = position === 'fixed' || hides(page[axis.overflow]) || hides(body[axis.overflow]);
+      parents[axis.name].push({ visible: view, area: still ? view : { start: 0, end: root[axis.extent] } });
     }
-    return [{ id: selectorOf(el), box, holds }];
+    return [{ id: selectorOf(el), box, parents }];
   });
   /** @type {Element[]} */
   const sideways = [];
@@ -124,7 +142,7 @@ function readClips(selectorOf, pointerTargets, narrow) {
  */
 export async function clipFindings(page) {
   await markListened(page);
-  /** @type {{actions: {id: string, box: Box, holds: Hold[]}[], sideways: string[]}} */
+  /** @type {{actions: {id: string, box: Box, parents: {x: Parent[], y: Parent[]}}[], sideways: string[]}} */
   const { actions, sideways } = await page.evaluate(`(${readClips})(${selectorOf}, ${pointerTargets}, ${REFLOW_WIDTH})`);
   return [
     ...actions.filter(action => cutOff(action)).map(({ id }) => ({ rule: CLIP_RULE, target: id })),
