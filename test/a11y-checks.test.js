@@ -8,7 +8,8 @@
 // - what reduced motion forbids;
 // - a tab stop nobody sees, in a collapsed, off-screen or transparent layer, a step that leaves
 //   focus on body, and tab order that runs back along a line or up a column;
-// - how a live region announces, for the announcement recorder.
+// - how a live region announces, for the announcement recorder, which won't read a page it isn't
+//   recording.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -235,5 +236,13 @@ describe("the announcement recorder's pure part (#24 slice 2)", () => {
     assert.equal(how('assertive', 'status'), 'assertive');
     assert.equal(how('off', 'log'), null);
     assert.equal(how(null, null), null);
+  });
+
+  it("refuses to read a page that isn't recording, as after a navigation, rather than hear nothing", async () => {
+    const page = (/** @type {unknown} */ said) => ({ evaluate: async () => said });
+    const saved = [{ region: '#status', politeness: 'polite', text: 'Saved' }];
+    assert.deepEqual(await announce.readAnnouncements(page(saved)), saved);
+    assert.deepEqual(await announce.readAnnouncements(page([])), []);
+    await assert.rejects(announce.readAnnouncements(page(null)), /^TypeError: the page isn't recording/);
   });
 });
