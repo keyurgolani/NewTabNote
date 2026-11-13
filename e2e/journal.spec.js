@@ -15,10 +15,11 @@
  *   today's Daily Note.
  * - A new tab's save typed while the worker is stopped is in the journal while it waits, and
  *   commits once the worker it woke runs it (#35 slice 4d, AC4's new tab half).
- * In each, another page holds the stores the command writes in a readwrite transaction, so the
- * command is sent and waits there. In the last four, the hold lasts until the case ends it, once
- * the command's page has closed or its worker has stopped, and the case checks that it still held
- * then, so what lands after is what the case claims, never the live turn landing first (#241).
+ * In each, another page holds the stores the command writes (test/support/faults/store-hold.js),
+ * so the command is sent and waits there. The hold lasts until the case ends it, once the
+ * command's page has closed or its worker has stopped, or until the crash takes its page, and the
+ * case checks that it still held then, so what lands after is what the case claims, never the
+ * live turn landing first (#241, #244).
  * The last case holds Web Lock `storage.restore` instead, as a restore in another context does: a
  * Popup quick note sent meanwhile waits in the worker uncommitted, its entry journaled, and commits
  * once that page lets the lock go (#35 slice 7).
@@ -27,71 +28,11 @@
 
 const { test, expect, expectNoUncaught } = require('./harness');
 const { profileStore } = require('./harness/profile-store');
+const { holdStores } = require('../test/support/faults');
 const driver = require('./characterization/driver');
 
-/** How long the first test's holding page keeps the stores, which is longer than it needs to set up */
-const HOLD_MS = 4000;
 /** How long the restore case watches its quick note not commit: far past a commit, far short of its deadline */
 const RESTORE_WATCH_MS = 2000;
-
-/** In `page`: a readwrite transaction over CanvasTabDB's `stores`, kept busy for `ms` */
-function holdStores(page, stores, ms) {
-  return page.evaluate(([names, holdMs]) => new Promise((resolve, reject) => {
-    const open = indexedDB.open('CanvasTabDB');
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const db = open.result;
-      const tx = db.transaction(names, 'readwrite');
-      const until = performance.now() + holdMs;
-      const spin = () => {
-        if (performance.now() < until) tx.objectStore(names[0]).get('ntn-hold').onsuccess = spin;
-      };
-      spin();
-      tx.oncomplete = () => db.close();
-      resolve();
-    };
-  }), [stores, ms]);
-}
-
-/**
- * In `page`: a readwrite transaction over CanvasTabDB's `stores`, kept busy until the case
- * releases it, so a command that writes in one of them waits there for as long as the case says.
- * Nothing else ends it but the page's close. `active()` answers whether it still holds, and
- * `release()` ends it and answers how it ended: `complete` once it has committed.
- */
-async function holdStoresUntilReleased(page, stores) {
-  await page.evaluate(names => new Promise((resolve, reject) => {
-    const open = indexedDB.open('CanvasTabDB');
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const db = open.result;
-      const tx = db.transaction(names, 'readwrite');
-      const hold = { active: true, released: false, ended: null };
-      hold.ended = new Promise(ended => {
-        const end = how => () => {
-          hold.active = false;
-          db.close();
-          ended(how);
-        };
-        tx.oncomplete = end('complete');
-        tx.onabort = end('abort');
-      });
-      const spin = () => {
-        if (!hold.released) tx.objectStore(names[0]).get('ntn-hold').onsuccess = spin;
-      };
-      spin();
-      window.__ntnHold = hold;
-      resolve();
-    };
-  }), stores);
-  return {
-    active: () => page.evaluate(() => window.__ntnHold.active),
-    release: () => page.evaluate(() => {
-      window.__ntnHold.released = true;
-      return window.__ntnHold.ended;
-    }),
-  };
-}
 
 /**
  * Stop the extension's service worker through CDP, as harness.spec.js and worker.spec.js do, and
@@ -276,7 +217,7 @@ test("an editor's save that its new tab died before committing is applied by the
   await driver.openNote(page, 'Kept');
   await expect.poll(() => journalIn(page), { message: "the new tab's journal is in" }).toBe(true);
   const holder = await extension.openSurface('popup');
-  await holdStores(holder, ['canvases', 'elements'], HOLD_MS);
+  const hold = await holdStores(holder, ['canvases', 'elements']);
 
   // Typed, and sent: it waits behind the hold, and its entry is in the journal
   await page.locator('#blocks-container > .block .block-content').first().click();
@@ -287,7 +228,11 @@ test("an editor's save that its new tab died before committing is applied by the
   });
   await expect.poll(() => journalEntries(holder), { message: 'the save is journaled' }).toEqual(['saveNoteContent']);
   const [{ opId }] = await journalRecords(holder);
+  // The save still waits as the tab crashes, so it goes with the tab. The crash takes the holder,
+  // in the same renderer, and its hold with it; one that's still open lets the hold go
+  await hold.stillHeld('as the tab crashes');
   await crash(extension, page);
+  if (!holder.isClosed()) expect(await hold.release(), 'the hold, released').toBe('complete');
 
   // The next page applies it at its idle, after its first read
   await extension.context.addInitScript(recordIdleAsks);
@@ -319,7 +264,7 @@ test("an editor's save that its new tab closed before its closing save's answer 
   await driver.openNote(page, 'Closing');
   await expect.poll(() => journalIn(page), { message: "the new tab's journal is in" }).toBe(true);
   const holder = await extension.openSurface('popup');
-  const hold = await holdStoresUntilReleased(holder, ['canvases', 'elements']);
+  const hold = await holdStores(holder, ['canvases', 'elements']);
 
   // A save, sent: it waits behind the hold, and its entry is in the journal
   await page.locator('#blocks-container > .block .block-content').first().click();
@@ -335,7 +280,7 @@ test("an editor's save that its new tab closed before its closing save's answer 
   await page.keyboard.type(', and more');
   await Promise.all([page.waitForEvent('close'), page.close({ runBeforeUnload: true })]);
   // The tab went while the hold still held, so neither save committed. Then the case ends the hold
-  expect(await hold.active(), 'the hold still holds once the tab has closed').toBe(true);
+  await hold.stillHeld('once the tab has closed');
   expect(await hold.release(), 'the hold, released').toBe('complete');
   const drafts = await holder.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('ntn-close-draft:')).length);
   expect(drafts, 'the closing tab left its draft').toBe(1);
@@ -360,7 +305,7 @@ test('a begun quick note lands once Popup closes, made once', async ({ extension
   const popup = await extension.openSurface('popup');
   await expect.poll(() => journalIn(popup), { message: "Popup's journal is in" }).toBe(true);
   const holder = await extension.openSurface('sidepanel');
-  const hold = await holdStoresUntilReleased(holder, ['canvases']);
+  const hold = await holdStores(holder, ['canvases']);
 
   // Sent: it waits behind the hold, and its entry is in the journal
   const input = popup.locator('#quick-note-input');
@@ -370,7 +315,7 @@ test('a begun quick note lands once Popup closes, made once', async ({ extension
   await popup.close();
   // Popup went while the hold still held, so the worker's turn was still waiting. Then the case
   // ends the hold
-  expect(await hold.active(), 'the hold still holds once Popup has closed').toBe(true);
+  await hold.stillHeld('once Popup has closed');
   expect(await hold.release(), 'the hold, released').toBe('complete');
 
   // The worker's turn has begun, so it runs to its outcome once the hold ends: the next new tab
@@ -390,7 +335,7 @@ test("a Popup quick note the worker was stopped in the middle of lands at the wo
   const popup = await extension.openSurface('popup');
   await expect.poll(() => journalIn(popup), { message: "Popup's journal is in" }).toBe(true);
   const holder = await extension.openSurface('sidepanel');
-  const hold = await holdStoresUntilReleased(holder, ['canvases']);
+  const hold = await holdStores(holder, ['canvases']);
 
   // Sent: it waits behind the hold, and its entry is in the journal. Popup closes, so its client
   // can't send it again, and the worker it waits in is stopped before it lands
@@ -402,7 +347,7 @@ test("a Popup quick note the worker was stopped in the middle of lands at the wo
   await stopWorker(extension);
   // The stop landed while the hold held, so the live turn never committed, and its entry is still
   // there: only the next start's drain can make the note. Then the case ends the hold
-  expect(await hold.active(), 'the hold still holds once the worker is stopped').toBe(true);
+  await hold.stillHeld('once the worker is stopped');
   expect(await journalEntries(holder), 'its entry, still journaled').toEqual(['createNote']);
   expect(await hold.release(), 'the hold, released').toBe('complete');
 
@@ -424,7 +369,7 @@ test("a new tab's save typed while the worker is stopped is in the journal while
   await driver.openNote(page, 'Kept');
   await expect.poll(() => journalIn(page), { message: "the new tab's journal is in" }).toBe(true);
   const holder = await extension.openSurface('popup');
-  const hold = await holdStoresUntilReleased(holder, ['canvases', 'elements']);
+  const hold = await holdStores(holder, ['canvases', 'elements']);
   await stopWorker(extension);
 
   // Typed with the worker stopped: its save is journaled as it goes, wakes the worker over the
@@ -436,7 +381,7 @@ test("a new tab's save typed while the worker is stopped is in the journal while
     app.editor.flushSave();
   });
   await expect.poll(() => journalEntries(holder), { message: 'the save is journaled' }).toEqual(['saveNoteContent']);
-  expect(await hold.active(), 'the hold holds').toBe(true);
+  await hold.stillHeld('once the save is journaled');
   expect(await hold.release(), 'the hold, released').toBe('complete');
 
   // The worker runs it, and its entry goes with its answer
@@ -452,7 +397,7 @@ test('a capture the worker was stopped in the middle of lands at its next start,
   await extension.seedOnboarded();
   const page = await driver.openNewTab(extension);
   const holder = await extension.openSurface('popup');
-  const hold = await holdStoresUntilReleased(holder, ['canvases', 'elements']);
+  const hold = await holdStores(holder, ['canvases', 'elements']);
 
   // Sent: it waits behind the hold, and its entry is in the journal. The worker it ran in is
   // stopped before it answers, so what the call answers is nothing to wait on
@@ -461,7 +406,7 @@ test('a capture the worker was stopped in the middle of lands at its next start,
   await stopWorker(extension);
   // The stop landed while the hold held, so the live turn never committed, and its entry is still
   // there: only the next start's drain can land the capture. Then the case ends the hold
-  expect(await hold.active(), 'the hold still holds once the worker is stopped').toBe(true);
+  await hold.stillHeld('once the worker is stopped');
   expect(await journalEntries(holder), 'its entry, still journaled').toEqual(['captureToDailyNote']);
   expect(await hold.release(), 'the hold, released').toBe('complete');
   await page.close();

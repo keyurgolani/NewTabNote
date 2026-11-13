@@ -3,41 +3,19 @@
  * transaction holds the notes' blocks (#33). The closing write waits behind that transaction and
  * is lost with the page, so at its pagehide the page writes a close-time draft to localStorage
  * first, and the next start applies it before it shows the note. Each round types a word inside
- * the save's 500 ms debounce, has the Popup hold the blocks in a readwrite transaction for 150 ms,
- * closes the tab with its beforeunload and pagehide handlers run, as a user's close does, and
- * opens a new tab on the note. R0's spec (#138), on the stack's harness. The tests also fail on
- * an uncaught exception that test/known-defects.json doesn't list.
+ * the save's 500 ms debounce, has the Popup hold the blocks (test/support/faults/store-hold.js),
+ * closes the tab with its beforeunload and pagehide handlers run, as a user's close does, checks
+ * that the hold still held once the tab had gone and ends it (#244), and opens a new tab on the
+ * note. R0's spec (#138), on the stack's harness. The tests also fail on an uncaught exception
+ * that test/known-defects.json doesn't list.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
 const { profileStore } = require('./harness/profile-store');
+const { holdStores } = require('../test/support/faults');
 const driver = require('./characterization/driver');
 
-// A trace records every step, which slows the close enough that a round could keep its edit
-// through the closing write alone
-test.use({ trace: 'off' });
-
 const ROUNDS = 20;
-const HOLD_MS = 150;
-
-/** In `page`: a readwrite transaction over the blocks, kept busy for `ms` */
-function holdBlocks(page, ms) {
-  return page.evaluate(holdMs => new Promise((resolve, reject) => {
-    const open = indexedDB.open('CanvasTabDB');
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const db = open.result;
-      const tx = db.transaction(['elements'], 'readwrite');
-      const until = performance.now() + holdMs;
-      const spin = () => {
-        if (performance.now() < until) tx.objectStore('elements').get('ntn-hold').onsuccess = spin;
-      };
-      spin();
-      tx.oncomplete = () => db.close();
-      resolve();
-    };
-  }), ms);
-}
 
 /** A new tab on the note, with its second block on screen */
 async function reopen(extension) {
@@ -78,10 +56,12 @@ async function typeAndCloseHeld(page, popup, word) {
   await caretAtEnd(page);
   await page.keyboard.type(` ${word}`);
   expect(await page.evaluate(() => app.editor.saveTimeout !== null), 'the save is still in its debounce').toBe(true);
-  await holdBlocks(popup, HOLD_MS);
+  const hold = await holdStores(popup, ['elements']);
   await Promise.all([page.waitForEvent('close'), page.close({ runBeforeUnload: true })]);
-  // The hold ends before the next start reads
-  await popup.waitForTimeout(HOLD_MS + 100);
+  // The tab went while the hold still held, so its closing write went with it. Then the case
+  // ends the hold, before the next start reads
+  await hold.stillHeld('once the tab has closed');
+  expect(await hold.release(), 'the hold, released').toBe('complete');
 }
 
 test('text typed just before the tab closes is kept while another page holds the blocks', async ({ extension }) => {

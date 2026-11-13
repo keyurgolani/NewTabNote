@@ -1,7 +1,9 @@
 /**
  * The `test` and `expect` every spec under e2e/ imports. The `extension` fixture launches
  * the built extension (launchExtension in extension.js) on a fresh profile for each test
- * and closes it afterwards. When the test fails it attaches the session log; the config
+ * and closes it afterwards, once it has let go of every store hold the test left
+ * (test/support/faults/store-hold.js), so a case that failed mid-hold doesn't leave its
+ * teardown waiting behind it (#244). When the test fails it attaches the session log; the config
  * keeps the trace and a screenshot of every page. `expectNoUncaught` (uncaught.js) is the
  * uncaught-exception check a spec ends with. `builtFiles` and `chunkFile` (build-files.js)
  * find a source file, or a chunk build-info.json names, in the bundled build, and
@@ -16,6 +18,7 @@
 const { test: base, expect } = require('@playwright/test');
 const { launchExtension, resolveDist, SURFACES, VIEWPORT, TIME_ZONE } = require('./extension');
 const { expectNoUncaught } = require('./uncaught');
+const { releaseHolds } = require('../../test/support/faults');
 const { builtFiles, chunkFile, editSkipReason } = require('./build-files');
 
 const test = base.extend({
@@ -26,6 +29,7 @@ const test = base.extend({
     const extension = await launchExtension({ chromium: playwright.chromium, headless, sources: extensionSources });
     await use(extension);
     try {
+      await releaseHolds();
       if (testInfo.status !== testInfo.expectedStatus) await extension.attachLog(testInfo);
     } finally {
       await extension.close();

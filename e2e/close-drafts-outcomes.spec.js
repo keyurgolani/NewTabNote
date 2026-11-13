@@ -11,37 +11,16 @@
  *   only moves it: the next start keeps both panes' text, in the main pane's order, with no
  *   recovered note, since the draft holds that block's move and not the main pane's copy of it
  *   (#17, #6).
- * The closing write waits behind the Popup's hold on the blocks and goes with the page, so the
- * edit reaches the next start through its draft alone. The tests also fail on an uncaught
- * exception that test/known-defects.json doesn't list.
+ * The closing write waits behind the Popup's hold on the blocks (test/support/faults/store-hold.js)
+ * and goes with the page, so the edit reaches the next start through its draft alone. The case
+ * ends the hold once the page has gone, and checks that it still held then (#244). The tests also
+ * fail on an uncaught exception that test/known-defects.json doesn't list.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
 const { profileStore } = require('./harness/profile-store');
+const { holdStores } = require('../test/support/faults');
 const driver = require('./characterization/driver');
-
-test.use({ trace: 'off' });
-
-const HOLD_MS = 1000;
-
-/** In `page`: a readwrite transaction over the blocks, kept busy for `ms` */
-function holdBlocks(page, ms) {
-  return page.evaluate(holdMs => new Promise((resolve, reject) => {
-    const open = indexedDB.open('CanvasTabDB');
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const db = open.result;
-      const tx = db.transaction(['elements'], 'readwrite');
-      const until = performance.now() + holdMs;
-      const spin = () => {
-        if (performance.now() < until) tx.objectStore('elements').get('ntn-hold').onsuccess = spin;
-      };
-      spin();
-      tx.oncomplete = () => db.close();
-      resolve();
-    };
-  }), ms);
-}
 
 /** A new tab on 'Shared', with its second block on screen */
 async function openShared(extension) {
@@ -70,13 +49,22 @@ async function typeAt(page, index, text) {
   await page.keyboard.type(text);
 }
 
+/**
+ * Close `page` while the Popup holds the blocks, as a user's close does, then end the hold once the
+ * page has gone, which fails unless it still held then
+ */
+async function closeHeld(page, popup) {
+  const hold = await holdStores(popup, ['elements']);
+  await Promise.all([page.waitForEvent('close'), page.close({ runBeforeUnload: true })]);
+  await hold.stillHeld('once the tab has closed');
+  expect(await hold.release(), 'the hold, released').toBe('complete');
+}
+
 /** Type into the closing tab's second block and close it while the Popup holds the blocks */
 async function editAndCloseHeld(closing, popup, text) {
   await typeAt(closing, 1, text);
   expect(await closing.evaluate(() => app.editor.saveTimeout !== null), 'the save is still in its debounce').toBe(true);
-  await holdBlocks(popup, HOLD_MS);
-  await Promise.all([closing.waitForEvent('close'), closing.close({ runBeforeUnload: true })]);
-  await popup.waitForTimeout(HOLD_MS + 200);
+  await closeHeld(closing, popup);
   expect(await popup.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('ntn-close-draft:')).length),
     'the closing tab left its draft').toBe(1);
 }
@@ -192,9 +180,7 @@ test("the pop-out's saved edit to a block, then the main pane's Enter above it a
   await page.keyboard.type('main');
   expect(await page.evaluate(() => app.editor.blocks.map(block => block.content))).toEqual(['first', 'main', 'start']);
   expect(await page.evaluate(() => app.editor.saveTimeout !== null), 'the save is still in its debounce').toBe(true);
-  await holdBlocks(popup, HOLD_MS);
-  await Promise.all([page.waitForEvent('close'), page.close({ runBeforeUnload: true })]);
-  await popup.waitForTimeout(HOLD_MS + 200);
+  await closeHeld(page, popup);
 
   const next = await driver.openNewTab(extension);
   // The draft carries the moved block's move, so the next start has the main pane's order too (#6)
