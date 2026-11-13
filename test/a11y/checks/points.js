@@ -9,7 +9,8 @@
  * session, so the harness's launch stays as it is. atPoints() declares a surface's tests, one a point,
  * each setting the point option withPoint() gives a spec's test. That test's pointPage fixture puts
  * its page at the point before it opens it, so the page loads there, and sets the text spacing on
- * what opened. It's CommonJS so a spec can declare them as it loads, and a test's page is its spec's
+ * what opened. Each test reads its page back at its point before its checks, and fails one that
+ * isn't. It's CommonJS so a spec can declare them as it loads, and a test's page is its spec's
  * whichever file declares it.
  */
 
@@ -79,6 +80,10 @@ function recordAt(point, points, findings) {
 /** Each page's CDP session, opened once with the DOM and CSS domains on for the spacing sheet */
 const sessions = new WeakMap();
 
+/** Each page's last point from emulate() and from spaceText(), with the loader of the document each found */
+const emulated = new WeakMap();
+const spaced = new WeakMap();
+
 /** @param {import('@playwright/test').Page} page */
 async function sessionOf(page) {
   if (!sessions.has(page)) {
@@ -102,6 +107,7 @@ async function spaceText(page, point) {
   const { frameTree } = await session.send('Page.getFrameTree');
   const { styleSheetId } = await session.send('CSS.createStyleSheet', { frameId: frameTree.frame.id });
   await session.send('CSS.setStyleSheetText', { styleSheetId, text: point.spacing === 'override' ? SPACING : '' });
+  spaced.set(page, { point: point.id, loaderId: frameTree.frame.loaderId });
 }
 
 /**
@@ -119,6 +125,52 @@ async function emulate(page, point, surface) {
   await session.send('Page.setFontSizes', { fontSizes: { standard: point.fontSize } });
   const media = { colorScheme: point.scheme, contrast: point.contrast, forcedColors: point.forcedColors, reducedMotion: point.motion };
   await page.emulateMedia(/** @type {any} */ (media));
+  const { frameTree } = await session.send('Page.getFrameTree');
+  emulated.set(page, { point: point.id, loaderId: frameTree.frame.loaderId });
+}
+
+/** What a page reads of its point: its width and scale, its pointer, and its scheme, contrast, forced colors and motion */
+const READ_POINT = `(() => {
+  const on = query => matchMedia(query).matches;
+  return {
+    width: innerWidth, scale: devicePixelRatio, pointer: on('(pointer: coarse)') && on('(any-pointer: coarse)') ? 'coarse' : 'fine',
+    scheme: on('(prefers-color-scheme: dark)') ? 'dark' : 'light', contrast: on('(prefers-contrast: more)') ? 'more' : 'no-preference',
+    forcedColors: on('(forced-colors: active)') ? 'active' : 'none', motion: on('(prefers-reduced-motion: reduce)') ? 'reduce' : 'no-preference',
+  };
+})()`;
+
+/**
+ * `page` read back: what it reads of its point, the loader of its document now, and the point and
+ * document emulate() and spaceText() last found it at
+ * @param {import('@playwright/test').Page} page
+ */
+async function readPoint(page) {
+  const session = await sessionOf(page);
+  const { frameTree } = await session.send('Page.getFrameTree');
+  return { ...(await page.evaluate(READ_POINT)), loaderId: frameTree.frame.loaderId, emulated: emulated.get(page) ?? null, spaced: spaced.get(page) ?? null };
+}
+
+/**
+ * How a page read back with readPoint() isn't at `point`: a reading that isn't the point's, no
+ * emulate() at it, a document that loaded before emulate() put it there, or spacing that spaceText()
+ * didn't set at it on this document
+ * @param {{width: number, scale: number, pointer: string, scheme: string, contrast: string, forcedColors: string, motion: string, loaderId: string,
+ *   emulated: {point: string, loaderId: string} | null, spaced: {point: string, loaderId: string} | null}} reading
+ * @param {Point} point
+ * @param {string} surface
+ * @param {any} [matrix]
+ * @returns {string[]}
+ */
+function pointProblems(reading, point, surface, matrix = MATRIX) {
+  const { width, deviceScaleFactor: scale } = viewportOf(point, surface, matrix);
+  const wanted = { width, scale, pointer: point.pointer, scheme: point.scheme, contrast: point.contrast, forcedColors: point.forcedColors, motion: point.motion };
+  const problems = Object.entries(wanted)
+    .filter(([name, value]) => reading[/** @type {keyof typeof wanted} */ (name)] !== value)
+    .map(([name, value]) => `${name} reads ${reading[/** @type {keyof typeof wanted} */ (name)]}, not ${value}`);
+  if (reading.emulated?.point !== point.id) problems.push(`emulate() didn't put it at ${point.id}`);
+  else if (reading.emulated.loaderId === reading.loaderId) problems.push(`it loaded before emulate() put it at ${point.id}`);
+  if (reading.spaced?.point !== point.id || reading.spaced.loaderId !== reading.loaderId) problems.push(`spaceText() didn't set ${point.id}'s spacing on this document`);
+  return problems;
 }
 
 /** Settles once every transition running on the page has ended */
@@ -150,8 +202,8 @@ function withPoint(test) {
  * `pointPage`: the page each one checks, opened as the spec opens its surface, through #34's harness
  * for the extension's own. Playwright reads a test's fixtures from its own function, so the spec
  * names how to open the page there, after it emulate()s the point the test sets, and spaceText()s
- * what opened. Each test takes the pointer off the page, checks it, and attaches what it found with
- * its point.
+ * what opened. Each test reads its page back and fails one that isn't at its point, as pointProblems()
+ * reads it, then takes the pointer off the page, checks it, and attaches what it found with its point.
  * @param {import('@playwright/test').TestType<{point: Point, pointPage: import('@playwright/test').Page}, any>} test
  * @param {string} surface
  * @param {{check: (page: import('@playwright/test').Page, point: Point) => Promise<{rule: string, target: string}[]>}} steps
@@ -162,6 +214,8 @@ function atPoints(test, surface, { check }) {
     test.describe(() => {
       test.use({ point });
       test(`${surface} at ${point.id}`, async ({ pointPage }, testInfo) => {
+        const problems = pointProblems(await readPoint(pointPage), point, surface);
+        if (problems.length > 0) throw new Error(`${surface}'s page isn't at ${point.id}: ${problems.join('; ')}`);
         await offPointer(pointPage);
         const findings = await check(pointPage, point);
         await testInfo.attach('a11y-findings', { body: JSON.stringify(recordAt(point, all.length, findings)), contentType: 'application/json' });
@@ -170,4 +224,4 @@ function atPoints(test, surface, { check }) {
   }
 }
 
-module.exports = { CONTRAST_RULES, pointsOf, viewportOf, recordAt, emulate, spaceText, offPointer, withPoint, atPoints };
+module.exports = { CONTRAST_RULES, pointsOf, viewportOf, recordAt, emulate, spaceText, readPoint, pointProblems, offPointer, withPoint, atPoints };
