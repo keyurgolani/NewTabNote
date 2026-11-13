@@ -40,10 +40,11 @@ jobs:
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
-      # The release tags, so test/kernel/storage-recorded.test.mjs checks each recorded
-      # fixture's commit and tree against its tag; NTN_RELEASE_TAGS makes a missing tag fail
+      # Every release tag, so test/kernel/storage-recorded.test.mjs checks each recorded fixture's
+      # commit and tree, and test/release-manifest.test.js each manifest entry's commit, against its
+      # tag; NTN_RELEASE_TAGS makes a missing tag fail
       - name: Fetch the release tags
-        run: git fetch --no-tags --depth=1 origin '+refs/tags/v1.*:refs/tags/v1.*' 2>&1 | tee -a "$RUNNER_TEMP/job.log"
+        run: git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*' 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm ci --ignore-scripts
         run: npm ci --ignore-scripts 2>&1 | tee -a "$RUNNER_TEMP/job.log"
       - name: npm test
