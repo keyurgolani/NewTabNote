@@ -2,8 +2,10 @@
  * The announcement recorder (#24, "Announcements"): what a step makes the live regions say, read back
  * after it. It watches each region that announces, by its aria-live, else its role (a status or log
  * politely, an alert assertively) or an output, and when a region's text changes it records the
- * region's whole text, with the region and how it's announced. A region with aria-live="off", as the
- * AI transcript's log is, says nothing, and neither does text outside every region. It starts through
+ * region's whole text, with the region and how it's announced. An alert speaks when it's added with
+ * its text too, as the legacy tab's note-gone notice is added. A region with aria-live="off", as the AI
+ * transcript's log is, says nothing, alerts added inside it included, and neither does text outside
+ * every region. It starts through
  * Playwright evaluation, which the extension's CSP doesn't apply to, and lasts until the page
  * navigates. A change that comes after the step resolves, from a timer say, needs the spec to wait.
  */
@@ -47,6 +49,14 @@ function install(selectorOf, politenessOf) {
     /** @type {Map<Element, string>} */
     const changed = new Map();
     for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        for (const alert of [node, ...node.querySelectorAll('[role="alert"]')]) {
+          if (alert.getAttribute('role') !== 'alert' || alert.parentElement?.closest('[aria-live="off"]')) continue;
+          const added = regionOf(alert);
+          if (added) changed.set(added.el, added.politeness);
+        }
+      }
       const region = regionOf(record.target);
       if (region) changed.set(region.el, region.politeness);
     }
