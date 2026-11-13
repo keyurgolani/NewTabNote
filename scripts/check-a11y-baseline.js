@@ -35,7 +35,7 @@ const baselineIn = (root = ROOT) => path.join(root, BASELINE);
 const USAGE = 'usage: node scripts/check-a11y-baseline.js [--base <git ref>]';
 
 /** @typedef {{page: string, rule: string, targets: string[], ownerGate?: string}} Line */
-/** @typedef {{page: string, findings: {rule: string, target: string, gate?: string}[]}} Record */
+/** @typedef {{page: string, findings: {rule: string, target: string, gate?: string}[], point?: string, points?: number}} Record */
 
 /** The gates matrix.json names, as `#16-dark` */
 function gates(root = ROOT) {
@@ -94,12 +94,15 @@ function specProblems(file, dir) {
 }
 
 /**
- * A run's findings, by page, against the file's lines
+ * A run's findings, by page, against the file's lines. A page in `partial` ran at only some of its
+ * matrix points, so its lines stay out of the drop check: a target found only at a point that didn't
+ * run isn't a drop.
  * @param {readonly Record[]} records
  * @param {{entries: readonly Line[]}} file
+ * @param {ReadonlySet<string>} [partial]
  * @returns {string[]}
  */
-function runProblems(records, file) {
+function runProblems(records, file, partial = new Set()) {
   const ran = new Set(records.map(({ page }) => page));
   /** @type {Map<string, {line: {page: string, rule: string, ownerGate?: string}, targets: Set<string>}>} */
   const found = new Map();
@@ -119,7 +122,7 @@ function runProblems(records, file) {
     if (unlisted.length > 0) problems.push(`${named(line)} fails ${listOf(unlisted)}, which ${BASELINE} doesn't list`);
   }
   for (const line of file.entries) {
-    if (!ran.has(line.page)) continue;
+    if (!ran.has(line.page) || partial.has(line.page)) continue;
     const targets = found.get(keyOf(line))?.targets ?? new Set();
     const gone = line.targets.filter(target => !targets.has(target));
     if (gone.length > 0) problems.push(`${named(line)} no longer fails ${listOf(gone)}: lower its line in ${BASELINE}`);
