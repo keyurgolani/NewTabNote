@@ -53,7 +53,8 @@ async function loadPageModule(env, file, { dynamicImports = true } = {}) {
       linking = link.catch(() => {});
       imported.set(module, (async () => {
         await link;
-        if (module.status !== 'evaluated') await module.evaluate();
+        // Node reads a module whose top-level await is pending as evaluated, and evaluate() waits for it
+        await module.evaluate();
         return module;
       })());
     }
