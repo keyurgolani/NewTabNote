@@ -42,7 +42,9 @@
 //   tab's note-gone notice is added: inside a log that's off too, and not again as part of a polite
 //   region it lands in. It keeps hearing after setContent() writes
 //   a new document into the page, which keeps the window, and refuses a page that never started
-//   recording, or that a reload has replaced since.
+//   recording, or that a reload has replaced since;
+// - under reduced motion, the motion check finds a transform transition, a keyframed rotation,
+//   smooth scroll and a canvas that keeps redrawing, and passes a fade and a canvas drawn once.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -399,4 +401,30 @@ test("the announcement recorder refuses a page that never started recording, and
   await announce.recordAnnouncements(page);
   await page.reload();
   await expect(announce.readAnnouncements(page)).rejects.toThrow(/^the page isn't recording/);
+});
+
+test('under reduced motion, the motion check finds a transform transition, a keyframed one, smooth scroll and a canvas that keeps redrawing, and passes a fade', async ({ page }) => {
+  const motion = await import('./motion.mjs');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setContent(
+    html(`<style>#slide { transition: transform 200ms; } #fade { transition: opacity 200ms; }
+      @keyframes spin { to { transform: rotate(1turn); } } #spin { animation: spin 1s infinite; }
+      #scroller { scroll-behavior: smooth; height: 40px; overflow: auto; }</style>
+      <div id="slide">A</div><div id="fade">B</div><div id="spin">C</div><div id="scroller"><p>D</p></div>
+      <canvas id="chart" width="40" height="40"></canvas><canvas id="still" width="40" height="40"></canvas>
+      <script>
+        const chart = document.getElementById('chart').getContext('2d');
+        let x = 0;
+        (function draw() { chart.clearRect(0, 0, 40, 40); chart.fillRect((x = (x + 1) % 40), 0, 4, 40); requestAnimationFrame(draw); })();
+        document.getElementById('still').getContext('2d').fillRect(0, 0, 10, 10);
+      </script>`),
+  );
+  expect(await motion.motionFindings(page)).toEqual([
+    { rule: 'transform-transition', target: '#slide' },
+    { rule: 'transform-animation', target: '#spin' },
+    { rule: 'smooth-scroll', target: '#scroller' },
+    { rule: 'chart-animation', target: '#chart' },
+  ]);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(motion.motionFindings(page)).rejects.toThrow(/prefers-reduced-motion: reduce/);
 });
