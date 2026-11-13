@@ -9,7 +9,9 @@
 // - the focus ring finds a ring under 3:1 against the page and a control with no ring, and passes a
 //   strong ring and two two-tone rings on a dark plane whose inner ring carries the contrast: one
 //   outlined, its inner ring beside the outline, and one of box-shadows, its inner ring stacked on
-//   the outer one;
+//   the outer one. An inner ring that's painted over doesn't count: a white shadow under an outline
+//   with no offset, or under a wider shadow listed before it, leaves a #555555 ring on slate, found,
+//   and the same shadows listed the other way round pass;
 // - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
 //   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
@@ -104,4 +106,18 @@ test("the focus ring reads planes and rings Chrome computes as color(srgb …), 
       <div class="slate"><div class="haze"><button id="through-haze">B</button></div><button id="mixed-stack">C</button></div>`),
   );
   expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-ring', target: '#through-haze' }]);
+});
+
+test('the focus ring finds an inner ring that is painted over: under an outline with no offset, or under a wider shadow listed before it', async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { outline: none; } .slate { background: #333333; padding: 8px; }
+      #covered:focus-visible { outline: 2px solid #555555; box-shadow: 0 0 0 2px #ffffff; }
+      #buried:focus-visible { box-shadow: 0 0 0 4px #555555, 0 0 0 2px #ffffff; }
+      #shown:focus-visible { box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #555555; }</style>
+      <div class="slate"><button id="covered">A</button><button id="buried">B</button><button id="shown">C</button></div>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([
+    { rule: 'ntn-focus-ring', target: '#covered' },
+    { rule: 'ntn-focus-ring', target: '#buried' },
+  ]);
 });
