@@ -38,6 +38,12 @@
  */
 
 /**
+ * The earliest `until` countIdbRequests takes, 1e12 epoch ms, in September 2001: no epoch time a
+ * test makes is earlier, and no page's own performance.now() gets this late
+ */
+const EPOCH_FLOOR = 1e12;
+
+/**
  * @typedef {{kind: 'read' | 'write', method: string, database: string | null, store: string | null, index: string | null, at: number}} IdbRequestEntry
  * @typedef {{method: string, database: string | null, store: string | null, index: string | null, at: number}} IdbCursorStep
  * @typedef {{entries: IdbRequestEntry[], cursorSteps: IdbCursorStep[]}} IdbRequestRecord
@@ -123,7 +129,9 @@ function installIdbRequestCounter(scope = globalThis) {
 
 /**
  * How many reads, writes and cursor steps `record` holds, in all and by `<database>/<store>`: every
- * one, or with `until` (epoch ms), those made at or before it. A null or non-finite `until` throws.
+ * one, or with `until` (epoch ms), those made at or before it. A null or non-finite `until` throws,
+ * and so does one below EPOCH_FLOOR, as a page's own performance.now() or a mark's startTime would
+ * be: cut there, a record would count nothing. The mark's cut goes through interactionReadyAt.
  * The cut is inclusive, so a request in the interaction-ready mark's own clock tick (100 µs, where
  * the page isn't cross-origin isolated) counts as made before it: for a budget, counting one request
  * too many is safer than missing one
@@ -135,7 +143,14 @@ function countIdbRequests(record, { until } = {}) {
   if (until !== undefined && !Number.isFinite(until)) {
     throw new TypeError(
       `countIdbRequests: until is an epoch time in ms, not ${String(until)} (${typeof until}). ` +
-        'interactionReadyAt answers null for a page that never marked, so cut that page another way',
+        'interactionReadyAt answers null for a page that never marked, so cut that page at another epoch time, ' +
+        'such as its performance.timeOrigin plus its echo',
+    );
+  }
+  if (until !== undefined && until < EPOCH_FLOOR) {
+    throw new RangeError(
+      `countIdbRequests: until is an epoch time in ms, and ${until} is too early for one: ` +
+        "add performance.timeOrigin to a page's own time, as interactionReadyAt does",
     );
   }
   const counts = { reads: 0, writes: 0, cursorSteps: 0, byStore: /** @type {Record<string, IdbCounts>} */ ({}) };
