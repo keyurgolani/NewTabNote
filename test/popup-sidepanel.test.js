@@ -60,8 +60,7 @@ async function popup(records = { canvases: notes() }, prepare = () => {}, { work
     { id: 'open-tab', tag: 'button' }, { id: 'quick-note-input', tag: 'input' },
     'main-content', 'daily-summary', 'summary-content', 'page-list',
   ]);
-  // Popup loads its chunks through import(), as Chrome loads them
-  await loadPageModule(env, 'js/popup.js', { dynamicImports: true });
+  await loadPageModule(env, 'js/popup.js');
   const started = Promise.all(env.document.fire('DOMContentLoaded'));
   if (wait) await started;
   /** The recent list as it reads: each note's name, or the list's message */
@@ -96,8 +95,8 @@ async function popupOnWorker(records = { canvases: notes() }, prepare = () => {}
 
 /**
  * A Side Panel on `records`, started as sidepanel.html starts it. On `worker`'s profile it shares
- * the worker's IndexedDB, chrome.* and Web Locks, as Popup's does there, and loads its chunks
- * through import(). With `wait` false, its start goes on while the case reads the page.
+ * the worker's IndexedDB, chrome.* and Web Locks, as Popup's does there. With `wait` false, its
+ * start goes on while the case reads the page.
  * @param {Object} [records] - rows per store, or null for a profile with no database
  * @param {{worker?: any, prepare?: (env: any) => void, wait?: boolean}} [options] - `prepare`
  *   runs on the environment before Side Panel starts
@@ -113,7 +112,7 @@ async function sidePanel(records = { canvases: notes() }, { worker = null, prepa
   openButton.setAttribute('data-open-notes', '');
   env.document.body.appendChild(openButton);
   env.load('js/insights-summary.js');
-  await loadPageModule(env, 'js/sidepanel.js', { dynamicImports: Boolean(worker) });
+  await loadPageModule(env, 'js/sidepanel.js');
   const started = Promise.all(env.document.fire('DOMContentLoaded'));
   if (wait) await started;
   /** Each section the panel shows, with its items' texts */

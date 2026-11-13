@@ -3,8 +3,8 @@
 // #35 slice 4d's page move, against the real worker: the new tab's composition root
 // (js/kernel/composition/newtab.js) loaded in a page, as newtab.html's workspace chunk loads it, on
 // a profile js/background.js started on first, whose port reaches the router the worker installs
-// (test/helpers/runtime-ports.js). The root's chunks load through import(), as Chrome loads them
-// (#237's dynamicImports): its send chunk, and #13's client and journal under it. Its reads stay on
+// (test/helpers/runtime-ports.js). The root's chunks load through import(), as Chrome loads them:
+// its send chunk, and #13's client and journal under it. Its reads stay on
 // #17's reader in the page, an editor's save goes over the port as newtab and commits in the
 // worker, a closing tab's edit is applied over the port before the first read, and its session's
 // write commits in the page. test/kernel/newtab-port.test.mjs holds the rest on a stand-in for the
@@ -32,7 +32,7 @@ async function newTabOnWorker(records, prepare = () => {}) {
   connectPage(worker.env.chrome, 'newtab.html');
   const env = createLegacyEnv({ indexedDB: worker.indexedDB, chrome: worker.env.chrome, locks: worker.env.global.navigator.locks });
   prepare(env);
-  const root = await loadPageModule(env, 'js/kernel/composition/newtab.js', { dynamicImports: true });
+  const root = await loadPageModule(env, 'js/kernel/composition/newtab.js');
   const host = root.newTabHost();
   const reader = root.createNewTabReader(host);
   const client = root.createNewTabPageClient(reader, host, { wake: () => {} });

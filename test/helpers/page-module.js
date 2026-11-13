@@ -7,10 +7,10 @@
  * their entries this way, so their tests do too. It takes vm.SourceTextModule, so node runs
  * with --experimental-vm-modules (npm test passes it).
  *
- * A module's import() rejects here unless a test asks for `dynamicImports`, as only Popup's
- * cases do since #35 slice 4b-2, whose writes load its send chunk that way. Then each import()
- * resolves as a static import does, through the same modules and the same relative-only rule,
- * and its module is linked and evaluated before it's handed back, as Chrome's is.
+ * A module's import() resolves as a static import does, through the same modules and the same
+ * relative-only rule, and its module is linked and evaluated once before it's handed back, however
+ * loads overlap, as Chrome's is (#237), so a case of a path behind a lazy chunk runs that path. A
+ * case of a failed load passes `dynamicImports: false`, and each import() then rejects.
  */
 
 const fs = require('node:fs');
@@ -27,10 +27,10 @@ const ROOT = path.join(__dirname, '..', '..');
  * @param {ReturnType<import('./legacy-env').createLegacyEnv>} env
  * @param {string} file
  * @param {{dynamicImports?: boolean}} [options] - `dynamicImports`: a module's import() loads
- *   the module it names, off unless a test passes it
+ *   the module it names, unless a test passes false
  * @returns {Promise<Object>}
  */
-async function loadPageModule(env, file, { dynamicImports = false } = {}) {
+async function loadPageModule(env, file, { dynamicImports = true } = {}) {
   if (typeof vm.SourceTextModule !== 'function') {
     throw new Error('test/helpers/page-module.js runs page modules with vm.SourceTextModule, '
       + 'which needs node --experimental-vm-modules (npm test passes it)');
@@ -44,12 +44,17 @@ async function loadPageModule(env, file, { dynamicImports = false } = {}) {
     }
     return moduleFor(fileURLToPath(new URL(specifier, referencing.identifier)));
   };
+  /** The links import() runs, one at a time, so none instantiates on a module another is linking */
+  let linking = Promise.resolve();
   const importModuleDynamically = (specifier, referencing) => {
     const module = linker(specifier, referencing);
     if (!imported.has(module)) {
+      const link = linking.then(() => (module.status === 'unlinked' ? module.link(linker) : undefined));
+      linking = link.catch(() => {});
       imported.set(module, (async () => {
-        if (module.status === 'unlinked') await module.link(linker);
-        if (module.status !== 'evaluated') await module.evaluate();
+        await link;
+        // Node reads a module whose top-level await is pending as evaluated, and evaluate() waits for it
+        await module.evaluate();
         return module;
       })());
     }
