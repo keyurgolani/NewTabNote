@@ -2,12 +2,13 @@
  * Text typed into a note just before its tab closes is kept even while another page's
  * transaction holds the notes' blocks (#33). The closing write waits behind that transaction and
  * is lost with the page, so at its pagehide the page writes a close-time draft to localStorage
- * first, and the next start applies it before it shows the note. Each round types a word inside
- * the save's 500 ms debounce, has the Popup hold the blocks (test/support/faults/store-hold.js),
- * closes the tab with its beforeunload and pagehide handlers run, as a user's close does, checks
- * that the hold still held once the tab had gone and ends it (#244), and opens a new tab on the
- * note. R0's spec (#138), on the stack's harness. The tests also fail on an uncaught exception
- * that test/known-defects.json doesn't list.
+ * first, and the next start applies it before it shows the note. Each round has the Popup hold the
+ * blocks (test/support/faults/store-hold.js) before it types, so a save the debounce makes waits
+ * behind the hold too, types a word inside the save's 500 ms debounce, closes the tab with its
+ * beforeunload and pagehide handlers run, as a user's close does, checks that the hold still held
+ * once the tab had gone and ends it, checks that the tab left its draft (#244), and opens a new
+ * tab on the note. R0's spec (#138), on the stack's harness. The tests also fail on an uncaught
+ * exception that test/known-defects.json doesn't list.
  */
 
 const { test, expect, expectNoUncaught } = require('./harness');
@@ -51,17 +52,21 @@ async function caretAtEnd(page) {
   });
 }
 
-/** Type `word` at the end of the second block, inside the debounce, and close the tab while the Popup holds the blocks */
+/**
+ * Type `word` at the end of the second block, inside the debounce, and close the tab while the
+ * Popup holds the blocks, from before the typing, so no save of the tab's can land first (#244)
+ */
 async function typeAndCloseHeld(page, popup, word) {
+  const hold = await holdStores(popup, ['elements']);
   await caretAtEnd(page);
   await page.keyboard.type(` ${word}`);
   expect(await page.evaluate(() => app.editor.saveTimeout !== null), 'the save is still in its debounce').toBe(true);
-  const hold = await holdStores(popup, ['elements']);
   await Promise.all([page.waitForEvent('close'), page.close({ runBeforeUnload: true })]);
-  // The tab went while the hold still held, so its closing write went with it. Then the case
-  // ends the hold, before the next start reads
+  // The tab went while the hold still held, so its closing write went with it, and its edit is in
+  // its draft alone. Then the case ends the hold, before the next start reads
   await hold.stillHeld('once the tab has closed');
   expect(await hold.release(), 'the hold, released').toBe('complete');
+  expect(await draftsIn(popup), 'the closing tab left its draft').toBe(1);
 }
 
 test('text typed just before the tab closes is kept while another page holds the blocks', async ({ extension }) => {
@@ -92,7 +97,6 @@ test('two new tabs that open at once on a profile with a draft apply it once, wi
   const popup = await extension.openSurface('popup');
   const page = await reopen(extension);
   await typeAndCloseHeld(page, popup, 'once');
-  expect(await draftsIn(popup), 'the closing tab left its draft').toBe(1);
 
   await driver.trackStartup(extension);
   const [one, two] = await Promise.all([extension.openSurface('newtab'), extension.openSurface('newtab')]);
