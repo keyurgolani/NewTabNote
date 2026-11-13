@@ -8,6 +8,8 @@
 // row whose pin shows only while the row is hovered, as a setup's click would, and the layers check
 // still finds the pin hidden: a point's checks see the page with nothing hovered. The row heads the page
 // and the pointer rests by its top left corner, so the row stays under it at every point's viewport.
+// The text-spacing override gets past a style-src without 'unsafe-inline', which keeps a style tag
+// out, as the extension's will once security/unsafe-inline takes that out.
 // The spec is the library's own, so its tests are no page's.
 
 const { test: base, expect } = require('@playwright/test');
@@ -56,4 +58,28 @@ points.atPoints(test, 'popup', {
     expect(await layers.layerFindings(page)).toEqual([{ rule: layers.HIDDEN_RULE, target: '#pin' }]);
     return [];
   },
+});
+
+/** A page whose own sheet is a file, which a style-src of 'self' lets in */
+const STRICT = `<!doctype html><html lang="en"><head><title>A strict page</title><link rel="stylesheet" href="/strict.css"></head>
+<body><main><p id="text">Text</p></main></body></html>`;
+
+test("the text-spacing override gets past a style-src without 'unsafe-inline', which keeps a style tag out", async ({ page }) => {
+  const point = points.pointsOf('popup').find((/** @type {{id: string}} */ { id }) => id === 'spacing-override');
+  await page.route('https://ntn.test/**', route =>
+    route.fulfill(
+      route.request().url().endsWith('.css')
+        ? { contentType: 'text/css', body: '#text { color: rgb(1, 2, 3); }' }
+        : { contentType: 'text/html', headers: { 'Content-Security-Policy': "style-src 'self'" }, body: STRICT },
+    ),
+  );
+  await points.emulate(page, point, 'popup');
+  await page.goto('https://ntn.test/strict.html');
+  await points.spaceText(page, point);
+  await page.evaluate(`document.head.append(Object.assign(document.createElement('style'), { textContent: '#text { text-transform: uppercase; }' }))`);
+  const read = await page.evaluate(`(() => {
+    const text = getComputedStyle(document.getElementById('text'));
+    return [text.color, text.letterSpacing, text.textTransform];
+  })()`);
+  expect(read).toEqual(['rgb(1, 2, 3)', `${0.12 * point.fontSize}px`, 'none']);
 });
