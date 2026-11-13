@@ -261,6 +261,18 @@ describe('the budget gate', () => {
     assert.deepEqual(run(budgets), [missing('package', 'zipBytes'), missing('package', 'updateBytes')]);
   });
 
+  it("refuses a reads row outside the new tab's routes, and a reads or requests row that isn't a whole number, and lets waitsOn name either (#300)", () => {
+    const { newtab, popup } = budgetsFor().entries;
+    const file = (/** @type {object} */ entries) => fileProblems(budgetsFor(entries)).map(({ message }) => message);
+    assert.deepEqual(file({ newtab: { ...newtab, reads: 40, requests: 0 }, popup: { ...popup, requests: 2 } }), []);
+    assert.deepEqual(file({ popup: { ...popup, reads: 3 } }), ['entry popup has a reads row, which only the new tab and Moment have']);
+    for (const value of [1.5, -1, '3']) {
+      assert.deepEqual(file({ newtab: { ...newtab, reads: value } }), ["entry newtab's reads row isn't a whole number"], String(value));
+      assert.deepEqual(file({ popup: { ...popup, requests: value } }), ["entry popup's requests row isn't a whole number"], String(value));
+    }
+    assert.deepEqual(file({ newtab: { ...newtab, reads: null, waitsOn: { reads: '#16' } }, popup: { ...popup, requests: null, waitsOn: { requests: '#4' } } }), []);
+  });
+
   it("refuses a waitsOn that names a row the entry can't have, a row with a number, or no issue, and a cold start or update size that isn't whole (#300)", () => {
     const { popup, background } = budgetsFor().entries;
     const file = (/** @type {object} */ entries, /** @type {object} */ row = {}) => fileProblems({ ...budgetsFor(entries), package: { ...PACKAGE_ROW, ...row } }).map(({ message }) => message);
@@ -926,6 +938,33 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.equal(gateReport(probe(1.01, 1.05, 2.7), BUDGETS).failed, false);
     // The same slow, heavy candidate with both rows back on report passes the job
     assert.equal(gateReport(probe(1.01, 1.09, 3.5), REPORTING).failed, false);
+  });
+
+  it('holds each count to its row on each profile the timing row takes: a null row reports, and a number fails a count over it, or a run with no count (#300)', () => {
+    const counted = (/** @type {any} */ max) => ({
+      ...probe(1.01, 1.05, 2.7),
+      counts: { runs: 2, profiles: Object.fromEntries(['typical', 'maximal'].map(name => [name, { packages: { candidate: { runs: [], max, failures: [] } } }])) },
+    });
+    const rows = (/** @type {number | null} */ reads, /** @type {number | null} */ requests) => ({
+      ...REPORTING,
+      entries: { newtab: { ...BUDGETS.entries.newtab, reads, requests }, popup: { ...BUDGETS.entries.popup, requests } },
+    });
+    const max = { newtab: { reads: 40, requests: 0 }, popup: { requests: 1 } };
+    const verdicts = (/** @type {any} */ report) => report.countVerdicts.map((/** @type {any} */ v) => `${v.profile} ${v.entry} ${v.row} ${v.count} ${v.limit} ${v.verdict}`);
+    // Null rows report what the run counted, and fail nothing
+    const reported = gateReport(counted(max), rows(null, null));
+    assert.deepEqual(verdicts(reported), ['typical newtab reads 40 null report', 'typical newtab requests 0 null report', 'typical popup requests 1 null report', 'maximal newtab reads 40 null report', 'maximal newtab requests 0 null report', 'maximal popup requests 1 null report']);
+    assert.equal(reported.failed, false);
+    assert.match(reported.markdown, /\| typical \| newtab \| IndexedDB reads before its mark \| 40 \| none yet \| report \|/);
+    // Set, a count at its row passes and one over it fails, however timing and heap report
+    const gated = gateReport(counted(max), rows(40, 0));
+    assert.deepEqual(verdicts(gated).slice(0, 3), ['typical newtab reads 40 40 pass', 'typical newtab requests 0 0 pass', 'typical popup requests 1 0 fail']);
+    assert.equal(gated.failed, true);
+    assert.equal(gateReport(counted({ newtab: { reads: 40, requests: 0 }, popup: { requests: 0 } }), rows(40, 0)).failed, false);
+    // A set row the run has no count for fails, so a run that counted nothing can't pass
+    const none = gateReport({ ...probe(1.01, 1.05, 2.7) }, rows(40, 0));
+    assert.deepEqual(verdicts(none).slice(0, 2), ['typical newtab reads undefined 40 invalid', 'typical newtab requests undefined 0 invalid']);
+    assert.equal(none.failed, true);
   });
 
   it('fails once a row is a gate', () => {

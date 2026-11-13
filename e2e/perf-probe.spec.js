@@ -8,7 +8,8 @@
  * key lands. And the probe's network-off mode (the harness's `network:
  * 'offline'`, no route) still stops every request outside the extension, from a page and from
  * the service worker, loopback included, where a control launch with the route taken off gets
- * through.
+ * through. A counted run (scripts/perf/counts.js, #300) counts the new tab's IndexedDB reads before
+ * its mark and the requests each page and the worker make outside the extension.
  */
 
 const fs = require('fs');
@@ -189,6 +190,26 @@ function tryAll(list) {
   return Promise.all(list.map(url => fetch(url, { cache: 'no-store' }).then(response => `answered ${response.status}`, error => `failed: ${error.name}`)))
     .then(results => new Promise(resolve => setTimeout(() => resolve({ results, violations }), 200)));
 }
+
+test("a counted run counts the new tab's IndexedDB reads before its mark, the page's and the worker's, and each page's and the worker's requests outside the extension (#300)", async ({ playwright }) => {
+  test.setTimeout(180_000);
+  // Loaded here, so the rest of this file runs without it
+  const { countedRun } = require('../scripts/perf/counts');
+  const { fixture } = await profileFixture('typical');
+  const run = await countedRun({ dist: resolveDist(), fixture, chromium: playwright.chromium });
+  // The new tab reads its settings and its notes before it marks itself ready
+  expect(run.newtab.pageReads).toBeGreaterThan(0);
+  expect(run.newtab.reads).toBe(run.newtab.pageReads + run.newtab.workerReads);
+  for (const name of ['newtab', 'popup', 'sidepanel', 'recovery', 'offscreen', 'background']) {
+    expect(Number.isInteger(run[name].requests), name).toBe(true);
+  }
+  // Each request it counted left the extension, and says where it went
+  expect(run.urls.length).toBe(['newtab', 'popup', 'sidepanel', 'recovery', 'offscreen', 'background'].reduce((sum, name) => sum + run[name].requests, 0));
+  for (const { url, from } of run.urls) {
+    expect(url).not.toMatch(/^(chrome-extension|data|blob|about):/);
+    expect(['newtab', 'popup', 'sidepanel', 'recovery', 'offscreen', 'background']).toContain(from);
+  }
+});
 
 test("the probe's network-off mode stops requests outside the extension, from a page and the worker", async ({ playwright }) => {
   // A server the CSP lets the extension reach (connect-src allows http://localhost:*), on
