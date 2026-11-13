@@ -116,16 +116,22 @@ function installIdbRequestCounter(scope = globalThis) {
 }
 
 /**
- * How many reads, writes and cursor steps `record` holds up to `until` (epoch ms, every one when
- * not given), in all and by `<database>/<store>`
+ * How many reads, writes and cursor steps `record` holds, in all and by `<database>/<store>`: every
+ * one, or with `until` (epoch ms), those made at or before it. A null or non-finite `until` throws
  * @param {IdbRequestRecord} record
- * @param {{until?: number | null}} [options]
+ * @param {{until?: number}} [options]
  * @returns {IdbCounts & {byStore: Record<string, IdbCounts>}}
  */
-function countIdbRequests(record, { until = null } = {}) {
+function countIdbRequests(record, { until } = {}) {
+  if (until !== undefined && !Number.isFinite(until)) {
+    throw new TypeError(
+      `countIdbRequests: until is an epoch time in ms, not ${String(until)} (${typeof until}). ` +
+        'interactionReadyAt answers null for a page that never marked, so cut that page another way',
+    );
+  }
   const counts = { reads: 0, writes: 0, cursorSteps: 0, byStore: /** @type {Record<string, IdbCounts>} */ ({}) };
   const add = (/** @type {{database: string | null, store: string | null, at: number}} */ item, /** @type {keyof IdbCounts} */ field) => {
-    if (until !== null && item.at > until) return;
+    if (until !== undefined && item.at > until) return;
     const key = `${item.database}/${item.store}`;
     counts.byStore[key] = counts.byStore[key] || { reads: 0, writes: 0, cursorSteps: 0 };
     counts.byStore[key][field]++;
@@ -149,14 +155,21 @@ async function countRequestsIn(target) {
 }
 
 /**
- * What `target`, a Playwright Page or Worker, has counted: { entries, cursorSteps }
+ * What `target`, a Playwright Page or Worker, has counted: { entries, cursorSteps }. It throws in a
+ * context with no record: a page whose document loaded before countRequestsIn, or a worker that
+ * restarted or updated since
  * @param {any} target
  * @returns {Promise<IdbRequestRecord>}
  */
 function readIdbRequests(target) {
   return target.evaluate(() => {
     const counter = /** @type {any} */ (globalThis).__ntnIdbRequests;
-    if (!counter) throw new Error('No IndexedDB request counter here: countRequestsIn its context or worker first');
+    if (!counter) {
+      throw new Error(
+        "No IndexedDB request counter here. The record lives on a page's document or a worker's global, so " +
+          'countRequestsIn the context before the page loads, and the worker again after it restarts or updates',
+      );
+    }
     return { entries: counter.entries(), cursorSteps: counter.cursorSteps() };
   });
 }
