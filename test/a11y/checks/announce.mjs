@@ -66,10 +66,16 @@ export async function recordAnnouncements(page) {
 }
 
 /**
- * What the live regions said since recording started or was last read, which it clears
+ * What the live regions said since recording started or was last read, which it clears. A page that
+ * isn't recording, because recording never started or a navigation replaced the document, is a
+ * TypeError rather than silence, so a spec that holds a step to saying nothing can't pass on nothing
+ * heard.
  * @param {Pick<import('@playwright/test').Page, 'evaluate'>} page
  * @returns {Promise<{region: string, politeness: 'polite' | 'assertive', text: string}[]>}
  */
 export async function readAnnouncements(page) {
-  return page.evaluate('(window.__ntnAnnouncements ?? []).splice(0)');
+  /** @type {{region: string, politeness: 'polite' | 'assertive', text: string}[] | null} */
+  const said = await page.evaluate('window.__ntnAnnouncements?.splice(0) ?? null');
+  if (said === null) throw new TypeError("the page isn't recording, so it heard nothing: start recordAnnouncements() after each navigation");
+  return said;
 }
