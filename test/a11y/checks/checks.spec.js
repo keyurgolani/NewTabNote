@@ -55,7 +55,8 @@
 //   stay. An action in a scroll container is held to what the container scrolls to, so the actions
 //   in panes a hidden-overflow box holds pass, below the fold or scrolled past, and so do those of a
 //   pane whose content runs past the page's end. One placed before its pane's start, where no scroll
-//   reaches, is found. Each reading has a page of its own: a button below the viewport of a page whose
+//   reaches, is found, and so are rows taller than the pane they're in, which never show whole, and
+//   the last row of a pane its frame cuts by less than a row, whose first row shows whole and passes. Each reading has a page of its own: a button below the viewport of a page whose
 //   body hides overflow is found, a fixed button past the hidden-overflow parent it sits in passes,
 //   and a strip that runs past 320 CSS px inside a scroll container doesn't make the page scroll
 //   sideways, so only the block beside it is named.
@@ -495,21 +496,24 @@ test("the clipping check finds an action a parent cuts off or scrolling can't re
   expect(await clip.clipFindings(page)).toEqual(CUT);
 });
 
-test("the clipping check holds an action in a scroll container to what the container scrolls to, and finds one before its pane's start", async ({ page }) => {
+test("the clipping check holds an action in a scroll container to what the container can show, and finds one before its pane's start, rows taller than their pane, and a row its frame cuts", async ({ page }) => {
   const clip = await import('./clip.mjs');
   await page.setViewportSize({ width: 320, height: 640 });
   const buttons = (/** @type {string} */ name, /** @type {number} */ count) =>
     Array.from({ length: count }, (_, i) => `<button id="${name}${i}">${i}</button>`).join('');
   await page.setContent(
     html(`<style>button { display: block; width: 44px; height: 44px; } .frame { height: 100px; overflow: hidden; }
-      .pane { height: 100px; overflow-y: auto; } #before0 { position: relative; top: -60px; }</style>
+      .pane { height: 100px; overflow-y: auto; } #before0 { position: relative; top: -60px; }
+      #short { height: 22px; } .frame.cut { height: 80px; } #cutting { height: 88px; }</style>
       <div class="frame"><div class="pane">${buttons('below', 4)}</div></div>
       <div class="frame"><div class="pane" id="scrolled">${buttons('above', 4)}</div></div>
       <div class="frame"><div class="pane">${buttons('before', 2)}</div></div>
-      <div class="pane">${buttons('past', 10)}</div>`),
+      <div class="pane">${buttons('past', 10)}</div>
+      <div class="frame"><div class="pane" id="short">${buttons('short', 2)}</div></div>
+      <div class="frame cut"><div class="pane" id="cutting">${buttons('cut', 2)}</div></div>`),
   );
   await page.evaluate("document.getElementById('scrolled').scrollTop = 60");
-  expect(await clip.clipFindings(page)).toEqual([{ rule: 'ntn-clipped-action', target: '#before0' }]);
+  expect(await clip.clipFindings(page)).toEqual(['#before0', '#short0', '#short1', '#cut1'].map(target => ({ rule: 'ntn-clipped-action', target })));
 });
 
 test('the clipping check holds a page to reflow only at 320 CSS px wide, so at 200 one that scrolls sideways is no finding, and what it cuts off still is', async ({ page }) => {

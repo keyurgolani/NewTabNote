@@ -272,14 +272,15 @@ describe("the clipping check's pure part (#24 slice 2)", () => {
     clip = await import('./a11y/checks/clip.mjs');
   });
 
-  it("finds an action held past an edge: a parent's that clips it, the area its scroll container scrolls, or the page's, and leaves one wholly before the page's start to the layers check", () => {
-    const FAR = 1e9;
-    const page = { left: 0, top: 0, right: 400, bottom: 800 };
-    const box = (/** @type {number} */ left, /** @type {number} */ top) => ({ left, top, right: left + 44, bottom: top + 44 });
-    const bar = { left: 0, top: -FAR, right: 100, bottom: FAR };
-    // The action held inside each edge, and the page's last
-    const cut = (/** @type {object} */ action, /** @type {object[]} */ ...edges) =>
-      clip.cutOff({ box: action, holds: [...edges, page].map(edge => ({ box: action, edge })) });
+  it("finds an action no scroll brings into view whole: past a parent that clips it, past what its scroll container can show, or past the page, and leaves one wholly before the page's start to the layers check", () => {
+    const span = (/** @type {number} */ start, /** @type {number} */ end) => ({ start, end });
+    const box = (/** @type {number} */ left, /** @type {number} */ top, size = 44) => ({ left, top, right: left + size, bottom: top + size });
+    // The page last: 400 by 800, and scrolling no further
+    const PAGE = { x: { visible: span(0, 400), area: span(0, 400) }, y: { visible: span(0, 800), area: span(0, 800) } };
+    // Each axis's parents from the action out, the page's after them
+    const cut = (/** @type {object} */ action, /** @type {{x?: object[], y?: object[]}} */ { x = [], y = [] } = {}, page = PAGE) =>
+      clip.cutOff({ box: action, parents: { x: [...x, page.x], y: [...y, page.y] } });
+    const bar = { x: [{ visible: span(0, 100) }] };
     assert.equal(cut(box(8, 8)), false);
     assert.equal(cut(box(50, 8), bar), false);
     assert.equal(cut(box(88, 8), bar), true);
@@ -289,14 +290,23 @@ describe("the clipping check's pure part (#24 slice 2)", () => {
     assert.equal(cut(box(8, 780)), true);
     assert.equal(cut(box(8, -22)), true);
     assert.equal(cut(box(-9999, 8)), false);
-    // In a pane showing the page's last 100px and scrolling from 600 to 1000: the action held inside
-    // that area, and the pane's visible part inside the page in its place
-    const pane = { left: 0, top: 700, right: 200, bottom: 800 };
-    const area = { left: -FAR, top: 600, right: FAR, bottom: 1000 };
-    const inPane = (/** @type {object} */ action, shown = pane) => clip.cutOff({ box: action, holds: [{ box: action, edge: area }, { box: shown, edge: page }] });
-    assert.equal(inPane(box(8, 900)), false);
-    assert.equal(inPane(box(8, 580)), true);
-    assert.equal(inPane(box(8, 900), { ...pane, bottom: 820 }), true);
+    // Rows of 40px in a list from 128 down, inside a sidebar from 0 to 200 that hides overflow. A 22px
+    // list shows no row whole, and an 80px one the sidebar cuts by 8px shows row 0 whole and not row 1.
+    const row = (/** @type {number} */ i) => box(8, 128 + 40 * i, 40);
+    const list = (/** @type {number} */ height) => ({ y: [{ visible: span(128, 128 + height), area: span(128, 128 + Math.max(height, 80)) }, { visible: span(0, 200) }] });
+    assert.deepEqual([cut(row(0), list(22)), cut(row(1), list(22))], [true, true]);
+    assert.deepEqual([cut(row(0), list(80)), cut(row(1), list(80))], [false, true]);
+    // A pane from 100 to 200 that scrolls from 40 to 1000: below its fold it passes, and before its start it's found
+    const pane = { y: [{ visible: span(100, 200), area: span(40, 1000) }] };
+    assert.deepEqual([cut(box(8, 900), pane), cut(box(8, 20), pane)], [false, true]);
+    // Popup's list at zoom-400: 48px rows from 100, 100px of it shown by a 200px page that doesn't
+    // scroll, and the list scrolling 268px, so row 6 can be brought in and row 7 can't
+    const popup = { x: { visible: span(0, 200), area: span(0, 200) }, y: { visible: span(0, 200), area: span(0, 200) } };
+    const rows = { y: [{ visible: span(100, 600), area: span(100, 868) }] };
+    assert.deepEqual([6, 7].map(i => cut(box(8, 100 + 48 * i, 48), rows, popup)), [false, true]);
+    // A pane taller than the page shows, in a page that scrolls: a row deep in it passes, as the two scrolls together bring it in
+    const tall = { y: [{ visible: span(100, 1100), area: span(100, 3100) }] };
+    assert.equal(cut(box(8, 2500, 40), tall, { ...PAGE, y: { visible: span(0, 800), area: span(0, 2000) } }), false);
     assert.deepEqual([clip.CLIP_RULE, clip.REFLOW_RULE, clip.REFLOW_WIDTH], ['ntn-clipped-action', 'ntn-reflow', 320]);
   });
 });
