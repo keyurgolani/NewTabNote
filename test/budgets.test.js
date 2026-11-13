@@ -591,11 +591,12 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual(entries.newtab.startChunks, ['workspace']);
     assert.equal(entries.newtab.lazyChunks, undefined);
     assert.deepEqual(entries.background.dependencies, ['valibot']);
-    // Popup's and Side Panel's start JS rows: their starts on #35 slice 4d as build job 128853943289 of
-    // PR checks run 42520909498 read them, with no headroom, since neither start loads js/runtime/lazy.js
-    // (2026-11-08)
+    // Popup's and Side Panel's start JS rows are their starts with no headroom, since neither start loads
+    // js/runtime/lazy.js. Popup's is its start on #35 slice 4d as build job 128853943289 of PR checks run
+    // 42520909498 read it (2026-11-08). Side Panel's is its start on #300 slice 5b as build job 131711018907
+    // of push run 43372411837 read it at 1fcbef1a (2026-11-12)
     assert.deepEqual(entries.popup.start.js, { raw: 76913, gzip: 26638 });
-    assert.deepEqual(entries.sidepanel.start.js, { raw: 73534, gzip: 25555 });
+    assert.deepEqual(entries.sidepanel.start.js, { raw: 73534, gzip: 25553 });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
     assert.equal(BUDGETS.timing.rounds, 12);
@@ -605,8 +606,10 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.deepEqual([BUDGETS.heap.limitMiB, BUDGETS.heap.tolerancePct], [3.28, 3]);
     // Timing gates the perf job since 14 valid CI runs, and heap since its row was set from CI's
     assert.deepEqual([BUDGETS.timing.mode, BUDGETS.heap.mode], ['gate', 'gate']);
-    // Offscreen: 28,150 / 8,818 and 230 / 174 bytes on 7489d7b3, plus about 5%, HTML at the smallest round row
-    assert.deepEqual(entries.offscreen.start, { js: { raw: 29 * KIB, gzip: 9 * KIB }, css: null, html: { raw: 1 * KIB, gzip: 1 * KIB }, fonts: null });
+    // Offscreen: its JS row is the 27,957 / 8,763 bytes that build job 131711018907 of push run 43372411837
+    // measured at 1fcbef1a, after #300 slice 5a, plus 5%, rounded up (2026-11-12). Its HTML stays at the
+    // smallest round row over 230 / 174 bytes on 7489d7b3
+    assert.deepEqual(entries.offscreen.start, { js: { raw: 29355, gzip: 9202 }, css: null, html: { raw: 1 * KIB, gzip: 1 * KIB }, fonts: null });
     assert.equal(BUDGETS.reference.packageDigest, '50d8ddc57945dc129ddabda2304f45b9354db79eff608017da49d5b845ab554d');
   });
 
@@ -625,9 +628,9 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     assert.equal(recovery.planned, undefined);
     // Its start CSS gzip row is 4.75 KiB, about 5% over the 4,639 bytes that build job 130333246078 of PR
     // checks run 42962855381 measured with #292 in (2026-11-10). Its raw row stays 22.5 KiB, which that
-    // start isn't over. Its start JS row is the 343,353 / 108,216 bytes that build job 131036732650 of
-    // push run 43174922769 measured at 14d7247b, after #35 slice 4f-3, plus 5%, rounded up (2026-11-12)
-    assert.deepEqual(recovery.start, { js: { raw: 360521, gzip: 113627 }, css: { raw: 22.5 * KIB, gzip: 4.75 * KIB }, html: { raw: 2 * KIB, gzip: 1 * KIB }, fonts: null });
+    // start isn't over. Its start JS row is the 342,887 / 108,093 bytes that build job 131711018907 of
+    // push run 43372411837 measured at 1fcbef1a, after #300 slice 5b, plus 5%, rounded up (2026-11-12)
+    assert.deepEqual(recovery.start, { js: { raw: 360032, gzip: 113498 }, css: { raw: 22.5 * KIB, gzip: 4.75 * KIB }, html: { raw: 2 * KIB, gzip: 1 * KIB }, fonts: null });
     // The trust code is the page's own; every other category stays off its start
     assert.deepEqual(recovery.forbidden, [
       'chart-library',
