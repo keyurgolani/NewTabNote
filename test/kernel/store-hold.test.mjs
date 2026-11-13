@@ -57,11 +57,19 @@ async function opened() {
   return { of, kernel: kernelOn(adapter) };
 }
 
+// Each case lets go of its holds in t.after: a hold spins until its release, so one a red left
+// held would keep the file running, where its red should end it at once (#244)
 describe('the store hold, in Node', () => {
-  it("resolves only once its first get succeeds, so a hold behind another context's transaction isn't held yet", async () => {
+  it("resolves only once its first get succeeds, so a hold behind another context's transaction isn't held yet", async t => {
     const { of } = await opened();
     const first = await holdStores(of.real, ['elements']);
     const second = holdStores(of.real, ['elements']);
+    // The first goes first, since the second holds only once it has
+    t.after(async () => {
+      await first.release().catch(() => {});
+      const hold = await second.catch(() => null);
+      if (hold) await hold.release().catch(() => {});
+    });
     const held = settledYet(second);
     await turns();
     assert.equal(held(), false, "the second hold's transaction waits behind the first's");
@@ -72,9 +80,10 @@ describe('the store hold, in Node', () => {
     closeAll(of);
   });
 
-  it("keeps a write by #17's adapter waiting until its release, which answers complete", async () => {
+  it("keeps a write by #17's adapter waiting until its release, which answers complete", async t => {
     const { of, kernel } = await opened();
     const hold = await holdStores(of.real, ['canvases']);
+    t.after(() => hold.release().catch(() => {}));
     const created = kernel.execute({ type: 'createNote', commandId: 'create-held', noteId: 'held', name: 'Held' });
     const answered = settledYet(created);
     await turns(100);
@@ -86,10 +95,11 @@ describe('the store hold, in Node', () => {
     closeAll(of);
   });
 
-  it('fails at once at its release, naming its database and stores, when it ended first', async () => {
+  it('fails at once at its release, naming its database and stores, when it ended first', async t => {
     const { of } = await opened();
     const faults = faultyFactory(of.real);
     const hold = await holdStores(faults.factory, ['canvases', 'elements']);
+    t.after(() => hold.release().catch(() => {}));
     // Its next get fails as a damaged file's read does, which aborts its transaction
     faults.failNextRead('canvases', 'NotReadableError');
     await turns();
@@ -99,11 +109,12 @@ describe('the store hold, in Node', () => {
     closeAll(of);
   });
 
-  it('holds an upgrade, so the next open waits until the release, which leaves the version as it was', async () => {
+  it('holds an upgrade, so the next open waits until the release, which leaves the version as it was', async t => {
     const { of } = await opened();
     closeAll(of);
     const before = await versionOf(of.real);
     const hold = await holdUpgrade(of.real);
+    t.after(() => hold.release().catch(() => {}));
     const opening = versionOf(of.real);
     const answered = settledYet(opening);
     await turns();
