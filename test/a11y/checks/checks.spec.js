@@ -35,7 +35,8 @@
 //   a link after it on its second line reads in order;
 // - the announcement recorder reads back what a step makes the live regions say: a status and a
 //   polite region politely, an alert assertively, and nothing from a log that's off or from text
-//   outside any region.
+//   outside any region. An alert added with its text is heard, as the legacy tab's note-gone notice is
+//   added, and one added inside a log that's off isn't.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -306,4 +307,18 @@ test("the announcement recorder reads back what a step makes the live regions sa
     { region: '#count', politeness: 'polite', text: '3 notes' },
   ]);
   expect(await announce.readAnnouncements(page)).toEqual([]);
+});
+
+test("the announcement recorder hears an alert added with its text, and not one added inside a region that's off", async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(html('<div id="log" role="log" aria-live="off"></div>'));
+  await announce.recordAnnouncements(page);
+  await page.evaluate(`const alert = (id, text) => {
+      const el = Object.assign(document.createElement('div'), { id, textContent: text });
+      el.setAttribute('role', 'alert');
+      return el;
+    };
+    document.querySelector('main').append(alert('gone', "This note was deleted, so these changes aren't saved."));
+    document.getElementById('log').append(alert('quiet', 'Not said'));`);
+  expect(await announce.readAnnouncements(page)).toEqual([{ region: '#gone', politeness: 'assertive', text: "This note was deleted, so these changes aren't saved." }]);
 });
