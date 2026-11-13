@@ -15,7 +15,8 @@
 // - until test/a11y/baseline.json lands with its seed, the step passes a run whose page finds
 //   something and prints the finding, and fails one whose checks spec fails. Once the file lands,
 //   the same finding fails it. Playwright's command line runs specs that start no browser, on
-//   test/a11y/'s config with its reporter's file and specs moved to a folder of their own.
+//   test/a11y/'s config with its reporter's file and specs moved to a folder of their own. A test's
+//   page is its spec's, even when a helper the spec loads declares it, as the matrix runner does.
 // test/toolchain.test.js holds every devDependency to the version the lockfile installs.
 
 const { describe, it } = require('node:test');
@@ -127,6 +128,26 @@ describe('test:a11y and its pinned axe (#24 slice 2)', () => {
       const seeded = run();
       assert.equal(seeded.status, 1, `once the file lands, the finding fails the run:\n${seeded.stdout}\n${seeded.stderr}`);
       assert.ok(seeded.stderr.includes(`test:a11y's findings don't match test/a11y/baseline.json:\n  ${finding}\n`), seeded.stderr);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("takes a test's page from its spec's own file, not from a helper the spec loads that declares it", () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-a11y-runner-')));
+    try {
+      fs.writeFileSync(path.join(dir, 'helper.js'), [
+        `const { test } = require(${JSON.stringify(require.resolve('@playwright/test'))});`,
+        'module.exports = (/** @type {string} */ title) => test(title, async () => {',
+        "  await test.info().attach('a11y-findings', { body: JSON.stringify({ findings: [{ rule: 'color-contrast', target: '#faint' }] }), contentType: 'application/json' });",
+        '});',
+      ].join('\n'));
+      fs.writeFileSync(path.join(dir, 'sample.spec.js'), "require('./helper.js')('sample at default');\n");
+      const reporter = [path.join(ROOT, 'test', 'a11y', 'baseline-reporter.js'), { baseline: path.join(dir, 'baseline.json'), specs: dir }];
+      fs.writeFileSync(path.join(dir, 'playwright.config.js'), `module.exports = ${JSON.stringify({ testDir: dir, outputDir: path.join(dir, 'results'), workers: 1, reporter: [reporter] })};\n`);
+      const run = spawnSync(process.execPath, [PLAYWRIGHT_CLI, 'test', '-c', path.join(dir, 'playwright.config.js')], { cwd: dir, encoding: 'utf8' });
+      assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+      assert.ok(run.stderr.includes(`\n  sample's color-contrast fails "#faint", which test/a11y/baseline.json doesn't list\n`), run.stderr);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

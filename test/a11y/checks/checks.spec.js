@@ -42,7 +42,26 @@
 //   tab's note-gone notice is added: inside a log that's off too, and not again as part of a polite
 //   region it lands in. It keeps hearing after setContent() writes
 //   a new document into the page, which keeps the window, and refuses a page that never started
-//   recording, or that a reload has replaced since.
+//   recording, or that a reload has replaced since;
+// - under reduced motion, the motion check finds a transform transition, a keyframed rotation,
+//   smooth scroll and a canvas that keeps redrawing, and passes a fade, a keyframed pulse and a
+//   canvas drawn once. It reads what a step starts from the step's start, so a slide that ends
+//   before the check's wait does is found, and a fade as short passes. It reads ::before and ::after
+//   too: a knob that slides and a spinner that turns are found at their elements, and a fade and a
+//   pulse on them pass;
+// - the clipping check finds an action a hidden-overflow bar cuts off and one partly before the
+//   page's start, and at 320 CSS px a block that makes the page scroll sideways, and passes a bar
+//   that scrolls. At 1280 and at 200, where nothing asks a page to reflow, only the cut-off actions
+//   stay. An action in a scroll container is held to what the container scrolls to, so the actions
+//   in panes a hidden-overflow box holds pass, below the fold or scrolled past, and so do those of a
+//   pane whose content runs past the page's end. One placed before its pane's start, where no scroll
+//   reaches, is found, and so is the last row of a pane its frame cuts by less than a row, while its
+//   first row passes. An action is found only where some part of it never scrolls into view: rows
+//   taller than their pane pass, and so does a button taller than the viewport on a page that
+//   scrolls, while one where the body hides overflow is found. Each reading has a page of its own: a
+//   button below the viewport of a page whose body hides overflow is found, a fixed button past the
+//   hidden-overflow parent it sits in passes, and a strip that runs past 320 CSS px inside a scroll
+//   container doesn't make the page scroll sideways, so only the block beside it is named.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -399,4 +418,139 @@ test("the announcement recorder refuses a page that never started recording, and
   await announce.recordAnnouncements(page);
   await page.reload();
   await expect(announce.readAnnouncements(page)).rejects.toThrow(/^the page isn't recording/);
+});
+
+test('under reduced motion, the motion check finds a transform transition, a keyframed one, smooth scroll and a canvas that keeps redrawing, and passes a fade and a keyframed pulse', async ({ page }) => {
+  const motion = await import('./motion.mjs');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setContent(
+    html(`<style>#slide { transition: transform 200ms; } #fade { transition: opacity 200ms; }
+      @keyframes spin { to { transform: rotate(1turn); } } #spin { animation: spin 1s infinite; }
+      @keyframes pulse { 50% { opacity: 0.5; } } #pulse { animation: pulse 1s infinite; }
+      #scroller { scroll-behavior: smooth; height: 40px; overflow: auto; }</style>
+      <div id="slide">A</div><div id="fade">B</div><div id="spin">C</div><div id="pulse">E</div><div id="scroller"><p>D</p></div>
+      <canvas id="chart" width="40" height="40"></canvas><canvas id="still" width="40" height="40"></canvas>
+      <script>
+        const chart = document.getElementById('chart').getContext('2d');
+        let x = 0;
+        (function draw() { chart.clearRect(0, 0, 40, 40); chart.fillRect((x = (x + 1) % 40), 0, 4, 40); requestAnimationFrame(draw); })();
+        document.getElementById('still').getContext('2d').fillRect(0, 0, 10, 10);
+      </script>`),
+  );
+  expect(await motion.motionFindings(page)).toEqual([
+    { rule: 'transform-transition', target: '#slide' },
+    { rule: 'transform-animation', target: '#spin' },
+    { rule: 'smooth-scroll', target: '#scroller' },
+    { rule: 'chart-animation', target: '#chart' },
+  ]);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(motion.motionFindings(page)).rejects.toThrow(/prefers-reduced-motion: reduce/);
+});
+
+test("the motion check reads what a step starts from the step's start, so a slide that ends before its wait does is found, and a fade as short passes", async ({ page }) => {
+  const motion = await import('./motion.mjs');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setContent(
+    html(`<style>@keyframes slide-in { from { transform: translateX(100%); } } @keyframes fade-in { from { opacity: 0; } }
+      .toast { animation: slide-in 1s; } .notice { animation: fade-in 1s; }</style>`),
+  );
+  await page.evaluate(`document.querySelector('main').append(
+    Object.assign(document.createElement('div'), { id: 'toast', className: 'toast', textContent: 'Saved' }),
+    Object.assign(document.createElement('div'), { id: 'notice', className: 'notice', textContent: 'Synced' }))`);
+  expect(await motion.motionFindings(page, { settle: 1500 })).toEqual([{ rule: 'transform-animation', target: '#toast' }]);
+});
+
+test('the motion check reads ::before and ::after: a knob that slides and a spinner that turns are found at their elements, and a fade and a pulse on them pass', async ({ page }) => {
+  const motion = await import('./motion.mjs');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setContent(
+    html(`<style>.knob::before, .spinner::after { content: ''; display: inline-block; width: 10px; height: 10px; }
+      #slider { transition: background-color 0.3s; } #slider::before { transition: transform 0.3s; } #faded::before { transition: opacity 0.3s; }
+      @keyframes spin { to { transform: rotate(1turn); } } @keyframes pulse { 50% { opacity: 0.5; } }
+      #spinner::after { animation: spin 1s infinite; } #pulsing::after { animation: pulse 1s infinite; }</style>
+      <div class="knob" id="slider">A</div><div class="knob" id="faded">B</div><div class="spinner" id="spinner">C</div><div class="spinner" id="pulsing">D</div>`),
+  );
+  expect(await motion.motionFindings(page)).toEqual([
+    { rule: 'transform-transition', target: '#slider' },
+    { rule: 'transform-animation', target: '#spinner' },
+  ]);
+});
+
+/** The clipping check's page: a button a bar cuts off, a bar that scrolls, a button partly before the page's start, and a block wider than 320 CSS px */
+const CLIPPED = html(`<style>button { flex: none; width: 44px; height: 44px; } .bar { display: flex; width: 100px; overflow: hidden; }
+  .scroller { display: flex; width: 100px; overflow-x: auto; } #early { position: relative; left: -30px; } #wide { width: 400px; height: 10px; }</style>
+  <div class="bar"><button id="a">A</button><button id="b">B</button><button id="cut">C</button></div>
+  <div class="scroller"><button id="d">D</button><button id="e">E</button><button id="f">F</button></div>
+  <button id="early">G</button><div id="wide"></div>`);
+
+/** The actions the clipping check finds cut off on that page, at any width */
+const CUT = [
+  { rule: 'ntn-clipped-action', target: '#cut' },
+  { rule: 'ntn-clipped-action', target: '#early' },
+];
+
+test("the clipping check finds an action a parent cuts off or scrolling can't reach, and at 320 CSS px a page that scrolls sideways", async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.setContent(CLIPPED);
+  expect(await clip.clipFindings(page)).toEqual([...CUT, { rule: 'ntn-reflow', target: '#wide' }]);
+  await page.setViewportSize({ width: 1280, height: 640 });
+  expect(await clip.clipFindings(page)).toEqual(CUT);
+});
+
+test("the clipping check holds an action in a scroll container to what the container can show, and finds one before its pane's start and a row its frame cuts, not rows taller than their pane", async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 320, height: 640 });
+  const buttons = (/** @type {string} */ name, /** @type {number} */ count) =>
+    Array.from({ length: count }, (_, i) => `<button id="${name}${i}">${i}</button>`).join('');
+  await page.setContent(
+    html(`<style>button { display: block; width: 44px; height: 44px; } .frame { height: 100px; overflow: hidden; }
+      .pane { height: 100px; overflow-y: auto; } #before0 { position: relative; top: -60px; }
+      #short { height: 22px; } .frame.cut { height: 80px; } #cutting { height: 88px; }</style>
+      <div class="frame"><div class="pane">${buttons('below', 4)}</div></div>
+      <div class="frame"><div class="pane" id="scrolled">${buttons('above', 4)}</div></div>
+      <div class="frame"><div class="pane">${buttons('before', 2)}</div></div>
+      <div class="pane">${buttons('past', 10)}</div>
+      <div class="frame"><div class="pane" id="short">${buttons('short', 2)}</div></div>
+      <div class="frame cut"><div class="pane" id="cutting">${buttons('cut', 2)}</div></div>`),
+  );
+  await page.evaluate("document.getElementById('scrolled').scrollTop = 60");
+  expect(await clip.clipFindings(page)).toEqual(['#before0', '#cut1'].map(target => ({ rule: 'ntn-clipped-action', target })));
+});
+
+test('the clipping check finds an action only where some part of it never scrolls into view, so one taller than the viewport passes on a page that scrolls, and is found where the body hides overflow', async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 320, height: 640 });
+  const tall = (/** @type {string} */ body) =>
+    html(`<style>${body} #tall { display: block; width: 44px; height: 900px; }</style><button id="tall">T</button>`);
+  await page.setContent(tall(''));
+  expect(await clip.clipFindings(page)).toEqual([]);
+  await page.setContent(tall('body { overflow: hidden; }'));
+  expect(await clip.clipFindings(page)).toEqual([{ rule: 'ntn-clipped-action', target: '#tall' }]);
+});
+
+test('the clipping check holds a page to reflow only at 320 CSS px wide, so at 200 one that scrolls sideways is no finding, and what it cuts off still is', async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 200, height: 640 });
+  await page.setContent(CLIPPED);
+  expect(await clip.clipFindings(page)).toEqual(CUT);
+});
+
+test("the clipping check holds each of its readings: a body that hides overflow reaches only the viewport, a fixed action escapes its parent, and a strip in a scroll container doesn't widen the page", async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.setContent(
+    html(`<style>body { overflow: hidden; } #low { display: block; width: 44px; height: 44px; margin-top: 700px; }</style><button id="low">L</button>`),
+  );
+  expect(await clip.clipFindings(page)).toEqual([{ rule: 'ntn-clipped-action', target: '#low' }]);
+  await page.setContent(
+    html(`<style>#parent { width: 100px; height: 50px; overflow: hidden; } #pinned { position: fixed; left: 150px; top: 200px; width: 44px; height: 44px; }</style>
+      <div id="parent"><button id="pinned">F</button></div>`),
+  );
+  expect(await clip.clipFindings(page)).toEqual([]);
+  await page.setContent(
+    html(`<style>#pane { width: 200px; overflow-x: auto; } #strip, #wide { width: 400px; height: 10px; }</style>
+      <div id="pane"><div id="strip"></div></div><div id="wide"></div>`),
+  );
+  expect(await clip.clipFindings(page)).toEqual([{ rule: 'ntn-reflow', target: '#wide' }]);
 });

@@ -9,7 +9,9 @@
 // - a tab stop nobody sees, in a collapsed, off-screen or transparent layer, a step that leaves
 //   focus on body, and tab order that runs back along a line or up a column;
 // - how a live region announces, for the announcement recorder, which won't read a page it isn't
-//   recording.
+//   recording;
+// - an action that a parent cuts off or that scrolling can't reach;
+// - the matrix runner's points, their viewports, and what a test at one records.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -261,5 +263,122 @@ describe("the announcement recorder's pure part (#24 slice 2)", () => {
     assert.deepEqual(await announce.readAnnouncements(page(saved)), saved);
     assert.deepEqual(await announce.readAnnouncements(page([])), []);
     await assert.rejects(announce.readAnnouncements(page(null)), /^TypeError: the page isn't recording/);
+  });
+});
+
+describe("the clipping check's pure part (#24 slice 2)", () => {
+  /** @type {any} */ let clip;
+  before(async () => {
+    clip = await import('./a11y/checks/clip.mjs');
+  });
+
+  it("finds an action where some part of it no scroll brings into view: past a parent that clips it, past what its scroll container can show, or past the page, and leaves one wholly before the page's start to the layers check", () => {
+    const span = (/** @type {number} */ start, /** @type {number} */ end) => ({ start, end });
+    const box = (/** @type {number} */ left, /** @type {number} */ top, size = 44) => ({ left, top, right: left + size, bottom: top + size });
+    // The page last: 400 by 800, and scrolling no further
+    const PAGE = { x: { visible: span(0, 400), area: span(0, 400) }, y: { visible: span(0, 800), area: span(0, 800) } };
+    // Each axis's parents from the action out, the page's after them
+    const cut = (/** @type {object} */ action, /** @type {{x?: object[], y?: object[]}} */ { x = [], y = [] } = {}, page = PAGE) =>
+      clip.cutOff({ box: action, parents: { x: [...x, page.x], y: [...y, page.y] } });
+    const bar = { x: [{ visible: span(0, 100) }] };
+    assert.equal(cut(box(8, 8)), false);
+    assert.equal(cut(box(50, 8), bar), false);
+    assert.equal(cut(box(88, 8), bar), true);
+    assert.equal(cut(box(88, 900), bar), true);
+    assert.equal(cut(box(370, 8)), true);
+    assert.equal(cut(box(-22, 8)), true);
+    assert.equal(cut(box(8, 780)), true);
+    assert.equal(cut(box(8, -22)), true);
+    assert.equal(cut(box(-9999, 8)), false);
+    // Rows of 40px in a list from 128 down, inside a sidebar from 0 to 200 that hides overflow. A 22px
+    // list scrolls every part of each row into view, and an 80px one the sidebar cuts by 8px never shows
+    // row 1's last 8px.
+    const row = (/** @type {number} */ i) => box(8, 128 + 40 * i, 40);
+    const list = (/** @type {number} */ height) => ({ y: [{ visible: span(128, 128 + height), area: span(128, 128 + Math.max(height, 80)) }, { visible: span(0, 200) }] });
+    assert.deepEqual([cut(row(0), list(22)), cut(row(1), list(22))], [false, false]);
+    assert.deepEqual([cut(row(0), list(80)), cut(row(1), list(80))], [false, true]);
+    // An action bigger than the page shows: on a page that scrolls each part of it comes into view, and on one that doesn't, its bottom never does
+    const card = box(8, 100, 300);
+    const short = { x: { visible: span(0, 400), area: span(0, 400) }, y: { visible: span(0, 200), area: span(0, 800) } };
+    assert.deepEqual([cut(card, {}, short), cut(card, {}, { ...short, y: { visible: span(0, 200), area: span(0, 200) } })], [false, true]);
+    // A pane from 100 to 200 that scrolls from 40 to 1000: below its fold it passes, and before its start it's found
+    const pane = { y: [{ visible: span(100, 200), area: span(40, 1000) }] };
+    assert.deepEqual([cut(box(8, 900), pane), cut(box(8, 20), pane)], [false, true]);
+    // Popup's list at zoom-400: 48px rows from 100, 100px of it shown by a 200px page that doesn't
+    // scroll, and the list scrolling 268px, so row 6 can be brought in and row 7 can't
+    const popup = { x: { visible: span(0, 200), area: span(0, 200) }, y: { visible: span(0, 200), area: span(0, 200) } };
+    const rows = { y: [{ visible: span(100, 600), area: span(100, 868) }] };
+    assert.deepEqual([6, 7].map(i => cut(box(8, 100 + 48 * i, 48), rows, popup)), [false, true]);
+    // A pane taller than the page shows, in a page that scrolls: a row deep in it passes, as the two scrolls together bring it in
+    const tall = { y: [{ visible: span(100, 1100), area: span(100, 3100) }] };
+    assert.equal(cut(box(8, 2500, 40), tall, { ...PAGE, y: { visible: span(0, 800), area: span(0, 2000) } }), false);
+    assert.deepEqual([clip.CLIP_RULE, clip.REFLOW_RULE, clip.REFLOW_WIDTH], ['ntn-clipped-action', 'ntn-reflow', 320]);
+  });
+});
+
+describe("the matrix runner's pure parts (#24 slice 2)", () => {
+  /** @type {any} */ let points;
+  before(() => {
+    points = require('./a11y/checks/points.js');
+  });
+  const find = (/** @type {string} */ surface, /** @type {string} */ id) => points.pointsOf(surface).find((/** @type {{id: string}} */ point) => point.id === id);
+
+  it("reads each surface's points from matrix.json: its default, its widths, and each axis every surface changes, with dark gated", () => {
+    const workspace = points.pointsOf('workspace');
+    assert.deepEqual(
+      workspace.map((/** @type {{id: string}} */ point) => point.id),
+      ['default', 'width-320', 'width-390', 'width-720', 'width-1100', 'zoom-200', 'zoom-400', 'fontSize-20', 'fontSize-24', 'spacing-override', 'pointer-coarse', 'scheme-dark', 'contrast-more', 'forcedColors-active', 'motion-reduce'],
+    );
+    assert.equal(points.pointsOf('popup').length, 12);
+    assert.deepEqual(workspace.filter((/** @type {{gate?: string}} */ point) => point.gate).map((/** @type {{id: string, gate: string}} */ point) => [point.id, point.gate]), [['scheme-dark', '#16-dark']]);
+    assert.deepEqual(find('workspace', 'zoom-400'), {
+      id: 'zoom-400', width: 1280, zoom: 400, fontSize: 16, spacing: 'default', pointer: 'fine', scheme: 'light', contrast: 'no-preference', forcedColors: 'none', motion: 'no-preference',
+    });
+    assert.throws(() => points.pointsOf('gallery'), /^TypeError: "gallery" is no surface docs\/accessibility\/matrix\.json names$/);
+  });
+
+  it('sizes a point at zoom Z as W/Z CSS px at device scale Z, and Popup at min(800, W·Z)/Z', () => {
+    const at = (/** @type {string} */ surface, /** @type {string} */ id) => points.viewportOf(find(surface, id), surface);
+    assert.deepEqual(at('workspace', 'default'), { width: 1280, height: 800, deviceScaleFactor: 1 });
+    assert.deepEqual(at('workspace', 'zoom-400'), { width: 320, height: 200, deviceScaleFactor: 4 });
+    assert.deepEqual(at('popup', 'zoom-200'), { width: 360, height: 400, deviceScaleFactor: 2 });
+    assert.deepEqual(at('popup', 'zoom-400'), { width: 200, height: 200, deviceScaleFactor: 4 });
+    assert.deepEqual(at('sidepanel', 'width-320'), { width: 320, height: 800, deviceScaleFactor: 1 });
+  });
+
+  it("reads a page back at its point: its width and scale, its media and pointer, a document that loaded after emulate(), and its spacing set on it", () => {
+    const at = find('popup', 'zoom-400');
+    const reading = {
+      ...{ width: 200, scale: 4, pointer: 'fine', scheme: 'light', contrast: 'no-preference', forcedColors: 'none', motion: 'no-preference' },
+      ...{ loaderId: 'B', emulated: { point: 'zoom-400', loaderId: 'A' }, spaced: { point: 'zoom-400', loaderId: 'B' } },
+    };
+    const problems = (/** @type {object} */ change, point = at) => points.pointProblems({ ...reading, ...change }, point, 'popup');
+    assert.deepEqual(problems({}), []);
+    // Read at the default point, and never put at one
+    assert.deepEqual(problems({ width: 360, scale: 1, emulated: { point: 'default', loaderId: 'A' }, spaced: { point: 'default', loaderId: 'B' } }), [
+      'width reads 360, not 200',
+      'scale reads 1, not 4',
+      "emulate() didn't put it at zoom-400",
+      "spaceText() didn't set zoom-400's spacing on this document",
+    ]);
+    assert.deepEqual(problems({ emulated: null, spaced: null }), ["emulate() didn't put it at zoom-400", "spaceText() didn't set zoom-400's spacing on this document"]);
+    // Opened before emulate(), a crossing, and spaced on the document before this one
+    assert.deepEqual(problems({ emulated: { point: 'zoom-400', loaderId: 'B' } }), ['it loaded before emulate() put it at zoom-400']);
+    assert.deepEqual(problems({ spaced: { point: 'zoom-400', loaderId: 'A' } }), ["spaceText() didn't set zoom-400's spacing on this document"]);
+    // Each medium and the pointer, at the point that changes it
+    const dark = find('popup', 'scheme-dark');
+    assert.deepEqual(problems({ width: 360, scale: 1, emulated: { point: 'scheme-dark', loaderId: 'A' }, spaced: { point: 'scheme-dark', loaderId: 'B' } }, dark), ['scheme reads light, not dark']);
+    const coarse = find('popup', 'pointer-coarse');
+    assert.deepEqual(problems({ width: 360, scale: 1, emulated: { point: 'pointer-coarse', loaderId: 'A' }, spaced: { point: 'pointer-coarse', loaderId: 'B' } }, coarse), ['pointer reads fine, not coarse']);
+  });
+
+  it("records a test's point and how many its page has with its findings, a contrast one at the dark point carrying #16-dark", () => {
+    const findings = [{ rule: 'color-contrast', target: '#a' }, { rule: 'ntn-focus-ring', target: '#b' }, { rule: 'button-name', target: '#c' }];
+    assert.deepEqual(points.recordAt(find('workspace', 'scheme-dark'), 15, findings), {
+      point: 'scheme-dark',
+      points: 15,
+      findings: [{ rule: 'color-contrast', target: '#a', gate: '#16-dark' }, { rule: 'ntn-focus-ring', target: '#b', gate: '#16-dark' }, { rule: 'button-name', target: '#c' }],
+    });
+    assert.deepEqual(points.recordAt(find('workspace', 'default'), 15, findings), { point: 'default', points: 15, findings });
   });
 });

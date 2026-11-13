@@ -16,7 +16,10 @@
 //   seed, and until then there's none, which is no lines. Neither one writes the file;
 // - until the seed lands, the reporter reports what the checks find without failing on it, so no CI
 //   step goes red on today's known issues. A spec that attaches nothing or garbles it still fails,
-//   and so does any failing test.
+//   and so does any failing test;
+// - a test at a matrix point attaches its point and how many its page has. A run that covered only
+//   some of a page's points, as one filtered inside its spec does, keeps that page's lines out of
+//   the drop check, and a point without its page's count is garbled.
 
 const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -167,6 +170,17 @@ describe("test:a11y's baseline (#24 slice 2)", () => {
     assert.equal(report([], tab([]), { file: null }).said, '');
     // Once the file lands, the same finding fails the run
     assert.ok(report([], tab([{ rule: 'button-name', target: '#menu' }])).failed);
+  });
+
+  it("keeps a page that ran at only some of its points out of the drop check, holds one that ran at all of them, and fails a garbled point", () => {
+    const line = { page: 'legacy-newtab', rule: 'button-name', targets: ['#menu'] };
+    const at = (/** @type {string} */ point) => [`Workspace at ${point}`, { point, points: 2, findings: [] }];
+    assert.equal(report([line], [at('default')]).failed, false);
+    const full = report([line], [at('default'), at('zoom-200')]);
+    assert.ok(full.failed);
+    assert.match(full.said, /legacy-newtab's button-name no longer fails "#menu": lower its line/);
+    assert.ok(report([], [['Workspace', { point: 'default', findings: [] }]]).failed);
+    assert.ok(report([], [['Workspace', { point: 'default', points: 0, findings: [] }]]).failed);
   });
 
   it("treats test/a11y/checks/ as the library's own spec, not a page: its tests attach nothing, and no line may hold it", () => {

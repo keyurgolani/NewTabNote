@@ -1,10 +1,13 @@
 /**
  * What #24 allows under `prefers-reduced-motion: reduce`: no transition or keyframed animation that
  * moves an element, as #16's motion rule drops translation and scaling, no smooth scroll, and no chart
- * animation. The browser check reads each element's computed style, its animations from
- * getAnimations() (each one's keyframed properties and its duration), and whether a chart animates,
- * and hands one element's reading here.
+ * animation. The browser check reads each element's computed style and its ::before's and ::after's,
+ * its animations and theirs from getAnimations() (each one's keyframed properties and its duration),
+ * and whether a chart animates, and hands one element's reading here. motionFindings() is that
+ * browser half: a chart animates when its canvas is redrawn while a short wait passes.
  */
+
+import { selectorOf } from './targets.mjs';
 
 /** The rules, by id */
 export const REDUCED_MOTION_RULES = Object.freeze(['transform-transition', 'transform-animation', 'smooth-scroll', 'chart-animation']);
@@ -43,4 +46,73 @@ export function motionProblems(style) {
   if (style.scrollBehavior === 'smooth') broken.push('smooth-scroll');
   if (style.chartAnimation === true) broken.push('chart-animation');
   return broken;
+}
+
+/**
+ * In the page, under reduced motion: each element with something that may move, with its computed
+ * transition and scroll behavior, the transitions of its ::before and ::after where they're
+ * generated, its keyframed animations and theirs, a transition's own aside, and for a canvas whether
+ * it was redrawn while `settle` ms passed. All but the redrawing is read at the start, as the step
+ * before left the page, so an animation the step started is read before it can end. It closes over
+ * nothing, since it runs through evaluation.
+ * @param {(el: Element) => string} selectorOf
+ * @param {number} settle
+ */
+async function readMotion(selectorOf, settle) {
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    throw new TypeError('motionFindings() runs under prefers-reduced-motion: reduce, where nothing may move');
+  }
+  const canvases = [...document.querySelectorAll('canvas')];
+  const pixels = (/** @type {HTMLCanvasElement} */ canvas) => {
+    try {
+      return canvas.toDataURL();
+    } catch {
+      return null;
+    }
+  };
+  const before = canvases.map(pixels);
+  const drawn = new Set(canvases);
+  const TIMING = new Set(['offset', 'computedOffset', 'easing', 'composite']);
+  const transitions = (/** @type {CSSStyleDeclaration} */ style) => style.transitionDuration.split(',').some(duration => parseFloat(duration) > 0);
+  const reads = [...document.querySelectorAll('*')].flatMap(el => {
+    const style = getComputedStyle(el);
+    // Its ::before and ::after where they're generated. Their animations come with the element's own.
+    const pseudo = ['::before', '::after']
+      .map(name => getComputedStyle(el, name))
+      .filter(({ content }) => content !== 'none' && content !== 'normal')
+      .filter(generated => transitions(generated))
+      .map(({ transitionProperty, transitionDuration }) => ({ transitionProperty, transitionDuration }));
+    const animations = el
+      .getAnimations({ subtree: true })
+      .filter(animation => !(animation instanceof CSSTransition) && animation.effect instanceof KeyframeEffect && animation.effect.target === el)
+      .map(animation => {
+        const effect = /** @type {KeyframeEffect} */ (animation.effect);
+        const properties = [...new Set(effect.getKeyframes().flatMap(frame => Object.keys(frame).filter(key => !TIMING.has(key))))];
+        return { properties, duration: Number(effect.getComputedTiming().duration) || 0 };
+      });
+    const moves = transitions(style) || pseudo.length > 0 || style.scrollBehavior === 'smooth' || animations.length > 0;
+    if (!moves && !drawn.has(el)) return [];
+    const id = el === document.documentElement ? 'html' : el === document.body ? 'body' : selectorOf(el);
+    const { transitionProperty, transitionDuration, scrollBehavior } = style;
+    return [{ el, moves, read: { id, transitionProperty, transitionDuration, scrollBehavior, animations, pseudo } }];
+  });
+  await new Promise(resolve => setTimeout(resolve, settle));
+  const redrawn = new Set(canvases.filter((canvas, i) => before[i] !== null && pixels(canvas) !== before[i]));
+  return reads.filter(({ el, moves }) => moves || redrawn.has(el)).map(({ el, read }) => ({ ...read, chartAnimation: redrawn.has(el) }));
+}
+
+/**
+ * Under reduced motion, what moves on `page`, as findings with their elements. A chart counts as
+ * animating when its canvas is redrawn while `settle` ms pass, so a spec checks it right after the
+ * step that draws it.
+ * @param {Pick<import('@playwright/test').Page, 'evaluate'>} page
+ * @param {{settle?: number}} [options]
+ */
+export async function motionFindings(page, { settle = 150 } = {}) {
+  /** @type {({id: string, pseudo: {transitionProperty: string, transitionDuration: string}[]} & Parameters<typeof motionProblems>[0])[]} */
+  const reads = await page.evaluate(`(${readMotion})(${selectorOf}, ${settle})`);
+  return reads.flatMap(({ id, pseudo, ...read }) => {
+    const broken = new Set([read, ...pseudo].flatMap(style => motionProblems(style)));
+    return REDUCED_MOTION_RULES.filter(rule => broken.has(rule)).map(rule => ({ rule, target: id }));
+  });
 }
