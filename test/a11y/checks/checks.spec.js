@@ -47,7 +47,10 @@
 //   smooth scroll and a canvas that keeps redrawing, and passes a fade and a canvas drawn once;
 // - the clipping check finds an action a hidden-overflow bar cuts off and one partly before the
 //   page's start, and at 320 CSS px a block that makes the page scroll sideways, and passes a bar
-//   that scrolls. At 1280 only the cut-off actions stay.
+//   that scrolls. At 1280 only the cut-off actions stay. An action in a scroll container is held to
+//   what the container scrolls to, so the actions in panes a hidden-overflow box holds pass, below
+//   the fold or scrolled past, and so do those of a pane whose content runs past the page's end. One
+//   placed before its pane's start, where no scroll reaches, is found.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -449,4 +452,21 @@ test("the clipping check finds an action a parent cuts off or scrolling can't re
   expect(await clip.clipFindings(page)).toEqual([...cut, { rule: 'ntn-reflow', target: '#wide' }]);
   await page.setViewportSize({ width: 1280, height: 640 });
   expect(await clip.clipFindings(page)).toEqual(cut);
+});
+
+test("the clipping check holds an action in a scroll container to what the container scrolls to, and finds one before its pane's start", async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 320, height: 640 });
+  const buttons = (/** @type {string} */ name, /** @type {number} */ count) =>
+    Array.from({ length: count }, (_, i) => `<button id="${name}${i}">${i}</button>`).join('');
+  await page.setContent(
+    html(`<style>button { display: block; width: 44px; height: 44px; } .frame { height: 100px; overflow: hidden; }
+      .pane { height: 100px; overflow-y: auto; } #before0 { position: relative; top: -60px; }</style>
+      <div class="frame"><div class="pane">${buttons('below', 4)}</div></div>
+      <div class="frame"><div class="pane" id="scrolled">${buttons('above', 4)}</div></div>
+      <div class="frame"><div class="pane">${buttons('before', 2)}</div></div>
+      <div class="pane">${buttons('past', 10)}</div>`),
+  );
+  await page.evaluate("document.getElementById('scrolled').scrollTop = 60");
+  expect(await clip.clipFindings(page)).toEqual([{ rule: 'ntn-clipped-action', target: '#before0' }]);
 });

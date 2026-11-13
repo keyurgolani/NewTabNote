@@ -272,19 +272,29 @@ describe("the clipping check's pure part (#24 slice 2)", () => {
     clip = await import('./a11y/checks/clip.mjs');
   });
 
-  it("finds an action cut off by a parent that clips it, or past where the page scrolls to, and leaves one wholly before the page's start to the layers check", () => {
+  it("finds an action held past an edge: a parent's that clips it, the area its scroll container scrolls, or the page's, and leaves one wholly before the page's start to the layers check", () => {
     const FAR = 1e9;
-    const reach = { right: 400, bottom: 800 };
+    const page = { left: 0, top: 0, right: 400, bottom: 800 };
     const box = (/** @type {number} */ left, /** @type {number} */ top) => ({ left, top, right: left + 44, bottom: top + 44 });
     const bar = { left: 0, top: -FAR, right: 100, bottom: FAR };
-    const cut = (/** @type {object} */ action) => clip.cutOff({ clips: [], reach, ...action });
-    assert.equal(cut({ box: box(8, 8) }), false);
-    assert.equal(cut({ box: box(50, 8), clips: [bar] }), false);
-    assert.equal(cut({ box: box(88, 8), clips: [bar] }), true);
-    assert.equal(cut({ box: box(88, 900), clips: [bar] }), true);
-    assert.equal(cut({ box: box(370, 8) }), true);
-    assert.equal(cut({ box: box(-22, 8) }), true);
-    assert.equal(cut({ box: box(-9999, 8) }), false);
+    // The action held inside each edge, and the page's last
+    const cut = (/** @type {object} */ action, /** @type {object[]} */ ...edges) =>
+      clip.cutOff({ box: action, holds: [...edges, page].map(edge => ({ box: action, edge })) });
+    assert.equal(cut(box(8, 8)), false);
+    assert.equal(cut(box(50, 8), bar), false);
+    assert.equal(cut(box(88, 8), bar), true);
+    assert.equal(cut(box(88, 900), bar), true);
+    assert.equal(cut(box(370, 8)), true);
+    assert.equal(cut(box(-22, 8)), true);
+    assert.equal(cut(box(-9999, 8)), false);
+    // In a pane showing the page's last 100px and scrolling from 600 to 1000: the action held inside
+    // that area, and the pane's visible part inside the page in its place
+    const pane = { left: 0, top: 700, right: 200, bottom: 800 };
+    const area = { left: -FAR, top: 600, right: FAR, bottom: 1000 };
+    const inPane = (/** @type {object} */ action, shown = pane) => clip.cutOff({ box: action, holds: [{ box: action, edge: area }, { box: shown, edge: page }] });
+    assert.equal(inPane(box(8, 900)), false);
+    assert.equal(inPane(box(8, 580)), true);
+    assert.equal(inPane(box(8, 900), { ...pane, bottom: 820 }), true);
     assert.deepEqual([clip.CLIP_RULE, clip.REFLOW_RULE, clip.REFLOW_WIDTH], ['ntn-clipped-action', 'ntn-reflow', 320]);
   });
 });
