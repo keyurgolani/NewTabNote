@@ -21,10 +21,11 @@
  *                      start doesn't import(), or a chunk the page's start import()s that the
  *                      row names in neither, so the row can't fall back to measuring the root;
  *                      or a row it needs with no number and no issue named for it in waitsOn
- *                      (#300): a start type its build has, its modules, the service worker's
- *                      cold start, a planned entry's start rows and modules, and the zip's and
- *                      update size's, so a row that waits on another issue reads apart from a
- *                      missing one
+ *                      (#300): a start type its build has, its modules and its requests, the
+ *                      new tab's reads, the service worker's cold start, a planned entry's
+ *                      start rows, modules, reads and requests, and the zip's and update
+ *                      size's, so a row that waits on another issue reads apart from a missing
+ *                      one
  *   budget/bytes       an entry's start over a row: JS, CSS, HTML, or fonts, raw or gzip at
  *                      level 9, the way npm run perf:probe measures them
  *   budget/modules     an entry's start over its module row: its modules, third-party and
@@ -547,9 +548,11 @@ function wholeNumber(value) {
 
 /**
  * Each row a build needs that has no number and no issue named for it in waitsOn (#300): the start
- * types an entry's build has, its modules, and the service worker's cold start; a planned entry's
- * start rows and modules, which wait on the issue that builds it; and the package's rows. A row
- * that waits on another issue names it, so it reads apart from one nobody set.
+ * types an entry's build has, its modules, its requests, the new tab's reads, and the service
+ * worker's cold start; a planned entry's start rows, modules, reads on the new tab's routes and
+ * requests, which wait on the issue that builds it; and the package's rows. Popup's and the Side
+ * Panel's reads can't be a number until #4 and #5 give them a ready mark, so the build needs
+ * neither yet. A row that waits on another issue names it, so it reads apart from one nobody set.
  * @param {Record<string, EntryGraph>} graphs
  * @param {BudgetFile} budgets
  * @returns {Problem[]}
@@ -561,9 +564,10 @@ function unsetProblems(graphs, budgets) {
   for (const [name, entry] of Object.entries(budgets.entries)) {
     const graph = graphs[name];
     if (!entry.planned && !graph) continue;
+    const counts = [...(READ_ENTRIES.includes(name) ? ['reads'] : []), 'requests'];
     const needs = entry.planned
-      ? [...START_TYPES, 'modules']
-      : [...START_TYPES.filter((type) => graph.start.bytes[type]), 'modules', ...(graph.kind === 'worker' ? ['coldStart'] : [])];
+      ? [...START_TYPES, 'modules', ...counts]
+      : [...START_TYPES.filter((type) => graph.start.bytes[type]), 'modules', ...counts, ...(graph.kind === 'worker' ? ['coldStart'] : [])];
     for (const row of needs) {
       const value = START_TYPES.includes(row) ? (entry.start || {})[/** @type {StartType} */ (row)] : /** @type {any} */ (entry)[row];
       if ((value === undefined || value === null) && !(entry.waitsOn && entry.waitsOn[row])) problems.push(unset(name, START_TYPES.includes(row) ? `start ${row.toUpperCase()}` : row));

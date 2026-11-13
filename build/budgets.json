@@ -143,7 +143,9 @@
     "moment": {
       "chunk": "moment",
       "modules": null,
-      "waitsOn": { "js": "#2", "css": "#2", "html": "#2", "fonts": "#2", "modules": "#2" },
+      "reads": null,
+      "requests": null,
+      "waitsOn": { "js": "#2", "css": "#2", "html": "#2", "fonts": "#2", "modules": "#2", "reads": "#2", "requests": "#2" },
       "planned": true,
       "reason": "#2's Moment, a loader chunk the new tab will boot instead of the workspace. The full forbidden list holds from its first build. Its numbers come from the owner before #2 builds it: a built planned row fails (AC3).",
       "start": { "js": null, "css": null, "html": null, "fonts": null },
