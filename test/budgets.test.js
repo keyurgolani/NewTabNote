@@ -943,7 +943,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
   it('holds each count to its row on each profile the timing row takes: a null row reports, and a number fails a count over it, or a run with no count (#300)', () => {
     const counted = (/** @type {any} */ max) => ({
       ...probe(1.01, 1.05, 2.7),
-      counts: { runs: 2, profiles: Object.fromEntries(['typical', 'maximal'].map(name => [name, { packages: { candidate: { runs: [], max, failures: [] } } }])) },
+      counts: { runs: 2, profiles: Object.fromEntries(['typical', 'maximal'].map(name => [name, { packages: { candidate: { runs: [max, max], max, failures: [] } } }])) },
     });
     const rows = (/** @type {number | null} */ reads, /** @type {number | null} */ requests) => ({
       ...REPORTING,
@@ -965,6 +965,34 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     const none = gateReport({ ...probe(1.01, 1.05, 2.7) }, rows(40, 0));
     assert.deepEqual(verdicts(none).slice(0, 2), ['typical newtab reads undefined 40 invalid', 'typical newtab requests undefined 0 invalid']);
     assert.equal(none.failed, true);
+  });
+
+  it("counts a profile whose counted run failed, or that has fewer runs than the probe asked, as one with no count, and names the run (#300)", () => {
+    const run = { newtab: { reads: 8, pageReads: 8, workerReads: 0, requests: 0 }, popup: { requests: 0 }, urls: [] };
+    const max = { newtab: { reads: 8, requests: 0 }, popup: { requests: 0 } };
+    const probed = (/** @type {any} */ typical) => ({
+      ...probe(1.01, 1.05, 2.7),
+      counts: { runs: 2, profiles: { typical: { packages: { candidate: { max, ...typical } } }, maximal: { packages: { candidate: { runs: [run, run], max, failures: [] } } } } },
+    });
+    const failed = probed({ runs: [run], failures: [{ run: 2, message: 'the new tab never marked itself ready' }] });
+    const rows = (/** @type {number | null} */ reads, /** @type {number | null} */ requests) => ({
+      ...REPORTING,
+      entries: { newtab: { ...BUDGETS.entries.newtab, reads, requests }, popup: { ...BUDGETS.entries.popup, requests } },
+    });
+    const typical = (/** @type {any} */ report) => [...new Set(report.countVerdicts.filter((/** @type {any} */ v) => v.profile === 'typical').map((/** @type {any} */ v) => v.verdict))];
+    // Set rows: the profile short of a run has no count, so it fails, and the other passes
+    const gated = gateReport(failed, rows(8, 0));
+    assert.equal(gated.failed, true);
+    assert.deepEqual(typical(gated), ['invalid']);
+    assert.deepEqual([...new Set(gated.countVerdicts.filter((/** @type {any} */ v) => v.profile === 'maximal').map((/** @type {any} */ v) => v.verdict))], ['pass']);
+    // Null rows: it reports, fails nothing, and says which run failed and why
+    const reported = gateReport(failed, rows(null, null));
+    assert.equal(reported.failed, false);
+    assert.match(reported.markdown, /- typical: counted run 2 failed: the new tab never marked itself ready/);
+    // A profile with fewer runs than asked and none failed is short too
+    const short = gateReport(probed({ runs: [run], failures: [] }), rows(8, 0));
+    assert.deepEqual(typical(short), ['invalid']);
+    assert.match(short.markdown, /- typical: 1 of the 2 counted runs/);
   });
 
   it('fails once a row is a gate', () => {
