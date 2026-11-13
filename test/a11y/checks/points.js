@@ -1,0 +1,142 @@
+'use strict';
+
+/**
+ * #24's matrix runner. A surface's points come from docs/accessibility/matrix.json, which holds the
+ * sizes until #301's table does: its default point, the widths it's also checked at, and each axis
+ * every surface is checked at, one change from the default. A point's id is `default` or the axis and
+ * value it changes, as `width-320` or `scheme-dark`. The point the matrix gates, dark, carries its
+ * gate, which a contrast finding there takes. emulate() puts a page at a point through its own CDP
+ * session, so the harness's launch stays as it is. atPoints() declares a surface's tests, one a point.
+ * It's CommonJS so a spec can declare them as it loads, and a test's page is its spec's whichever file
+ * declares it.
+ */
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const MATRIX_FILE = 'docs/accessibility/matrix.json';
+const MATRIX = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', MATRIX_FILE), 'utf8'));
+
+/** The rules that measure contrast, which a gated point's gate holds */
+const CONTRAST_RULES = Object.freeze(['color-contrast', 'ntn-focus-ring']);
+
+/** A viewport's height in device px, which the matrix leaves open */
+const HEIGHT = 800;
+
+/** WCAG 1.4.12's text spacing, which the spacing override sets */
+const SPACING = '* { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; } p { margin-bottom: 2em !important; }';
+
+/**
+ * @typedef {{id: string, width: number, zoom: number, fontSize: number, spacing: string, pointer: string,
+ *   scheme: string, contrast: string, forcedColors: string, motion: string, gate?: string}} Point
+ */
+
+/**
+ * The points `surface` is checked at, in the matrix's order
+ * @param {string} surface
+ * @param {any} [matrix]
+ * @returns {Point[]}
+ */
+function pointsOf(surface, matrix = MATRIX) {
+  const spec = matrix.surfaces[surface];
+  if (!spec) throw new TypeError(`${JSON.stringify(surface)} is no surface ${MATRIX_FILE} names`);
+  const changes = [{}, ...spec.widths.map((/** @type {number} */ width) => ({ width })), ...matrix.everySurface];
+  return changes.map(change => {
+    const [axis, value] = Object.entries(change)[0] ?? [];
+    const gate = axis === undefined ? undefined : matrix.gated?.[axis]?.[value];
+    return { id: axis === undefined ? 'default' : `${axis}-${value}`, ...matrix.defaults[spec.default], ...change, ...(gate ? { gate } : {}) };
+  });
+}
+
+/**
+ * A point's viewport: at zoom Z, W/Z CSS px wide at device scale Z, and on a surface with a
+ * maxWidth, min(maxWidth, W·Z)/Z, as the matrix has it
+ * @param {Point} point
+ * @param {string} surface
+ * @param {any} [matrix]
+ */
+function viewportOf(point, surface, matrix = MATRIX) {
+  const scale = point.zoom / 100;
+  const { maxWidth } = matrix.surfaces[surface];
+  const device = maxWidth === undefined ? point.width : Math.min(maxWidth, point.width * scale);
+  return { width: Math.round(maxWidth === undefined ? point.width / scale : device / scale), height: Math.round(HEIGHT / scale), deviceScaleFactor: scale };
+}
+
+/**
+ * What a test at `point` attaches as a11y-findings: its point, how many points its page has, and its
+ * findings, a contrast one at a gated point carrying the gate
+ * @param {Point} point
+ * @param {number} points
+ * @param {readonly {rule: string, target: string}[]} findings
+ */
+function recordAt(point, points, findings) {
+  const gate = point.gate;
+  return { point: point.id, points, findings: findings.map(finding => (gate && CONTRAST_RULES.includes(finding.rule) ? { ...finding, gate } : finding)) };
+}
+
+/** Each page's CDP session, opened once with the DOM and CSS domains on for the spacing sheet */
+const sessions = new WeakMap();
+
+/** @param {import('@playwright/test').Page} page */
+async function sessionOf(page) {
+  if (!sessions.has(page)) {
+    const session = await page.context().newCDPSession(page);
+    await session.send('DOM.enable');
+    await session.send('CSS.enable');
+    sessions.set(page, session);
+  }
+  return sessions.get(page);
+}
+
+/**
+ * Sets the text-spacing override on the page's document, or takes it off, through CDP's inspector
+ * style sheet, which the extension's CSP doesn't block as it would a style tag. A new document needs
+ * it again.
+ * @param {import('@playwright/test').Page} page
+ * @param {Point} point
+ */
+async function spaceText(page, point) {
+  const session = await sessionOf(page);
+  const { frameTree } = await session.send('Page.getFrameTree');
+  const { styleSheetId } = await session.send('CSS.createStyleSheet', { frameId: frameTree.frame.id });
+  await session.send('CSS.setStyleSheetText', { styleSheetId, text: point.spacing === 'override' ? SPACING : '' });
+}
+
+/**
+ * Puts `page` at `point`: its viewport and device scale, touch for a coarse pointer, the default font
+ * size, the text spacing, and the scheme, contrast, forced colors and motion media
+ * @param {import('@playwright/test').Page} page
+ * @param {Point} point
+ * @param {string} surface
+ */
+async function emulate(page, point, surface) {
+  const session = await sessionOf(page);
+  await session.send('Emulation.setDeviceMetricsOverride', { ...viewportOf(point, surface), mobile: false });
+  await session.send('Emulation.setTouchEmulationEnabled', point.pointer === 'coarse' ? { enabled: true, maxTouchPoints: 5 } : { enabled: false });
+  await session.send('Page.setFontSizes', { fontSizes: { standard: point.fontSize } });
+  const media = { colorScheme: point.scheme, contrast: point.contrast, forcedColors: point.forcedColors, reducedMotion: point.motion };
+  await page.emulateMedia(/** @type {any} */ (media));
+  await spaceText(page, point);
+}
+
+/**
+ * Declares one test of `surface` at each of its points. Each puts the page at its point, opens the
+ * surface, sets the text spacing on what opened, checks it, and attaches what it found with its point.
+ * @param {import('@playwright/test').TestType<any, any>} test - the spec's test, with its fixtures
+ * @param {string} surface
+ * @param {{open: (page: any) => Promise<unknown>, check: (page: any, point: Point) => Promise<{rule: string, target: string}[]>}} steps
+ */
+function atPoints(test, surface, { open, check }) {
+  const all = pointsOf(surface);
+  for (const point of all) {
+    test(`${surface} at ${point.id}`, async ({ page }, testInfo) => {
+      await emulate(page, point, surface);
+      await open(page);
+      await spaceText(page, point);
+      const findings = await check(page, point);
+      await testInfo.attach('a11y-findings', { body: JSON.stringify(recordAt(point, all.length, findings)), contentType: 'application/json' });
+    });
+  }
+}
+
+module.exports = { CONTRAST_RULES, pointsOf, viewportOf, recordAt, emulate, spaceText, atPoints };
