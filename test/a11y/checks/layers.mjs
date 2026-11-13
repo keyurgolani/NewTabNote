@@ -4,8 +4,9 @@
  * through the page and reads each stop: whether the page shows any of it where it sits, by what's on
  * top at its middle and near its corners, and its opacity with its parents'. A stop under aria-hidden
  * is axe's aria-hidden-focus. Tab order follows the order the page reads in, left to right as the
- * extension's pages run: a stop Tab reaches back along a line, or up a column, from the stop before
- * is out of it. No scripted action leaves focus on body either: focusLost() reads where a step left it.
+ * extension's pages run: a stop Tab reaches back along a line, up a column, or up to the column
+ * before, from the stop before is out of it. No scripted action leaves focus on body either:
+ * focusLost() reads where a step left it.
  */
 
 import { tabWalk } from './ring.mjs';
@@ -31,9 +32,11 @@ export function hiddenStops(stops) {
 }
 
 /**
- * The stops Tab reaches out of reading order: back along the line the stop before sits on, or up the
- * column it sits in. Two boxes share a line when they overlap by half the shorter one's height, and a
- * column when they overlap by half the narrower one's width. A stop that wraps starts at its `box`
+ * The stops Tab reaches out of reading order: back along the line the stop before sits on, up the
+ * column it sits in, or up and back to the left with neither shared, as a step up to the column before
+ * is, which no reading left to right takes. A step up and right, to the top of the next column, reads
+ * in order. Two boxes share a line when they overlap by half the shorter one's height, and a column
+ * when they overlap by half the narrower one's width. A stop that wraps starts at its `box`
  * and ends at its `end`, so the next stop is read from where it ends.
  * @param {readonly {id: string, box: Box, end?: Box}[]} stops - in tab order
  * @returns {string[]}
@@ -47,7 +50,8 @@ export function orderProblems(stops) {
       const [a, b] = [stops[i - 1].end ?? stops[i - 1].box, stop.box];
       const line = overlap(a.y, a.height, b.y, b.height);
       if (line) return b.x + b.width / 2 < a.x + a.width / 2;
-      return overlap(a.x, a.width, b.x, b.width) && b.y + b.height <= a.y;
+      if (overlap(a.x, a.width, b.x, b.width)) return b.y + b.height <= a.y;
+      return b.y + b.height <= a.y && b.x + b.width / 2 < a.x + a.width / 2;
     })
     .map(({ id }) => id);
 }
