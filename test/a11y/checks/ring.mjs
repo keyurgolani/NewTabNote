@@ -5,7 +5,8 @@
  * measures its pairs, through js/design/contrast.js's measure(): the outer ring's contrast, or the
  * inner ring's against both the outer and the plane, whichever is better. #16's inner ring fills the
  * offset between the control and the outline, so it's painted on the plane beside the outer ring,
- * never over it, and a translucent inner ring composites onto the plane. A plane on a translucent
+ * never over it, and a translucent inner ring composites onto the plane. Opacity on the control or a
+ * parent fades the ring against the plane around it before it's measured. A plane on a translucent
  * backdrop can't be measured, so it's a TypeError that names the plane. A color is #16's theme
  * grammar, or color(srgb …), the form Chrome computes a color-mix() in sRGB to; a color in another
  * space is a TypeError that names the space.
@@ -49,7 +50,8 @@ function color(text) {
  * The planes the ring falls short on, each with its ratio
  * @param {{outer: string, inner?: string, innerOn?: 'outer'}} ring - CSS colors, with `innerOn: 'outer'`
  *   for a ring of box-shadows, whose inner ring is stacked on the outer one rather than beside it
- * @param {readonly {id: string, color: string, over?: string}[]} planes - each plane's color, and what's under it
+ * @param {readonly {id: string, color: string, over?: string, ringOpacity?: number}[]} planes - each
+ *   plane's color, what's under it, and the opacity the ring shows at over it, which fades the ring
  * @param {number} [min]
  * @returns {{plane: string, ratio: number}[]}
  */
@@ -68,6 +70,10 @@ export function ringShortfalls(ring, planes, min = RING_MIN) {
       if (ring.innerOn === 'outer' && colors.inner) {
         colors.inner = compositeOver(colors.inner, compositeOver(colors.fg, colors.bg.a < 1 ? compositeOver(colors.bg, colors.over) : colors.bg));
       }
+      // Opacity fades the ring as it's painted, its inner ring flattened onto the outer one first
+      const fade = plane.ringOpacity ?? 1;
+      colors.fg = { ...colors.fg, a: colors.fg.a * fade };
+      if (colors.inner) colors.inner = { ...colors.inner, a: colors.inner.a * fade };
       return { plane: plane.id, ratio: measure(colors, 1).ratio };
     })
     .filter(({ ratio }) => ratio < min);
@@ -119,7 +125,13 @@ function readRing(selectorOf) {
     }
     return { color: color ?? 'rgb(255, 255, 255)' };
   };
-  const planes = [{ id: 'around', ...plane(el.parentElement) }];
+  // The ring shows at the opacity of the control and each parent up to the plane around it. That
+  // plane, and the control's own fill, fade with the ring rather than under it.
+  let ringOpacity = 1;
+  for (let node = el; node && (node === el || alpha(getComputedStyle(node).backgroundColor) === 0); node = node.parentElement) {
+    ringOpacity *= Number(getComputedStyle(node).opacity);
+  }
+  const planes = [{ id: 'around', ...plane(el.parentElement), ...(ringOpacity < 1 ? { ringOpacity } : {}) }];
   if (alpha(style.backgroundColor) > 0) planes.push({ id: 'control', ...plane(el) });
   const stacked = !outline && inner ? { innerOn: 'outer' } : {};
   return { id: selectorOf(el), ring: outer ? { outer, ...(inner ? { inner } : {}), ...stacked } : null, planes };
