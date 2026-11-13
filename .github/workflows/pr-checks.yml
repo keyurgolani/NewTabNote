@@ -141,8 +141,10 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-24.04
-    # verify:fixtures runs a build per failure rule, and verify:reproducible two more
-    timeout-minutes: 30
+    # verify:fixtures runs a build per failure rule, and verify:reproducible two more. At 94
+    # fixtures, verify:fixtures took 1,632 s on a slow runner and the job ran past 30 minutes, so
+    # it has 40 until the fixtures leave this job's path (#29)
+    timeout-minutes: 40
     outputs:
       excerpt: ${{ steps.excerpt.outputs.excerpt }}
     steps:
