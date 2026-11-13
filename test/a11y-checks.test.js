@@ -221,6 +221,19 @@ describe("the layers checks' pure parts (#24 slice 2)", () => {
     assert.deepEqual(layers.orderProblems([at('#a', 60, 8), at('#b', 60, 60), at('#c', 8, 8), at('#d', 8, 60)]), ['#c']);
     assert.equal(layers.ORDER_RULE, 'ntn-tab-order');
   });
+
+  it("reports where its walk stops short, as the ring's does, and keeps a hidden stop out of the order", async () => {
+    const stop = (/** @type {string} */ id, /** @type {number} */ x, shown = true) => ({ id, shown, opacity: 1, box: { x, y: 0, width: 44, height: 44 } });
+    /** A page whose Tab presses read `reads` in turn, then nothing, as when focus leaves the page */
+    const walk = (/** @type {any[]} */ reads, /** @type {object} */ options = {}) =>
+      layers.layerFindings({ keyboard: { press: async () => {} }, evaluate: async () => reads.shift() ?? null }, options);
+    const short = [{ rule: 'ntn-focus-walk', target: '#b' }];
+    assert.deepEqual(await walk([stop('#a', 0), stop('#b', 52), stop('#b', 52)]), short);
+    assert.deepEqual(await walk([stop('#a', 0), { ...stop('#b', 52), followed: true }]), short);
+    assert.deepEqual(await walk([stop('#a', 0), stop('#b', 52), stop('#c', 104)], { max: 2 }), short);
+    // A hidden stop back along the line is hidden, and the stops around it read in order
+    assert.deepEqual(await walk([stop('#a', 52), stop('#gone', 0, false), stop('#b', 104)]), [{ rule: 'ntn-hidden-focus', target: '#gone' }]);
+  });
 });
 
 describe("the announcement recorder's pure part (#24 slice 2)", () => {
