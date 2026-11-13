@@ -39,7 +39,8 @@
 //   atomic one its whole text, `3 notes`. Each toast added to a toast region is read alone, and one
 //   leaving says nothing. An alert added with its text is heard, as the legacy tab's note-gone notice
 //   is added, and one added inside a log that's off isn't. It keeps hearing after setContent() writes
-//   a new document into the page, which keeps the window.
+//   a new document into the page, which keeps the window, and refuses a page that never started
+//   recording, or that a reload has replaced since.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -351,4 +352,13 @@ test('the announcement recorder reads each toast a region adds alone, and nothin
   expect(await announce.readAnnouncements(page)).toEqual([{ region: '#toasts', politeness: 'polite', text: 'Exported' }]);
   await page.evaluate("document.querySelector('#toasts > div').remove()");
   expect(await announce.readAnnouncements(page)).toEqual([]);
+});
+
+test("the announcement recorder refuses a page that never started recording, and one a reload has replaced since", async ({ page }) => {
+  const announce = await import('./announce.mjs');
+  await page.setContent(html('<div id="status" role="status"></div>'));
+  await expect(announce.readAnnouncements(page)).rejects.toThrow(/^the page isn't recording/);
+  await announce.recordAnnouncements(page);
+  await page.reload();
+  await expect(announce.readAnnouncements(page)).rejects.toThrow(/^the page isn't recording/);
 });
