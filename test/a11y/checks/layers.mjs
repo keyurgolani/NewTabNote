@@ -3,13 +3,17 @@
  * inert, with focus moved out first, so Tab never lands where nobody sees it. The browser half tabs
  * through the page and reads each stop: whether the page shows any of it where it sits, by what's on
  * top at its middle and near its corners, and its opacity with its parents'. A stop under aria-hidden
- * is axe's aria-hidden-focus.
+ * is axe's aria-hidden-focus. No scripted action leaves focus on body either: focusLost() reads where
+ * a step left it.
  */
 
 import { tabWalk } from './ring.mjs';
 
 /** The rule a tab stop nobody sees fails */
 export const HIDDEN_RULE = 'ntn-hidden-focus';
+
+/** The rule a step that leaves focus on body fails */
+export const LOST_RULE = 'ntn-focus-lost';
 
 /**
  * The stops nobody sees: the page shows none of one where it sits, or it's transparent
@@ -48,4 +52,15 @@ export async function layerFindings(page, options = {}) {
   const { reads, stopped } = await tabWalk(page, readStop, options);
   const findings = hiddenStops(reads).map(target => ({ rule: HIDDEN_RULE, target }));
   return stopped ? [...findings, stopped] : findings;
+}
+
+/**
+ * After a step, whether it left focus on body: a finding named for the step, or none
+ * @param {Pick<import('@playwright/test').Page, 'evaluate'>} page
+ * @param {string} step - what the step did
+ */
+export async function focusLost(page, step) {
+  /** @type {boolean} */
+  const lost = await page.evaluate('[null, document.body, document.documentElement].includes(document.activeElement)');
+  return lost ? [{ rule: LOST_RULE, target: step }] : [];
 }
