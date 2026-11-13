@@ -6,8 +6,8 @@
 //   two-tone ring measured as #16 measures one;
 // - the chords Chrome keeps for itself;
 // - what reduced motion forbids;
-// - a tab stop nobody sees, in a collapsed, off-screen or transparent layer, and a step that leaves
-//   focus on body.
+// - a tab stop nobody sees, in a collapsed, off-screen or transparent layer, a step that leaves
+//   focus on body, and tab order that runs back along a line or up a column.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -207,5 +207,14 @@ describe("the layers checks' pure parts (#24 slice 2)", () => {
     const page = (/** @type {boolean} */ lost) => ({ evaluate: async () => lost });
     assert.deepEqual(await layers.focusLost(page(true), 'close the menu'), [{ rule: 'ntn-focus-lost', target: 'close the menu' }]);
     assert.deepEqual(await layers.focusLost(page(false), 'close the menu'), []);
+  });
+
+  it('finds a tab stop out of the order the page reads in: back along a line, or up a column, from the stop before', () => {
+    const at = (/** @type {string} */ id, /** @type {number} */ x, /** @type {number} */ y) => ({ id, box: { x, y, width: 44, height: 44 } });
+    // Along a line, down to the next, then up to the top of the next column
+    assert.deepEqual(layers.orderProblems([at('#a', 0, 0), at('#b', 52, 0), at('#c', 0, 52), at('#d', 200, 0)]), []);
+    assert.deepEqual(layers.orderProblems([at('#b', 52, 0), at('#a', 0, 0)]), ['#a']);
+    assert.deepEqual(layers.orderProblems([at('#low', 0, 52), at('#high', 0, 0)]), ['#high']);
+    assert.equal(layers.ORDER_RULE, 'ntn-tab-order');
   });
 });

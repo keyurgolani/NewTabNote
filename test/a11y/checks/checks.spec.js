@@ -27,7 +27,9 @@
 //   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix;
 // - the layers check finds a tab stop nobody sees, in a collapsed, off-screen or transparent layer,
 //   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus. A step
-//   that leaves focus on body is found, and one that returns it to its invoker passes.
+//   that leaves focus on body is found, and one that returns it to its invoker passes. Tab order
+//   that runs back along a row or up a column, as CSS reversed them, is found, and a row read left
+//   to right passes.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -239,4 +241,19 @@ test('the layers check finds a step that leaves focus on body, and passes one th
   await page.evaluate('window.returnFocus = true');
   await openAndClose();
   expect(await layers.focusLost(page, 'close the menu')).toEqual([]);
+});
+
+test('the layers check finds a tab stop out of the order the page reads in, back along a row or up a column, and passes a row in order', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { width: 44px; height: 44px; } .row { display: flex; gap: 8px; } .reversed { flex-direction: row-reverse; justify-content: flex-end; }
+      .column { display: flex; flex-direction: column-reverse; align-items: flex-start; }</style>
+      <div class="row"><button id="a1">1</button><button id="a2">2</button></div>
+      <div class="row reversed"><button id="b1">1</button><button id="b2">2</button></div>
+      <div class="column"><button id="c1">1</button><button id="c2">2</button></div>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([
+    { rule: 'ntn-tab-order', target: '#b2' },
+    { rule: 'ntn-tab-order', target: '#c2' },
+  ]);
 });
