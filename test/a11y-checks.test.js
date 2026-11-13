@@ -171,13 +171,14 @@ describe("the browser halves' pure parts (#24 slice 2)", () => {
     assert.equal(faded[0].ratio.toFixed(2), '2.59');
   });
 
-  it('reports where the focus walk stops short, at a control that keeps focus on Tab or at its cap, and ends quietly otherwise', async () => {
+  it('reports where the focus walk stops short, at a control that keeps focus on Tab, leaves it on body before a tab stop, or at its cap, and ends quietly otherwise', async () => {
     const strong = (/** @type {string} */ id) => ({ id, ring: { outer: '#000000' }, planes: [{ id: 'around', color: '#ffffff' }] });
     /** A page whose Tab presses read `reads` in turn, then nothing, as when focus leaves the page */
     const walk = (/** @type {any[]} */ reads, /** @type {object} */ options = {}) =>
       ring.ringFindings({ keyboard: { press: async () => {} }, evaluate: async () => reads.shift() ?? null }, options);
     assert.deepEqual(await walk([strong('#a'), strong('#b')]), []);
     assert.deepEqual(await walk([strong('#a'), strong('#b'), strong('#a')]), []);
+    assert.deepEqual(await walk([strong('#a'), { ...strong('#cell'), followed: true }]), [{ rule: 'ntn-focus-walk', target: '#cell' }]);
     assert.deepEqual(await walk([strong('#a'), strong('#indent'), strong('#indent')]), [{ rule: 'ntn-focus-walk', target: '#indent' }]);
     assert.deepEqual(await walk([strong('#a'), strong('#b'), strong('#c')], { max: 2 }), [{ rule: 'ntn-focus-walk', target: '#b' }]);
   });

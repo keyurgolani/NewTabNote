@@ -16,7 +16,8 @@
 //   with no offset, or under a wider shadow listed before it, leaves a #555555 ring on slate, found,
 //   and the same shadows listed the other way round pass. A ring fades with opacity on the control
 //   or a parent: a #1869ba ring at 0.6 on white is found, and the same ring at full opacity passes.
-//   The walk reports where it stops short, at a control that keeps focus on Tab or at its cap, as
+//   The walk reports where it stops short, at a control that keeps focus on Tab, at one whose Tab
+//   leaves focus on body with a tab stop still to come, as a table's last cell does, or at its cap, as
 //   ntn-focus-walk, with a faint ring past it unread;
 // - each half's boundary has a planted fault of its own: a small link alone in its list item is a
 //   target, and a white ring at no offset on a white button in a #333333 toolbar clears the toolbar
@@ -163,7 +164,7 @@ test('the focus ring finds a ring faded by opacity on the control or on a parent
   ]);
 });
 
-test('the focus walk reports where it stops short: at a control that keeps focus on Tab, or at its cap', async ({ page }) => {
+test('the focus walk reports where it stops short: at a control that keeps focus on Tab, at one that leaves it on body before a tab stop, or at its cap', async ({ page }) => {
   const rings = `<style>button { outline: none; } button:focus-visible { outline: 2px solid #000000; outline-offset: 2px; }
     .faint:focus-visible { outline-color: #cccccc; }</style>`;
   await page.setContent(
@@ -171,6 +172,11 @@ test('the focus walk reports where it stops short: at a control that keeps focus
       <script>document.getElementById('indent').addEventListener('keydown', event => { if (event.key === 'Tab') event.preventDefault(); });</script>`),
   );
   expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-walk', target: '#indent' }]);
+  await page.setContent(
+    html(`${rings}<button id="gone">A</button><button class="faint">B</button>
+      <script>document.getElementById('gone').addEventListener('keydown', event => { if (event.key === 'Tab') { event.preventDefault(); event.target.remove(); } });</script>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-walk', target: '#gone' }]);
   await page.setContent(html(`${rings}<button id="one">1</button><button id="two">2</button><button id="three">3</button><button class="faint">4</button>`));
   expect(await ring.ringFindings(page, { max: 2 })).toEqual([{ rule: 'ntn-focus-walk', target: '#two' }]);
 });
