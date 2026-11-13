@@ -211,12 +211,18 @@ describe('the budget gate', () => {
   });
 
   it("fails an entry's start over its module row, the count the build's line prints, and gates nothing on a null row (#300)", () => {
-    const { popup, background } = budgetsFor().entries;
+    const { newtab, popup, background } = budgetsFor().entries;
     // The fixture's Popup starts with popup.html, js/popup.js and valibot, and the worker is its one module
     assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: 3 }, background: { ...background, modules: 1 } })), []);
     assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: 2 }, background: { ...background, modules: 0 } })), [
       'budget/modules popup: its start has 3 modules, over its 2; a number over a row goes to the owner, not into the row',
       'budget/modules background: its start has 1 module, over its 0; a number over a row goes to the owner, not into the row',
+    ]);
+    // The new tab's start holds 11, beside a lazy chunk, the four libraries and a worker, which the row
+    // doesn't count: it holds the start alone, as the build's line does
+    assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, modules: 11 } })), []);
+    assert.deepEqual(run(budgetsFor({ newtab: { ...newtab, modules: 10 } })), [
+      'budget/modules newtab: its start has 11 modules, over its 10; a number over a row goes to the owner, not into the row',
     ]);
     assert.deepEqual(run(budgetsFor({ popup: { ...popup, modules: null } })), []);
   });
