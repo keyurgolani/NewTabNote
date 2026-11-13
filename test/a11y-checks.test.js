@@ -272,7 +272,7 @@ describe("the clipping check's pure part (#24 slice 2)", () => {
     clip = await import('./a11y/checks/clip.mjs');
   });
 
-  it("finds an action no scroll brings into view whole: past a parent that clips it, past what its scroll container can show, or past the page, and leaves one wholly before the page's start to the layers check", () => {
+  it("finds an action where some part of it no scroll brings into view: past a parent that clips it, past what its scroll container can show, or past the page, and leaves one wholly before the page's start to the layers check", () => {
     const span = (/** @type {number} */ start, /** @type {number} */ end) => ({ start, end });
     const box = (/** @type {number} */ left, /** @type {number} */ top, size = 44) => ({ left, top, right: left + size, bottom: top + size });
     // The page last: 400 by 800, and scrolling no further
@@ -291,11 +291,16 @@ describe("the clipping check's pure part (#24 slice 2)", () => {
     assert.equal(cut(box(8, -22)), true);
     assert.equal(cut(box(-9999, 8)), false);
     // Rows of 40px in a list from 128 down, inside a sidebar from 0 to 200 that hides overflow. A 22px
-    // list shows no row whole, and an 80px one the sidebar cuts by 8px shows row 0 whole and not row 1.
+    // list scrolls every part of each row into view, and an 80px one the sidebar cuts by 8px never shows
+    // row 1's last 8px.
     const row = (/** @type {number} */ i) => box(8, 128 + 40 * i, 40);
     const list = (/** @type {number} */ height) => ({ y: [{ visible: span(128, 128 + height), area: span(128, 128 + Math.max(height, 80)) }, { visible: span(0, 200) }] });
-    assert.deepEqual([cut(row(0), list(22)), cut(row(1), list(22))], [true, true]);
+    assert.deepEqual([cut(row(0), list(22)), cut(row(1), list(22))], [false, false]);
     assert.deepEqual([cut(row(0), list(80)), cut(row(1), list(80))], [false, true]);
+    // An action bigger than the page shows: on a page that scrolls each part of it comes into view, and on one that doesn't, its bottom never does
+    const card = box(8, 100, 300);
+    const short = { x: { visible: span(0, 400), area: span(0, 400) }, y: { visible: span(0, 200), area: span(0, 800) } };
+    assert.deepEqual([cut(card, {}, short), cut(card, {}, { ...short, y: { visible: span(0, 200), area: span(0, 200) } })], [false, true]);
     // A pane from 100 to 200 that scrolls from 40 to 1000: below its fold it passes, and before its start it's found
     const pane = { y: [{ visible: span(100, 200), area: span(40, 1000) }] };
     assert.deepEqual([cut(box(8, 900), pane), cut(box(8, 20), pane)], [false, true]);
