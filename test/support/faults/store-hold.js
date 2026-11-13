@@ -15,10 +15,9 @@
  * holdStores resolves once its first get has succeeded, so its transaction holds the stores, not
  * merely exists. holdUpgrade opens the database one version up and keeps the upgrade busy, and its
  * release aborts the upgrade, so the version stays as it was. Neither has a time limit: only its
- * release, its context's end, or its connection's end ends one. One that ended before its release
- * makes release() and stillHeld() fail at once, naming its database and stores. releaseHolds() lets
- * go of every hold a Page or Worker still has, which the e2e harness calls before it closes a
- * test's extension, so a case that fails mid-hold leaves its teardown nothing to wait on.
+ * release, its context's end, or its connection's end ends one, so a case that fails mid-hold has
+ * it ended by its teardown's close of the context. One that ended before its release makes
+ * release() and stillHeld() fail at once, naming its database and stores.
  *
  * startStoreHold, readStoreHold and releaseStoreHold run in the context the hold is made from and
  * hold nothing from outside themselves, so they go in through evaluate as they are. In Node they
@@ -143,8 +142,6 @@ function releaseStoreHold({ id }, scope = globalThis) {
   return hold.ended;
 }
 
-/** The holds a Page or Worker still has, for releaseHolds */
-const unreleased = new Set();
 let holdCount = 0;
 
 /**
@@ -184,15 +181,10 @@ async function startHold(target, plan) {
     async stillHeld(when) {
       const state = await call(readStoreHold, when);
       if (state.holding) return;
-      unreleased.delete(hold);
       throw new Error(`the hold on ${what} no longer holds ${when}: it ended (${state.how})`);
     },
-    async release() {
-      unreleased.delete(hold);
-      return call(releaseStoreHold, 'at its release');
-    },
+    release: () => call(releaseStoreHold, 'at its release'),
   };
-  if (typeof target.evaluate === 'function') unreleased.add(hold);
   return hold;
 }
 
@@ -219,16 +211,4 @@ function holdUpgrade(target, { database = 'CanvasTabDB' } = {}) {
   return startHold(target, { database, stores: [], upgrade: true });
 }
 
-/**
- * Lets go of every hold a Page or Worker still has, and answers how many it let go. A hold whose
- * context has gone is passed over.
- * @returns {Promise<number>}
- */
-async function releaseHolds() {
-  const holds = [...unreleased];
-  unreleased.clear();
-  const ended = await Promise.allSettled(holds.map(hold => hold.release()));
-  return ended.filter(result => result.status === 'fulfilled').length;
-}
-
-module.exports = { holdStores, holdUpgrade, releaseHolds, startStoreHold, readStoreHold, releaseStoreHold };
+module.exports = { holdStores, holdUpgrade, startStoreHold, readStoreHold, releaseStoreHold };
