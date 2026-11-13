@@ -10,7 +10,8 @@
 //   focus on body, and tab order that runs back along a line or up a column;
 // - how a live region announces, for the announcement recorder, which won't read a page it isn't
 //   recording;
-// - an action that a parent cuts off or that scrolling can't reach.
+// - an action that a parent cuts off or that scrolling can't reach;
+// - the matrix runner's points, their viewports, and what a test at one records.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -285,5 +286,46 @@ describe("the clipping check's pure part (#24 slice 2)", () => {
     assert.equal(cut({ box: box(-22, 8) }), true);
     assert.equal(cut({ box: box(-9999, 8) }), false);
     assert.deepEqual([clip.CLIP_RULE, clip.REFLOW_RULE, clip.REFLOW_WIDTH], ['ntn-clipped-action', 'ntn-reflow', 320]);
+  });
+});
+
+describe("the matrix runner's pure parts (#24 slice 2)", () => {
+  /** @type {any} */ let points;
+  before(() => {
+    points = require('./a11y/checks/points.js');
+  });
+  const find = (/** @type {string} */ surface, /** @type {string} */ id) => points.pointsOf(surface).find((/** @type {{id: string}} */ point) => point.id === id);
+
+  it("reads each surface's points from matrix.json: its default, its widths, and each axis every surface changes, with dark gated", () => {
+    const workspace = points.pointsOf('workspace');
+    assert.deepEqual(
+      workspace.map((/** @type {{id: string}} */ point) => point.id),
+      ['default', 'width-320', 'width-390', 'width-720', 'width-1100', 'zoom-200', 'zoom-400', 'fontSize-20', 'fontSize-24', 'spacing-override', 'pointer-coarse', 'scheme-dark', 'contrast-more', 'forcedColors-active', 'motion-reduce'],
+    );
+    assert.equal(points.pointsOf('popup').length, 12);
+    assert.deepEqual(workspace.filter((/** @type {{gate?: string}} */ point) => point.gate).map((/** @type {{id: string, gate: string}} */ point) => [point.id, point.gate]), [['scheme-dark', '#16-dark']]);
+    assert.deepEqual(find('workspace', 'zoom-400'), {
+      id: 'zoom-400', width: 1280, zoom: 400, fontSize: 16, spacing: 'default', pointer: 'fine', scheme: 'light', contrast: 'no-preference', forcedColors: 'none', motion: 'no-preference',
+    });
+    assert.throws(() => points.pointsOf('gallery'), /^TypeError: "gallery" is no surface docs\/accessibility\/matrix\.json names$/);
+  });
+
+  it('sizes a point at zoom Z as W/Z CSS px at device scale Z, and Popup at min(800, W·Z)/Z', () => {
+    const at = (/** @type {string} */ surface, /** @type {string} */ id) => points.viewportOf(find(surface, id), surface);
+    assert.deepEqual(at('workspace', 'default'), { width: 1280, height: 800, deviceScaleFactor: 1 });
+    assert.deepEqual(at('workspace', 'zoom-400'), { width: 320, height: 200, deviceScaleFactor: 4 });
+    assert.deepEqual(at('popup', 'zoom-200'), { width: 360, height: 400, deviceScaleFactor: 2 });
+    assert.deepEqual(at('popup', 'zoom-400'), { width: 200, height: 200, deviceScaleFactor: 4 });
+    assert.deepEqual(at('sidepanel', 'width-320'), { width: 320, height: 800, deviceScaleFactor: 1 });
+  });
+
+  it("records a test's point and how many its page has with its findings, a contrast one at the dark point carrying #16-dark", () => {
+    const findings = [{ rule: 'color-contrast', target: '#a' }, { rule: 'ntn-focus-ring', target: '#b' }, { rule: 'button-name', target: '#c' }];
+    assert.deepEqual(points.recordAt(find('workspace', 'scheme-dark'), 15, findings), {
+      point: 'scheme-dark',
+      points: 15,
+      findings: [{ rule: 'color-contrast', target: '#a', gate: '#16-dark' }, { rule: 'ntn-focus-ring', target: '#b', gate: '#16-dark' }, { rule: 'button-name', target: '#c' }],
+    });
+    assert.deepEqual(points.recordAt(find('workspace', 'default'), 15, findings), { point: 'default', points: 15, findings });
   });
 });
