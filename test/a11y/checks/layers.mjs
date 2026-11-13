@@ -52,7 +52,9 @@ export function orderProblems(stops) {
 /**
  * In the page: the focused element, with whether the page shows any of it and its opacity with its
  * parents', or null when focus is on the page itself. A stop the pointer passes through is shown if
- * any of it is on screen.
+ * any of it is on screen. Its box is where it sits with nothing scrolled, each scrolled box around it
+ * up to a fixed one added back, since Chrome scrolls each stop it tabs to into view and order compares
+ * stops read at different scroll positions. A sticky box isn't followed.
  * @param {(el: Element) => string} selectorOf
  */
 function readStop(selectorOf) {
@@ -64,7 +66,13 @@ function readStop(selectorOf) {
   const shown = onScreen && (getComputedStyle(el).pointerEvents === 'none' || hits.some(hit => hit !== null && (hit === el || el.contains(hit))));
   let opacity = 1;
   for (let node = el; node; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
-  return { id: selectorOf(el), shown, opacity, box: { x: left, y: top, width, height } };
+  let dx = 0;
+  let dy = 0;
+  for (let node = el; node.parentElement && getComputedStyle(node).position !== 'fixed'; node = node.parentElement) {
+    dx += node.parentElement.scrollLeft;
+    dy += node.parentElement.scrollTop;
+  }
+  return { id: selectorOf(el), shown, opacity, box: { x: left + dx, y: top + dy, width, height } };
 }
 
 /**
