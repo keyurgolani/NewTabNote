@@ -350,11 +350,17 @@ function shardOf(fixtures, { index, count }) {
 }
 
 /**
+ * What a run does with its arguments: how many fixtures it builds at once, its shard, and its
+ * fixtures, the ones named or all of them, and then the shard's of those (#29). An argument it
+ * can't read is a usage error, and a name no fixture has is missing.
+ * @template {{name: string}} F
  * @param {string[]} argv
- * @returns {Promise<number>} the exit code
+ * @param {F[]} all - every fixture
+ * @param {number} [parallelism] - the machine's, for the default of at most 4 at once
+ * @returns {{usage: true} | {missing: string[]} | {jobs: number, shard: {index: number, count: number} | null, fixtures: F[]}}
  */
-async function main(argv) {
-  let jobs = Math.max(1, Math.min(4, os.availableParallelism()));
+function planRun(argv, all, parallelism = os.availableParallelism()) {
+  let jobs = Math.max(1, Math.min(4, parallelism));
   /** @type {{index: number, count: number} | null} */
   let shard = null;
   /** @type {string[]} */
@@ -362,28 +368,35 @@ async function main(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--jobs') {
       jobs = Number(argv[++i]);
-      if (!Number.isInteger(jobs) || jobs < 1) {
-        console.error(USAGE);
-        return 2;
-      }
+      if (!Number.isInteger(jobs) || jobs < 1) return { usage: true };
     } else if (argv[i] === '--shard') {
       shard = parseShard(argv[++i] ?? '');
-      if (!shard) {
-        console.error(USAGE);
-        return 2;
-      }
+      if (!shard) return { usage: true };
     } else {
       names.push(argv[i]);
     }
   }
-  const all = readFixtures();
   const missing = names.filter((name) => !all.some((fixture) => fixture.name === name));
-  if (missing.length > 0) {
-    console.error(`verify:fixtures failed: no fixture named ${missing.join(', ')} in test/build-fixtures/`);
+  if (missing.length > 0) return { missing };
+  const chosen = names.length > 0 ? all.filter((fixture) => names.includes(fixture.name)) : all;
+  return { jobs, shard, fixtures: shard ? shardOf(chosen, shard) : chosen };
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {Promise<number>} the exit code
+ */
+async function main(argv) {
+  const plan = planRun(argv, readFixtures());
+  if ('usage' in plan) {
+    console.error(USAGE);
+    return 2;
+  }
+  if ('missing' in plan) {
+    console.error(`verify:fixtures failed: no fixture named ${plan.missing.join(', ')} in test/build-fixtures/`);
     return 1;
   }
-  const chosen = names.length > 0 ? all.filter((fixture) => names.includes(fixture.name)) : all;
-  const fixtures = shard ? shardOf(chosen, shard) : chosen;
+  const { jobs, shard, fixtures } = plan;
   console.log(`verify:fixtures: ${plural(fixtures.length, 'fixture')}${shard ? `, shard ${shard.index} of ${shard.count}` : ''}, ${jobs} at a time`);
 
   const started = Date.now();
@@ -414,4 +427,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }
 
-module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, outputProblems, runFixture, parseShard, shardOf, FIXTURES, CANARY_NAMES, KINDS };
+module.exports = { readFixtures, applyEdits, recordSecurityEntry, liftByteRows, reportedCodes, outputProblems, runFixture, parseShard, shardOf, planRun, FIXTURES, CANARY_NAMES, KINDS };
