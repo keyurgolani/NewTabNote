@@ -717,6 +717,12 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     // The zip: 834,251 bytes in build job 131822570080 of PR checks run 43406673412, plus 5% rounded up,
     // #300 slice 6a's first CI round's figure: the shipped files are next's except the inlined build ID
     assert.equal(BUDGETS.package.zipBytes, 875964);
+    // The counts: the new tab's IndexedDB reads before its mark, 8 at typical and 7 at maximal in job
+    // 131926238843 of perf run 43437487224, plus 5% rounded up to the whole count, and each entry's requests
+    // outside the extension, 0 in every counted run of that job, since a 0 stays 0 (#300 slice 6b, 2026-11-13)
+    assert.deepEqual(Object.fromEntries(Object.entries(entries).map(([name, entry]) => [name, [entry.reads, entry.requests]])), {
+      newtab: [9, 0], popup: [null, 0], sidepanel: [null, 0], offscreen: [undefined, 0], recovery: [undefined, 0], background: [undefined, 0], moment: [undefined, undefined],
+    });
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
     assert.equal(BUDGETS.timing.rounds, 12);
@@ -783,11 +789,15 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
   // The shipped rows with both set to report, for the cases that read a summary without failing
   const REPORTING = { ...BUDGETS, timing: { ...BUDGETS.timing, mode: 'report' }, heap: { ...BUDGETS.heap, mode: 'report' } };
   const ratio = (median, extra = {}) => ({ median, q1: median - 0.01, q3: median + 0.01, values: Array(12).fill(median), ...extra });
+  // Two counted runs on each profile with counts the shipped rows take, so a case about timing
+  // and heap reads no counts verdict but a pass (#300)
+  const TAKEN = { newtab: { reads: 8, requests: 0 }, popup: { requests: 0 }, sidepanel: { requests: 0 }, offscreen: { requests: 0 }, recovery: { requests: 0 }, background: { requests: 0 } };
+  const COUNTED = { runs: 2, profiles: Object.fromEntries(['typical', 'maximal'].map(name => [name, { packages: { candidate: { runs: [TAKEN, TAKEN], max: TAKEN, failures: [] } } }])) };
   // The candidate's ratio to the first 1.4.0 copy alone is set apart from its ratio to both, so
   // a summary that read the first would show. Both profiles the rows gate get the same numbers.
   // `paired` is how many rounds have a run of every package: a package that recorded fewer, on
-  // either side, leaves its other rounds unpaired
-  const probe = (self, both, heapMiB, { first = both + 0.2, failures = [], problems = [], rounds = 12, paired = rounds } = {}) => ({
+  // either side, leaves its other rounds unpaired. `counts: null` leaves the counts out
+  const probe = (self, both, heapMiB, { first = both + 0.2, failures = [], problems = [], rounds = 12, paired = rounds, counts = COUNTED } = {}) => ({
     environment: { cpu: 'test', cores: 4, platform: 'linux' },
     timing: {
       browser: '156',
@@ -809,6 +819,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
         ]),
       ),
     },
+    ...(counts ? { counts } : {}),
     problems,
   });
   const each = verdict => ['typical', 'maximal'].map(profile => ({ profile, ...verdict }));
@@ -968,7 +979,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.equal(gated.failed, true);
     assert.equal(gateReport(counted({ newtab: { reads: 40, requests: 0 }, popup: { requests: 0 } }), rows(40, 0)).failed, false);
     // A set row the run has no count for fails, so a run that counted nothing can't pass
-    const none = gateReport({ ...probe(1.01, 1.05, 2.7) }, rows(40, 0));
+    const none = gateReport(probe(1.01, 1.05, 2.7, { counts: null }), rows(40, 0));
     assert.deepEqual(verdicts(none).slice(0, 2), ['typical newtab reads undefined 40 invalid', 'typical newtab requests undefined 0 invalid']);
     assert.equal(none.failed, true);
     // A request from a page that's no entry is listed under the table, once, and fails nothing
