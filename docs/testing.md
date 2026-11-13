@@ -60,6 +60,19 @@ node scripts/fixtures/derive-expected.mjs
 
 The recorder `git archive`s the tag into a scratch directory, loads it unpacked in the harness, headless, writes the seed through the release's own `Storage`, Popup, and settings, and dumps it with each canary back to its placeholder. A canary the release changed fails the run. The header pins the tag's commit and tree, and lists the write paths that ran. `test/kernel/storage-recorded.test.mjs` checks those pins against the tags. CI's unit job fetches the tags and sets `NTN_RELEASE_TAGS=required`, so a missing tag fails there; a local clone without them shows the check as skipped. Nothing is downloaded, and a release Chromium won't load falls back to #17's synthesized fixture for its row, listed in the test's `FALLBACKS`.
 
+## Faults
+
+`test/support/faults/` holds what #28's slice 4 names for tests on either host, and its `index.js` exports it. Nothing under `test/support/` ships. Fixture rule 5's factory wrapper stays in `test/kernel/storage-faults.mjs`, beside the kernel tests that import it.
+
+The IndexedDB request counter (`idb-requests.js`, #301) records each request a context makes on a store, an index or a cursor, as it makes it, for #27's IndexedDB reads before interaction-ready and any case that counts requests.
+
+- A spec starts it with `countRequestsIn(extension.context)`, which adds it as an init script, so each page's next document counts from its first script, and with `countRequestsIn(extension.worker)`, which counts the service worker's from then on. `readIdbRequests` reads a page's or the worker's record.
+- The record lives only as long as the page's document or the worker's global. A navigation or a reload starts a page's afresh. A worker that restarts or updates loses its own, so a spec calls `countRequestsIn(extension.worker)` again after either, and `readIdbRequests` says so in a context with no record.
+- An entry is one request: its kind (`read` or `write`), method, database, store and index, and when, on the epoch clock, so a page's entries and the worker's line up. A cursor's steps move a request along rather than make one, so they're listed apart.
+- `countIdbRequests(record, { until })` counts a record up to and including a time on the epoch clock. The mark's cut goes through `interactionReadyAt(page)`, which puts the page's `ntn:interaction-ready` mark on that clock, not through `performance.timeOrigin` plus the mark's `startTime` by hand. The cut takes in the mark's own clock tick, 100 µs where the page isn't cross-origin isolated, since for a budget one request too many is safer than one missed. With no `until`, it counts the whole record. A null or non-finite `until` throws, and so does one below 1e12, such as a page's own `performance.now()`, so a cut can't count everything or nothing by mistake. A page that never marked, where `interactionReadyAt` answers null, is cut at another epoch time, such as its `performance.timeOrigin` plus its echo.
+- Each wrapper calls the method it replaced as it was and adds no await, so the same request goes out in the same order, for one small object per request, and a call that throws counts nothing. A store's `delete` and a cursor's `delete` count as writes. Database opens and deletes (`indexedDB.open`, `deleteDatabase`), `databases()` and transactions aren't counted, and a dedicated worker or the offscreen document, which no init script reaches, isn't seen.
+- In Node, `installIdbRequestCounter` takes fake-indexeddb's classes as its scope (`test/idb-request-counter.test.js`).
+
 ## The performance probe
 
 `npm run perf:probe` (#27 slice 4a) measures a built extension from the outside: its pages, its marks, and CDP. It never reads how the package was built, so it runs the same on the legacy build, the 1.4.0 package, and a bundler's output. It writes JSON to `dist-report/`, which git ignores.

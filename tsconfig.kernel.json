@@ -10,5 +10,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node", "chrome"]
   },
-  "include": ["js/kernel/**/*.js", "js/kernel/**/*.mjs", "js/states/**/*.js", "test/kernel/**/*.mjs"]
+  "include": ["js/kernel/**/*.js", "js/kernel/**/*.mjs", "js/states/**/*.js", "test/kernel/**/*.mjs", "test/support/**/*.js", "test/support/**/*.mjs"]
 }
