@@ -125,8 +125,10 @@ function readRing(selectorOf) {
     }
     return { color: color ?? 'rgb(255, 255, 255)' };
   };
-  // The ring shows at the opacity of the control and each parent up to the plane around it. That
-  // plane, and the control's own fill, fade with the ring rather than under it.
+  // The ring shows at the opacity of the control and each parent up to the plane around it. A known
+  // limit: opacity on the parent that carries that plane, or above it, isn't measured, and neither is
+  // the control's own fill under the control's opacity, though each composites over what's under the
+  // faded box. No legacy box with a background fades a focusable control (#327's review, drop 4).
   let ringOpacity = 1;
   for (let node = el; node && (node === el || alpha(getComputedStyle(node).backgroundColor) === 0); node = node.parentElement) {
     ringOpacity *= Number(getComputedStyle(node).opacity);
