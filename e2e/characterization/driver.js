@@ -18,6 +18,10 @@ const { profileStore } = require('../harness/profile-store');
 // BlockEditor.loadNote (js/editor.js) focuses the note's first block this long after it renders
 const EDITOR_FOCUS_DELAY_MS = 50;
 const SETTLE_TIMEOUT_MS = 10_000;
+/** How long the worker's storage upgrade may take before the harness says so: past 1.7.0's slowest, 10.7 s (#286) */
+const UPGRADE_BOUND_MS = 15_000;
+/** How long one of the harness's deletes in the worker may go unanswered before it says so (#286) */
+const DELETE_BOUND_MS = 10_000;
 
 // ─── Startup ───
 
@@ -447,13 +451,24 @@ async function startCoordinator(extension) {
  * minifier renames it, so the name comes from that function's source. A module worker (#12)
  * keeps its top-level bindings out of the global scope, so without openState this fails asking
  * for an update instead of guessing.
+ *
+ * Either wait fails after UPGRADE_BOUND_MS, naming what it waited on, so a stalled run reads as
+ * one in the report, apart from a failure of the state under test (#286).
  */
 async function workerStorageSettled(extension) {
   await startCoordinator(extension);
   if (await extension.worker.evaluate(() => Boolean(self.storageUpgrade))) {
-    await extension.worker.evaluate(async () => {
-      await self.storageUpgrade;
-    });
+    await extension.worker.evaluate(async boundMs => {
+      let timer;
+      const late = new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`the worker's storageUpgrade didn't settle in ${boundMs / 1000} s`)), boundMs);
+      });
+      try {
+        await Promise.race([self.storageUpgrade, late]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }, UPGRADE_BOUND_MS);
     return;
   }
   if (await extension.worker.evaluate(() => Boolean(self.Storage) && 'openState' in self.Storage)) {
@@ -473,7 +488,8 @@ async function workerStorageSettled(extension) {
     throw new Error("Couldn't reach the storage promise captureToDailyNote awaits (a module worker's bindings aren't global); "
       + 'update workerStorageSettled in e2e/characterization/driver.js');
   }
-  await extension.worker.evaluate(binding);
+  await extension.worker.evaluate(`Promise.race([${binding}, new Promise((resolve, reject) => setTimeout(() => `
+    + `reject(new Error("the worker's Storage start didn't settle in ${UPGRADE_BOUND_MS / 1000} s")), ${UPGRADE_BOUND_MS}))]).then(() => {})`);
 }
 
 /**
@@ -510,13 +526,33 @@ async function seedFolder(extension, name, parentId = null) {
  */
 async function shortOfSpace(extension) {
   await workerStorageSettled(extension);
-  await extension.worker.evaluate(async () => {
+  await extension.worker.evaluate(async boundMs => {
     const done = request => new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    await done(indexedDB.deleteDatabase('CanvasTabDB'));
-    await done(indexedDB.deleteDatabase('NewTabNoteRecovery'));
+    // A delete waits for every other connection to its database to close, so one another context
+    // keeps open blocks it: it fails with no answer in boundMs, naming what blocked it (#286)
+    const deleted = name => new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(name);
+      let blocked = false;
+      const timer = setTimeout(() => {
+        reject(new Error(`deleting ${name} got no answer in ${boundMs / 1000} s${blocked ? ', blocked by a connection still open' : ''}`));
+      }, boundMs);
+      request.onblocked = () => {
+        blocked = true;
+      };
+      request.onsuccess = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      request.onerror = () => {
+        clearTimeout(timer);
+        reject(request.error);
+      };
+    });
+    await deleted('CanvasTabDB');
+    await deleted('NewTabNoteRecovery');
     const stores = {
       canvases: ['id', ['name', 'updatedAt']], elements: ['id', ['canvasId', 'type']], settings: ['key', []],
       media: ['id', ['canvasId']], search_index: ['noteId', []], folders: ['id', ['parentId', 'name']],
@@ -536,7 +572,7 @@ async function shortOfSpace(extension) {
         status: 'space-blocked', code: 'space-short', at: Date.now(), version: chrome.runtime.getManifest().version, costly: true,
       },
     });
-  });
+  }, DELETE_BOUND_MS);
 }
 
 /**
@@ -549,13 +585,33 @@ async function shortOfSpace(extension) {
  */
 async function upgradedAfterACopy(extension) {
   await workerStorageSettled(extension);
-  await extension.worker.evaluate(async () => {
+  await extension.worker.evaluate(async boundMs => {
     const done = request => new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    await done(indexedDB.deleteDatabase('CanvasTabDB'));
-    await done(indexedDB.deleteDatabase('NewTabNoteRecovery'));
+    // A delete waits for every other connection to its database to close, so one another context
+    // keeps open blocks it: it fails with no answer in boundMs, naming what blocked it (#286)
+    const deleted = name => new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(name);
+      let blocked = false;
+      const timer = setTimeout(() => {
+        reject(new Error(`deleting ${name} got no answer in ${boundMs / 1000} s${blocked ? ', blocked by a connection still open' : ''}`));
+      }, boundMs);
+      request.onblocked = () => {
+        blocked = true;
+      };
+      request.onsuccess = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      request.onerror = () => {
+        clearTimeout(timer);
+        reject(request.error);
+      };
+    });
+    await deleted('CanvasTabDB');
+    await deleted('NewTabNoteRecovery');
     const stores = {
       canvases: ['id', ['name', 'updatedAt']], elements: ['id', ['canvasId', 'type']], settings: ['key', []],
       media: ['id', ['canvasId']], search_index: ['noteId', []], folders: ['id', ['parentId', 'name']],
@@ -587,7 +643,7 @@ async function upgradedAfterACopy(extension) {
       tx.onabort = () => reject(tx.error);
     });
     db.close();
-  });
+  }, DELETE_BOUND_MS);
   await captureBookmark(extension, { url: 'https://example.test/after-the-update', title: 'After the update' });
   await expect.poll(() => extension.worker.evaluate(async () => {
     const upgrade = await self.storageUpgrade;
