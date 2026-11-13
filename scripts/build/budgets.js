@@ -22,8 +22,9 @@
  *                      row names in neither, so the row can't fall back to measuring the root;
  *                      or a row it needs with no number and no issue named for it in waitsOn
  *                      (#300): a start type its build has, its modules, the service worker's
- *                      cold start, every row of a planned entry, and the zip's and update
- *                      size's, so a row that waits on another issue reads apart from a missing one
+ *                      cold start, a planned entry's start rows and modules, and the zip's and
+ *                      update size's, so a row that waits on another issue reads apart from a
+ *                      missing one
  *   budget/bytes       an entry's start over a row: JS, CSS, HTML, or fonts, raw or gzip at
  *                      level 9, the way npm run perf:probe measures them
  *   budget/modules     an entry's start over its module row: its modules, third-party and
@@ -546,9 +547,9 @@ function wholeNumber(value) {
 
 /**
  * Each row a build needs that has no number and no issue named for it in waitsOn (#300): the start
- * types an entry's build has, its modules, and the service worker's cold start; every row of a
- * planned entry, which waits on the issue that builds it; and the package's rows. A row that waits
- * on another issue names it, so it reads apart from one nobody set.
+ * types an entry's build has, its modules, and the service worker's cold start; a planned entry's
+ * start rows and modules, which wait on the issue that builds it; and the package's rows. A row
+ * that waits on another issue names it, so it reads apart from one nobody set.
  * @param {Record<string, EntryGraph>} graphs
  * @param {BudgetFile} budgets
  * @returns {Problem[]}

@@ -5,7 +5,8 @@
  * fresh profile with the package installed and the fixture profile seeded, as an install-cold run
  * has it (scripts/perf/timing.js), and no clock. It counts the new tab's IndexedDB reads before its
  * interaction-ready mark, and the requests each page and the service worker make outside the
- * extension. The timed runs never count: the counter wraps every IndexedDB request method, so it
+ * extension in the windows below, but for what the worker sends through the offscreen document
+ * it creates. The timed runs never count: the counter wraps every IndexedDB request method, so it
  * runs here alone.
  *
  * - IndexedDB requests come from #301's counter (test/support/faults/): in every page from its
@@ -17,10 +18,17 @@
  *   counted to its load and SETTLE_MS after it, since none has a ready mark yet (#4, #5). The
  *   offscreen document opens as a page, where the worker would create it only for a request it
  *   sends there.
- * - The service worker's requests count from the new tab's open to the run's end.
- * - A request outside the extension is one to any URL but its own, data:, blob: and about:. The
- *   network is off in Chromium itself, so none is answered, and each one still counts as made. One
- *   the network guard refuses is never made, and isn't counted.
+ * - The service worker's requests count from just before it opens the new tab to the run's end,
+ *   while the pages start. Its own start, its install and a restart come before that, and no run
+ *   counts them yet: that takes the listener on before the worker runs, which launchExtension
+ *   can't give.
+ * - What the worker sends through the offscreen document it creates, the requests to the Ollama
+ *   URL, isn't seen at all: Playwright doesn't attach to that document (e2e/network-guard.spec.js),
+ *   so those requests land on no row. Counting them takes a CDP session on the offscreen target.
+ * - A request outside the extension is one to any URL but a chrome-extension:// one, of any
+ *   extension, and data:, blob: and about:. The network is off in Chromium itself, so none is
+ *   answered, and each one still counts as made. One the network guard refuses is never made, and
+ *   isn't counted.
  */
 
 const { launchExtension } = require('../../e2e/harness/extension');
@@ -36,7 +44,8 @@ const LATER_PAGES = Object.freeze({ popup: 'popup.html', sidepanel: 'sidepanel.h
 const ENTRIES = Object.freeze(['newtab', ...Object.keys(LATER_PAGES), 'background']);
 
 /**
- * Whether a request to `url` leaves the extension
+ * Whether a request to `url` goes outside every extension: any URL but chrome-extension://, data:,
+ * blob: and about:
  * @param {string} url
  */
 function offOrigin(url) {
