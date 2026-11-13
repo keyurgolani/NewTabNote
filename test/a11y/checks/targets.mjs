@@ -79,7 +79,9 @@ function collectTargets(selectorOf) {
     let exempt;
     if (el instanceof HTMLElement && el.isContentEditable && !el.parentElement?.isContentEditable) exempt = 'editing-area';
     else if (el.matches('a[href]') && style.display === 'inline') {
-      const block = el.parentElement?.closest('p, li, td, th, dd, dt, blockquote, figcaption');
+      // Its text block is the nearest box that isn't inline: a p or li, or a note's div, its editing host
+      let block = el.parentElement;
+      while (block && ['inline', 'contents'].includes(getComputedStyle(block).display)) block = block.parentElement;
       if (block && block.textContent?.trim() !== el.textContent?.trim()) exempt = 'inline-link';
     }
     return [{ id: selectorOf(el), width, height, ...(exempt ? { exempt } : {}) }];
