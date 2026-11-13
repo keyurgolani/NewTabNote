@@ -78,11 +78,12 @@ export const RULE = 'ntn-focus-ring';
 
 /**
  * In the page: the focused element's ring and the planes beside it, or null when focus is on the page
- * itself. The outline is the outer ring and a box-shadow under it the inner, as #16 draws a two-tone
- * ring; with no outline, the widest box-shadow is the outer ring and the next the inner, stacked on it,
- * so it composites onto the outer ring. A plane is the
- * first background that isn't transparent, around the control and on it, with the first opaque one
- * under it when it's translucent.
+ * itself. The outline is the outer ring, and the top box-shadow the inner where the outline's offset
+ * leaves room for it, as #16 draws a two-tone ring. With no outline, the rings are the shadows that
+ * show past every one listed before them: the widest is the outer ring and the next the inner,
+ * stacked on it, so it composites onto the outer ring. A shadow that's painted over is no ring. A
+ * plane is the first background that isn't transparent, around the control and on it, with the first
+ * opaque one under it when it's translucent.
  * @param {(el: Element) => string} selectorOf
  */
 function readRing(selectorOf) {
@@ -96,12 +97,17 @@ function readRing(selectorOf) {
     return color.startsWith('rgba') ? Number(color.slice(color.lastIndexOf(',') + 1, -1)) : 1;
   };
   const COLOR = /rgba?\([^)]*\)|color\([^)]*\)/;
+  // Box-shadows paint in the order they're listed, the first on top
   const shadows = (style.boxShadow === 'none' ? [] : style.boxShadow.split(/,(?![^(]*\))/))
     .filter(shadow => !shadow.includes('inset'))
-    .map(shadow => ({ color: (shadow.match(COLOR) ?? ['rgba(0, 0, 0, 0)'])[0], spread: parseFloat(shadow.replace(COLOR, '').match(/-?[\d.]+px/g)?.[3] ?? '0') }))
-    .sort((a, b) => b.spread - a.spread);
+    .map(shadow => ({ color: (shadow.match(COLOR) ?? ['rgba(0, 0, 0, 0)'])[0], spread: parseFloat(shadow.replace(COLOR, '').match(/-?[\d.]+px/g)?.[3] ?? '0') }));
+  // So a shadow shows only past every one listed before it
+  const shown = shadows.filter((shadow, i) => shadows.slice(0, i).every(({ spread }) => spread < shadow.spread));
   const outline = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0 ? style.outlineColor : null;
-  const [outer, inner] = outline ? [outline, shadows[0]?.color] : shadows.map(({ color }) => color);
+  // An outline paints over every shadow, so the top one shows only in the offset the outline leaves
+  const [outer, inner] = outline
+    ? [outline, parseFloat(style.outlineOffset) > 0 ? shadows[0]?.color : undefined]
+    : [shown.at(-1)?.color, shown.at(-2)?.color];
   /** @param {Element | null} start */
   const plane = start => {
     let color = null;
