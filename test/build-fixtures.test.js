@@ -137,6 +137,22 @@ describe('test/build-fixtures/', () => {
     ]);
   });
 
+  it('splits the fixtures into shards by name, so n shards hold each fixture exactly once and differ in size by one at most (#29)', () => {
+    const { shardOf, parseShard } = require('../scripts/build/verify-fixtures.js');
+    const names = fixtures.map(({ name }) => name).sort();
+    for (const count of [1, 2, 3]) {
+      const shards = Array.from({ length: count }, (_, i) => shardOf(fixtures, { index: i + 1, count }).map(({ name }) => name));
+      assert.deepEqual(shards.flat().sort(), names, `${count} shards hold every fixture`);
+      assert.equal(new Set(shards.flat()).size, names.length, `${count} shards hold no fixture twice`);
+      const sizes = shards.map((shard) => shard.length);
+      assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `${count} shards: ${sizes.join(', ')}`);
+    }
+    // In name order, whatever order it's handed the fixtures in
+    assert.deepEqual(shardOf([{ name: 'c' }, { name: 'a' }, { name: 'b' }], { index: 1, count: 2 }), [{ name: 'a' }, { name: 'c' }]);
+    assert.deepEqual(parseShard('2/2'), { index: 2, count: 2 });
+    for (const text of ['0/2', '3/2', '1/0', '1', '1/2/3', 'a/b', ' 1/2', '-1/2', '']) assert.equal(parseShard(text), null, JSON.stringify(text));
+  });
+
   it('reads the codes a build or package run reported from its problem lines', () => {
     const run = {
       status: 1,
