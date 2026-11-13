@@ -627,6 +627,16 @@ describe("build/budgets.json, with the owner's numbers (2026-10-31)", () => {
     // of push run 43372411837 read it at 1fcbef1a (2026-11-12)
     assert.deepEqual(entries.popup.start.js, { raw: 76913, gzip: 26638 });
     assert.deepEqual(entries.sidepanel.start.js, { raw: 73534, gzip: 25553 });
+    // Each entry's start modules, Popup's and Side Panel's start CSS and HTML, and the service worker's
+    // start JS: next's push run 43397463553 at 088ff88d, plus 5% rounded up to the module or the byte. Moment's
+    // module row waits for #2 (#300 slice 6a, 2026-11-13)
+    assert.deepEqual(Object.fromEntries(Object.entries(entries).map(([name, entry]) => [name, entry.modules])), { newtab: 158, popup: 63, sidepanel: 62, offscreen: 12, recovery: 161, background: 210, moment: null });
+    assert.deepEqual([entries.popup.start.css, entries.popup.start.html], [{ raw: 7213, gzip: 2016 }, { raw: 2967, gzip: 1116 }]);
+    assert.deepEqual([entries.sidepanel.start.css, entries.sidepanel.start.html], [{ raw: 3503, gzip: 1272 }, { raw: 1536, gzip: 702 }]);
+    assert.deepEqual(entries.background.start.js, { raw: 338354, gzip: 103464 });
+    // The zip: 834,251 bytes in build job 131822570080 of PR checks run 43406673412, plus 5% rounded up,
+    // #300 slice 6a's first CI round's figure: the shipped files are next's except the inlined build ID
+    assert.equal(BUDGETS.package.zipBytes, 875964);
     assert.equal(BUDGETS.timing.tolerancePct, 7);
     // Timing takes 12 rounds of each profile, and both rows gate both profiles
     assert.equal(BUDGETS.timing.rounds, 12);

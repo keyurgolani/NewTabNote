@@ -7,7 +7,7 @@
   "edits": [
     {
       "file": "build/budgets.json",
-      "replace": "\"zipBytes\": null",
+      "replace": "\"zipBytes\": 875964",
       "with": "\"zipBytes\": 1"
     }
   ]

@@ -9,7 +9,7 @@
   "edits": [
     {
       "file": "build/budgets.json",
-      "replace": "\"page\": \"popup.html\",\n      \"modules\": null,",
+      "replace": "\"page\": \"popup.html\",\n      \"modules\": 63,",
       "with": "\"page\": \"popup.html\",\n      \"modules\": 1,"
     }
   ]
