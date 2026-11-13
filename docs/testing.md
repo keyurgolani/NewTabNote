@@ -75,6 +75,12 @@ The IndexedDB request counter (`idb-requests.js`, #301) records each request a c
 - Each wrapper calls the method it replaced as it was and adds no await, so the same request goes out in the same order, for one small object per request, and a call that throws counts nothing. A store's `delete` and a cursor's `delete` count as writes. Database opens and deletes (`indexedDB.open`, `deleteDatabase`), `databases()` and transactions aren't counted, and a dedicated worker or the offscreen document, which no init script reaches, isn't seen.
 - In Node, `installIdbRequestCounter` takes fake-indexeddb's classes as its scope (`test/idb-request-counter.test.js`).
 
+The store hold (`store-hold.js`, #301) is #28's hung-repository fault at the database: another context's transaction over a database's stores, kept until the case releases it.
+
+- `holdStores(target, stores)` holds stores of CanvasTabDB, or of the database its options name, in a readwrite transaction from a Page or Worker or, in Node, from an `IDBFactory`, so a write to one of them waits behind it. It resolves once its first get has succeeded, so the hold holds and doesn't merely exist. `holdUpgrade(target)` holds the database's upgrade one version up, so every other open waits, and its release rolls the upgrade back.
+- A hold has no time limit. A case ends it after what it holds across, such as a tab's close or a worker's stop, and `stillHeld(when)` fails unless the hold still held then. `release()` answers `complete`, or `abort` for an upgrade, and fails at once, naming the database and stores, when the hold ended first. `releaseHolds()` lets go of every hold a Page or Worker still has, for a test's teardown.
+- In Node it runs over fake-indexeddb, and `test/kernel/store-hold.test.mjs` holds it to #17's adapter. `e2e/store-hold.spec.js` holds it in an extension page and in the worker.
+
 ## The performance probe
 
 `npm run perf:probe` (#27 slice 4a) measures a built extension from the outside: its pages, its marks, and CDP. It never reads how the package was built, so it runs the same on the legacy build, the 1.4.0 package, and a bundler's output. It writes JSON to `dist-report/`, which git ignores.
