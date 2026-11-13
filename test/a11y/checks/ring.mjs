@@ -137,23 +137,32 @@ function readRing(selectorOf) {
   return { id: selectorOf(el), ring: outer ? { outer, ...(inner ? { inner } : {}), ...stacked } : null, planes };
 }
 
+/** The rule a focus walk that stops short fails: Tab left focus where it was, or the walk hit its cap */
+export const WALK_RULE = 'ntn-focus-walk';
+
 /**
  * Tabs through `page` from where focus is, and finds each control whose ring is under 3:1 against a
- * plane beside it, or that shows none, until focus leaves the page or comes back round
- * @param {import('@playwright/test').Page} page
+ * plane beside it, or that shows none, until focus leaves the page or comes back round. A walk that
+ * stops short says where: at a control that keeps focus on Tab, as an editor does that indents on
+ * it, or at the last control it read when it hits its cap.
+ * @param {Pick<import('@playwright/test').Page, 'keyboard' | 'evaluate'>} page
  * @param {{max?: number}} [options] - the most Tab presses
  */
 export async function ringFindings(page, { max = 200 } = {}) {
   /** @type {{rule: string, target: string}[]} */
   const findings = [];
   const seen = new Set();
+  /** @type {string | null} */
+  let last = null;
   for (let press = 0; press < max; press += 1) {
     await page.keyboard.press('Tab');
     /** @type {{id: string, ring: {outer: string, inner?: string} | null, planes: {id: string, color: string, over?: string}[]} | null} */
     const read = await page.evaluate(`(${readRing})(${selectorOf})`);
-    if (read === null || seen.has(read.id)) break;
+    if (read !== null && read.id === last) return [...findings, { rule: WALK_RULE, target: read.id }];
+    if (read === null || seen.has(read.id)) return findings;
     seen.add(read.id);
+    last = read.id;
     if (read.ring === null || ringShortfalls(read.ring, read.planes).length > 0) findings.push({ rule: RULE, target: read.id });
   }
-  return findings;
+  return last === null ? findings : [...findings, { rule: WALK_RULE, target: last }];
 }
