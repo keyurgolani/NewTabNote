@@ -170,8 +170,9 @@ export function tabStopFollows() {
  * it, as a table's last cell does when it re-renders its block, or at the last stop it read when it
  * hits its cap.
  * @param {Pick<import('@playwright/test').Page, 'keyboard' | 'evaluate'>} page
- * @param {(selectorOf: (el: Element) => string) => {id: string} | null} read - in the page: the
- *   focused element's reading, or null when focus is on the page itself
+ * @param {(selectorOf: (el: Element) => string, first: boolean) => {id: string} | null} read - in the
+ *   page: the focused element's reading, or null when focus is on the page itself, told whether it's
+ *   the walk's first
  * @param {{max?: number}} [options] - the most Tab presses
  * @returns {Promise<{reads: any[], stopped: {rule: string, target: string} | null}>}
  */
@@ -185,7 +186,7 @@ export async function tabWalk(page, read, { max = 200 } = {}) {
   for (let press = 0; press < max; press += 1) {
     await page.keyboard.press('Tab');
     /** @type {{id: string, followed?: boolean} | null} */
-    const stop = await page.evaluate(`((stop) => stop && { ...stop, followed: (${tabStopFollows})() })((${read})(${selectorOf}))`);
+    const stop = await page.evaluate(`((stop) => stop && { ...stop, followed: (${tabStopFollows})() })((${read})(${selectorOf}, ${press === 0}))`);
     if (stop !== null && stop.id === last) return { reads, stopped: { rule: WALK_RULE, target: stop.id } };
     if (stop === null) return { reads, stopped: followed && last !== null ? { rule: WALK_RULE, target: last } : null };
     if (seen.has(stop.id)) return { reads, stopped: null };

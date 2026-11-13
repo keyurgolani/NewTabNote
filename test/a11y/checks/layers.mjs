@@ -2,7 +2,7 @@
  * Focus and layers (#24, "Focus and layers"): hidden, collapsed, off-screen and transparent layers are
  * inert, with focus moved out first, so Tab never lands where nobody sees it. The browser half tabs
  * through the page and reads each stop: whether the page shows any of it where it sits, by what's on
- * top at its middle and near its corners, and its opacity with its parents'. A stop under aria-hidden
+ * top at the middle and near the corners of each of its line boxes, and its opacity with its parents'. A stop under aria-hidden
  * is axe's aria-hidden-focus. Tab order follows the order the page reads in, left to right as the
  * extension's pages run: a stop Tab reaches back along a line, up a column, or up to the column
  * before, from the stop before is out of it. No scripted action leaves focus on body either:
@@ -37,8 +37,10 @@ export function hiddenStops(stops) {
  * is, which no reading left to right takes. A step up and right, to the top of the next column, reads
  * in order. Two boxes share a line when they overlap by half the shorter one's height, and a column
  * when they overlap by half the narrower one's width. A stop that wraps starts at its `box`
- * and ends at its `end`, so the next stop is read from where it ends.
- * @param {readonly {id: string, box: Box, end?: Box}[]} stops - in tab order
+ * and ends at its `end`, so the next stop is read from where it ends. A stop read in the page carries
+ * `before`, the stop before's last line box as the same read measured it, so each step compares in one
+ * frame whatever scrolled between the two reads; null when there's none to measure.
+ * @param {readonly {id: string, box: Box, end?: Box, before?: Box | null}[]} stops - in tab order
  * @returns {string[]}
  */
 export function orderProblems(stops) {
@@ -47,7 +49,8 @@ export function orderProblems(stops) {
   return stops
     .filter((stop, i) => {
       if (i === 0) return false;
-      const [a, b] = [stops[i - 1].end ?? stops[i - 1].box, stop.box];
+      const [a, b] = [stop.before === undefined ? (stops[i - 1].end ?? stops[i - 1].box) : stop.before, stop.box];
+      if (a === null) return false;
       const line = overlap(a.y, a.height, b.y, b.height);
       if (line) return b.x + b.width / 2 < a.x + a.width / 2;
       if (overlap(a.x, a.width, b.x, b.width)) return b.y + b.height <= a.y;
@@ -60,13 +63,15 @@ export function orderProblems(stops) {
  * In the page: the focused element, with whether the page shows any of it and its opacity with its
  * parents', or null when focus is on the page itself. It's read by its line boxes, so a link that wraps
  * is shown if the page shows it where either part sits, and its box is its first part, with its last
- * as its end. A stop the pointer passes through is shown if any of it is on screen. Its boxes are where
- * it sits with nothing scrolled, each scrolled box around it up to a fixed one added back, since Chrome
- * scrolls each stop it tabs to into view and order compares stops read at different scroll positions.
- * A sticky box isn't followed.
+ * as its end. A stop the pointer passes through is shown if any of it is on screen. Chrome scrolls each
+ * stop it tabs to into view, so the read also measures the last stop the walk saw shown, kept on the
+ * window, by its last line box: `before`, in the same frame as this stop's boxes.
  * @param {(el: Element) => string} selectorOf
+ * @param {boolean} first - whether it's the walk's first read, which has no stop before it
  */
-function readStop(selectorOf) {
+function readStop(selectorOf, first) {
+  const scope = /** @type {any} */ (window);
+  if (first) scope.__ntnShownStop = null;
   const el = document.activeElement;
   if (!el || el === document.body || el === document.documentElement) return null;
   const parts = [...el.getClientRects()].filter(({ width, height }) => width > 0 && height > 0);
@@ -84,15 +89,14 @@ function readStop(selectorOf) {
   const shown = parts.some(seen);
   let opacity = 1;
   for (let node = el; node; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
-  let dx = 0;
-  let dy = 0;
-  for (let node = el; node.parentElement && getComputedStyle(node).position !== 'fixed'; node = node.parentElement) {
-    dx += node.parentElement.scrollLeft;
-    dy += node.parentElement.scrollTop;
-  }
-  const at = (/** @type {DOMRect} */ { left, top, width, height }) => ({ x: left + dx, y: top + dy, width, height });
-  const [first = el.getBoundingClientRect()] = parts;
-  return { id: selectorOf(el), shown, opacity, box: at(first), ...(parts.length > 1 ? { end: at(parts[parts.length - 1]) } : {}) };
+  const at = (/** @type {DOMRect} */ { left, top, width, height }) => ({ x: left, y: top, width, height });
+  /** @type {Element | null} */
+  const prior = scope.__ntnShownStop ?? null;
+  const priorParts = prior && prior.isConnected ? [...prior.getClientRects()].filter(({ width, height }) => width > 0 && height > 0) : [];
+  const before = priorParts.length > 0 ? at(priorParts[priorParts.length - 1]) : null;
+  if (shown && opacity !== 0) scope.__ntnShownStop = el;
+  const [start = el.getBoundingClientRect()] = parts;
+  return { id: selectorOf(el), shown, opacity, box: at(start), ...(parts.length > 1 ? { end: at(parts[parts.length - 1]) } : {}), before };
 }
 
 /**
