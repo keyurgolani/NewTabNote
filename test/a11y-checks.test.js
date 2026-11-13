@@ -286,6 +286,8 @@ describe("the clipping check's pure part (#24 slice 2)", () => {
     assert.equal(cut(box(88, 900), bar), true);
     assert.equal(cut(box(370, 8)), true);
     assert.equal(cut(box(-22, 8)), true);
+    assert.equal(cut(box(8, 780)), true);
+    assert.equal(cut(box(8, -22)), true);
     assert.equal(cut(box(-9999, 8)), false);
     // In a pane showing the page's last 100px and scrolling from 600 to 1000: the action held inside
     // that area, and the pane's visible part inside the page in its place

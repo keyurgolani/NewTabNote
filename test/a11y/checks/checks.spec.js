@@ -44,14 +44,18 @@
 //   a new document into the page, which keeps the window, and refuses a page that never started
 //   recording, or that a reload has replaced since;
 // - under reduced motion, the motion check finds a transform transition, a keyframed rotation,
-//   smooth scroll and a canvas that keeps redrawing, and passes a fade and a canvas drawn once;
+//   smooth scroll and a canvas that keeps redrawing, and passes a fade, a keyframed pulse and a
+//   canvas drawn once;
 // - the clipping check finds an action a hidden-overflow bar cuts off and one partly before the
 //   page's start, and at 320 CSS px a block that makes the page scroll sideways, and passes a bar
 //   that scrolls. At 1280 and at 200, where nothing asks a page to reflow, only the cut-off actions
 //   stay. An action in a scroll container is held to what the container scrolls to, so the actions
 //   in panes a hidden-overflow box holds pass, below the fold or scrolled past, and so do those of a
 //   pane whose content runs past the page's end. One placed before its pane's start, where no scroll
-//   reaches, is found.
+//   reaches, is found. Each reading has a page of its own: a button below the viewport of a page whose
+//   body hides overflow is found, a fixed button past the hidden-overflow parent it sits in passes,
+//   and a strip that runs past 320 CSS px inside a scroll container doesn't make the page scroll
+//   sideways, so only the block beside it is named.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -410,14 +414,15 @@ test("the announcement recorder refuses a page that never started recording, and
   await expect(announce.readAnnouncements(page)).rejects.toThrow(/^the page isn't recording/);
 });
 
-test('under reduced motion, the motion check finds a transform transition, a keyframed one, smooth scroll and a canvas that keeps redrawing, and passes a fade', async ({ page }) => {
+test('under reduced motion, the motion check finds a transform transition, a keyframed one, smooth scroll and a canvas that keeps redrawing, and passes a fade and a keyframed pulse', async ({ page }) => {
   const motion = await import('./motion.mjs');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setContent(
     html(`<style>#slide { transition: transform 200ms; } #fade { transition: opacity 200ms; }
       @keyframes spin { to { transform: rotate(1turn); } } #spin { animation: spin 1s infinite; }
+      @keyframes pulse { 50% { opacity: 0.5; } } #pulse { animation: pulse 1s infinite; }
       #scroller { scroll-behavior: smooth; height: 40px; overflow: auto; }</style>
-      <div id="slide">A</div><div id="fade">B</div><div id="spin">C</div><div id="scroller"><p>D</p></div>
+      <div id="slide">A</div><div id="fade">B</div><div id="spin">C</div><div id="pulse">E</div><div id="scroller"><p>D</p></div>
       <canvas id="chart" width="40" height="40"></canvas><canvas id="still" width="40" height="40"></canvas>
       <script>
         const chart = document.getElementById('chart').getContext('2d');
@@ -480,4 +485,23 @@ test('the clipping check holds a page to reflow only at 320 CSS px wide, so at 2
   await page.setViewportSize({ width: 200, height: 640 });
   await page.setContent(CLIPPED);
   expect(await clip.clipFindings(page)).toEqual(CUT);
+});
+
+test("the clipping check holds each of its readings: a body that hides overflow reaches only the viewport, a fixed action escapes its parent, and a strip in a scroll container doesn't widen the page", async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.setContent(
+    html(`<style>body { overflow: hidden; } #low { display: block; width: 44px; height: 44px; margin-top: 700px; }</style><button id="low">L</button>`),
+  );
+  expect(await clip.clipFindings(page)).toEqual([{ rule: 'ntn-clipped-action', target: '#low' }]);
+  await page.setContent(
+    html(`<style>#parent { width: 100px; height: 50px; overflow: hidden; } #pinned { position: fixed; left: 150px; top: 200px; width: 44px; height: 44px; }</style>
+      <div id="parent"><button id="pinned">F</button></div>`),
+  );
+  expect(await clip.clipFindings(page)).toEqual([]);
+  await page.setContent(
+    html(`<style>#pane { width: 200px; overflow-x: auto; } #strip, #wide { width: 400px; height: 10px; }</style>
+      <div id="pane"><div id="strip"></div></div><div id="wide"></div>`),
+  );
+  expect(await clip.clipFindings(page)).toEqual([{ rule: 'ntn-reflow', target: '#wide' }]);
 });
