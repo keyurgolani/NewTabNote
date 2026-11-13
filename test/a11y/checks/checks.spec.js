@@ -8,7 +8,8 @@
 //   by its own click listener or a resize cursor: a 16 by 16 Close inside a tab's button, a 4px
 //   col-resize strip and an 18 by 18 checkbox under a row with the same cursor are found, and a toggle's
 //   slider is part of its label, so the toggle is one finding. A link in running text is exempt
-//   in any text block, a note's div and its editing host included, and a link alone in one isn't;
+//   in any text block, a note's div and its editing host included, however deep in inline boxes it
+//   sits, under a note's bold or a wrapper with no box of its own, and a link alone in one isn't;
 // - the focus ring finds a ring under 3:1 against the page and a control with no ring, and passes a
 //   strong ring and two two-tone rings on a dark plane whose inner ring carries the contrast: one
 //   outlined, its inner ring beside the outline, and one of box-shadows, its inner ring stacked on
@@ -97,10 +98,12 @@ test("the hit boxes find a pointer-only control by its own click listener or a r
   ]);
 });
 
-test("the hit boxes pass a link in running text in any text block, a note's editing host and its wiki links included, and find one alone in its block", async ({ page }) => {
+test("the hit boxes pass a link in running text in any text block, a note's editing host and its wiki links included, under bold or a box-less wrapper too, and find one alone in its block", async ({ page }) => {
   await page.setContent(
     html(`<div class="block"><div class="block-content" contenteditable="true">Read <a href="https://example.com/guide" id="guide">the guide</a> first, then <a href="#" class="wiki-link" id="wiki">Note</a>.</div></div>
+      <div class="block"><div class="block-content" contenteditable="true">Read <b><a href="#bold" id="bold">the guide</a></b> first.</div></div>
       <div class="note-text">See <a href="#more" id="more">more</a> below.</div>
+      <p>See <span style="display: contents"><a href="#wrapped" id="wrapped">this</a></span> too.</p>
       <div><a href="#solo" id="solo">Solo</a></div>`),
   );
   expect(await targets.targetFindings(page)).toEqual([{ rule: 'ntn-target-size', target: '#solo' }]);
