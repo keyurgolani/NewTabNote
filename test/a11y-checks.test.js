@@ -9,7 +9,8 @@
 // - a tab stop nobody sees, in a collapsed, off-screen or transparent layer, a step that leaves
 //   focus on body, and tab order that runs back along a line or up a column;
 // - how a live region announces, for the announcement recorder, which won't read a page it isn't
-//   recording.
+//   recording;
+// - an action that a parent cuts off or that scrolling can't reach.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -261,5 +262,28 @@ describe("the announcement recorder's pure part (#24 slice 2)", () => {
     assert.deepEqual(await announce.readAnnouncements(page(saved)), saved);
     assert.deepEqual(await announce.readAnnouncements(page([])), []);
     await assert.rejects(announce.readAnnouncements(page(null)), /^TypeError: the page isn't recording/);
+  });
+});
+
+describe("the clipping check's pure part (#24 slice 2)", () => {
+  /** @type {any} */ let clip;
+  before(async () => {
+    clip = await import('./a11y/checks/clip.mjs');
+  });
+
+  it("finds an action cut off by a parent that clips it, or past where the page scrolls to, and leaves one wholly before the page's start to the layers check", () => {
+    const FAR = 1e9;
+    const reach = { right: 400, bottom: 800 };
+    const box = (/** @type {number} */ left, /** @type {number} */ top) => ({ left, top, right: left + 44, bottom: top + 44 });
+    const bar = { left: 0, top: -FAR, right: 100, bottom: FAR };
+    const cut = (/** @type {object} */ action) => clip.cutOff({ clips: [], reach, ...action });
+    assert.equal(cut({ box: box(8, 8) }), false);
+    assert.equal(cut({ box: box(50, 8), clips: [bar] }), false);
+    assert.equal(cut({ box: box(88, 8), clips: [bar] }), true);
+    assert.equal(cut({ box: box(88, 900), clips: [bar] }), true);
+    assert.equal(cut({ box: box(370, 8) }), true);
+    assert.equal(cut({ box: box(-22, 8) }), true);
+    assert.equal(cut({ box: box(-9999, 8) }), false);
+    assert.deepEqual([clip.CLIP_RULE, clip.REFLOW_RULE, clip.REFLOW_WIDTH], ['ntn-clipped-action', 'ntn-reflow', 320]);
   });
 });

@@ -44,7 +44,10 @@
 //   a new document into the page, which keeps the window, and refuses a page that never started
 //   recording, or that a reload has replaced since;
 // - under reduced motion, the motion check finds a transform transition, a keyframed rotation,
-//   smooth scroll and a canvas that keeps redrawing, and passes a fade and a canvas drawn once.
+//   smooth scroll and a canvas that keeps redrawing, and passes a fade and a canvas drawn once;
+// - the clipping check finds an action a hidden-overflow bar cuts off and one partly before the
+//   page's start, and at 320 CSS px a block that makes the page scroll sideways, and passes a bar
+//   that scrolls. At 1280 only the cut-off actions stay.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -427,4 +430,23 @@ test('under reduced motion, the motion check finds a transform transition, a key
   ]);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(motion.motionFindings(page)).rejects.toThrow(/prefers-reduced-motion: reduce/);
+});
+
+test("the clipping check finds an action a parent cuts off or scrolling can't reach, and at 320 CSS px a page that scrolls sideways", async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.setContent(
+    html(`<style>button { flex: none; width: 44px; height: 44px; } .bar { display: flex; width: 100px; overflow: hidden; }
+      .scroller { display: flex; width: 100px; overflow-x: auto; } #early { position: relative; left: -30px; } #wide { width: 400px; height: 10px; }</style>
+      <div class="bar"><button id="a">A</button><button id="b">B</button><button id="cut">C</button></div>
+      <div class="scroller"><button id="d">D</button><button id="e">E</button><button id="f">F</button></div>
+      <button id="early">G</button><div id="wide"></div>`),
+  );
+  const cut = [
+    { rule: 'ntn-clipped-action', target: '#cut' },
+    { rule: 'ntn-clipped-action', target: '#early' },
+  ];
+  expect(await clip.clipFindings(page)).toEqual([...cut, { rule: 'ntn-reflow', target: '#wide' }]);
+  await page.setViewportSize({ width: 1280, height: 640 });
+  expect(await clip.clipFindings(page)).toEqual(cut);
 });
