@@ -119,12 +119,26 @@ async function emulate(page, point, surface) {
   await spaceText(page, point);
 }
 
+/** Settles once every transition running on the page has ended */
+const TRANSITIONS_ENDED = `Promise.all(document.getAnimations().filter(animation => animation instanceof CSSTransition)
+  .map(animation => animation.finished.catch(() => {}))).then(() => {})`;
+
+/**
+ * Takes the pointer off `page` and waits out the transitions that starts, so the checks see the page
+ * as a keyboard user has it, with nothing hovered: a setup's click leaves the pointer on its control
+ * @param {import('@playwright/test').Page} page
+ */
+async function offPointer(page) {
+  await page.mouse.move(-1, -1);
+  await page.evaluate(TRANSITIONS_ENDED);
+}
+
 /**
  * Declares one test of `surface` at each of its points, on `test`, which defines `pointPage`: the
  * page each one checks, opened as the spec opens its surface, through #34's harness for the
  * extension's own. Playwright reads a test's fixtures from its own function, so the spec names how to
- * open the page there. Each test puts the page at its point, text spacing included, checks it, and
- * attaches what it found with its point.
+ * open the page there. Each test puts the page at its point, text spacing included, takes the pointer
+ * off it, checks it, and attaches what it found with its point.
  * @param {import('@playwright/test').TestType<{pointPage: import('@playwright/test').Page}, any>} test
  * @param {string} surface
  * @param {{check: (page: import('@playwright/test').Page, point: Point) => Promise<{rule: string, target: string}[]>}} steps
@@ -134,10 +148,11 @@ function atPoints(test, surface, { check }) {
   for (const point of all) {
     test(`${surface} at ${point.id}`, async ({ pointPage }, testInfo) => {
       await emulate(pointPage, point, surface);
+      await offPointer(pointPage);
       const findings = await check(pointPage, point);
       await testInfo.attach('a11y-findings', { body: JSON.stringify(recordAt(point, all.length, findings)), contentType: 'application/json' });
     });
   }
 }
 
-module.exports = { CONTRAST_RULES, pointsOf, viewportOf, recordAt, emulate, spaceText, atPoints };
+module.exports = { CONTRAST_RULES, pointsOf, viewportOf, recordAt, emulate, spaceText, offPointer, atPoints };
