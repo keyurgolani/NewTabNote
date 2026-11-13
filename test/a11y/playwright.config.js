@@ -20,6 +20,8 @@ module.exports = defineConfig({
   reporter: [...(process.env.CI ? [['list'], ['github']] : [['list']]), ['./baseline-reporter.js']],
   expect: { timeout: 10_000 },
   use: {
+    // The full Chromium build, as the harness runs extensions, which CI installs with --no-shell
+    channel: 'chromium',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },

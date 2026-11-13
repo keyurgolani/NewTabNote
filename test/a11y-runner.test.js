@@ -9,15 +9,24 @@
 //   --test-list) is set, and the config runs the *.spec.js under test/a11y/ one at a time, with no
 //   retry, so a finding comes from one attempt;
 // - the reporter the config builds reads test/a11y/baseline.json at the path check:a11y-baseline
-//   reads, since a wrong one reads as no file, which after the seed is report-only.
+//   reads, since a wrong one reads as no file, which after the seed is report-only;
+// - CI's extension job runs it after test:extension, on the full Chromium build the job installs,
+//   and pr-gate's local command for the job runs it too;
+// - until test/a11y/baseline.json lands with its seed, the step passes a run whose page finds
+//   something and prints the finding, and fails one whose checks spec fails. Once the file lands,
+//   the same finding fails it. Playwright's command line runs specs that start no browser, on
+//   test/a11y/'s config with its reporter's file and specs moved to a folder of their own.
 // test/toolchain.test.js holds every devDependency to the version the lockfile installs.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
+const PLAYWRIGHT_CLI = require.resolve('@playwright/test/cli');
 const check = require('../scripts/check-a11y-baseline.js');
 const read = (/** @type {string} */ file) => JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf8'));
 
@@ -62,5 +71,64 @@ describe('test:a11y and its pinned axe (#24 slice 2)', () => {
     // seed is report-only, and --base, which reads the file itself, wouldn't notice
     assert.equal(check.baselineIn(), path.join(ROOT, 'test', 'a11y', 'baseline.json'));
     assert.equal(new Reporter(options)._baseline, check.baselineIn());
+  });
+
+  it("runs in CI's extension job after test:extension, on the Chromium the job installs, and pr-gate's local command for the job runs it", () => {
+    const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pr-checks.yml'), 'utf8');
+    const job = workflow.slice(workflow.indexOf('\n  extension:\n'), workflow.indexOf('\n  pr-gate:\n'));
+    const order = ['run: npm run test:extension 2>&1', 'run: npm run test:a11y 2>&1 | tee -a "$RUNNER_TEMP/job.log"', 'job.log" extension'];
+    const at = order.map(step => job.indexOf(step));
+    assert.ok(at.every(index => index > 0) && at[0] < at[1] && at[1] < at[2], `the steps are at ${at.join(', ')}`);
+    assert.match(workflow, /"extension": "npm run build -- --strict && npm run test:extension && npm run test:a11y"/);
+    // The job installs Chromium with --no-shell, the full build the harness runs extensions on
+    assert.equal(require('./a11y/playwright.config.js').use.channel, 'chromium');
+  });
+
+  it("passes and prints a page's finding before the seed, fails on a failing checks spec, and fails on the finding once the file lands", () => {
+    // Playwright places a spec by its real path, and macOS's temporary folder sits behind a link
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-a11y-runner-')));
+    try {
+      const playwright = JSON.stringify(require.resolve('@playwright/test'));
+      // A page's spec, whose test attaches what its checks found, as each page's test does
+      fs.writeFileSync(path.join(dir, 'sample.spec.js'), [
+        `const { test } = require(${playwright});`,
+        "test('sample', async () => {",
+        "  await test.info().attach('a11y-findings', { body: JSON.stringify({ findings: [{ rule: 'color-contrast', target: '#faint' }] }), contentType: 'application/json' });",
+        '});',
+      ].join('\n'));
+      fs.mkdirSync(path.join(dir, 'checks'));
+      const checks = (/** @type {number} */ value) => fs.writeFileSync(path.join(dir, 'checks', 'checks.spec.js'), [
+        `const { test, expect } = require(${playwright});`,
+        `test('the check library', () => { expect(${value}).toBe(1); });`,
+      ].join('\n'));
+      const baseline = path.join(dir, 'baseline.json');
+      const reporter = [path.join(ROOT, 'test', 'a11y', 'baseline-reporter.js'), { baseline, specs: dir }];
+      fs.writeFileSync(path.join(dir, 'playwright.config.js'), [
+        `const config = require(${JSON.stringify(path.join(ROOT, 'test', 'a11y', 'playwright.config.js'))});`,
+        `module.exports = { ...config, testDir: ${JSON.stringify(dir)}, outputDir: ${JSON.stringify(path.join(dir, 'results'))},`,
+        `  reporter: config.reporter.map(entry => (entry[0] === './baseline-reporter.js' ? ${JSON.stringify(reporter)} : entry)) };`,
+      ].join('\n'));
+      const run = () => spawnSync(process.execPath, [PLAYWRIGHT_CLI, 'test', '-c', path.join(dir, 'playwright.config.js')], { cwd: dir, encoding: 'utf8' });
+      const finding = `sample's color-contrast fails "#faint", which test/a11y/baseline.json doesn't list`;
+      const reported = `test:a11y's findings, reported only until test/a11y/baseline.json lands with its seed:\n  ${finding}\n`;
+
+      checks(1);
+      const found = run();
+      assert.equal(found.status, 0, `before the seed, a page's finding passes:\n${found.stdout}\n${found.stderr}`);
+      assert.ok(found.stderr.includes(reported), `and is printed:\n${found.stderr}`);
+
+      checks(2);
+      const broken = run();
+      assert.equal(broken.status, 1, `a failing checks spec fails the run:\n${broken.stdout}\n${broken.stderr}`);
+      assert.ok(broken.stderr.includes(reported) && !broken.stderr.includes("don't match"), `the test fails it, not the finding:\n${broken.stderr}`);
+
+      checks(1);
+      fs.writeFileSync(baseline, JSON.stringify({ check: check.CHECK, entries: [] }));
+      const seeded = run();
+      assert.equal(seeded.status, 1, `once the file lands, the finding fails the run:\n${seeded.stdout}\n${seeded.stderr}`);
+      assert.ok(seeded.stderr.includes(`test:a11y's findings don't match test/a11y/baseline.json:\n  ${finding}\n`), seeded.stderr);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

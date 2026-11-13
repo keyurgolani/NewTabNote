@@ -82,6 +82,58 @@ test('starts an extension excerpt at an Error a failed load prints', () => {
   assert.equal(excerpt(log, MARKERS.extension).split('\n')[0], 'Error: test/known-defects.json breaks the ledger format:');
 });
 
+test("starts an extension excerpt at test:a11y's baseline report, which a run with no failed test prints (#24 slice 2)", () => {
+  const log = [
+    '> new-tab-note@1.7.0 test:a11y',
+    '> playwright test -c test/a11y/playwright.config.js',
+    '',
+    'Running 3 tests using 1 worker',
+    '  ✓  1 test/a11y/checks/checks.spec.js:25:1 › axe finds a button with no name, and passes one with a name (1.2s)',
+    '',
+    "test:a11y's findings don't match test/a11y/baseline.json:",
+    '  legacy-newtab\'s button-name fails "#menu", which test/a11y/baseline.json doesn\'t list',
+    ...numbered(30, '  detail'),
+  ].join('\n');
+  assert.equal(excerpt(log, MARKERS.extension).split('\n')[0], "test:a11y's findings don't match test/a11y/baseline.json:");
+});
+
+test("starts an extension excerpt in test:a11y's own failure when test:extension passed with a flaky test before it (#24 slice 2)", () => {
+  // test:extension's list reporter numbers a flaky test's first error too, one that CI's retry passed
+  const flaky = [
+    '> new-tab-note@1.7.0 test:extension',
+    '> playwright test -c e2e/playwright.config.js',
+    '',
+    '  ✘  1 e2e/smoke.spec.js:26:3 › popup: shows the quick note input (1.1s)',
+    '  ✓  2 e2e/smoke.spec.js:26:3 › popup: shows the quick note input (retry #1) (1.0s)',
+    '',
+    '  1) e2e/smoke.spec.js:26:3 › popup: shows the quick note input ───────────',
+    '',
+    '    Error: a step that passed on its retry',
+    '',
+    '  1 flaky',
+    '  1 passed (4.2s)',
+    '',
+    '> new-tab-note@1.7.0 test:a11y',
+    '> playwright test -c test/a11y/playwright.config.js',
+    '',
+  ];
+  const report = ["test:a11y's findings don't match test/a11y/baseline.json:", '  legacy-newtab\'s button-name fails "#menu", which test/a11y/baseline.json doesn\'t list'];
+  const failed = ['  ✘  1 test/a11y/checks/checks.spec.js:29:1 › axe finds a button with no name (1.2s)', '', '  1) test/a11y/checks/checks.spec.js:29:1 › axe finds a button with no name ───', '', '    Error: expect(received).toEqual(expected)'];
+  withTempDir(dir => {
+    const env = { ...process.env };
+    delete env.GITHUB_OUTPUT;
+    for (const [tail, first] of [
+      [report, report[0]],
+      [failed, failed[2]],
+    ]) {
+      const log = path.join(dir, 'job.log');
+      fs.writeFileSync(log, `${[...flaky, ...tail].join('\n')}\n`);
+      const stdout = execFileSync(process.execPath, [SCRIPT, log, 'extension'], { env, encoding: 'utf8' });
+      assert.equal(stdout.split('\n')[0], first);
+    }
+  });
+});
+
 test('starts a kernel excerpt at whichever of its three checks failed', () => {
   const npm = (script) => ['', `> new-tab-note@1.4.1 ${script}`, ''];
   const passedTests = [...npm('test:kernel'), ...numbered(30, '✔ kernel test'), 'ℹ pass 30', 'ℹ fail 0'];

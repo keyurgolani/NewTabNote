@@ -41,9 +41,13 @@ class BaselineReporter {
     return false;
   }
 
-  /** @param {string} file - a spec's absolute path */
+  /**
+   * A spec's page, or null for the library's own spec under checks/, whose tests attach nothing
+   * @param {string} file - the spec's absolute path
+   */
   _pageOf(file) {
-    return path.relative(this._specs, file).split(path.sep).join('/').replace(/\.spec\.js$/, '');
+    const page = path.relative(this._specs, file).split(path.sep).join('/').replace(/\.spec\.js$/, '');
+    return page.startsWith('checks/') ? null : page;
   }
 
   /**
@@ -51,7 +55,7 @@ class BaselineReporter {
    * @param {{allTests: () => {location: {file: string}}[]}} suite
    */
   onBegin(config, suite) {
-    this._selected = new Set(suite.allTests().map(test => this._pageOf(test.location.file)));
+    this._selected = new Set(suite.allTests().flatMap(test => this._pageOf(test.location.file) ?? []));
   }
 
   /**
@@ -59,7 +63,8 @@ class BaselineReporter {
    * @param {{status: string, attachments: {name: string, body?: Buffer, path?: string}[]}} result
    */
   onTestEnd(test, result) {
-    if (result.status !== 'passed') return;
+    const page = this._pageOf(test.location.file);
+    if (page === null || result.status !== 'passed') return;
     const attached = result.attachments.filter(({ name }) => name === NAME);
     if (attached.length === 0) this._problems.push(`"${test.title}" passed without attaching ${NAME}`);
     for (const { body, path: file } of attached) {
@@ -69,7 +74,7 @@ class BaselineReporter {
       } catch {
         // Not JSON, or a file that's gone: the problem below names it
       }
-      if (isRecord(record)) this._records.push({ page: this._pageOf(test.location.file), findings: record.findings });
+      if (isRecord(record)) this._records.push({ page, findings: record.findings });
       else this._problems.push(`"${test.title}" attached ${NAME} that isn't a list of findings, each a rule and a target`);
     }
   }

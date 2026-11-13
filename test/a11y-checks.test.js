@@ -128,3 +128,63 @@ describe("the accessibility checks' pure parts (#24 slice 2)", () => {
     assert.deepEqual(motion.REDUCED_MOTION_RULES, ['transform-transition', 'transform-animation', 'smooth-scroll', 'chart-animation']);
   });
 });
+
+// The browser halves' pure parts: axe's results as findings, one per node a rule fails, with #29's
+// tags, and the rule IDs the custom checks report under. test/a11y/checks/checks.spec.js runs the
+// halves themselves in Chromium.
+describe("the browser halves' pure parts (#24 slice 2)", () => {
+  /** @type {any} */ let axe;
+  before(async () => {
+    axe = await import('./a11y/checks/axe.mjs');
+  });
+
+  it("runs axe with #29's tags and makes each node a rule fails a finding, through frames and shadow roots", () => {
+    assert.deepEqual(axe.TAGS, ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']);
+    const results = {
+      violations: [
+        { id: 'button-name', nodes: [{ target: ['#save'] }, { target: ['iframe.preview', '#close'] }] },
+        { id: 'label', nodes: [{ target: [['#editor-host', 'input.title']] }] },
+      ],
+      passes: [{ id: 'region', nodes: [{ target: ['main'] }] }],
+    };
+    assert.deepEqual(axe.axeFindings(results), [
+      { rule: 'button-name', target: '#save' },
+      { rule: 'button-name', target: 'iframe.preview >>> #close' },
+      { rule: 'label', target: '#editor-host >>> input.title' },
+    ]);
+    assert.deepEqual(axe.axeFindings({ violations: [] }), []);
+  });
+
+  it("composites a box-shadow ring's inner ring onto the outer one it's stacked on, not onto the plane", () => {
+    const slate = [{ id: 'slate', color: '#333333' }];
+    const halfWhite = { outer: '#555555', inner: 'rgba(255, 255, 255, 0.5)' };
+    assert.deepEqual(ring.ringShortfalls({ ...halfWhite, innerOn: 'outer' }, slate), []);
+    assert.deepEqual(ring.ringShortfalls(halfWhite, slate).map((/** @type {any} */ s) => s.plane), ['slate']);
+  });
+
+  it('fades a ring by the opacity it shows at over a plane, as on a control with opacity or under a parent with it', () => {
+    const blue = { outer: '#1869ba' };
+    const white = { id: 'around', color: '#ffffff' };
+    assert.deepEqual(ring.ringShortfalls(blue, [white]), []);
+    const faded = ring.ringShortfalls(blue, [{ ...white, ringOpacity: 0.6 }]);
+    assert.deepEqual(faded.map((/** @type {any} */ s) => s.plane), ['around']);
+    assert.equal(faded[0].ratio.toFixed(2), '2.59');
+  });
+
+  it('reports where the focus walk stops short, at a control that keeps focus on Tab, leaves it on body before a tab stop, or at its cap, and ends quietly otherwise', async () => {
+    const strong = (/** @type {string} */ id) => ({ id, ring: { outer: '#000000' }, planes: [{ id: 'around', color: '#ffffff' }] });
+    /** A page whose Tab presses read `reads` in turn, then nothing, as when focus leaves the page */
+    const walk = (/** @type {any[]} */ reads, /** @type {object} */ options = {}) =>
+      ring.ringFindings({ keyboard: { press: async () => {} }, evaluate: async () => reads.shift() ?? null }, options);
+    assert.deepEqual(await walk([strong('#a'), strong('#b')]), []);
+    assert.deepEqual(await walk([strong('#a'), strong('#b'), strong('#a')]), []);
+    assert.deepEqual(await walk([strong('#a'), { ...strong('#cell'), followed: true }]), [{ rule: 'ntn-focus-walk', target: '#cell' }]);
+    assert.deepEqual(await walk([strong('#a'), strong('#indent'), strong('#indent')]), [{ rule: 'ntn-focus-walk', target: '#indent' }]);
+    assert.deepEqual(await walk([strong('#a'), strong('#b'), strong('#c')], { max: 2 }), [{ rule: 'ntn-focus-walk', target: '#b' }]);
+  });
+
+  it('reports the custom checks under their own rule IDs, apart from axe\'s', () => {
+    assert.equal(targets.RULE, 'ntn-target-size');
+    assert.equal(ring.RULE, 'ntn-focus-ring');
+  });
+});

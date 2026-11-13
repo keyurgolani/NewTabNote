@@ -1,0 +1,196 @@
+// #24 slice 2: the check library's browser halves, on pages set in plain Chromium. Each check has to
+// find a planted fault and pass its clean twin:
+// - axe, with #29's tags, finds a button with no name and passes one with a name;
+// - the hit boxes find a 43 by 43 button, and pass a 44 by 44 one, a link in running text, and a
+//   checkbox whose label is its hit area. They measure a control that only takes clicks, and a
+//   pointer-only one under aria-hidden: a 24 by 24 handle, an 18 by 18 checkbox and a 20 by 20 Close
+//   are found, and a 44 by 44 one and a shape inside a button pass. A pointer-only control is also one
+//   by its own click listener or a resize cursor: a 16 by 16 Close inside a tab's button, a 4px
+//   col-resize strip and an 18 by 18 checkbox under a row with the same cursor are found, and a toggle's
+//   slider is part of its label, so the toggle is one finding. A link in running text is exempt
+//   in any text block, a note's div and its editing host included, however deep in inline boxes it
+//   sits, under a note's bold or a wrapper with no box of its own, and a link alone in one isn't;
+// - the focus ring finds a ring under 3:1 against the page and a control with no ring, and passes a
+//   strong ring and two two-tone rings on a dark plane whose inner ring carries the contrast: one
+//   outlined, its inner ring beside the outline, and one of box-shadows, its inner ring stacked on
+//   the outer one. An inner ring that's painted over doesn't count: a white shadow under an outline
+//   with no offset, or under a wider shadow listed before it, leaves a #555555 ring on slate, found,
+//   and the same shadows listed the other way round pass. A ring fades with opacity on the control
+//   or a parent: a #1869ba ring at 0.6 on white is found, and the same ring at full opacity passes.
+//   The walk reports where it stops short, at a control that keeps focus on Tab, at one whose Tab
+//   leaves focus on body with a tab stop still to come, as a table's last cell does, or at its cap, as
+//   ntn-focus-walk, with a faint ring past it unread;
+// - each half's boundary has a planted fault of its own: a small link alone in its list item is a
+//   target, and a white ring at no offset on a white button in a #333333 toolbar clears the toolbar
+//   but fails against the button's fill;
+// - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
+//   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix.
+// These tests are the library's own, so they attach no findings, and no baseline line holds them.
+
+const { test, expect } = require('@playwright/test');
+
+/** @type {any} */ let axe;
+/** @type {any} */ let targets;
+/** @type {any} */ let ring;
+test.beforeAll(async () => {
+  axe = await import('./axe.mjs');
+  targets = await import('./targets.mjs');
+  ring = await import('./ring.mjs');
+});
+
+/** A page with `body` in its main landmark, and nothing else axe's tags would flag */
+const html = (/** @type {string} */ body) =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>A check's page</title></head><body><main>${body}</main></body></html>`;
+
+test('axe finds a button with no name, and passes one with a name', async ({ page }) => {
+  await page.setContent(html('<button id="nameless"></button>'));
+  expect(await axe.axeOn(page)).toEqual([{ rule: 'button-name', target: '#nameless' }]);
+  await page.setContent(html('<button id="named">Save</button>'));
+  expect(await axe.axeOn(page)).toEqual([]);
+});
+
+test('the hit boxes find a 43 by 43 button, and pass a 44 by 44 one, a link in running text, and a checkbox its label carries', async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { width: 44px; height: 44px; padding: 0; } #small { width: 43px; height: 43px; }
+      label { display: inline-block; min-width: 44px; min-height: 44px; }</style>
+      <button id="fits">A</button><button id="small">B</button>
+      <p>Read <a href="#guide" id="inline">the guide</a> first.</p>
+      <label><input type="checkbox" id="done"> Done</label>`),
+  );
+  expect(await targets.targetFindings(page)).toEqual([{ rule: 'ntn-target-size', target: '#small' }]);
+});
+
+test("the hit boxes measure a control that only takes clicks, and a pointer-only one under aria-hidden, as the contract's handle, checkbox and Close are", async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { width: 44px; height: 44px; padding: 0; } #close { width: 20px; height: 20px; }
+      .handle { width: 24px; height: 24px; cursor: grab; } .check { width: 18px; height: 18px; cursor: pointer; }
+      .roomy { width: 44px; height: 44px; cursor: pointer; } svg { width: 12px; height: 12px; }</style>
+      <div class="handle" id="handle" aria-hidden="true"></div>
+      <div class="check" id="check"><svg viewBox="0 0 24 24"></svg></div>
+      <div class="roomy" id="roomy" aria-hidden="true"><svg viewBox="0 0 24 24"></svg></div>
+      <button id="close" tabindex="-1" aria-hidden="true">×</button>
+      <button id="fits"><svg viewBox="0 0 24 24" style="cursor: pointer"></svg></button>`),
+  );
+  expect(await targets.targetFindings(page)).toEqual([
+    { rule: 'ntn-target-size', target: '#handle' },
+    { rule: 'ntn-target-size', target: '#check' },
+    { rule: 'ntn-target-size', target: '#close' },
+  ]);
+});
+
+test("the hit boxes find a pointer-only control by its own click listener or a resize cursor, and count a label's slider as its control", async ({ page }) => {
+  await page.setContent(
+    html(`<style>.tab { width: 120px; height: 44px; padding: 0; } #tab-close { display: inline-block; width: 16px; height: 16px; }
+      #resize { width: 4px; height: 200px; cursor: col-resize; } #row { width: 300px; height: 48px; cursor: pointer; }
+      #select { width: 18px; height: 18px; } #toggle { display: inline-block; width: 40px; height: 22px; }
+      #toggle input { opacity: 0; width: 0; height: 0; margin: 0; } .slider { display: inline-block; width: 40px; height: 22px; cursor: pointer; }</style>
+      <button class="tab" id="tab">Note <span id="tab-close">×</span></button>
+      <div id="resize"></div>
+      <div id="row"><div id="select"></div> A note</div>
+      <label id="toggle"><input type="checkbox" id="toggle-input"><span class="slider"></span></label>
+      <script>for (const id of ['tab-close', 'select']) document.getElementById(id).addEventListener('click', () => {});</script>`),
+  );
+  expect(await targets.targetFindings(page)).toEqual([
+    { rule: 'ntn-target-size', target: '#tab-close' },
+    { rule: 'ntn-target-size', target: '#resize' },
+    { rule: 'ntn-target-size', target: '#select' },
+    { rule: 'ntn-target-size', target: '#toggle-input' },
+  ]);
+});
+
+test("the hit boxes pass a link in running text in any text block, a note's editing host and its wiki links included, under bold or a box-less wrapper too, and find one alone in its block", async ({ page }) => {
+  await page.setContent(
+    html(`<div class="block"><div class="block-content" contenteditable="true">Read <a href="https://example.com/guide" id="guide">the guide</a> first, then <a href="#" class="wiki-link" id="wiki">Note</a>.</div></div>
+      <div class="block"><div class="block-content" contenteditable="true">Read <b><a href="#bold" id="bold">the guide</a></b> first.</div></div>
+      <div class="note-text">See <a href="#more" id="more">more</a> below.</div>
+      <p>See <span style="display: contents"><a href="#wrapped" id="wrapped">this</a></span> too.</p>
+      <div><a href="#solo" id="solo">Solo</a></div>`),
+  );
+  expect(await targets.targetFindings(page)).toEqual([{ rule: 'ntn-target-size', target: '#solo' }]);
+});
+
+test('the focus ring finds a faint ring and a missing one, and passes a strong ring and two-tone rings, outlined or stacked, on a dark plane', async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { outline: none; }
+      #faint:focus-visible { outline: 2px solid #cccccc; outline-offset: 2px; }
+      #strong:focus-visible { outline: 2px solid #000000; outline-offset: 2px; }
+      .slate { background: #333333; padding: 8px; }
+      #two-tone:focus-visible { outline: 2px solid #555555; outline-offset: 2px; box-shadow: 0 0 0 2px #ffffff; }
+      #stacked:focus-visible { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5), 0 0 0 4px #555555; }</style>
+      <button id="faint">A</button><button id="strong">B</button>
+      <div class="slate"><button id="two-tone">C</button><button id="stacked">E</button></div><button id="none">D</button>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([
+    { rule: 'ntn-focus-ring', target: '#faint' },
+    { rule: 'ntn-focus-ring', target: '#none' },
+  ]);
+});
+
+test("the focus ring reads planes and rings Chrome computes as color(srgb …), a translucent mix's alpha included", async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { outline: none; }
+      .tinted { background: color-mix(in srgb, #6c5ce7 10%, white); padding: 8px; }
+      #on-mix:focus-visible { outline: 2px solid #000000; outline-offset: 2px; }
+      .slate { background: #333333; padding: 8px; }
+      .haze { background: color-mix(in srgb, white 10%, transparent); padding: 8px; }
+      #through-haze:focus-visible { outline: 2px solid #555555; outline-offset: 2px; }
+      #mixed-stack:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, white 50%, transparent), 0 0 0 4px #555555; }</style>
+      <div class="tinted"><button id="on-mix">A</button></div>
+      <div class="slate"><div class="haze"><button id="through-haze">B</button></div><button id="mixed-stack">C</button></div>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-ring', target: '#through-haze' }]);
+});
+
+test('the focus ring finds an inner ring that is painted over: under an outline with no offset, or under a wider shadow listed before it', async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { outline: none; } .slate { background: #333333; padding: 8px; }
+      #covered:focus-visible { outline: 2px solid #555555; box-shadow: 0 0 0 2px #ffffff; }
+      #buried:focus-visible { box-shadow: 0 0 0 4px #555555, 0 0 0 2px #ffffff; }
+      #shown:focus-visible { box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #555555; }</style>
+      <div class="slate"><button id="covered">A</button><button id="buried">B</button><button id="shown">C</button></div>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([
+    { rule: 'ntn-focus-ring', target: '#covered' },
+    { rule: 'ntn-focus-ring', target: '#buried' },
+  ]);
+});
+
+test('the focus ring finds a ring faded by opacity on the control or on a parent', async ({ page }) => {
+  await page.setContent(
+    html(`<style>button { outline: none; background: transparent; border: 0; }
+      button:focus-visible { outline: 2px solid #1869ba; outline-offset: 2px; } #busy, .dim { opacity: 0.6; }</style>
+      <button id="busy">A</button><div class="dim"><button id="in-dim">B</button></div><button id="clear">C</button>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([
+    { rule: 'ntn-focus-ring', target: '#busy' },
+    { rule: 'ntn-focus-ring', target: '#in-dim' },
+  ]);
+});
+
+test('the focus walk reports where it stops short: at a control that keeps focus on Tab, at one that leaves it on body before a tab stop, or at its cap', async ({ page }) => {
+  const rings = `<style>button { outline: none; } button:focus-visible { outline: 2px solid #000000; outline-offset: 2px; }
+    .faint:focus-visible { outline-color: #cccccc; }</style>`;
+  await page.setContent(
+    html(`${rings}<button id="first">A</button><button id="indent">B</button><button class="faint">C</button>
+      <script>document.getElementById('indent').addEventListener('keydown', event => { if (event.key === 'Tab') event.preventDefault(); });</script>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-walk', target: '#indent' }]);
+  await page.setContent(
+    html(`${rings}<button id="gone">A</button><button class="faint">B</button>
+      <script>document.getElementById('gone').addEventListener('keydown', event => { if (event.key === 'Tab') { event.preventDefault(); event.target.remove(); } });</script>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-walk', target: '#gone' }]);
+  await page.setContent(html(`${rings}<button id="one">1</button><button id="two">2</button><button id="three">3</button><button class="faint">4</button>`));
+  expect(await ring.ringFindings(page, { max: 2 })).toEqual([{ rule: 'ntn-focus-walk', target: '#two' }]);
+});
+
+test("the hit boxes find a small link alone in its list item, and the ring finds one that clears the plane around it but not the control's own fill", async ({ page }) => {
+  await page.setContent(html('<ul><li><a href="#settings" id="settings">Settings</a></li></ul>'));
+  expect(await targets.targetFindings(page)).toEqual([{ rule: 'ntn-target-size', target: '#settings' }]);
+  await page.setContent(
+    html(`<style>.toolbar { background: #333333; padding: 8px; } #on-fill { background: #ffffff; border: 0; outline: none; }
+      #on-fill:focus-visible { outline: 2px solid #ffffff; outline-offset: 0; }</style>
+      <div class="toolbar"><button id="on-fill">A</button></div>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-ring', target: '#on-fill' }]);
+});
