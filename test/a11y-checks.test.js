@@ -341,6 +341,32 @@ describe("the matrix runner's pure parts (#24 slice 2)", () => {
     assert.deepEqual(at('sidepanel', 'width-320'), { width: 320, height: 800, deviceScaleFactor: 1 });
   });
 
+  it("reads a page back at its point: its width and scale, its media and pointer, a document that loaded after emulate(), and its spacing set on it", () => {
+    const at = find('popup', 'zoom-400');
+    const reading = {
+      ...{ width: 200, scale: 4, pointer: 'fine', scheme: 'light', contrast: 'no-preference', forcedColors: 'none', motion: 'no-preference' },
+      ...{ loaderId: 'B', emulated: { point: 'zoom-400', loaderId: 'A' }, spaced: { point: 'zoom-400', loaderId: 'B' } },
+    };
+    const problems = (/** @type {object} */ change, point = at) => points.pointProblems({ ...reading, ...change }, point, 'popup');
+    assert.deepEqual(problems({}), []);
+    // Read at the default point, and never put at one
+    assert.deepEqual(problems({ width: 360, scale: 1, emulated: { point: 'default', loaderId: 'A' }, spaced: { point: 'default', loaderId: 'B' } }), [
+      'width reads 360, not 200',
+      'scale reads 1, not 4',
+      "emulate() didn't put it at zoom-400",
+      "spaceText() didn't set zoom-400's spacing on this document",
+    ]);
+    assert.deepEqual(problems({ emulated: null, spaced: null }), ["emulate() didn't put it at zoom-400", "spaceText() didn't set zoom-400's spacing on this document"]);
+    // Opened before emulate(), a crossing, and spaced on the document before this one
+    assert.deepEqual(problems({ emulated: { point: 'zoom-400', loaderId: 'B' } }), ['it loaded before emulate() put it at zoom-400']);
+    assert.deepEqual(problems({ spaced: { point: 'zoom-400', loaderId: 'A' } }), ["spaceText() didn't set zoom-400's spacing on this document"]);
+    // Each medium and the pointer, at the point that changes it
+    const dark = find('popup', 'scheme-dark');
+    assert.deepEqual(problems({ width: 360, scale: 1, emulated: { point: 'scheme-dark', loaderId: 'A' }, spaced: { point: 'scheme-dark', loaderId: 'B' } }, dark), ['scheme reads light, not dark']);
+    const coarse = find('popup', 'pointer-coarse');
+    assert.deepEqual(problems({ width: 360, scale: 1, emulated: { point: 'pointer-coarse', loaderId: 'A' }, spaced: { point: 'pointer-coarse', loaderId: 'B' } }, coarse), ['pointer reads fine, not coarse']);
+  });
+
   it("records a test's point and how many its page has with its findings, a contrast one at the dark point carrying #16-dark", () => {
     const findings = [{ rule: 'color-contrast', target: '#a' }, { rule: 'ntn-focus-ring', target: '#b' }, { rule: 'button-name', target: '#c' }];
     assert.deepEqual(points.recordAt(find('workspace', 'scheme-dark'), 15, findings), {

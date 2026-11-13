@@ -10,7 +10,9 @@
 // and the pointer rests by its top left corner, so the row stays under it at every point's viewport.
 // The page reads its width, its scheme and whether it's touched as it loads, as the legacy tab sets
 // itself up once from them, and each point's test finds those readings at its point, so the page
-// opened there.
+// opened there. It opens through page.route() as a document of its own, after emulate(). A pointPage
+// that opens its page and skips emulate() fails at every point, since the runner reads each page back
+// at its point before its checks.
 // The text-spacing override gets past a style-src without 'unsafe-inline', which keeps a style tag
 // out, as the extension's will once security/unsafe-inline takes that out.
 // The spec is the library's own, so its tests are no page's.
@@ -30,10 +32,17 @@ const PAGE = `<!doctype html><html lang="en"><head><title>A point</title><style>
   });
 </script></body></html>`;
 
+/** Where the spec serves its pages, through page.route(), so each opens as a document of its own */
+const POINT_URL = 'https://ntn.test/point.html';
+
+/** @param {import('@playwright/test').Page} page */
+const serve = page => page.route(POINT_URL, route => route.fulfill({ contentType: 'text/html', body: PAGE }));
+
 const test = points.withPoint(base).extend({
   pointPage: async ({ page, point }, use) => {
+    await serve(page);
     await points.emulate(page, point, 'popup');
-    await page.setContent(PAGE);
+    await page.goto(POINT_URL);
     await points.spaceText(page, point);
     await page.hover('#row', { position: { x: 4, y: 4 } });
     await use(page);
@@ -75,6 +84,20 @@ points.atPoints(test, 'popup', {
     expect(await layers.layerFindings(page)).toEqual([{ rule: layers.HIDDEN_RULE, target: '#pin' }]);
     return [];
   },
+});
+
+// A pointPage that opens its page and never puts it at its point
+const skipping = points.withPoint(base).extend({
+  pointPage: async ({ page }, use) => {
+    await serve(page);
+    await page.goto(POINT_URL);
+    await use(page);
+  },
+});
+
+skipping.describe('a pointPage that skips emulate()', () => {
+  skipping.fail(() => true, 'the runner reads its page back at each point and finds it at none');
+  points.atPoints(skipping, 'popup', { check: async () => [] });
 });
 
 /** A page whose own sheet is a file, which a style-src of 'self' lets in */
