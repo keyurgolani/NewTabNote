@@ -106,8 +106,8 @@ npm run package
 # ci/baselines/typecheck.json
 npm run typecheck:ratchet
 
-# A build per failure rule (test/build-fixtures/), and two clean builds of HEAD that have to
-# package the same zip
+# A fixture per failure rule (test/build-fixtures/), built in each mode it runs, and two clean
+# builds of HEAD that have to package the same zip
 npm run verify:fixtures
 npm run verify:reproducible
 

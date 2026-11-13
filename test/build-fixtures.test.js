@@ -153,6 +153,12 @@ describe('test/build-fixtures/', () => {
     for (const text of ['0/2', '3/2', '1/0', '1', '1/2/3', 'a/b', ' 1/2', '-1/2', '']) assert.equal(parseShard(text), null, JSON.stringify(text));
   });
 
+  it("runs in CI as two shards, fixtures-1's 1/2 and fixtures-2's 2/2, so each fixture runs there once and none on the build job's path (#29)", () => {
+    const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pr-checks.yml'), 'utf8');
+    const runs = [...workflow.matchAll(/^ +run: npm run verify:fixtures(.*?) 2>&1/gm)].map((match) => match[1]);
+    assert.deepEqual(runs, [' -- --shard 1/2', ' -- --shard 2/2']);
+  });
+
   it('reads the codes a build or package run reported from its problem lines', () => {
     const run = {
       status: 1,
