@@ -946,7 +946,7 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     assert.equal(gateReport(probe(1.01, 1.09, 3.5), REPORTING).failed, false);
   });
 
-  it('holds each count to its row on each profile the timing row takes: a null row reports, and a number fails a count over it, or a run with no count (#300)', () => {
+  it("holds each count to its row on each profile the timing row takes: a null row reports, a number fails a count over it, or a run with no count, and a request from a page that's no entry is listed, held to no row (#300)", () => {
     const counted = (/** @type {any} */ max) => ({
       ...probe(1.01, 1.05, 2.7),
       counts: { runs: 2, profiles: Object.fromEntries(['typical', 'maximal'].map(name => [name, { packages: { candidate: { runs: [max, max], max, failures: [] } } }])) },
@@ -971,6 +971,14 @@ describe("CI's perf summary (scripts/perf/gate-report.js)", () => {
     const none = gateReport({ ...probe(1.01, 1.05, 2.7) }, rows(40, 0));
     assert.deepEqual(verdicts(none).slice(0, 2), ['typical newtab reads undefined 40 invalid', 'typical newtab requests undefined 0 invalid']);
     assert.equal(none.failed, true);
+    // A request from a page that's no entry is listed under the table, once, and fails nothing
+    const welcome = counted(max);
+    const request = { url: 'http://localhost:9/welcome', from: 'unknown' };
+    welcome.counts.profiles.typical.packages.candidate.runs = [{ ...max, unattributed: [request] }, { ...max, unattributed: [request] }];
+    const listed = gateReport(welcome, rows(40, 1));
+    assert.equal(listed.failed, false);
+    assert.match(listed.markdown, /\n\nRequests outside the extension from a page that's no entry, which no row counts:\n\n- typical: http:\/\/localhost:9\/welcome\n\n/);
+    assert.doesNotMatch(listed.markdown, /- maximal: http/);
   });
 
   it("counts a profile whose counted run failed, or that has fewer runs than the probe asked, as one with no count, and names the run (#300)", () => {

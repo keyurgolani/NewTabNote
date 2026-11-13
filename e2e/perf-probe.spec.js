@@ -208,6 +208,8 @@ test("a counted run counts the new tab's IndexedDB reads before its mark, the pa
     expect(url).not.toMatch(/^(chrome-extension|data|blob|about):/);
     expect(ENTRIES).toContain(from);
   }
+  // and none came from a page that's no entry, which no row would count
+  expect(run.unattributed).toEqual([]);
 });
 
 /**
@@ -217,9 +219,10 @@ test("a counted run counts the new tab's IndexedDB reads before its mark, the pa
  * record before they're in it, it then reads twice and has the worker read once, so only the cut
  * at the mark keeps them out, and 2 s on it fetches once more. Popup, the Side Panel,
  * recovery.html and the offscreen document each fetch once at their load, and once 2 s on, past
- * their window, and Popup has the worker fetch once as it loads. Each fetch goes to loopback,
- * which the network-off mode's dead proxy fails, so nothing answers it. The package is written to
- * a temporary directory, which the caller removes.
+ * their window. As Popup loads, it has the worker fetch once and open welcome.html, a page that's
+ * no entry, which fetches once as it loads. Each fetch goes to loopback, which the network-off
+ * mode's dead proxy fails, so nothing answers it. The package is written to a temporary
+ * directory, which the caller removes.
  */
 function countingPackage() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-perf-counts-'));
@@ -240,6 +243,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     return true;
   }
   if (message === 'fetch') fetch('http://localhost:9/worker').catch(() => {});
+  if (message === 'welcome') chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html'), active: false });
   return false;
 });
 `,
@@ -274,10 +278,15 @@ request.onsuccess = async () => {
     'later.js': `
 const name = location.pathname.slice(1, -'.html'.length);
 fetch('http://localhost:9/' + name + '-load').catch(() => {});
-if (name === 'popup') chrome.runtime.sendMessage('fetch').catch(() => {});
+if (name === 'popup') {
+  chrome.runtime.sendMessage('fetch').catch(() => {});
+  chrome.runtime.sendMessage('welcome').catch(() => {});
+}
 setTimeout(() => fetch('http://localhost:9/' + name + '-later').catch(() => {}), 2000);
 `,
     ...Object.fromEntries(['popup', 'sidepanel', 'recovery', 'offscreen'].map(name => [`${name}.html`, page(name, 'later.js')])),
+    'welcome.html': page('Welcome', 'welcome.js'),
+    'welcome.js': "fetch('http://localhost:9/welcome').catch(() => {});\n",
   };
   for (const [file, text] of Object.entries(files)) fs.writeFileSync(path.join(root, file), text);
   return root;
@@ -300,6 +309,8 @@ test('a counted run counts what each window holds and nothing past it, on a pack
       'recovery /recovery-load',
       'sidepanel /sidepanel-load',
     ]);
+    // The welcome tab's is on no entry's list, and held apart
+    expect(run.unattributed).toEqual([{ url: 'http://localhost:9/welcome', from: 'unknown' }]);
   } finally {
     fs.rmSync(dist, { recursive: true, force: true });
   }
