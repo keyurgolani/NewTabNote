@@ -52,7 +52,10 @@ const MARK = '@@mutant-result ';
 const FIELDS = ['id', 'behavior', 'protects', 'file', 'find', 'replace', 'test', 'name'];
 const PENDING_FIELDS = ['behavior', 'protects', 'waitsFor'];
 // Not copied: history, dependencies (linked instead), and build and test output
-const SKIP = new Set(['.git', 'node_modules', 'dist', 'releases', 'test-results', 'playwright-report', '.claude']);
+const SKIP = new Set(['.git', 'node_modules', 'dist', 'test-results', 'playwright-report', '.claude']);
+// Skipped at the root only: `npm run package` writes its zips to the root's releases/, while the
+// release files frozen as test fixtures live in releases/ folders under test/ (#239)
+const ROOT_ONLY = new Set(['releases']);
 const PROXY_VARS = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'];
 
 /**
@@ -152,14 +155,15 @@ function occurrences(text, find) {
 }
 
 /**
- * A copy of `root` in a new scratch directory, with node_modules linked
+ * A copy of `root` in a new scratch directory, with node_modules linked: SKIP's folders at any depth
+ * stay out, and ROOT_ONLY's at the root
  * @param {string} root
  * @returns {string}
  */
 function scratchCopy(root) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'ntn-mutants-'));
   for (const entry of fs.readdirSync(root)) {
-    if (SKIP.has(entry)) continue;
+    if (SKIP.has(entry) || ROOT_ONLY.has(entry)) continue;
     fs.cpSync(path.join(root, entry), path.join(scratch, entry), {
       recursive: true,
       filter: source => !SKIP.has(path.basename(source)),

@@ -349,3 +349,48 @@ test('counts every occurrence of a find, overlapping ones too', () => {
   assert.equal(occurrences('aaa', 'aa'), 2);
   assert.equal(occurrences('abc', 'd'), 0);
 });
+
+/**
+ * Writes `text` to `file` under `root`, making its folders
+ * @param {string} root
+ * @param {string} file
+ * @param {string} [text]
+ */
+const plant = (root, file, text = file) => {
+  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+  fs.writeFileSync(path.join(root, file), text);
+};
+
+test("copies every release file under test/, and leaves out only the build's releases/ at the root and the skipped folders at any depth (#239)", (t) => {
+  const root = tree({ mutants: [mutant('killed', '(a, b) => a + b', '(a, b) => a * b', 'adds')] });
+  const kept = ['test/fixtures/storage/releases/v1.4.1/js/storage.js', 'test/fixtures/releases/manifest.json'];
+  const left = ['releases/new-tab-note-v9.9.9.zip', 'dist/x.js', 'sub/dist/x.js', 'sub/node_modules/x.js', 'test-results/x.json', 'playwright-report/x.html', 'sub/.claude/x.md', 'sub/.git/x'];
+  for (const file of [...kept, ...left]) plant(root, file);
+  const result = spawnSync(process.execPath, [SCRIPT, '--root', root, '--json', '--keep'], { encoding: 'utf8' });
+  const scratch = (/scratch copy kept at (.+)/.exec(result.stderr) || [])[1];
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(scratch, `the run says where it kept its copy: ${result.stderr}`);
+  assert.deepEqual(kept.filter((file) => !fs.existsSync(path.join(scratch, file))), [], 'every release file under test/ is in the copy');
+  assert.deepEqual(left.filter((file) => fs.existsSync(path.join(scratch, file))), [], "the root's releases/ and the skipped folders aren't");
+});
+
+test('a mutant named on a test that reads a release file under test/ gets a passing baseline, and is killed (#239)', (t) => {
+  const reading = `${LIB_TEST}test('reads its release file', () => assert.equal(require('./test/fixtures/storage/releases/v1/lib.js').three(), 3));\n`;
+  const root = tree({ mutants: [mutant('release-killed', '(a, b) => a + b', '(a, b) => a - b', 'reads its release file')] }, reading);
+  plant(root, 'test/fixtures/storage/releases/v1/lib.js', "'use strict';\nconst { add } = require('../../../../../lib.js');\nexports.three = () => add(1, 2);\n");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { status, report, stderr } = run(root);
+  assert.equal(status, 0, stderr);
+  assert.deepEqual(report.summary, { mutants: 1, killed: 1, survived: 0, stale: 0, invalid: 0, pending: 0 });
+});
+
+test("git ignores the build's releases/ at the root, and not test/fixtures/releases/ (#239)", () => {
+  const ignored = (file) => spawnSync('git', ['check-ignore', '--no-index', '-q', file], { cwd: path.join(__dirname, '..') }).status === 0;
+  assert.equal(ignored('releases/new-tab-note-v9.9.9.zip'), true, "the build's releases/ at the root");
+  assert.equal(ignored('test/fixtures/releases/manifest.json'), false, 'the releases manifest');
+  assert.equal(ignored('test/fixtures/storage/releases/v1.4.1/js/storage.js'), false, 'a frozen release file');
+});
