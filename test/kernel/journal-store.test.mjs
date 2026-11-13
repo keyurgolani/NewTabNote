@@ -20,7 +20,7 @@ import {
 import { ownerLock } from '../../js/kernel/core/domain/journal.js';
 import { createMemoryJournal } from '../../js/kernel/core/memory/journal.js';
 import { describeJournalStore, entryOf } from './journal-store-suite.mjs';
-import { faultyFactory } from './storage-faults.mjs';
+import { faultyFactory } from '../support/faults/storage-faults.mjs';
 
 const { IDBFactory } = createRequire(import.meta.url)('fake-indexeddb');
 

@@ -1,4 +1,5 @@
-// #28 slice 3, the fixture tool itself (load-fixture.mjs) cut off, through storage-faults.mjs.
+// #28 slice 3, the fixture tool itself (load-fixture.mjs) cut off, through the fault wrapper
+// (test/support/faults/storage-faults.mjs).
 // This is the loader and dumper, not production crash recovery (storage-migrate.test.mjs and
 // storage-recorded.test.mjs stop #17's runner at every step). The loader is atomic per
 // transaction, not per store or per fixture: a load the disk refuses at commit, or one a

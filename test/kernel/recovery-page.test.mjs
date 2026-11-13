@@ -35,7 +35,7 @@ import { PROVIDERS } from '../../js/trust/core/providers/catalog.js';
 import { REMEDIATIONS, searchEntryOf } from '../../js/trust/core/remediation/catalog.js';
 import { closeAll as closeContexts, legacyContext, legacyEnv } from './legacy-fixture.mjs';
 import { KeyRange, profileWith, synthesized } from './migration-support.mjs';
-import { faultyFactory } from './storage-faults.mjs';
+import { faultyFactory } from '../support/faults/storage-faults.mjs';
 import { recoveryWorker } from './recovery-worker.mjs';
 import { MANIFEST, grantedAsDeclared } from './trust-provider-support.mjs';
 import { manualClock, realTimers, webLocks } from './trust-support.mjs';

@@ -9,12 +9,12 @@ import { createRequire } from 'node:module';
 
 import { createIndexedDbAdapter } from '../../js/kernel/adapters/indexeddb/adapter.js';
 import { pendingStructural } from '../../js/kernel/adapters/indexeddb/registry.js';
-import { faultyFactory } from './storage-faults.mjs';
+import { faultyFactory } from '../support/faults/storage-faults.mjs';
 import { KeyRange, closeAll, kernelOn, profile } from './storage-fixture.mjs';
 import { CALLERS, testClock, testIds } from './support.mjs';
 
 /** @typedef {import('./storage-fixture.mjs').Profile} Profile */
-/** @typedef {import('./storage-faults.mjs').Faults} Faults */
+/** @typedef {import('../support/faults/storage-faults.mjs').Faults} Faults */
 /** @typedef {import('../../js/kernel/core/application/kernel.js').Kernel} Kernel */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').Outcome} Outcome */
 /** @typedef {import('../../js/kernel/core/contracts/outcomes.js').BulkOutcome} BulkOutcome */

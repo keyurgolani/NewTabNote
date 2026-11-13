@@ -28,7 +28,7 @@ How the tests are set up, what they're allowed to fake, and the three records th
 2. Fakes stand in for the browser only: `fake-indexeddb` (pinned) for IndexedDB, and `legacy-env.js`'s stubs for `chrome.*`, timers, `navigator.locks`, `BroadcastChannel`, and a small DOM. Nothing in `js/` has a test-only branch.
 3. A fake of a browser API is held to the real one. The `chrome.storage.local` stub runs `test/helpers/chrome-storage-suite.js` in Node, and the same suite runs in Chromium in `e2e/chrome-storage.spec.js`. Where they differ, the stub changes.
 4. Databases are built with raw `indexedDB.open` calls (`createDatabase` in `legacy-env.js`), so a test sees what a 1.4.0 or newer build would have left on disk, not what app startup would make of it.
-5. Failures are injected at the boundary. `test/kernel/storage-faults.mjs` wraps the IndexedDB factory and can make the next write throw, let it succeed and then abort its transaction, or fail the next read. It never changes the adapter under test.
+5. Failures are injected at the boundary. `test/support/faults/storage-faults.mjs` wraps the IndexedDB factory and can make the next write throw, let it succeed and then abort its transaction, or fail the next read. It never changes the adapter under test.
 6. The contract suites run on every implementation through their fixtures: `test/kernel/legacy-fixture.mjs` for the legacy adapter, `test/kernel/storage-fixture.mjs` for the IndexedDB adapter, and the memory adapter directly. `test/kernel/support.mjs` has the clock the test moves, counting ids, and a caller per surface.
 7. Test data is synthetic. No real notes, keys, passwords, or tokens. A secret a test needs is a made-up canary, and no assertion message prints it.
 8. The extension harness (`e2e/harness/`) launches the built extension on a fresh profile per test. Characterization specs act through `e2e/characterization/driver.js` and assert on what it returns, never on app state.
@@ -64,7 +64,7 @@ The recorder `git archive`s the tag into a scratch directory, loads it unpacked 
 
 ## Faults
 
-`test/support/faults/` holds what #28's slice 4 names for tests on either host, and its `index.js` exports it. Nothing under `test/support/` ships. Fixture rule 5's factory wrapper stays in `test/kernel/storage-faults.mjs`, beside the kernel tests that import it.
+`test/support/faults/` holds what #28's slice 4 names for tests on either host, and its `index.js` exports it. Nothing under `test/support/` ships. Fixture rule 5's factory wrapper is here too, as `storage-faults.mjs`, an ES module the kernel tests import by its own path rather than through `index.js`.
 
 The IndexedDB request counter (`idb-requests.js`, #301) records each request a context makes on a store, an index or a cursor, as it makes it, for #27's IndexedDB reads before interaction-ready and any case that counts requests.
 
