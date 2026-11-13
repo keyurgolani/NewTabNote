@@ -25,9 +25,10 @@
  *
  * Then the counts (#300): on each profile the timing row takes, the counted package's highest
  * over its runs, the new tab's IndexedDB reads before its mark and each entry's requests outside
- * the extension, against the entry's reads and requests rows. A null row reports what was
- * counted. A number exits 1 on a count over it, and on a profile the run has no count of, so a
- * run that counted nothing can't pass.
+ * the extension, against the entry's reads and requests rows. A profile whose counted package had
+ * a run fail, or has fewer runs than the probe asked for, has no count, and the summary names
+ * why. A null row reports what was counted. A number exits 1 on a count over it, and on a profile
+ * with no count, so a run that counted nothing, or less than it asked, can't pass.
  */
 
 const fs = require('fs');
@@ -43,19 +44,35 @@ const pct = ratio => `${ratio >= 1 ? '+' : ''}${((ratio - 1) * 100).toFixed(1)}%
 const ms = value => (value === null || value === undefined ? 'n/a' : `${Math.round(value)} ms`);
 
 /**
+ * The counts on `profile`, the highest of the last package the probe counted, or none with the
+ * reasons why: a run of it failed, or it has fewer runs than the probe asked for (#300)
+ * @param {any} probe
+ * @param {string} profile
+ * @returns {{max: Record<string, any>, problems: string[]}}
+ */
+function countsOn(probe, profile) {
+  const asked = (probe.counts && probe.counts.runs) || 0;
+  const measured = probe.counts && probe.counts.profiles && probe.counts.profiles[profile];
+  const counted = Object.values((measured && measured.packages) || {});
+  if (counted.length === 0) return { max: {}, problems: [] };
+  const last = /** @type {any} */ (counted[counted.length - 1]);
+  const problems = (last.failures || []).map((/** @type {{run: number, message: string}} */ failure) => `counted run ${failure.run} failed: ${failure.message}`);
+  if ((last.runs || []).length < asked) problems.push(`${(last.runs || []).length} of the ${asked} counted runs`);
+  return { max: problems.length > 0 ? {} : last.max || {}, problems };
+}
+
+/**
  * Each count against its row (#300), on each of `profiles`: the counted package's highest over
- * its runs, the last package the probe counted
+ * its runs, the last package the probe counted, or none where countsOn has none
  * @param {any} probe
  * @param {any} budgets
  * @param {string[]} profiles
  * @returns {Array<{profile: string, entry: string, row: string, count: number | undefined, limit: number | null, verdict: 'pass' | 'fail' | 'invalid' | 'report'}>}
  */
 function countVerdicts(probe, budgets, profiles) {
-  const measured = (probe.counts && probe.counts.profiles) || {};
   const verdicts = [];
   for (const profile of profiles) {
-    const counted = Object.values((measured[profile] && measured[profile].packages) || {});
-    const max = counted.length > 0 ? /** @type {any} */ (counted[counted.length - 1]).max || {} : {};
+    const { max } = countsOn(probe, profile);
     for (const [entry, row] of Object.entries(budgets.entries || {})) {
       if (/** @type {any} */ (row).planned) continue;
       for (const name of Object.keys(COUNTS)) {
@@ -165,12 +182,14 @@ function gateReport(probe, budgets) {
     '',
     '## perf: counts against their rows',
     '',
-    `On ${on(timing)}: the counted package's highest over ${(probe.counts && probe.counts.runs) || 0} untimed runs (#300). A row with no number yet reports; one with a number fails a count over it, or a profile with no count.`,
+    `On ${on(timing)}: the counted package's highest over each profile's ${(probe.counts && probe.counts.runs) || 0} untimed runs (#300). A profile with a failed run, or short of its runs, has no count. A row with no number yet reports; one with a number fails a count over it, or a profile with no count.`,
     '',
     '| Profile | Entry | Count | Counted | Row | Verdict |',
     '| --- | --- | --- | --- | --- | --- |',
     ...counts.map(({ profile, entry, row, count, limit, verdict }) => `| ${profile} | ${entry} | ${COUNTS[/** @type {'reads' | 'requests'} */ (row)]} | ${count === undefined ? 'n/a' : count} | ${limit === null ? 'none yet' : limit} | ${verdict} |`),
   );
+  const short = takes(timing).flatMap(profile => countsOn(probe, profile).problems.map(problem => `- ${profile}: ${problem}`));
+  if (short.length > 0) lines.push('', 'No count, so no row is read:', '', ...short);
   const environment = probe.environment || {};
   lines.push('', `Machine: ${environment.cpu || 'unknown'}, ${environment.cores || '?'} cores, ${environment.platform || ''}; Chromium ${(probe.timing && probe.timing.browser) || 'unknown'}.`);
   return { markdown: `${lines.join('\n')}\n`, failed, verdicts, countVerdicts: counts };
