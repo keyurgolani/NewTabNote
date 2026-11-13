@@ -485,8 +485,15 @@ async function workerStorageSettled(extension) {
     throw new Error("Couldn't reach the storage promise captureToDailyNote awaits (a module worker's bindings aren't global); "
       + 'update workerStorageSettled in e2e/characterization/driver.js');
   }
-  await extension.worker.evaluate(`Promise.race([${binding}, new Promise((resolve, reject) => setTimeout(() => `
-    + `reject(new Error("the worker's Storage start didn't settle in ${UPGRADE_BOUND_MS / 1000} s")), ${UPGRADE_BOUND_MS}))]).then(() => {})`);
+  // The binding is a top-level name, so the wait goes in as an expression, and its timer goes once
+  // the race settles, as the run's does
+  await extension.worker.evaluate(`(() => {
+    let timer;
+    const late = new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("the worker's Storage start didn't settle in ${UPGRADE_BOUND_MS / 1000} s")), ${UPGRADE_BOUND_MS});
+    });
+    return Promise.race([${binding}, late]).finally(() => clearTimeout(timer)).then(() => {});
+  })()`);
 }
 
 /**
