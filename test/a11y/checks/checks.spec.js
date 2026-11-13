@@ -15,6 +15,9 @@
 //   or a parent: a #1869ba ring at 0.6 on white is found, and the same ring at full opacity passes.
 //   The walk reports where it stops short, at a control that keeps focus on Tab or at its cap, as
 //   ntn-focus-walk, with a faint ring past it unread;
+// - each half's boundary has a planted fault of its own: a small link alone in its list item is a
+//   target, and a white ring at no offset on a white button in a #333333 toolbar clears the toolbar
+//   but fails against the button's fill;
 // - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
 //   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
@@ -147,4 +150,15 @@ test('the focus walk reports where it stops short: at a control that keeps focus
   expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-walk', target: '#indent' }]);
   await page.setContent(html(`${rings}<button id="one">1</button><button id="two">2</button><button id="three">3</button><button class="faint">4</button>`));
   expect(await ring.ringFindings(page, { max: 2 })).toEqual([{ rule: 'ntn-focus-walk', target: '#two' }]);
+});
+
+test("the hit boxes find a small link alone in its list item, and the ring finds one that clears the plane around it but not the control's own fill", async ({ page }) => {
+  await page.setContent(html('<ul><li><a href="#settings" id="settings">Settings</a></li></ul>'));
+  expect(await targets.targetFindings(page)).toEqual([{ rule: 'ntn-target-size', target: '#settings' }]);
+  await page.setContent(
+    html(`<style>.toolbar { background: #333333; padding: 8px; } #on-fill { background: #ffffff; border: 0; outline: none; }
+      #on-fill:focus-visible { outline: 2px solid #ffffff; outline-offset: 0; }</style>
+      <div class="toolbar"><button id="on-fill">A</button></div>`),
+  );
+  expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-ring', target: '#on-fill' }]);
 });
