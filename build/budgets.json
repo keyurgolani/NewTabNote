@@ -92,17 +92,17 @@
     },
     "offscreen": {
       "page": "offscreen.html",
-      "reason": "The offscreen document, which runs AI requests for the service worker. Its rows are today's size plus about 5%, decided for the owner on 2026-11-01: on 7489d7b3 its start JS was 28,150 / 8,818 bytes (the page's module and js/network-guard.js) and its HTML 230 / 174. The HTML row is 1 KiB, the smallest round row, since 5% of 230 bytes is 12. It loads no stylesheet, and no fonts.",
-      "start": { "js": { "raw": 29696, "gzip": 9216 }, "css": null, "html": { "raw": 1024, "gzip": 1024 }, "fonts": null },
+      "reason": "The offscreen document, which runs AI requests for the service worker. Its rows are today's size plus about 5%, decided for the owner on 2026-11-01: on 7489d7b3 its start JS was 28,150 / 8,818 bytes (the page's module and js/network-guard.js) and its HTML 230 / 174. The HTML row is 1 KiB, the smallest round row, since 5% of 230 bytes is 12. Its start JS row is 29,355 / 9,202 bytes, the 27,957 / 8,763 that build job 131711018907 of push run 43372411837 measured at 1fcbef1a, after #300 slice 5a, plus 5%, rounded up, by that rule (2026-11-12; it was 29 / 9 KiB). It loads no stylesheet, and no fonts.",
+      "start": { "js": { "raw": 29355, "gzip": 9202 }, "css": null, "html": { "raw": 1024, "gzip": 1024 }, "fonts": null },
       "forbidden": [],
       "dependencies": []
     },
     "recovery": {
       "page": "recovery.html",
       "lazyChunks": ["index-lag", "legacy", "permissions", "platform", "probe", "recovery-fallback", "recovery-readiness"],
-      "reason": "The Trust Center and the Recovery Center (#20 slice 4b). Its rows are today's size plus about 5%, the rule the owner set for these rows, decided for the owner on 2026-11-01 (docs/performance/budgets.md). Its start CSS gzip row is 4.75 KiB, about 5% over the 4,639 bytes that build job 130333246078 of PR checks run 42962855381 measured with #292 in, by that rule (2026-11-10; it was 4.5 KiB). Its raw row stays 22.5 KiB, which that start isn't over. Its start JS row is 360,521 / 113,627 bytes, the 343,353 / 108,216 that build job 131036732650 of push run 43174922769 measured at 14d7247b, after #35 slice 4f-3 moved its rebuild and checks to the worker, plus 5%, rounded up, by that rule (2026-11-12; it was 395 / 123 KiB). The trust code is its own, so its start holds it; the providers' checks load after it opens, and the fallback a repair commits on while the coordinator can't run it loads at its first use (#35 slice 8). Its forbidden list is every other category and its dependencies are what its graph holds, both as the build reported them on 2026-10-31, so anything added later is deliberate.",
+      "reason": "The Trust Center and the Recovery Center (#20 slice 4b). Its rows are today's size plus about 5%, the rule the owner set for these rows, decided for the owner on 2026-11-01 (docs/performance/budgets.md). Its start CSS gzip row is 4.75 KiB, about 5% over the 4,639 bytes that build job 130333246078 of PR checks run 42962855381 measured with #292 in, by that rule (2026-11-10; it was 4.5 KiB). Its raw row stays 22.5 KiB, which that start isn't over. Its start JS row is 360,032 / 113,498 bytes, the 342,887 / 108,093 that build job 131711018907 of push run 43372411837 measured at 1fcbef1a, after #300 slice 5b's tree shaking took two modules nothing used off its start, plus 5%, rounded up, by that rule (2026-11-12; it was 360,521 / 113,627 after #35 slice 4f-3 moved its rebuild and checks to the worker, and 395 / 123 KiB before). The trust code is its own, so its start holds it; the providers' checks load after it opens, and the fallback a repair commits on while the coordinator can't run it loads at its first use (#35 slice 8). Its forbidden list is every other category and its dependencies are what its graph holds, both as the build reported them on 2026-10-31, so anything added later is deliberate.",
       "start": {
-        "js": { "raw": 360521, "gzip": 113627 },
+        "js": { "raw": 360032, "gzip": 113498 },
         "css": { "raw": 23040, "gzip": 4864 },
         "html": { "raw": 2048, "gzip": 1024 },
         "fonts": null
