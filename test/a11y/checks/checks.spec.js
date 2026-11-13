@@ -47,10 +47,11 @@
 //   smooth scroll and a canvas that keeps redrawing, and passes a fade and a canvas drawn once;
 // - the clipping check finds an action a hidden-overflow bar cuts off and one partly before the
 //   page's start, and at 320 CSS px a block that makes the page scroll sideways, and passes a bar
-//   that scrolls. At 1280 only the cut-off actions stay. An action in a scroll container is held to
-//   what the container scrolls to, so the actions in panes a hidden-overflow box holds pass, below
-//   the fold or scrolled past, and so do those of a pane whose content runs past the page's end. One
-//   placed before its pane's start, where no scroll reaches, is found.
+//   that scrolls. At 1280 and at 200, where nothing asks a page to reflow, only the cut-off actions
+//   stay. An action in a scroll container is held to what the container scrolls to, so the actions
+//   in panes a hidden-overflow box holds pass, below the fold or scrolled past, and so do those of a
+//   pane whose content runs past the page's end. One placed before its pane's start, where no scroll
+//   reaches, is found.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -435,23 +436,26 @@ test('under reduced motion, the motion check finds a transform transition, a key
   await expect(motion.motionFindings(page)).rejects.toThrow(/prefers-reduced-motion: reduce/);
 });
 
+/** The clipping check's page: a button a bar cuts off, a bar that scrolls, a button partly before the page's start, and a block wider than 320 CSS px */
+const CLIPPED = html(`<style>button { flex: none; width: 44px; height: 44px; } .bar { display: flex; width: 100px; overflow: hidden; }
+  .scroller { display: flex; width: 100px; overflow-x: auto; } #early { position: relative; left: -30px; } #wide { width: 400px; height: 10px; }</style>
+  <div class="bar"><button id="a">A</button><button id="b">B</button><button id="cut">C</button></div>
+  <div class="scroller"><button id="d">D</button><button id="e">E</button><button id="f">F</button></div>
+  <button id="early">G</button><div id="wide"></div>`);
+
+/** The actions the clipping check finds cut off on that page, at any width */
+const CUT = [
+  { rule: 'ntn-clipped-action', target: '#cut' },
+  { rule: 'ntn-clipped-action', target: '#early' },
+];
+
 test("the clipping check finds an action a parent cuts off or scrolling can't reach, and at 320 CSS px a page that scrolls sideways", async ({ page }) => {
   const clip = await import('./clip.mjs');
   await page.setViewportSize({ width: 320, height: 640 });
-  await page.setContent(
-    html(`<style>button { flex: none; width: 44px; height: 44px; } .bar { display: flex; width: 100px; overflow: hidden; }
-      .scroller { display: flex; width: 100px; overflow-x: auto; } #early { position: relative; left: -30px; } #wide { width: 400px; height: 10px; }</style>
-      <div class="bar"><button id="a">A</button><button id="b">B</button><button id="cut">C</button></div>
-      <div class="scroller"><button id="d">D</button><button id="e">E</button><button id="f">F</button></div>
-      <button id="early">G</button><div id="wide"></div>`),
-  );
-  const cut = [
-    { rule: 'ntn-clipped-action', target: '#cut' },
-    { rule: 'ntn-clipped-action', target: '#early' },
-  ];
-  expect(await clip.clipFindings(page)).toEqual([...cut, { rule: 'ntn-reflow', target: '#wide' }]);
+  await page.setContent(CLIPPED);
+  expect(await clip.clipFindings(page)).toEqual([...CUT, { rule: 'ntn-reflow', target: '#wide' }]);
   await page.setViewportSize({ width: 1280, height: 640 });
-  expect(await clip.clipFindings(page)).toEqual(cut);
+  expect(await clip.clipFindings(page)).toEqual(CUT);
 });
 
 test("the clipping check holds an action in a scroll container to what the container scrolls to, and finds one before its pane's start", async ({ page }) => {
@@ -469,4 +473,11 @@ test("the clipping check holds an action in a scroll container to what the conta
   );
   await page.evaluate("document.getElementById('scrolled').scrollTop = 60");
   expect(await clip.clipFindings(page)).toEqual([{ rule: 'ntn-clipped-action', target: '#before0' }]);
+});
+
+test('the clipping check holds a page to reflow only at 320 CSS px wide, so at 200 one that scrolls sideways is no finding, and what it cuts off still is', async ({ page }) => {
+  const clip = await import('./clip.mjs');
+  await page.setViewportSize({ width: 200, height: 640 });
+  await page.setContent(CLIPPED);
+  expect(await clip.clipFindings(page)).toEqual(CUT);
 });
