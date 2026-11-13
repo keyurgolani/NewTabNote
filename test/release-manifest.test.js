@@ -56,9 +56,9 @@ describe("the releases manifest", () => {
     const order = tag => tag.slice(1).split('.').map(Number);
     const newest = [...local].sort((a, b) => order(a).reduce((d, n, i) => d || n - order(b)[i], 0)).at(-1);
     // Tagging a release mustn't turn every PR red, so the newest tag's entry may land in a PR of its own
-    if (!listed.includes(newest)) t.diagnostic(`${newest}, the newest release tag, has no entry yet, which only the newest may lack until its entry PR lands`);
+    if (!listed.includes(newest)) t.diagnostic(`${newest}, the newest release tag, has no entry yet, which only the newest may lack until its entry PR lands. See "Publishing a release" in docs/release-plan.md.`);
     assert.deepEqual(local.filter(tag => !listed.includes(tag) && tag !== newest), [],
-      `release tags with no entry: run scripts/fixtures/release-manifest.mjs. Only the newest tag, ${newest}, may wait for its entry PR`);
+      `release tags with no entry: run scripts/fixtures/release-manifest.mjs. Only the newest tag, ${newest}, may wait for its entry PR. See "Publishing a release" in docs/release-plan.md.`);
     for (const { tag, commit } of MANIFEST.releases) {
       if (!local.includes(tag)) {
         assert.notEqual(process.env.NTN_RELEASE_TAGS, 'required', `${tag} isn't in this clone, and NTN_RELEASE_TAGS requires it`);
@@ -66,5 +66,16 @@ describe("the releases manifest", () => {
       }
       assert.equal(git('rev-parse', `${tag}^{commit}`), commit, `${tag}'s commit`);
     }
+  });
+
+  it("has the release plan add each release's entry once its Release run is green, since only the newest tag may go without one", () => {
+    const plan = fs.readFileSync(path.join(ROOT, 'docs', 'release-plan.md'), 'utf8');
+    const publishing = plan.split(/^## /m).find((section) => section.startsWith('Publishing a release\n'));
+    assert.ok(publishing, 'docs/release-plan.md has "Publishing a release"');
+    const steps = publishing.split('\n').filter((line) => /^\d+\. /.test(line));
+    const released = steps.findIndex((step) => step.includes('Wait for the Release run'));
+    const entry = steps.findIndex((step) => step.includes('`test/fixtures/releases/manifest.json`') && step.includes('`node scripts/fixtures/release-manifest.mjs`'));
+    assert.notEqual(entry, -1, "a step writes the release's entry to test/fixtures/releases/manifest.json with node scripts/fixtures/release-manifest.mjs");
+    assert.ok(released !== -1 && entry > released, 'after the Release run, whose release has the digests the writer reads');
   });
 });
