@@ -51,8 +51,9 @@ export function motionProblems(style) {
 /**
  * In the page, under reduced motion: each element with something that may move, with its computed
  * transition and scroll behavior, its keyframed animations, a transition's own aside, and for a
- * canvas whether it was redrawn while `settle` ms passed. It closes over nothing, since it runs
- * through evaluation.
+ * canvas whether it was redrawn while `settle` ms passed. All but the redrawing is read at the
+ * start, as the step before left the page, so an animation the step started is read before it can
+ * end. It closes over nothing, since it runs through evaluation.
  * @param {(el: Element) => string} selectorOf
  * @param {number} settle
  */
@@ -69,10 +70,9 @@ async function readMotion(selectorOf, settle) {
     }
   };
   const before = canvases.map(pixels);
-  await new Promise(resolve => setTimeout(resolve, settle));
-  const redrawn = new Set(canvases.filter((canvas, i) => before[i] !== null && pixels(canvas) !== before[i]));
+  const drawn = new Set(canvases);
   const TIMING = new Set(['offset', 'computedOffset', 'easing', 'composite']);
-  return [...document.querySelectorAll('*')].flatMap(el => {
+  const reads = [...document.querySelectorAll('*')].flatMap(el => {
     const style = getComputedStyle(el);
     const animations = el
       .getAnimations()
@@ -83,11 +83,15 @@ async function readMotion(selectorOf, settle) {
         return { properties, duration: Number(effect.getComputedTiming().duration) || 0 };
       });
     const transitions = style.transitionDuration.split(',').some(duration => parseFloat(duration) > 0);
-    if (!transitions && style.scrollBehavior !== 'smooth' && animations.length === 0 && !redrawn.has(el)) return [];
+    const moves = transitions || style.scrollBehavior === 'smooth' || animations.length > 0;
+    if (!moves && !drawn.has(el)) return [];
     const id = el === document.documentElement ? 'html' : el === document.body ? 'body' : selectorOf(el);
     const { transitionProperty, transitionDuration, scrollBehavior } = style;
-    return [{ id, transitionProperty, transitionDuration, scrollBehavior, animations, chartAnimation: redrawn.has(el) }];
+    return [{ el, moves, read: { id, transitionProperty, transitionDuration, scrollBehavior, animations } }];
   });
+  await new Promise(resolve => setTimeout(resolve, settle));
+  const redrawn = new Set(canvases.filter((canvas, i) => before[i] !== null && pixels(canvas) !== before[i]));
+  return reads.filter(({ el, moves }) => moves || redrawn.has(el)).map(({ el, read }) => ({ ...read, chartAnimation: redrawn.has(el) }));
 }
 
 /**
