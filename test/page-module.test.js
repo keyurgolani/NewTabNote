@@ -39,6 +39,17 @@ describe("a page module's import() under test/helpers/page-module.js", () => {
     assert.deepEqual(plain(page.evaluated), ['shared', 'deeper', 'common', 'lazy']);
   });
 
+  it('hands back a chunk it has loaded at once, as Chrome does, while another chunk is still linking', async () => {
+    const page = await loadPageModule(createLegacyEnv(), PAGE);
+    await page.loadLazy();
+    // left.mjs's graph is four modules the page lacks, so its link takes turns the repeat doesn't wait for
+    const left = page.loadLeft();
+    const before = await page.loadLazy().then(() => plain(page.evaluated));
+    await left;
+    assert.deepEqual(before, ['shared', 'lazy']);
+    assert.deepEqual(plain(page.evaluated), ['shared', 'lazy', 'deeper', 'common']);
+  });
+
   it('hands back a module another load is still running only once it has run, top-level awaits included', async () => {
     const page = await loadPageModule(createLegacyEnv(), PAGE);
     // outer.mjs's load runs lazy.mjs as its static import, while lazy.mjs's own import() waits on that run
