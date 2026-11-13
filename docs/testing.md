@@ -64,7 +64,7 @@ The recorder `git archive`s the tag into a scratch directory, loads it unpacked 
 
 ## Faults
 
-`test/support/faults/` holds what #28's slice 4 names for tests on either host, and its `index.js` exports it. Nothing under `test/support/` ships. Fixture rule 5's factory wrapper is here too, as `storage-faults.mjs`, an ES module the kernel tests import by its own path rather than through `index.js`.
+`test/support/faults/` holds what #28's slice 4 names for tests on either host, and its `index.js` exports it. Nothing under `test/support/` ships. Fixture rule 5's factory wrapper is here too, as `storage-faults.mjs`, an ES module the Node tests import by its own path rather than through `index.js`.
 
 The IndexedDB request counter (`idb-requests.js`, #301) records each request a context makes on a store, an index or a cursor, as it makes it, for #27's IndexedDB reads before interaction-ready and any case that counts requests.
 
