@@ -36,6 +36,15 @@ describe("the releases manifest", () => {
     assert.deepEqual(MANIFEST.releases.find(release => release.tag === 'v1.1.0').assets.map(asset => asset.name), ['new-tab-note-v1.1.0.crx']);
   });
 
+  it("has CI's unit job fetch every listed tag and the next major's, so a 2.0.0 entry finds its tag there", () => {
+    const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pr-checks.yml'), 'utf8');
+    const fetches = [...workflow.matchAll(/'\+refs\/tags\/([^:']+):refs\/tags\/\1'/g)].map((match) => match[1]);
+    assert.equal(fetches.length, 1, "one tag fetch, the unit job's");
+    const takes = new RegExp(`^${fetches[0].replaceAll('.', '\\.').replaceAll('*', '.*')}$`);
+    const wanted = [...MANIFEST.releases.map((release) => release.tag), 'v2.0.0'];
+    assert.deepEqual(wanted.filter((tag) => !takes.test(tag)), [], `the unit job fetches only ${fetches[0]}`);
+  });
+
   it("holds every entry to its tag's commit, and lists every release tag but the newest, which may wait for its entry PR", (t) => {
     const local = git('tag', '--list', 'v*').split('\n').filter(tag => /^v\d+\.\d+\.\d+$/.test(tag));
     if (local.length === 0) {
