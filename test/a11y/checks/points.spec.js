@@ -1,15 +1,23 @@
 // #24 slice 2: the matrix runner, on pages set in plain Chromium. atPoints() declares one test of a
-// surface at each of its points from docs/accessibility/matrix.json, puts the page there through CDP,
-// opens it, and checks it. Each test here reads back what the page sees at its point: its width at
-// its zoom and device scale, its default font size, the text-spacing override, a coarse pointer, and
-// the scheme, contrast, forced colors and motion media. Popup's twelve points include its zoom, at
-// min(800, W·Z)/Z CSS px. The spec is the library's own, so its tests are no page's.
+// surface at each of its points from docs/accessibility/matrix.json, on a test whose `pointPage`
+// fixture opens the page each one checks, as a page's own spec opens its surface through #34's
+// harness. Each test puts the page at its point through CDP and checks it. Each one here reads back
+// what the page sees at its point: its width at its zoom and device scale, its default font size, the
+// text-spacing override, a coarse pointer, and the scheme, contrast, forced colors and motion media.
+// Popup's twelve points include its zoom, at min(800, W·Z)/Z CSS px. The spec is the library's own,
+// so its tests are no page's.
 
-const { test, expect } = require('@playwright/test');
+const { test: base, expect } = require('@playwright/test');
 const points = require('./points.js');
 
+const test = base.extend({
+  pointPage: async ({ page }, use) => {
+    await page.setContent('<!doctype html><html lang="en"><head><title>A point</title></head><body><main><p id="text">Text</p></main></body></html>');
+    await use(page);
+  },
+});
+
 points.atPoints(test, 'popup', {
-  open: page => page.setContent('<!doctype html><html lang="en"><head><title>A point</title></head><body><main><p id="text">Text</p></main></body></html>'),
   check: async (page, point) => {
     const read = await page.evaluate(`(() => {
       const text = getComputedStyle(document.getElementById('text'));
