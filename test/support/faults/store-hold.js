@@ -14,10 +14,12 @@
  *
  * holdStores resolves once its first get has succeeded, so its transaction holds the stores, not
  * merely exists. holdUpgrade opens the database one version up and keeps the upgrade busy, and its
- * release aborts the upgrade, so the version stays as it was. Neither has a time limit: only its
- * release, its context's end, or its connection's end ends one, so a case that fails mid-hold has
- * it ended by its teardown's close of the context. One that ended before its release makes
- * release() and stillHeld() fail at once, naming its database and stores.
+ * release aborts the upgrade, so the version stays as it was. Another context's connection that
+ * stays open through the versionchange keeps the upgrade from starting, and then holdUpgrade fails
+ * 10 s after its open hears blocked, naming the database. Once a hold holds, it has no time limit:
+ * only its release, its context's end, or its connection's end ends it, so a case that fails
+ * mid-hold has it ended by its teardown's close of the context. One that ended before its release
+ * makes release() and stillHeld() fail at once, naming its database and stores.
  *
  * startStoreHold, readStoreHold and releaseStoreHold run in the context the hold is made from and
  * hold nothing from outside themselves, so they go in through evaluate as they are. In Node they
@@ -96,7 +98,26 @@ function startStoreHold(plan, scope = globalThis) {
       const version = probe.result.version;
       probe.result.close();
       const open = scope.indexedDB.open(plan.database, version + 1);
+      // Another connection that stays open through the versionchange keeps the upgrade from
+      // starting, so the hold fails once it has stayed open this long after the open heard so, and
+      // an upgrade that starts after that goes straight back
+      const blockedBoundMs = 10_000;
+      /** @type {ReturnType<typeof setTimeout> | undefined} */
+      let blocked;
+      let late = false;
+      open.onblocked = () => {
+        if (blocked !== undefined) return;
+        blocked = setTimeout(() => {
+          late = true;
+          reject(new Error(`the hold on ${what} couldn't start: another connection to ${plan.database} stayed open ${blockedBoundMs / 1000} s after its versionchange`));
+        }, blockedBoundMs);
+      };
       open.onupgradeneeded = () => {
+        clearTimeout(blocked);
+        if (late) {
+          open.transaction.abort();
+          return;
+        }
         hold.db = open.result;
         hold.tx = open.transaction;
         hold.tx.oncomplete = hold.end('complete');
@@ -105,8 +126,7 @@ function startStoreHold(plan, scope = globalThis) {
         const names = hold.db.objectStoreNames;
         spin(names.length > 0 ? names[0] : hold.db.createObjectStore('ntn-hold').name);
       };
-      // The release's abort fails the open too, which is how a held upgrade ends; the open waits
-      // while another connection stays open
+      // The release's abort fails the open too, which is how a held upgrade ends
       open.onerror = refused(open);
       open.onsuccess = () => open.result.close();
     };
