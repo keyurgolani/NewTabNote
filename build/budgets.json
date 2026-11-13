@@ -74,7 +74,9 @@
     "popup": {
       "page": "popup.html",
       "modules": 63,
+      "reads": null,
       "requests": null,
+      "waitsOn": { "reads": "#4" },
       "lazyChunks": ["close-drafts-applier", "popup-send-chunk"],
       "reason": "The Popup's start JS: its start on #35 slice 4d, whose host chunk no longer carries the commands' domain code, 76,913 / 26,638 bytes as build job 128853943289 of PR checks run 42520909498 read it, with no headroom (2026-11-08; it was 97,900 / 33,000 bytes, #35 slice 4b-2's start plus 5%). Its start CSS and HTML rows are 7,213 / 2,016 and 2,967 / 1,116 bytes: 6,869 / 1,920 and 2,825 / 1,062 as next's push run 43397463553 read them at 088ff88d, plus 5% rounded up (#300 slice 6a, 2026-11-13). Its timing and heap wait for #4's ready mark.",
       "start": {
@@ -90,7 +92,9 @@
     "sidepanel": {
       "page": "sidepanel.html",
       "modules": 62,
+      "reads": null,
       "requests": null,
+      "waitsOn": { "reads": "#5" },
       "lazyChunks": ["close-drafts-applier", "journal-chunk", "sidepanel-send-chunk"],
       "reason": "The Side Panel's start JS: its start on #300 slice 5b, 73,534 / 25,553 bytes as build job 131711018907 of push run 43372411837 read it at 1fcbef1a, with no headroom (2026-11-12). Slice 5b's tree shaking renamed its chunks, which took 2 bytes off its gzip. It was 73,534 / 25,555 on #35 slice 4d, whose host chunk no longer carries the commands' domain code (2026-11-08), and 94,600 / 32,200 bytes before that, #35 slice 4c's start plus 5%. Its start CSS and HTML rows are 3,503 / 1,272 and 1,536 / 702 bytes: 3,336 / 1,211 and 1,462 / 668 as next's push run 43397463553 read them at 088ff88d, plus 5% rounded up (#300 slice 6a, 2026-11-13). Its timing and heap wait for #5's ready mark.",
       "start": {

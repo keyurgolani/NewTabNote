@@ -72,8 +72,10 @@ const FONT = /\.(?:woff2?|ttf|otf)$/i;
 const START_TYPES = ['html', 'js', 'css', 'fonts'];
 /** The package row's rows: the zip's bytes, and update size, which #31's release gate sets (#300) */
 const PACKAGE_ROWS = ['zipBytes', 'updateBytes'];
-/** The entries a reads row goes on: the new tab's routes, where #27 has IndexedDB reads before interaction-ready (#300) */
+/** The entries whose reads row may hold a number: the new tab's routes, where #27 has IndexedDB reads before interaction-ready (#300) */
 const READ_ENTRIES = ['newtab', 'moment'];
+/** The entries whose reads row stays null until their page has a ready mark to count to: Popup (#4) and the Side Panel (#5), as #27 has them */
+const MARKLESS_READ_ENTRIES = ['popup', 'sidepanel'];
 /** An issue a null row waits on, in waitsOn */
 const ISSUE = /^#[1-9]\d*$/;
 /**
@@ -482,7 +484,9 @@ function fileProblems(budgets) {
     for (const key of ['reads', 'requests']) {
       if (entry[key] !== undefined && entry[key] !== null && !wholeNumber(entry[key])) fail(`entry ${name}'s ${key} row isn't a whole number`);
     }
-    if (entry.reads !== undefined && !READ_ENTRIES.includes(name)) fail(`entry ${name} has a reads row, which only the new tab and Moment have`);
+    if (entry.reads !== undefined && MARKLESS_READ_ENTRIES.includes(name)) {
+      if (entry.reads !== null) fail(`entry ${name}'s reads row stays null until its page has a ready mark to count reads to`);
+    } else if (entry.reads !== undefined && !READ_ENTRIES.includes(name)) fail(`entry ${name} has a reads row, which only the new tab, Moment, Popup and the Side Panel have`);
     if (entry.coldStart !== undefined) {
       if (name !== 'background') fail(`entry ${name} has a coldStart row, which only the service worker has`);
       else if (entry.coldStart !== null && !wholeNumber(entry.coldStart)) fail(`entry ${name}'s coldStart row isn't a whole number of milliseconds`);
@@ -509,7 +513,7 @@ function fileProblems(budgets) {
  * @returns {string[]}
  */
 function rowsOf(name) {
-  return [...START_TYPES, 'modules', ...(READ_ENTRIES.includes(name) ? ['reads'] : []), 'requests', ...(name === 'background' ? ['coldStart'] : [])];
+  return [...START_TYPES, 'modules', ...([...READ_ENTRIES, ...MARKLESS_READ_ENTRIES].includes(name) ? ['reads'] : []), 'requests', ...(name === 'background' ? ['coldStart'] : [])];
 }
 
 /**
