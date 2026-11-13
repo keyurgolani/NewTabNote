@@ -29,7 +29,8 @@
 //   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus. A step
 //   that leaves focus on body is found, and one that returns it to its invoker passes. Tab order
 //   that runs back along a row or up a column, as CSS reversed them, is found, and a row read left
-//   to right passes;
+//   to right passes, and so does a column read top to bottom that's taller than the page, where the
+//   walk scrolls;
 // - the announcement recorder reads back what a step makes the live regions say: a status and a
 //   polite region politely, an alert assertively, and nothing from a log that's off or from text
 //   outside any region.
@@ -259,6 +260,18 @@ test('the layers check finds a tab stop out of the order the page reads in, back
     { rule: 'ntn-tab-order', target: '#b2' },
     { rule: 'ntn-tab-order', target: '#c2' },
   ]);
+});
+
+test('the layers check reads tab order in one frame, so a column read top to bottom passes though the walk scrolls down it', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { display: block; width: 44px; height: 44px; } .gap { height: 520px; } .room { height: 1200px; }</style>
+      <button id="top">1</button><div class="gap"></div><button id="middle">2</button><div class="gap"></div><button id="bottom">3</button>
+      <div class="room"></div>`),
+  );
+  // The room below lets Chrome scroll the last stop it tabs to into the middle of the page, above where
+  // the stop before it was read
+  expect(await layers.layerFindings(page)).toEqual([]);
 });
 
 test("the announcement recorder reads back what a step makes the live regions say, and nothing from a region that's off or from no region", async ({ page }) => {
