@@ -44,6 +44,21 @@ const entry = (kind, method, index = null) => ({ kind, method, database: 'counte
 const step = (method, index = null) => ({ method, database: 'counted', store: 'notes', index });
 const READS = ['get', 'getKey', 'getAll', 'getAllKeys', 'getAllRecords', 'count', 'openCursor', 'openKeyCursor'];
 
+/** The methods the counter wraps, as `<class>.<method>`, where a class has them */
+const WRAPPED = [
+  ...READS.flatMap((method) => [`IDBObjectStore.${method}`, `IDBIndex.${method}`]),
+  ...['put', 'add', 'delete', 'clear'].map((method) => `IDBObjectStore.${method}`),
+  ...['update', 'delete', 'continue', 'advance', 'continuePrimaryKey'].map((method) => `IDBCursor.${method}`),
+];
+/** Every own method of the three prototypes, keyed `<class>.<method>`, to compare before and after */
+const methods = () => Object.fromEntries(Object.entries({ IDBObjectStore, IDBIndex, IDBCursor }).flatMap(([label, cls]) =>
+  Object.getOwnPropertyNames(cls.prototype).flatMap((name) => {
+    const { value } = Object.getOwnPropertyDescriptor(cls.prototype, name);
+    return typeof value === 'function' ? [[`${label}.${name}`, value]] : [];
+  })));
+/** The methods in `to` that aren't the ones in `from`, sorted */
+const changed = (from, to) => Object.keys(from).filter((name) => to[name] !== from[name]).sort();
+
 describe('the IndexedDB request counter', () => {
   it('counts each read on a store or an index once, with its database, store, index and time', async (t) => {
     const counter = counted(t);
@@ -66,7 +81,14 @@ describe('the IndexedDB request counter', () => {
   it("counts writes, a cursor's among them, and a cursor's steps apart from its reads", async (t) => {
     const counter = counted(t);
     const db = await notes();
+    // A walk first, so the reset has steps to empty as well as requests
+    await run(db, 'readonly', (store) => {
+      const walk = store.openCursor();
+      walk.onsuccess = () => walk.result && walk.result.continue();
+    });
+    assert.ok(counter.cursorSteps().length > 0, 'the walk made steps');
     counter.reset();
+    assert.deepEqual([counter.entries(), counter.cursorSteps()], [[], []], 'the reset empties both lists');
     await run(db, 'readonly', (store) => {
       const walk = store.index('byTitle').openCursor();
       walk.onsuccess = () => walk.result.primaryKey === 'a' && walk.result.continuePrimaryKey('C', 'c');
@@ -111,20 +133,24 @@ describe('the IndexedDB request counter', () => {
   });
 
   it('installs once over the same classes, and its uninstall puts every method back', async (t) => {
-    const originals = [IDBObjectStore.prototype.get, IDBIndex.prototype.count, IDBCursor.prototype.continue, IDBCursor.prototype.update];
+    const before = methods();
     const scope = { IDBObjectStore, IDBIndex, IDBCursor, performance };
     t.after(() => scope.__ntnIdbRequests && scope.__ntnIdbRequests.uninstall());
     assert.equal(installIdbRequestCounter(scope), true);
     const counter = scope.__ntnIdbRequests;
+    const during = methods();
+    assert.deepEqual(changed(before, during), WRAPPED.filter((name) => name in before).sort(), 'it wraps each request method the classes have, and nothing else');
     assert.equal(installIdbRequestCounter(scope), true);
     assert.ok(scope.__ntnIdbRequests === counter, 'a second install keeps the first counter');
+    assert.deepEqual(changed(during, methods()), [], 'and wraps nothing again');
     const db = await notes();
     counter.reset();
     await done(db.transaction('notes').objectStore('notes').get('a'));
     assert.equal(counter.entries().length, 1, 'one get counts once');
     counter.uninstall();
     assert.equal(scope.__ntnIdbRequests, undefined);
-    assert.deepEqual([IDBObjectStore.prototype.get, IDBIndex.prototype.count, IDBCursor.prototype.continue, IDBCursor.prototype.update], originals);
+    assert.deepEqual(Object.keys(methods()).sort(), Object.keys(before).sort(), 'the prototypes have the methods they had');
+    assert.deepEqual(changed(before, methods()), [], 'each one the method it was before the install');
     await done(db.transaction('notes').objectStore('notes').get('a'));
     assert.equal(counter.entries().length, 1, 'nothing counts once the counter is out');
   });
