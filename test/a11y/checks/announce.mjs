@@ -5,9 +5,10 @@
  * region's whole text, with the region and how it's announced. An alert speaks when it's added with
  * its text too, as the legacy tab's note-gone notice is added. A region with aria-live="off", as the AI
  * transcript's log is, says nothing, alerts added inside it included, and neither does text outside
- * every region. It starts through
- * Playwright evaluation, which the extension's CSP doesn't apply to, and lasts until the page
- * navigates. A change that comes after the step resolves, from a timer say, needs the spec to wait.
+ * every region. It starts through Playwright evaluation, which the extension's CSP doesn't apply to,
+ * and lasts as long as the page's window: a navigation ends it, and a new document written into the
+ * same window, as setContent() writes one, keeps it, since it watches the document itself. A change
+ * that comes after the step resolves, from a timer say, needs the spec to wait.
  */
 
 import { selectorOf } from './targets.mjs';
@@ -49,6 +50,8 @@ function install(selectorOf, politenessOf) {
     /** @type {Map<Element, string>} */
     const changed = new Map();
     for (const record of records) {
+      // The document's own children come and go only when a new document is written in, which says nothing
+      if (record.target === document) continue;
       for (const node of record.addedNodes) {
         if (!(node instanceof Element)) continue;
         for (const alert of [node, ...node.querySelectorAll('[role="alert"]')]) {
@@ -64,7 +67,7 @@ function install(selectorOf, politenessOf) {
       const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
       if (text) said.push({ region: selectorOf(el), politeness, text });
     }
-  }).observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+  }).observe(document, { subtree: true, childList: true, characterData: true });
 }
 
 /**
@@ -77,7 +80,7 @@ export async function recordAnnouncements(page) {
 
 /**
  * What the live regions said since recording started or was last read, which it clears. A page that
- * isn't recording, because recording never started or a navigation replaced the document, is a
+ * isn't recording, because recording never started or a navigation since replaced the window, is a
  * TypeError rather than silence, so a spec that holds a step to saying nothing can't pass on nothing
  * heard.
  * @param {Pick<import('@playwright/test').Page, 'evaluate'>} page
