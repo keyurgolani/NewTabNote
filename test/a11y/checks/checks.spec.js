@@ -30,9 +30,10 @@
 //   that leaves focus on body is found, and one that returns it to its invoker passes. Tab order
 //   that runs back along a row or up a column, as CSS reversed them, or up to the column before, as in
 //   a reversed row of two-stop columns, is found, and a row read left to right passes, and so does a
-//   column read top to bottom that's taller than the page, where the walk scrolls. A link that wraps
-//   is read by its line boxes, so it shows where either part sits and a link after it on its second
-//   line reads in order;
+//   column read top to bottom that's taller than the page, where the walk scrolls. Each step is read in
+//   the frame it's read in, so the steps out of a scroller and onto a fixed bar read in order, and a
+//   column read back up after a scroll is found. A link that wraps is read by its line boxes, so it
+//   shows where either part sits and a link after it on its second line reads in order;
 // - the announcement recorder reads back what a step makes the live regions say: a status and a
 //   polite region politely, an alert assertively, and nothing from a log that's off or from text
 //   outside any region. A region that isn't atomic says what was added, so a count reads `3`, and an
@@ -281,6 +282,37 @@ test('the layers check reads tab order in one frame, so a column read top to bot
   // The room below lets Chrome scroll the last stop it tabs to into the middle of the page, above where
   // the stop before it was read
   expect(await layers.layerFindings(page)).toEqual([]);
+});
+
+test('the layers check reads a step out of a scroller in the frame it is read in, so a button after the scroller reads in order', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { display: block; width: 44px; height: 44px; } .scroller { height: 200px; overflow-y: auto; } .gap { height: 150px; }</style>
+      <div class="scroller"><button id="in1">1</button><div class="gap"></div><button id="in2">2</button><div class="gap"></div><button id="in3">3</button></div>
+      <button id="after">After</button>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([]);
+});
+
+test('the layers check reads a step onto a fixed bar in the frame it is read in, so the bar after a scrolled page reads in order', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { display: block; width: 44px; height: 44px; } .gap { height: 900px; } .room { height: 1200px; } .bar { position: fixed; bottom: 0; left: 0; }</style>
+      <button id="first">1</button><div class="gap"></div><button id="last">2</button><div class="room"></div>
+      <div class="bar"><button id="bar">Bar</button></div>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([]);
+});
+
+test('the layers check still finds a column read back up after a scroll, in the frame each step is read in', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  // CSS order shows the column top, mid, low, where Tab reads it top, low, mid
+  await page.setContent(
+    html(`<style>main { display: flex; flex-direction: column; } button { width: 44px; height: 44px; } .short { height: 300px; } .long { height: 900px; } .room { height: 1200px; }</style>
+      <button id="top" style="order: 1">1</button><div class="short" style="order: 2"></div><button id="low" style="order: 5">2</button>
+      <div class="long" style="order: 4"></div><button id="mid" style="order: 3">3</button><div class="room" style="order: 6"></div>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([{ rule: 'ntn-tab-order', target: '#mid' }]);
 });
 
 test('the layers check reads a link that wraps by its line boxes: shown where either part sits, and a stop after it on its second line in order', async ({ page }) => {

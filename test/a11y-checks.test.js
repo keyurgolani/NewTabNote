@@ -219,6 +219,8 @@ describe("the layers checks' pure parts (#24 slice 2)", () => {
     assert.deepEqual(layers.orderProblems([at('#low', 0, 52), at('#high', 0, 0)]), ['#high']);
     // A row of two-stop columns that CSS reversed: the step up and back to the column before
     assert.deepEqual(layers.orderProblems([at('#a', 60, 8), at('#b', 60, 60), at('#c', 8, 8), at('#d', 8, 60)]), ['#c']);
+    // A stop read after a scroll is held to the stop before it as the same read measured it
+    assert.deepEqual(layers.orderProblems([at('#a', 0, 400), { ...at('#b', 0, 300), before: { x: 0, y: 200, width: 44, height: 44 } }]), []);
     assert.equal(layers.ORDER_RULE, 'ntn-tab-order');
   });
 
