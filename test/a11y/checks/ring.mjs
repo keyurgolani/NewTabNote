@@ -137,14 +137,36 @@ function readRing(selectorOf) {
   return { id: selectorOf(el), ring: outer ? { outer, ...(inner ? { inner } : {}), ...stacked } : null, planes };
 }
 
-/** The rule a focus walk that stops short fails: Tab left focus where it was, or the walk hit its cap */
+/** The rule a focus walk that stops short fails: Tab left focus where it was, or on body with a tab stop to come, or the walk hit its cap */
 export const WALK_RULE = 'ntn-focus-walk';
+
+/**
+ * In the page: whether a tab stop follows the focused control in the document, so that a Tab from it
+ * that leaves focus on body hasn't reached the page's end, as a script that drops focus mid-page has
+ * it. A stop is rendered, visible and enabled, outside any inert subtree, and in the tab order by its
+ * tabindex, its tag or as an editing host. It runs through Playwright evaluation, so it closes over
+ * nothing.
+ */
+export function tabStopFollows() {
+  const focused = document.activeElement;
+  if (!focused || focused === document.body) return false;
+  const STOPS = 'a[href], area[href], button, input:not([type="hidden"]), select, textarea, summary, iframe, [contenteditable]:not([contenteditable="false"]), [tabindex]';
+  return [...document.querySelectorAll(STOPS)].some(el => {
+    if (el === focused || !(focused.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+    if (!(el instanceof HTMLElement) || el.matches(':disabled') || el.closest('[inert]')) return false;
+    const host = el.isContentEditable && !el.parentElement?.isContentEditable;
+    if (el.isContentEditable && !host) return false;
+    if (!(el.hasAttribute('tabindex') ? el.tabIndex >= 0 : host || el.tabIndex >= 0)) return false;
+    return el.getClientRects().length > 0 && getComputedStyle(el).visibility === 'visible';
+  });
+}
 
 /**
  * Tabs through `page` from where focus is, and finds each control whose ring is under 3:1 against a
  * plane beside it, or that shows none, until focus leaves the page or comes back round. A walk that
  * stops short says where: at a control that keeps focus on Tab, as an editor does that indents on
- * it, or at the last control it read when it hits its cap.
+ * it, at one whose Tab leaves focus on body though a tab stop follows it, as a table's last cell does
+ * when it re-renders its block, or at the last control it read when it hits its cap.
  * @param {Pick<import('@playwright/test').Page, 'keyboard' | 'evaluate'>} page
  * @param {{max?: number}} [options] - the most Tab presses
  */
@@ -154,14 +176,17 @@ export async function ringFindings(page, { max = 200 } = {}) {
   const seen = new Set();
   /** @type {string | null} */
   let last = null;
+  let followed = false;
   for (let press = 0; press < max; press += 1) {
     await page.keyboard.press('Tab');
-    /** @type {{id: string, ring: {outer: string, inner?: string} | null, planes: {id: string, color: string, over?: string}[]} | null} */
-    const read = await page.evaluate(`(${readRing})(${selectorOf})`);
+    /** @type {{id: string, ring: {outer: string, inner?: string} | null, planes: {id: string, color: string, over?: string}[], followed?: boolean} | null} */
+    const read = await page.evaluate(`((read) => read && { ...read, followed: (${tabStopFollows})() })((${readRing})(${selectorOf}))`);
     if (read !== null && read.id === last) return [...findings, { rule: WALK_RULE, target: read.id }];
-    if (read === null || seen.has(read.id)) return findings;
+    if (read === null) return followed && last !== null ? [...findings, { rule: WALK_RULE, target: last }] : findings;
+    if (seen.has(read.id)) return findings;
     seen.add(read.id);
     last = read.id;
+    followed = read.followed === true;
     if (read.ring === null || ringShortfalls(read.ring, read.planes).length > 0) findings.push({ rule: RULE, target: read.id });
   }
   return last === null ? findings : [...findings, { rule: WALK_RULE, target: last }];
