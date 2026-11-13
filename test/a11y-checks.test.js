@@ -5,7 +5,8 @@
 // - the focus ring's contrast against each plane beside it, with alpha composited first and a
 //   two-tone ring measured as #16 measures one;
 // - the chords Chrome keeps for itself;
-// - what reduced motion forbids.
+// - what reduced motion forbids;
+// - a tab stop nobody sees, in a collapsed, off-screen or transparent layer.
 // The browser checks read the page and hand these what they measured.
 
 const { describe, it, before } = require('node:test');
@@ -186,5 +187,18 @@ describe("the browser halves' pure parts (#24 slice 2)", () => {
   it('reports the custom checks under their own rule IDs, apart from axe\'s', () => {
     assert.equal(targets.RULE, 'ntn-target-size');
     assert.equal(ring.RULE, 'ntn-focus-ring');
+  });
+});
+
+describe("the layers checks' pure parts (#24 slice 2)", () => {
+  /** @type {any} */ let layers;
+  before(async () => {
+    layers = await import('./a11y/checks/layers.mjs');
+  });
+
+  it('finds a tab stop nobody sees: one the page shows none of where it sits, or a transparent one', () => {
+    const stop = (/** @type {string} */ id, /** @type {boolean} */ shown, opacity = 1) => ({ id, shown, opacity });
+    assert.deepEqual(layers.hiddenStops([stop('#seen', true), stop('#collapsed', false), stop('#clear', true, 0), stop('#faded', true, 0.4)]), ['#collapsed', '#clear']);
+    assert.equal(layers.HIDDEN_RULE, 'ntn-hidden-focus');
   });
 });

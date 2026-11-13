@@ -24,7 +24,9 @@
 //   target, and a white ring at no offset on a white button in a #333333 toolbar clears the toolbar
 //   but fails against the button's fill;
 // - it reads what Chrome computes a color-mix() in sRGB to, color(srgb …): a plane mixed in sRGB, a
-//   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix.
+//   translucent mix on slate whose alpha decides it, and a stacked ring whose inner shadow is a mix;
+// - the layers check finds a tab stop nobody sees, in a collapsed, off-screen or transparent layer,
+//   and passes one in an inert layer, which Tab skips, and a skip link that shows on focus.
 // These tests are the library's own, so they attach no findings, and no baseline line holds them.
 
 const { test, expect } = require('@playwright/test');
@@ -193,4 +195,22 @@ test("the hit boxes find a small link alone in its list item, and the ring finds
       <div class="toolbar"><button id="on-fill">A</button></div>`),
   );
   expect(await ring.ringFindings(page)).toEqual([{ rule: 'ntn-focus-ring', target: '#on-fill' }]);
+});
+
+test('the layers check finds a tab stop nobody sees, in a collapsed, off-screen or transparent layer, and passes an inert layer and a skip link that shows on focus', async ({ page }) => {
+  const layers = await import('./layers.mjs');
+  await page.setContent(
+    html(`<style>button { width: 44px; height: 44px; } .collapsed { width: 0; overflow: hidden; } .off { position: absolute; left: -9999px; }
+      .clear { opacity: 0; } .skip { position: absolute; left: -9999px; } .skip:focus { left: 0; top: 0; }</style>
+      <a href="#shown" class="skip" id="skip">Skip</a><button id="shown">A</button>
+      <div class="collapsed"><button id="in-collapsed">B</button></div>
+      <div class="off"><button id="off-screen">C</button></div>
+      <div class="clear"><button id="transparent">D</button></div>
+      <div class="collapsed" inert><button id="in-inert">E</button></div>`),
+  );
+  expect(await layers.layerFindings(page)).toEqual([
+    { rule: 'ntn-hidden-focus', target: '#in-collapsed' },
+    { rule: 'ntn-hidden-focus', target: '#off-screen' },
+    { rule: 'ntn-hidden-focus', target: '#transparent' },
+  ]);
 });
