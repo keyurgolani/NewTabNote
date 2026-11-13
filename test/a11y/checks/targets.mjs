@@ -54,25 +54,67 @@ export function selectorOf(el) {
   return parts.join(' > ');
 }
 
+/** The presses a control that only takes the pointer listens for */
+const PRESSES = Object.freeze(['click', 'mousedown', 'pointerdown']);
+
+/**
+ * Marks each element `page`'s scripts gave a press listener of its own, through CDP's DOMDebugger, in a
+ * WeakSet that collectTargets() reads: a pointer-only control inside another, or under a parent with its
+ * cursor, shows no cursor of its own, but listens for presses
+ * @param {import('@playwright/test').Page} page
+ */
+async function markListened(page) {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const { result: root } = await session.send('Runtime.evaluate', { expression: 'document' });
+    const { listeners } = await session.send('DOMDebugger.getEventListeners', { objectId: root.objectId ?? '', depth: -1 });
+    const nodes = new Set(listeners.filter(({ type, backendNodeId }) => PRESSES.includes(type) && backendNodeId).map(({ backendNodeId }) => backendNodeId));
+    /** @type {{objectId: string}[]} */
+    const listened = [];
+    for (const backendNodeId of nodes) {
+      const { object } = await session.send('DOM.resolveNode', { backendNodeId });
+      if (object.objectId) listened.push({ objectId: object.objectId });
+    }
+    await session.send('Runtime.callFunctionOn', {
+      objectId: root.objectId,
+      functionDeclaration: 'function (...listened) { globalThis.__ntnListened = new WeakSet(listened); }',
+      arguments: listened,
+    });
+  } finally {
+    await session.detach();
+  }
+}
+
 /**
  * In the page: each pointer target that's rendered and not hidden or inert, with its box (the label
  * that wraps a form control is its hit area), and its exemption, if it's the editing host as a whole
  * or a link in running text inside a text block. A target is a control by its tag, role or tab stop,
- * or an element that only takes clicks, which the pointer's cursor shows: the one the cursor starts
- * at, not a part that inherits it, and not one inside a target already counted. aria-hidden leaves
- * a target one, since the contract builds its pointer-only controls that way.
+ * or an element that only takes the pointer. Its cursor can show that, a press, grab or resize one,
+ * where the cursor starts and outside a control already counted, and so can a press listener of its
+ * own, inside a control or under a parent with its cursor, which markListened() marks. A box whose
+ * own listener serves the targets inside it isn't one, nor is an editing host, and a label's parts are
+ * its control's hit area. aria-hidden leaves a target one, since the contract builds its pointer-only
+ * controls that way.
  * @param {(el: Element) => string} selectorOf
  */
 function collectTargets(selectorOf) {
   const POINTER =
     'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"], [tabindex]:not([tabindex="-1"])';
-  const CLICKS = ['pointer', 'grab', 'grabbing'];
-  const clicks = (/** @type {Element} */ el) => {
+  const CLICKS = ['pointer', 'grab', 'grabbing', 'col-resize', 'row-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize', 'n-resize', 'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize', 'se-resize', 'sw-resize'];
+  /** @type {WeakSet<Element>} */
+  const listened = /** @type {any} */ (globalThis).__ntnListened ?? new WeakSet();
+  const labelPart = (/** @type {Element} */ el) => el.localName === 'label' || Boolean(el.closest('label')?.control);
+  const byCursor = (/** @type {Element} */ el) => {
     const { cursor } = getComputedStyle(el);
-    if (!CLICKS.includes(cursor) || el.localName === 'label' || el.parentElement?.closest(POINTER)) return false;
+    if (!CLICKS.includes(cursor) || el.parentElement?.closest(POINTER)) return false;
     return !el.parentElement || getComputedStyle(el.parentElement).cursor !== cursor;
   };
-  return [...document.querySelectorAll('*')].filter(el => el.matches(POINTER) || clicks(el)).flatMap(el => {
+  const all = [...document.querySelectorAll('*')];
+  const shown = new Set(all.filter(el => !labelPart(el) && byCursor(el)));
+  const own = new Set(all.filter(el => !labelPart(el) && listened.has(el) && !(el instanceof HTMLElement && el.isContentEditable)));
+  const found = all.filter(el => el.matches(POINTER) || shown.has(el) || own.has(el));
+  const serves = (/** @type {Element} */ el) => !el.matches(POINTER) && !shown.has(el) && found.some(other => other !== el && el.contains(other));
+  return found.filter(el => !serves(el)).flatMap(el => {
     const style = getComputedStyle(el);
     if (el.closest('[inert], [hidden]') || style.visibility !== 'visible' || el.getClientRects().length === 0) return [];
     const { width, height } = (el.matches('input, select, textarea') ? (el.closest('label') ?? el) : el).getBoundingClientRect();
@@ -93,6 +135,7 @@ function collectTargets(selectorOf) {
  * @param {import('@playwright/test').Page} page
  */
 export async function targetFindings(page) {
+  await markListened(page);
   /** @type {{id: string, width: number, height: number, exempt?: string}[]} */
   const boxes = await page.evaluate(`(${collectTargets})(${selectorOf})`);
   return smallTargets(boxes).map(({ id }) => ({ rule: RULE, target: id }));
