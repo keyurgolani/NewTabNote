@@ -46,7 +46,9 @@
 // - under reduced motion, the motion check finds a transform transition, a keyframed rotation,
 //   smooth scroll and a canvas that keeps redrawing, and passes a fade, a keyframed pulse and a
 //   canvas drawn once. It reads what a step starts from the step's start, so a slide that ends
-//   before the check's wait does is found, and a fade as short passes;
+//   before the check's wait does is found, and a fade as short passes. It reads ::before and ::after
+//   too: a knob that slides and a spinner that turns are found at their elements, and a fade and a
+//   pulse on them pass;
 // - the clipping check finds an action a hidden-overflow bar cuts off and one partly before the
 //   page's start, and at 320 CSS px a block that makes the page scroll sideways, and passes a bar
 //   that scrolls. At 1280 and at 200, where nothing asks a page to reflow, only the cut-off actions
@@ -453,6 +455,22 @@ test("the motion check reads what a step starts from the step's start, so a slid
     Object.assign(document.createElement('div'), { id: 'toast', className: 'toast', textContent: 'Saved' }),
     Object.assign(document.createElement('div'), { id: 'notice', className: 'notice', textContent: 'Synced' }))`);
   expect(await motion.motionFindings(page, { settle: 1500 })).toEqual([{ rule: 'transform-animation', target: '#toast' }]);
+});
+
+test('the motion check reads ::before and ::after: a knob that slides and a spinner that turns are found at their elements, and a fade and a pulse on them pass', async ({ page }) => {
+  const motion = await import('./motion.mjs');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setContent(
+    html(`<style>.knob::before, .spinner::after { content: ''; display: inline-block; width: 10px; height: 10px; }
+      #slider { transition: background-color 0.3s; } #slider::before { transition: transform 0.3s; } #faded::before { transition: opacity 0.3s; }
+      @keyframes spin { to { transform: rotate(1turn); } } @keyframes pulse { 50% { opacity: 0.5; } }
+      #spinner::after { animation: spin 1s infinite; } #pulsing::after { animation: pulse 1s infinite; }</style>
+      <div class="knob" id="slider">A</div><div class="knob" id="faded">B</div><div class="spinner" id="spinner">C</div><div class="spinner" id="pulsing">D</div>`),
+  );
+  expect(await motion.motionFindings(page)).toEqual([
+    { rule: 'transform-transition', target: '#slider' },
+    { rule: 'transform-animation', target: '#spinner' },
+  ]);
 });
 
 /** The clipping check's page: a button a bar cuts off, a bar that scrolls, a button partly before the page's start, and a block wider than 320 CSS px */
