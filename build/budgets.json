@@ -30,7 +30,9 @@
   },
   "package": {
     "zipBytes": 875964,
-    "reason": "The zip npm run package writes, in bytes (#27 AC3, #300): 834,251 bytes in build job 131822570080 of PR checks run 43406673412, plus 5% rounded up (2026-11-13). That's #300 slice 6a's first CI round's figure: the shipped files are next's except the inlined build ID."
+    "updateBytes": null,
+    "waitsOn": { "updateBytes": "#31" },
+    "reason": "The zip npm run package writes, in bytes (#27 AC3, #300): 834,251 bytes in build job 131822570080 of PR checks run 43406673412, plus 5% rounded up (2026-11-13). That's #300 slice 6a's first CI round's figure: the shipped files are next's except the inlined build ID. Update size, the bytes new or changed against the previous release, is for #31's release gate (#31 slice 3): its row stays null, waiting on #31, until that gate sets it."
   },
   "forbidden": {
     "chart-library": { "about": "Chart.js", "paths": ["js/lib/chart.js"] },
@@ -123,11 +125,14 @@
       "modules": 210,
       "reason": "The service worker. Its start JS row is #300's: 322,241 / 98,537 bytes as next's push run 43397463553 read it at 088ff88d, plus 5% rounded up (#300 slice 6a, 2026-11-13). Its cold-start time is #35's, and stays null until #35 sets it; its graph is one self-contained module (#27 slice 2), and its third-party packages are checked like a page's.",
       "start": { "js": { "raw": 338354, "gzip": 103464 }, "css": null, "html": null, "fonts": null },
+      "coldStart": null,
+      "waitsOn": { "coldStart": "#35" },
       "dependencies": ["valibot"]
     },
     "moment": {
       "chunk": "moment",
       "modules": null,
+      "waitsOn": { "js": "#2", "css": "#2", "html": "#2", "fonts": "#2", "modules": "#2" },
       "planned": true,
       "reason": "#2's Moment, a loader chunk the new tab will boot instead of the workspace. The full forbidden list holds from its first build. Its numbers come from the owner before #2 builds it: a built planned row fails (AC3).",
       "start": { "js": null, "css": null, "html": null, "fonts": null },

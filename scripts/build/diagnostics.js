@@ -76,7 +76,7 @@ const CODES = Object.freeze({
   'guard/rows': 'the rows the built page guard inlines aren\'t the validated destination registry\'s',
   'guard/registry-unreadable': 'the destination registry has a problem, so the page guard would refuse every destination: the build won\'t inline it, or the built guard can\'t read its rows',
   'env/canary': 'a canary secret set in the build\'s environment reached its logs, dist/, or the zip',
-  'budget/entry': 'a page or the service worker the build has with no build/budgets.json row, a row for an entry it doesn\'t have that isn\'t planned, or a planned row for one it has',
+  'budget/entry': 'a page or the service worker the build has with no build/budgets.json row, a row for an entry it doesn\'t have that isn\'t planned, a planned row for one it has, or a row it needs with no number and no issue named for it in waitsOn',
   'budget/bytes': 'an entry\'s start JS, CSS, HTML, or fonts is over its build/budgets.json row, raw or gzip',
   'budget/modules': 'an entry\'s start holds more modules than its build/budgets.json row',
   'budget/forbidden': 'a module or file a forbidden category names is on an entry\'s start path',
